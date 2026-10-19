@@ -11,6 +11,7 @@
 #include "coop_partner_body.h"
 #if defined(KK_DEV_TOOLS)
 #include "dev_puppet_mesh.h"
+#include "coop_stimulus_debug.h"
 #endif
 
 #include <algorithm>
@@ -37,6 +38,7 @@
 #include "coop_partner_selection.h"
 #include "coop_runtime.h"
 #include "coop_nametag.h"
+#include "coop_enemies_game.h"
 #include "photo_mode.h"
 #include "settings.h"
 
@@ -55,6 +57,7 @@ REX_EXTERN(__imp__sub_82881B70);
 REX_EXTERN(__imp__sub_82454690);
 REX_EXTERN(__imp__sub_8271E4E8);
 REX_EXTERN(__imp__sub_82449F18);
+REX_EXTERN(__imp__sub_8242AA88);
 #if defined(KK_DEV_TOOLS)
 namespace kk {
 void DevFishAfterWorld(PPCContext&, uint8_t*);
@@ -355,6 +358,7 @@ struct State {
   bool loading = true, ready = false, driving = false, attempted = false, terminal = false;
   bool finish_pending = false, measure = false, transition_pending = false;
   bool partner_eligible = false, prepared = false;
+  bool combat_publishing = false;
   unsigned missing_action_kind = 0;
   std::set<uint32_t> retired;
   Clock::time_point retry_at{};
@@ -907,6 +911,10 @@ void RefreshScriptEvidence(const uint8_t* b, uint32_t world) {
     }
     for (uint32_t off = 0; off+4 <= size; off += 4) {
       const auto ref = Load32(b, vars+off);
+      // Only a live leased body's audited raptor candidate slots are combat
+      // references. PRG records and all unknown offsets still disqualify it.
+      if (Get().driving && ref == Get().selected.actor &&
+          coop::EnemyCombatReference(b, owner, ai, vars, off)) continue;
       if (ref != owner && Get().humans.count(ref)) script_evidence.references.try_emplace(ref, owner);
     }
     return true;
@@ -1288,6 +1296,30 @@ void PartnerBodyAfterAi(PPCContext& ctx, uint8_t* b, uint32_t w) {
   }
   s.early_pos = rig.pos; s.early_forward = rig.forward; s.early_frame = Frame(ctx, b, rig.actor);
   s.measure = true;
+  // Full H Post/AI remains held. Refresh only its audited perception publisher
+  // under the body's native context, after committing the driven transform.
+  const auto link = coop::EnemyLinkSnapshot();
+  if (Opt().partner && !Opt().spawn && link.connected && link.role == coop::Role::Host && coop::EnemyPartnerCombatReady() &&
+      Range(rig.vars, 5152) && Range(Load32(b, 0x82CC9C30), 7144) &&
+      Load32(b, rig.vars+4) >= 1 && Load32(b, rig.vars+4) <= 12) {
+    Scratch scratch(ctx, b);
+    constexpr uint32_t globals[] = {0x82CCBF64, 0x82CCBF68, 0x82CCBF6C, 0x82CCBF70};
+    uint32_t saved[4];
+    for (unsigned i = 0; i < 4; ++i) saved[i] = Load32(b, globals[i]);
+    Store32(b, globals[0], rig.ai); Store32(b, globals[1], rig.ai);
+    Store32(b, globals[2], rig.actor); Store32(b, globals[3], rig.actor);
+    s.combat_publishing = true;
+#if defined(KK_DEV_TOOLS)
+    static uint64_t attempts = 0;
+    if (++attempts <= 8 || attempts%120 == 0)
+      REXLOG_INFO("BITE perception-gate body={:08X} class={} disabled+2728={} state+2712={} refresh={}",
+          rig.actor, Load32(b, rig.vars+4), Load32(b, rig.vars+2728), Load32(b, rig.vars+2712), attempts);
+#endif
+    __imp__sub_8242AA88(ctx, b);
+    s.combat_publishing = false;
+    for (unsigned i = 0; i < 4; ++i) Store32(b, globals[i], saved[i]);
+    if (!s.Validate(b, w, rig)) return;
+  }
   if (Opt().partner) coop::SetPartnerBodyDriven(true);
   else if (s.elapsed >= 8) { s.driving = false; s.finish_pending = true; }
 }
@@ -1437,6 +1469,52 @@ void PartnerBodyTriggerReference(const uint8_t* b, uint32_t record) {
     s.Abort("live-trigger-or-stimulus-reference");
   }
 }
+uint32_t PartnerBodyCombatActor(const uint8_t* b) {
+  const auto& s = Get();
+  if (!Enabled() || !Opt().partner || Opt().spawn || !s.driving || !s.prepared ||
+      !s.partner_eligible || !s.partner.fresh || !s.Environment(b, s.world)) return 0;
+  const auto it = s.humans.find(s.selected.actor);
+  Rig rig;
+  // Read-only even when used by dev diagnostics. The normal before/after AI
+  // validators own release; this snapshot never changes lease state.
+  return it != s.humans.end() && it->second.generation == s.selected_generation &&
+      Member(b, s.world, s.selected.actor) && ReadRig(b, s.selected.actor, rig) && Same(rig, s.selected) ? rig.actor : 0;
+}
+bool PartnerBodyStimulus(PPCContext& ctx, uint8_t* b) {
+  auto& s = Get();
+  const auto body = PartnerBodyCombatActor(b);
+  if (coop::EnemyDamageEnqueue(ctx, b, body)) return true;
+  if (body && s.combat_publishing && ctx.r4.u32 == 1 && ctx.r3.u32 == body &&
+      uint32_t(ctx.lr) == 0x82635DF0 && Range(ctx.r6.u32, 108)) {
+    // The publisher alone may mention its own body; no arbitrary stimulus or
+    // mission/cinematic payload receives this exemption.
+#if defined(KK_DEV_TOOLS)
+    const auto output = ctx.r8.u32, payload = ctx.r6.u32;
+    const bool readable = Range(output, 8);
+    const auto old_id = readable ? Load32(b, output) : UINT32_MAX;
+    const auto old_generation = readable ? Load32(b, output+4) : 0;
+    const auto classification = Load32(b, payload+96);
+    const auto lifetime = ctx.f1.f64;
+#endif
+    __imp__sub_8271E4E8(ctx, b);
+#if defined(KK_DEV_TOOLS)
+    const auto u32 = [&](uint32_t p) { return Load32(b, p); };
+    const auto record = coop::stimulus_debug::ReadHandle(u32, output);
+    const bool queued = readable && record.valid && record.source == body && (record.id >> 24) == 1 &&
+        (record.id != old_id || record.generation != old_generation);
+    static uint64_t count = 0, succeeded = 0, refused = 0;
+    ++count; if (queued) ++succeeded; else ++refused;
+    if (count <= 8 || count%120 == 0 || (!queued && refused <= 8)) {
+      const auto pool = coop::stimulus_debug::ReadPool(u32, 1);
+      REXLOG_INFO("BITE human-publish body={:08X} class={} lifetime={:.3f} queued={} id={:08X}/{} record={:08X} pool-flags={:08X} enumerable={} source={:08X} pool={}/{} count={} succeeded={} refused={}",
+          body, classification, lifetime, queued, record.id, record.generation, record.address, record.flags,
+          record.enumerable, record.source, pool.count, pool.capacity, count, succeeded, refused);
+    }
+#endif
+    return true;
+  }
+  return false;
+}
 void PartnerBodyScriptRecord(const uint8_t* b) {
   auto& s = Get();
   if (!Opt().automatic || !s.driving) return;
@@ -1454,6 +1532,7 @@ REX_HOOK_RAW(sub_82454690) {
   __imp__sub_82454690(ctx, base);
 }
 REX_HOOK_RAW(sub_8271E4E8) {
+  if (kk::PartnerBodyStimulus(ctx, base)) return;
   kk::PartnerBodyTriggerReference(base, ctx.r6.u32);
   __imp__sub_8271E4E8(ctx, base);
 }

@@ -65,6 +65,7 @@ void CoopSession::Transition(SessionState s) {
     poses_.Clear(); enemies_.Clear(); outgoing_shots_.clear(); incoming_shots_.clear();
     remote_inventory_.reset(); sent_cheats_.reset();
     local_inventory_.reset(); sent_inventory_.reset();
+    outgoing_combat_.clear(); incoming_combat_.clear();
     // Keep host settings during a temporary loss. End/leave restores own choices.
     if (s != SessionState::Lost) host_cheats_.reset();
     if (s == SessionState::Ended) { outgoing_flow_.clear(); incoming_flow_.clear(); }
@@ -109,6 +110,11 @@ void CoopSession::Receive(const Message& m, double now) {
     } else {
       if (state_ != SessionState::Connected && state_ != SessionState::Lost) return;
       switch (m.type) {
+        case MessageType::DamageEvent: case MessageType::PlayerStatus:
+          if (state_ != SessionState::Connected ||
+              (m.type == MessageType::DamageEvent ? config_.role != Role::Guest : config_.role != Role::Host)) return;
+          if (incoming_combat_.size() >= combat::kQueueLimit) { End(now); return; }
+          incoming_combat_.push_back({m, now}); break;
         case MessageType::Cheats:
           if (config_.role != Role::Guest || (cheat_seen_ && int32_t(m.sequence-cheat_sequence_) <= 0)) return;
           cheat_seen_ = true; cheat_sequence_ = m.sequence; host_cheats_ = m.cheats; break;
@@ -196,6 +202,12 @@ void CoopSession::Tick(double now, const std::optional<PlayerPose>& local, const
     if (!Send(outgoing_flow_.front(), true)) break;
     outgoing_flow_.pop_front();
   }
+  if (state_ == SessionState::Connected) for (unsigned n = 0; n < 8 && !outgoing_combat_.empty(); ++n) {
+    const auto& entry = outgoing_combat_.front();
+    if (entry.message.epoch != epoch_ || !combat::Fresh(entry.received, now)) { outgoing_combat_.pop_front(); continue; }
+    if (!Send(entry.message, true)) break;
+    outgoing_combat_.pop_front();
+  }
   if (local && now - last_pose_ >= .05 && state_ == SessionState::Connected) {
     Message pose; pose.type = MessageType::PlayerPose; pose.pose = *local;
     Send(pose, false); last_pose_ = now;
@@ -248,6 +260,16 @@ bool CoopSession::QueueFlow(const Message& m) {
   if (state_ != SessionState::Connected || !IsFlowMessage(m.type) || outgoing_flow_.size() >= 64) return false;
   std::vector<uint8_t> bytes; if (!Encode(m, bytes)) return false;
   outgoing_flow_.push_back(m); return true;
+}
+bool CoopSession::QueueCombat(const Message& m, double submitted) {
+  if (state_ != SessionState::Connected || !IsCombatMessage(m.type) || m.epoch != epoch_ ||
+      !std::isfinite(submitted) || outgoing_combat_.size() >= combat::kQueueLimit ||
+      (m.type == MessageType::DamageEvent ? config_.role != Role::Host : config_.role != Role::Guest)) return false;
+  std::vector<uint8_t> bytes; if (!Encode(m, bytes)) return false;
+  outgoing_combat_.push_back({m, submitted}); return true;
+}
+std::vector<ReceivedCombat> CoopSession::TakeCombat() {
+  auto out = std::move(incoming_combat_); incoming_combat_.clear(); return out;
 }
 std::vector<Message> CoopSession::TakeFlow() { auto out = std::move(incoming_flow_); incoming_flow_.clear(); return out; }
 std::vector<ReceivedShot> CoopSession::TakeShots() { auto out = std::move(incoming_shots_); incoming_shots_.clear(); return out; }

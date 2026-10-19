@@ -8,7 +8,11 @@
 #include "play_internal.h"
 #include "photo_mode.h"
 #include "coop_partner_body.h"
+#if defined(KK_DEV_TOOLS)
+#include "coop_stimulus_debug.h"
+#endif
 #include <algorithm>
+#include <bit>
 #include <rex/logging.h>
 #include <chrono>
 #include <cstdlib>
@@ -29,6 +33,17 @@ REX_EXTERN(__imp__sub_82696A28);
 REX_EXTERN(__imp__sub_8243A3C0);
 REX_EXTERN(__imp__sub_82634428);
 REX_EXTERN(__imp__sub_82419C38);
+REX_EXTERN(__imp__sub_8261DE68);
+REX_EXTERN(__imp__sub_826A0920);
+REX_EXTERN(__imp__sub_82548BC0);
+#if defined(KK_DEV_TOOLS)
+REX_EXTERN(__imp__sub_8254A8F8);
+REX_EXTERN(__imp__sub_82569A70);
+REX_EXTERN(__imp__sub_8245A7B8);
+REX_EXTERN(__imp__sub_8246DC58);
+REX_EXTERN(__imp__sub_82428020);
+REX_EXTERN(__imp__sub_82464680);
+#endif
 #if defined(KK_DEV_TOOLS)
 REX_EXTERN(__imp__sub_8250EE50);
 REX_EXTERN(__imp__sub_8250EDE8);
@@ -331,6 +346,12 @@ struct Authored {
 };
 struct Pending { EnemyId id; uint32_t ai, matrix; float x, y, z; };
 struct Spawner { uint64_t key; uint32_t ai, vars, sequence = 0; std::map<uint32_t, uint64_t> sources; };
+#if defined(KK_DEV_TOOLS)
+struct DevRaptorLog {
+  double select_next = 0, vision_next = 0, filter_next = 0, register_next = 0, ray_next = 0, gate_next = 0;
+  unsigned select_count = 0, vision_count = 0, filter_count = 0, register_count = 0, ray_count = 0, gate_count = 0;
+};
+#endif
 struct State {
   uint32_t world = 0, game = 0;
   std::map<std::pair<uint32_t, uint32_t>, uint32_t> visits;
@@ -352,6 +373,16 @@ struct State {
   ShotValidator shot_validator;
   ShotCounters shots;
   uint32_t next_shot = 0;
+  uint64_t combat_epoch = 0, incarnation = 0;
+  uint32_t next_damage = 0, next_status = 0;
+  uint32_t combat_hero = 0, combat_ai = 0, combat_vars = 0;
+  bool injecting_damage = false;
+  combat::DamageReplay damage_replay;
+  combat::StatusReplay status_replay;
+  std::deque<ReceivedCombat> pending_damage;
+  std::optional<PlayerStatus> sent_status;
+  double next_status_time = 0, partner_status_time = -1;
+  uint64_t hits_produced = 0, hits_queued = 0, hits_native = 0, hits_refused = 0;
   bool shooting = false, shot_resolved = false;
   ShotIntent shot;
   InventoryState shot_inventory;
@@ -360,6 +391,8 @@ struct State {
   bool shot_matched = false;
   const char* shot_hit_reason = "no-hit";
   unsigned shot_target_diagnostics = 0;
+  std::map<uint32_t, DevRaptorLog> raptor_logs;
+  unsigned raptor_candidate_lines = 0;
 #endif
   double census_until = 0, next_numbers = 0, next_shot_log = 0;
   double error_sum = 0, error_max = 0;
@@ -375,6 +408,13 @@ struct State {
     orphan_logged.clear(); unbound = 0;
     aliases.clear(); retry.clear(); retry_diagnosed.clear(); shots = {}; shot_validator = {}; shooting = shot_resolved = false; shot = {};
     census_until = next_numbers = next_log = next_shot_log = error_sum = error_max = 0; error_count = 0;
+    combat_epoch = incarnation = 0; combat_hero = combat_ai = combat_vars = 0;
+    next_damage = next_status = 0; pending_damage.clear(); sent_status.reset();
+    damage_replay = {}; status_replay = {}; injecting_damage = false;
+    next_status_time = 0; partner_status_time = -1;
+#if defined(KK_DEV_TOOLS)
+    raptor_logs.clear(); raptor_candidate_lines = 0;
+#endif
   }
 };
 State& Get() { static State s; return s; }
@@ -506,6 +546,16 @@ bool ValidBinding(const uint8_t* b, const Binding& binding) {
   Binding now; EnemyState e;
   return Member(b, Get().world, binding.actor, Get().link.role == Role::Guest) && Read(b, binding.actor, now, e) &&
       now.ai == binding.ai && now.vars == binding.vars && now.matrix == binding.matrix && e.id.family == binding.id.family;
+}
+bool RetainedDamageSource(const uint8_t* b, const Binding& source) {
+  // Preserve the last committed attack of a corpse still in the full registry.
+  // Removal, component reuse and a new initializer invalidate it immediately.
+  bool initializing = false, spawner = false; uint32_t state = 0;
+  return Member(b, Get().world, source.actor, true) && PoseAddress(source.actor, 32) &&
+      !(Load32(b, source.actor)&1) && Ptr(b, Ptr(b, source.actor, 24, 8), 4, 88) == source.ai &&
+      Ptr(b, source.ai, 64, LifeOffset(source.id.family)+4) == source.vars &&
+      Ptr(b, source.actor, 12, 64) == source.matrix &&
+      Tracks(b, source.ai, state, spawner, &initializing) == source.id.family && !initializing;
 }
 // Same engine transform/controller route and scratch discipline as the puppet.
 struct Scratch {
@@ -689,6 +739,377 @@ ShotVector Direction(ShotVector a, ShotVector z) {
 bool JackReady(const uint8_t* b) {
   return ReadJackPose([&](uint32_t a) { return Load32(b, a); }, [&](uint32_t a) { return Load16(b, a); },
       [&](uint32_t a) { return LoadF(b, a); }, Now()).pose.has_value();
+}
+struct HumanStatus {
+  uint32_t hero = 0, ai = 0, vars = 0, cell = 0, bank = 0;
+  float value = 0, hurt = 0, dead = 0, recovered = 0;
+  PlayerCondition condition = PlayerCondition::Alive;
+};
+std::optional<HumanStatus> ReadHumanStatus(const uint8_t* b) {
+  HumanStatus h;
+  h.hero = Load32(b, 0x82CCBF7C);
+  h.ai = Ptr(b, Ptr(b, h.hero, 24, 8), 4, 88);
+  h.vars = Ptr(b, h.ai, 64, 15232);
+  h.bank = Load32(b, 0x82CC8848);
+  if (!h.vars || !PoseAddress(h.hero, 32) || !Ptr(b, h.hero, 12, 64)) return {};
+  const auto id = Load32(b, h.vars+4);
+  if (id > 12 || !PoseAddress(h.bank, 7096+4*id) || !Load32(b, h.vars)) return {};
+  // Verify canonical H tagoff even during native death, without requiring the
+  // ordinary live-pose reader (which can reject inactive/dead actors).
+  const auto first = Load16(b, h.ai+80), last = Load16(b, h.ai+82);
+  if (first > last || last > 4096 || !PoseAddress(h.ai, (first+7)*4)) return {};
+  const auto tag = Ptr(b, h.ai, (first+6)*4, 24);
+  if (!tag || Load32(b, tag+20) != 0x826718B8) return {};
+  h.cell = h.bank+7092+4*id;
+  h.value = LoadF(b, h.cell); h.dead = LoadF(b, 0x820B0C98);
+  h.hurt = LoadF(b, 0x828D28E8); h.recovered = LoadF(b, 0x828E3AC0);
+  if (!std::isfinite(h.value) || !std::isfinite(h.dead) || !std::isfinite(h.hurt) ||
+      !std::isfinite(h.recovered) || h.dead == h.hurt || h.dead == h.recovered || h.hurt == h.recovered) return {};
+  h.condition = h.value == h.dead ? PlayerCondition::Dead :
+      h.value == h.hurt ? PlayerCondition::Hurt : PlayerCondition::Alive;
+  return h;
+}
+void CombatContext(const uint8_t* b) {
+  auto& s = Get();
+  if (s.link.role == Role::Host) {
+    // Host hit sequence belongs to the guest's life, not the host's Jack or a
+    // transient one-way connection loss. The guest status changes its life.
+    if (s.combat_epoch != s.link.epoch) {
+      s.combat_epoch = s.link.epoch; s.status_replay.Reset(s.combat_epoch, s.identity);
+      s.next_damage = 0; s.partner_status_time = -1; s.pending_damage.clear();
+    }
+    return;
+  }
+  const auto h = ReadHumanStatus(b);
+  if (!h) {
+#if defined(KK_DEV_TOOLS)
+    static double next = 0; static unsigned count = 0;
+    if (count < 8 && Now() >= next) {
+      ++count; next = Now()+1;
+      const auto hero = Load32(b, 0x82CCBF7C), ai = Ptr(b, Ptr(b, hero, 24, 8), 4, 88);
+      REXLOG_INFO("BITE Jack-status unavailable hero={:08X} ai={:08X} vars={:08X} bank={:08X} dead={:.3f} hurt={:.3f} recovered={:.3f}",
+          hero, ai, Ptr(b, ai, 64, 8), Load32(b, 0x82CC8848), LoadF(b, 0x820B0C98), LoadF(b, 0x828D28E8), LoadF(b, 0x828E3AC0));
+    }
+#endif
+    return;
+  }
+  if (s.combat_epoch != s.link.epoch || s.combat_hero != h->hero ||
+      s.combat_ai != h->ai || s.combat_vars != h->vars || !s.incarnation) {
+    static uint64_t life = uint64_t(std::chrono::duration_cast<std::chrono::microseconds>(
+        std::chrono::steady_clock::now().time_since_epoch()).count());
+    s.combat_epoch = s.link.epoch; s.incarnation = ++life;
+    s.combat_hero = h->hero; s.combat_ai = h->ai; s.combat_vars = h->vars;
+    s.damage_replay.Reset(s.combat_epoch, s.identity, s.incarnation);
+    s.status_replay.Reset(s.combat_epoch, s.identity);
+    s.sent_status.reset(); s.next_status = s.next_damage = 0;
+    s.next_status_time = 0; s.partner_status_time = -1; s.pending_damage.clear();
+  }
+}
+void PublishPlayerStatus(const uint8_t* b) {
+  auto& s = Get();
+  if (!s.prepared || s.link.role != Role::Guest || !Connected() || !Environment(b, s.world) ||
+      !s.combat_epoch || s.combat_epoch != s.link.epoch || !s.incarnation) return;
+  const auto h = ReadHumanStatus(b); if (!h || h->hero != s.combat_hero || h->ai != s.combat_ai || h->vars != s.combat_vars) return;
+  PlayerStatus p{s.identity, s.incarnation, s.next_status+1, s.damage_replay.Last(), h->condition};
+  const bool changed = !s.sent_status || p.condition != s.sent_status->condition || p.last_damage != s.sent_status->last_damage;
+  if (!changed && Now() < s.next_status_time) return;
+  if (!p.number) return; // Do not wrap a replay sequence.
+  Message m; m.type = MessageType::PlayerStatus; m.epoch = s.combat_epoch; m.player_status = p;
+  if (SubmitCombat(m, Now())) {
+    ++s.next_status; s.sent_status = p; s.next_status_time = Now()+.5;
+#if defined(KK_DEV_TOOLS)
+    if (changed) REXLOG_INFO("BITE player-status incarnation={} condition={} last-processed={} cell={:08X} value={:.3f} dead={:.3f} hurt={:.3f} recovered={:.3f} bank={:08X} G={:08X}",
+        p.incarnation, uint8_t(p.condition), p.last_damage, h->cell, h->value, h->dead, h->hurt, h->recovered, h->bank, Load32(b, 0x82CC97C0));
+#endif
+  }
+}
+bool NativeDamage(PPCContext& ctx, uint8_t* b, const DamageEvent& d) {
+  auto& s = Get();
+  if (!Scratch::CanUse(ctx) || !JackReady(b) || !Environment(b, s.world)) return false;
+  auto alias = s.aliases.find(d.enemy);
+  if (alias == s.aliases.end()) return false;
+  std::vector<Binding> bindings;
+  for (const auto& [actor, binding] : s.bindings) bindings.push_back(binding);
+  const Binding* source = Match(alias->second, bindings); // also refuses mutable-component aliases
+  const auto h = ReadHumanStatus(b);
+  if (!source || !RetainedDamageSource(b, *source) || !h || h->hero != s.combat_hero || h->ai != s.combat_ai ||
+      h->vars != s.combat_vars || h->condition == PlayerCondition::Dead) return false;
+  constexpr uint32_t pool = 0x82C8EF30;
+  const auto count = Load32(b, pool+12), used = Load32(b, pool+8);
+  const float duration = LoadF(b, 0x820B0E48); // Raptor bite 8256D2F0 lifetime.
+  if (!count || count > 4096 || used >= count || !Ptr(b, pool, 0, count*116) ||
+      !std::isfinite(duration) || duration <= 0 || duration > 10) return false;
+  Scratch scratch(ctx, b);
+  constexpr uint32_t globals[] = {0x82CCBF64, 0x82CCBF68, 0x82CCBF6C, 0x82CCBF70};
+  uint32_t saved[4]; for (unsigned i = 0; i < 4; ++i) saved[i] = Load32(b, globals[i]);
+  Store32(b, globals[0], source->ai); Store32(b, globals[1], source->ai);
+  Store32(b, globals[2], source->actor); Store32(b, globals[3], source->actor);
+  const uint32_t result = scratch.Vec(0, 0, 0, 0x100);
+  Store32(b, result, UINT32_MAX); Store32(b, result+4, 0);
+  StoreF(b, ctx.r1.u32+88, d.direction.z);
+  ctx.r3.u64 = result; ctx.r4.s64 = -1; ctx.r5.u64 = d.flags;
+  ctx.r6.u64 = source->actor; ctx.r8.u64 = h->hero; ctx.r9.u64 = d.magnitude;
+  ctx.r10.u64 = (uint64_t(std::bit_cast<uint32_t>(d.direction.x)) << 32) | std::bit_cast<uint32_t>(d.direction.y);
+  ctx.f1.f64 = duration;
+  s.injecting_damage = true;
+  __imp__sub_8261DE68(ctx, b);
+  s.injecting_damage = false;
+  for (unsigned i = 0; i < 4; ++i) Store32(b, globals[i], saved[i]);
+  return Load32(b, result) != UINT32_MAX && Load32(b, result+4) != 0;
+}
+void CombatBeforeAi(PPCContext& ctx, uint8_t* b) {
+  auto& s = Get();
+  CombatContext(b);
+  for (auto& entry : TakeCombat()) {
+    if (s.link.role == Role::Host) {
+      const auto old = s.status_replay.Status();
+      if (s.status_replay.Accept(entry.message, entry.received, Now())) {
+        s.partner_status_time = Now();
+        if (old.incarnation != s.status_replay.Status().incarnation) { s.next_damage = 0; s.pending_damage.clear(); }
+#if defined(KK_DEV_TOOLS)
+        const auto& p = s.status_replay.Status();
+        static unsigned logged = 0;
+        if (logged < 256 && (old.incarnation != p.incarnation || old.condition != p.condition || old.last_damage != p.last_damage)) {
+          ++logged;
+          REXLOG_INFO("BITE partner-status incarnation={} condition={} last-processed={}", p.incarnation, uint8_t(p.condition), p.last_damage);
+        }
+#endif
+      }
+    } else if (entry.message.type == MessageType::DamageEvent) {
+      if (s.pending_damage.size() < combat::kQueueLimit) s.pending_damage.push_back(std::move(entry));
+      else {
+        ++s.hits_refused;
+#if defined(KK_DEV_TOOLS)
+        static unsigned logged = 0;
+        if (logged++ < 8) REXLOG_WARN("BITE guest damage refused reason=pending-queue-full");
+#endif
+      }
+    }
+  }
+  if (s.link.role == Role::Host) {
+    while (!s.pending_damage.empty()) {
+      const auto& pending = s.pending_damage.front();
+      if (!combat::Fresh(pending.received, Now())) { ++s.hits_refused; s.pending_damage.pop_front(); continue; }
+      if (!SubmitCombat(pending.message, pending.received)) break;
+      ++s.hits_queued; s.pending_damage.pop_front();
+    }
+  } else {
+    while (!s.pending_damage.empty()) {
+      const auto& entry = s.pending_damage.front();
+      // Wait briefly for the normal enemy matcher, without advancing replay.
+      if ((!s.aliases.contains(entry.message.damage.enemy) || !s.link.partner) && combat::Fresh(entry.received, Now())) break;
+      const bool accepted = s.link.partner && s.link.partner->level == s.identity.level &&
+          combat::DamageClock(entry.message.damage.time, s.link.partner->time) &&
+          s.damage_replay.Accept(entry.message, entry.received, Now());
+      const bool queued = accepted && NativeDamage(ctx, b, entry.message.damage);
+      if (queued) ++s.hits_native; else ++s.hits_refused;
+#if defined(KK_DEV_TOOLS)
+      REXLOG_INFO("BITE guest number={} incarnation={} replay-accepted={} native-queued={} processed={} injured=observe-native-consumer",
+          entry.message.damage.number, entry.message.damage.incarnation, accepted, queued, s.damage_replay.Last());
+#endif
+      s.pending_damage.pop_front();
+    }
+    PublishPlayerStatus(b);
+  }
+}
+#if defined(KK_DEV_TOOLS)
+void DevBait(PPCContext& ctx, uint8_t* b) {
+  struct Bait {
+    double due = -1;
+    bool done = false;
+    Bait() {
+      const char* value = std::getenv("KK_DEV_BAIT");
+      if (!value || !*value) return;
+      char* end = nullptr; const auto parsed = std::strtod(value, &end);
+      if (end != value && !*end && std::isfinite(parsed) && parsed >= 0 && parsed <= 3600) due = parsed;
+      else REXLOG_WARN("KK dev bait: invalid KK_DEV_BAIT, expected seconds in 0..3600");
+    }
+  };
+  static Bait bait;
+  if (bait.done || bait.due < 0) return;
+  const double t = kk::DevSecondsSinceMenu();
+  if (t < bait.due) return;
+  if (t > bait.due+10) { bait.done = true; REXLOG_WARN("KK dev bait: expired waiting for matched live raptor on guest"); return; }
+  auto& s = Get();
+  if (!s.prepared || s.link.role != Role::Guest || !Connected() || !Environment(b, s.world)) return;
+  const auto jack = ReadJackPose([&](uint32_t p) { return Load32(b, p); },
+      [&](uint32_t p) { return Load16(b, p); }, [&](uint32_t p) { return LoadF(b, p); }, Now());
+  if (!jack.pose) return;
+  const ShotVector origin{jack.pose->x, jack.pose->y, jack.pose->z};
+  const Record* nearest = nullptr; float distance = 300;
+  for (const auto& [actor, record] : s.driving) {
+    if (record.kind != EnemyEventKind::Spawned || record.enemy.life <= 0 || record.enemy.id.family != EnemyFamily::Raptor) continue;
+    const auto it = s.bindings.find(actor); const auto alias = s.aliases.find(record.enemy.id);
+    if (it == s.bindings.end() || alias == s.aliases.end() || alias->second != it->second.id || !ValidBinding(b, it->second)) continue;
+    const float d = ShotDistance(origin, {record.enemy.x, record.enemy.y, record.enemy.z});
+    if (d < distance) { distance = d; nearest = &record; }
+  }
+  if (!nearest) return;
+  const auto& e = nearest->enemy;
+  const float dx = e.x-origin.x, dy = e.y-origin.y, length = std::hypot(dx, dy);
+  const float fx = length > .001f ? dx/length : std::cos(e.facing);
+  const float fy = length > .001f ? dy/length : std::sin(e.facing);
+  const ShotVector target{e.x-3*fx, e.y-3*fy, e.z};
+  if (!kk::DevTeleportJack(ctx, b, Load32(b, 0x82CCBF7C), target, fx, fy)) return;
+  bait.done = true;
+  REXLOG_INFO("KK dev bait: at {:.2f} guest teleported by native 82538B70 raptor={:016X}/{} from=({:.3f},{:.3f},{:.3f}) to=({:.3f},{:.3f},{:.3f}) stand-off=3 collision-unverified=true",
+      t, e.id.source, e.id.sequence, origin.x, origin.y, origin.z, target.x, target.y, target.z);
+}
+// Diagnostics are per validated host raptor, bounded and reset on load. The old
+// process-wide timer hid other raptors; a handle alone did not identify a victim.
+uint32_t DevRaptorVars(const uint8_t* b, uint32_t actor, uint32_t ai) {
+  const auto& s = Get();
+  if (!REXCVAR_GET(kk_coop_enabled) || !Connected() || s.link.role != Role::Host || !Environment(b, s.world)) return 0;
+  const auto it = s.bindings.find(actor);
+  if (it == s.bindings.end() || it->second.id.family != EnemyFamily::Raptor ||
+      it->second.ai != ai || !ValidBinding(b, it->second)) return 0;
+  const auto vars = Ptr(b, ai, 64, 14200);
+  return vars == it->second.vars ? vars : 0;
+}
+DevRaptorLog* DevRaptorBudget(uint32_t actor) {
+  auto& logs = Get().raptor_logs;
+  if (!logs.contains(actor) && logs.size() >= 16) return nullptr;
+  return &logs[actor];
+}
+bool DevSample(double& next, unsigned& count, bool changed = false) {
+  const auto now = Now();
+  if (count >= 64 || (!changed && now < next)) return false;
+  ++count; next = now+1; return true;
+}
+int32_t DevBodySlot(const uint8_t* b, uint32_t vars, uint32_t body) {
+  const auto count = Load32(b, vars+5236);
+  if (!body || count > 20) return -1;
+  for (uint32_t i = 0; i < count; ++i) if (Load32(b, vars+6244+4*i) == body) return int32_t(i);
+  return -1;
+}
+void DevRaptorCandidates(const uint8_t* b, uint32_t actor, uint32_t vars, uint32_t body) {
+  const auto count = Load32(b, vars+5236);
+  if (count > 20) { REXLOG_WARN("BITE raptor-candidates actor={:08X} invalid-count={} limit=20", actor, count); return; }
+  for (uint32_t i = 0; i < count; ++i) {
+    const auto target = Load32(b, vars+6244+4*i), off = 4*i, pos = vars+6000+12*i;
+    // Reserve evidence for a late body registration even after the other-row
+    // budget is spent. Body rows remain bounded by each raptor's 64 samples.
+    if (!(body && target == body)) {
+      if (Get().raptor_candidate_lines >= 1024) continue;
+      ++Get().raptor_candidate_lines;
+    }
+    // Best-interest has several priority passes, not one scalar score. +5748 is
+    // native distance; +5832 is compared as a score in 8254AABC. Log both plus
+    // eligibility/priority fields rather than infer why a lower score won.
+    REXLOG_INFO("BITE raptor-candidate actor={:08X} slot={} candidate={:08X} body={} selected={} visited={} class+5664={} flags+5496={:08X} seen+5244={} area+5328={} area-id+5412={} group+5580={} distance+5748={:.3f} score+5832={:.3f} life+5916={:.3f} pos=({:.3f},{:.3f},{:.3f})",
+        actor, i, target, body && target == body, Load32(b, vars+5228) == i,
+        (Load32(b, vars+5232) & (1u << i)) != 0, Load32(b, vars+5664+off), Load32(b, vars+5496+off),
+        Load32(b, vars+5244+off), Load32(b, vars+5328+off), Load32(b, vars+5412+off), Load32(b, vars+5580+off),
+        LoadF(b, vars+5748+off), LoadF(b, vars+5832+off), LoadF(b, vars+5916+off),
+        LoadF(b, pos), LoadF(b, pos+4), LoadF(b, pos+8));
+  }
+}
+void DevRaptorVision(PPCContext& ctx, uint8_t* b) {
+  const auto ai = Load32(b, 0x82CCBF64), actor = Load32(b, 0x82CCBF6C);
+  const auto vars = DevRaptorVars(b, actor, ai), body = vars ? kk::PartnerBodyCombatActor(b) : 0;
+  auto* budget = vars ? DevRaptorBudget(actor) : nullptr;
+  const bool sample = budget && body && DevSample(budget->vision_next, budget->vision_count);
+  if (sample) {
+    const auto u32 = [&](uint32_t p) { return Load32(b, p); };
+    const auto pool = stimulus_debug::ReadPool(u32, 1);
+    unsigned found = 0, enumerable = 0;
+    if (pool.valid && pool.count <= 4096) for (uint32_t i = 0; i < pool.count; ++i) {
+      const auto r = stimulus_debug::ReadSlot(u32, pool, i);
+      if (!r.valid || r.source != body) continue;
+      ++found; enumerable += r.enumerable;
+      if (found <= 4) REXLOG_INFO("BITE vision-stimulus actor={:08X} body={:08X} id={:08X}/{} pool-flags={:08X} enumerable={} lifetime={:.6f} class={} status={} life={:.3f} pos=({:.3f},{:.3f},{:.3f})",
+          actor, body, r.id, r.generation, r.flags, r.enumerable, LoadF(b, r.address+4),
+          Load32(b, r.address+8+96), Load32(b, r.address+8+92), LoadF(b, r.address+8+48),
+          LoadF(b, r.address+8+24), LoadF(b, r.address+8+28), LoadF(b, r.address+8+32));
+    }
+    REXLOG_INFO("BITE vision-input actor={:08X} body={:08X} pool-valid={} scan-complete={} pool={}/{} body-records={} enumerable={} cached+5144={} candidates={} body-slot={}",
+        actor, body, pool.valid, pool.valid && pool.count <= 4096, pool.count, pool.capacity,
+        found, enumerable, Load32(b, vars+5144), Load32(b, vars+5236), DevBodySlot(b, vars, body));
+  }
+  __imp__sub_82569A70(ctx, b);
+  if (sample && DevRaptorVars(b, actor, ai) == vars)
+    REXLOG_INFO("BITE vision-output actor={:08X} body={:08X} candidates={} body-slot={} visited-mask={:08X}",
+        actor, body, Load32(b, vars+5236), DevBodySlot(b, vars, body), Load32(b, vars+5232));
+}
+void DevRaptorFilter(PPCContext& ctx, uint8_t* b) {
+  const auto ai = Load32(b, 0x82CCBF64), actor = Load32(b, 0x82CCBF6C);
+  const auto vars = uint32_t(ctx.lr) == 0x82569BD8 ? DevRaptorVars(b, actor, ai) : 0;
+  const auto body = vars ? kk::PartnerBodyCombatActor(b) : 0;
+  const auto r = body ? stimulus_debug::ReadHandle([&](uint32_t p) { return Load32(b, p); }, ctx.r3.u32) : stimulus_debug::Record{};
+  const auto classification = r.valid ? Load32(b, r.address+8+96) : 0;
+  __imp__sub_8245A7B8(ctx, b);
+  auto* budget = r.valid && r.source == body ? DevRaptorBudget(actor) : nullptr;
+  if (budget && DevSample(budget->filter_next, budget->filter_count))
+    REXLOG_INFO("BITE body-filter actor={:08X} body={:08X} id={:08X}/{} class={} rejected={}",
+        actor, body, r.id, r.generation, classification, ctx.r3.u32 != 0);
+}
+void DevRaptorRegister(PPCContext& ctx, uint8_t* b) {
+  const auto ai = Load32(b, 0x82CCBF64), actor = Load32(b, 0x82CCBF6C);
+  const auto vars = uint32_t(ctx.lr) == 0x82569BF8 ? DevRaptorVars(b, actor, ai) : 0;
+  const auto body = vars ? kk::PartnerBodyCombatActor(b) : 0;
+  const bool observe = body && ctx.r3.u32 == body;
+  const auto before = observe ? Load32(b, vars+5236) : 0;
+  __imp__sub_8246DC58(ctx, b);
+  auto* budget = observe && DevRaptorVars(b, actor, ai) == vars ? DevRaptorBudget(actor) : nullptr;
+  if (budget && DevSample(budget->register_next, budget->register_count))
+    REXLOG_INFO("BITE body-register actor={:08X} body={:08X} returned-slot={} body-slot={} candidates={}->{} full-before={}",
+        actor, body, ctx.r3.s32, DevBodySlot(b, vars, body), before, Load32(b, vars+5236), before == 20);
+}
+void DevRaptorVisibility(PPCContext& ctx, uint8_t* b, bool ray) {
+  const auto ai = Load32(b, 0x82CCBF64), actor = Load32(b, 0x82CCBF6C), caller = uint32_t(ctx.lr);
+  const auto vars = caller == (ray ? 0x82569FE8u : 0x8256A0DCu) ? DevRaptorVars(b, actor, ai) : 0;
+  const auto body = vars ? kk::PartnerBodyCombatActor(b) : 0;
+  const auto index = ctx.r3.u32;
+  const bool observe = body && (ray ? index == body : index < 20 && index < Load32(b, vars+5236) && Load32(b, vars+6244+4*index) == body);
+  if (ray) __imp__sub_82428020(ctx, b); else __imp__sub_82464680(ctx, b);
+  auto* budget = observe ? DevRaptorBudget(actor) : nullptr;
+  if (budget && DevSample(ray ? budget->ray_next : budget->gate_next, ray ? budget->ray_count : budget->gate_count))
+    REXLOG_INFO("BITE body-visibility actor={:08X} body={:08X} helper={} caller={:08X} result={} (native-vision-ray-nonzero-passes; gate-zero-passes)",
+        actor, body, ray ? "82428020" : "82464680", caller, ctx.r3.u32);
+}
+void DevRaptorSelection(PPCContext& ctx, uint8_t* b) {
+  const auto ai = Load32(b, 0x82CCBF64), actor = Load32(b, 0x82CCBF6C);
+  const auto vars = DevRaptorVars(b, actor, ai);
+  const auto before = vars ? Load32(b, vars+5216) : 0;
+  const auto cached = vars ? Load32(b, vars+5168) : 0;
+  __imp__sub_8254A8F8(ctx, b);
+  if (!vars || DevRaptorVars(b, actor, ai) != vars) return;
+  auto* budget = DevRaptorBudget(actor);
+  const auto after = Load32(b, vars+5216), body = kk::PartnerBodyCombatActor(b);
+  if (!budget || !DevSample(budget->select_next, budget->select_count, before != after)) return;
+  const auto u32 = [&](uint32_t p) { return Load32(b, p); };
+  const auto target = stimulus_debug::ReadHandle(u32, vars+5216);
+  const auto force = stimulus_debug::ReadHandle(u32, vars+8436);
+  uint32_t state = 0; bool spawner = false; Tracks(b, ai, state, spawner);
+  REXLOG_INFO("BITE raptor-select actor={:08X} hero-cache+5100={:08X} target-handle+5216={:08X}->{:08X}/{} valid={} source={:08X} victim={:08X} body={:08X} victim-is-body={} slot={} body-slot={} candidates={} state={:08X} cached-before+5168={} mode+5108={} kind+32={} script+13932={} script-actor+10808={:08X} script-op+10904={} force+8436={:08X}/{} force-owner={:08X} force-victim={:08X} force-active+8432={} human-policy+8316={:.3f} interest-value+36={:.3f}",
+      actor, Load32(b, vars+5100), before, after, target.generation, target.valid, target.source, target.target,
+      body, body && target.valid && target.target == body, int32_t(Load32(b, vars+5228)), DevBodySlot(b, vars, body),
+      Load32(b, vars+5236), state, cached, Load32(b, vars+5108), Load32(b, vars+32), Load32(b, vars+13932),
+      Load32(b, vars+10808), Load32(b, vars+10904), force.id, force.generation, force.target,
+      force.valid ? Load32(b, force.address+16) : 0,
+      Load32(b, vars+8432), LoadF(b, vars+8316), target.valid ? LoadF(b, target.address+44) : 0.0f);
+  DevRaptorCandidates(b, actor, vars, body);
+}
+#endif
+void ObserveHumanConsumption(PPCContext& ctx, uint8_t* b) {
+#if defined(KK_DEV_TOOLS)
+  const bool observe = REXCVAR_GET(kk_coop_enabled) && Connected() && Load32(b, 0x82CCBF6C) == Load32(b, 0x82CCBF7C);
+  const auto before = observe ? ReadHumanStatus(b) : std::nullopt;
+#endif
+  __imp__sub_826A0920(ctx, b);
+#if defined(KK_DEV_TOOLS)
+  const auto after = before ? ReadHumanStatus(b) : std::nullopt;
+  static unsigned count = 0; static double next = 0;
+  if (before && after && before->hero == after->hero && before->vars == after->vars &&
+      count < 256 && (before->value != after->value || Now() >= next)) {
+    ++count; next = Now()+1;
+    REXLOG_INFO("BITE Jack-consume cell={:08X} before={:.3f} after={:.3f} condition={} flags={:08X} magnitude={:.3f} immunity={} hit-time={:.3f} recovery-delay={:.3f} native-queued={} processed={}",
+        after->cell, before->value, after->value, uint8_t(after->condition), Load32(b, after->vars+3204),
+        LoadF(b, after->vars+3228), Load32(b, after->vars+3232), LoadF(b, after->vars+11852),
+        LoadF(b, after->vars+13288), Get().hits_native, Get().damage_replay.Last());
+  }
+#endif
+  PublishPlayerStatus(b);
 }
 // A null reason means observation began. Keep every refusal distinguishable in
 // dev diagnostics instead of treating an unobserved callback as a missed shot.
@@ -934,6 +1355,10 @@ void BeforeAi(PPCContext& ctx, uint8_t* b, uint32_t w) {
     }
   }
   else HostShots(ctx, b);
+  CombatBeforeAi(ctx, b);
+#if defined(KK_DEV_TOOLS)
+  DevBait(ctx, b);
+#endif
 }
 void AfterAi(PPCContext& ctx, uint8_t* b, uint32_t w) {
   auto& s = Get();
@@ -954,6 +1379,7 @@ void AfterAi(PPCContext& ctx, uint8_t* b, uint32_t w) {
     }
 #endif
   }
+  PublishPlayerStatus(b);
   s.counts.sent = s.link.sent; SetEnemyCounters(s.counts);
   SetShotCounters(s.shots);
 #if defined(KK_DEV_TOOLS)
@@ -1013,6 +1439,7 @@ void EnemyBeforeLoad() {
   DevWakeBeforeLoad();
 #endif
   if (!REXCVAR_GET(kk_coop_enabled)) return;
+  ClearCombat();
   Get().ResetWorld(); PublishEnemyFrame({}); SetEnemyCounters({}); SetShotCounters({});
 }
 void EnemyAfterLoad(const uint8_t* b, uint32_t game) {
@@ -1030,7 +1457,85 @@ void EnemyGameFrame() {
     // Release immediately on loss, but retain this load's identity so recovery
     // can revalidate it. The synchronous load boundary owns pointer teardown.
     auto& s = Get(); s.prepared = false; s.driving.clear(); SetEnemyCounters({});
+    s.pending_damage.clear(); s.sent_status.reset(); s.partner_status_time = -1;
+    if (s.link.role == Role::Guest) {
+      s.combat_epoch = s.incarnation = 0; s.damage_replay = {};
+    }
+    ClearCombat();
   }
+}
+bool EnemyCombatReference(const uint8_t* b, uint32_t owner, uint32_t ai, uint32_t vars, uint32_t offset) {
+  auto& s = Get();
+  if (!s.prepared || s.link.role != Role::Host || !Connected() || !Environment(b, s.world) ||
+      Now()-s.prepared_at > .5 || !PoseAddress(vars, 6324)) return false;
+  const auto binding = s.bindings.find(owner);
+  return binding != s.bindings.end() && binding->second.id.family == EnemyFamily::Raptor &&
+      binding->second.ai == ai && binding->second.vars == vars && ValidBinding(b, binding->second) &&
+      combat::CandidateReference(offset, Load32(b, vars+5236));
+}
+bool EnemyPartnerCombatReady() {
+  const auto& s = Get(); const auto& p = s.status_replay.Status();
+  return s.link.role == Role::Host && s.prepared && Connected() && s.combat_epoch == s.link.epoch &&
+      p.world == s.identity && p.incarnation && p.condition != PlayerCondition::Dead &&
+      combat::Fresh(s.partner_status_time, Now()) && s.link.partner && s.link.partner->level == s.identity.level;
+}
+bool EnemyDamageEnqueue(PPCContext& ctx, uint8_t* b, uint32_t body) {
+  auto& s = Get();
+  if (!REXCVAR_GET(kk_coop_enabled) || ctx.r4.u32 != 4 || !PoseAddress(ctx.r6.u32, 108)) return false;
+  const auto payload = ctx.r6.u32, source = ctx.r3.u32, victim = Load32(b, payload+4);
+  bool matched_source = false;
+  if (s.prepared && s.link.role == Role::Guest && Connected() && Environment(b, s.world) && Now()-s.prepared_at <= .5) {
+    const auto it = s.bindings.find(source);
+    if (it != s.bindings.end() && RetainedDamageSource(b, it->second))
+      for (const auto& [host, local] : s.aliases) matched_source |= local == it->second.id;
+  }
+  const auto action = combat::FilterVictim(4, victim, body, Load32(b, 0x82CCBF7C),
+      s.link.role == Role::Guest, matched_source, s.injecting_damage);
+  if (action == combat::VictimAction::Pass) return false;
+  if (action == combat::VictimAction::ProtectBody) {
+    ++s.hits_produced;
+    const auto binding = s.bindings.find(source);
+    DamageEvent damage{s.identity, s.status_replay.Status().incarnation, s.next_damage+1, {},
+        Load32(b, payload+88), Load32(b, payload+92),
+        {LoadF(b, payload+24), LoadF(b, payload+28), LoadF(b, payload+32)}};
+    damage.time = Now();
+    if (binding != s.bindings.end()) damage.enemy = binding->second.id;
+    const bool audited = binding != s.bindings.end() &&
+        binding->second.id.family == EnemyFamily::Raptor && ValidBinding(b, binding->second) &&
+        uint32_t(ctx.lr) == 0x8261DEEC && source == Load32(b, 0x82CCBF6C) &&
+        combat::RaptorHit(damage.flags, damage.magnitude);
+    const bool qualified = audited && EnemyPartnerCombatReady() && ValidDamageEvent(damage);
+    bool queued = false;
+    if (qualified) {
+      Message m; m.type = MessageType::DamageEvent; m.epoch = s.combat_epoch; m.damage = damage;
+      if (s.pending_damage.empty() && SubmitCombat(m, Now())) { queued = true; ++s.hits_queued; }
+      else if (s.pending_damage.size() < combat::kQueueLimit) { s.pending_damage.push_back({m, Now()}); queued = true; }
+      if (queued) ++s.next_damage;
+    }
+    if (!queued) ++s.hits_refused;
+    if (!audited) kk::PartnerBodyTriggerReference(b, payload); // unknown reference still releases auto leases
+#if defined(KK_DEV_TOOLS)
+    static unsigned logged = 0;
+    if (logged++ < 256) REXLOG_INFO("BITE host melee-enqueue source={:08X} victim={:08X} body={:08X} flags={:08X} magnitude={} qualified={} queued={} number={} body-protected=true produced={} sent={} refused={}",
+        source, victim, body, damage.flags, damage.magnitude, qualified, queued, damage.number,
+        s.hits_produced, s.hits_queued, s.hits_refused);
+#endif
+  }
+#if defined(KK_DEV_TOOLS)
+  else { static unsigned logged = 0; if (logged++ < 32) REXLOG_INFO("BITE guest local-duplicate suppressed source={:08X} victim={:08X}", source, victim); }
+#endif
+  // Mirror pool-full semantics: no new handle. Initialize the caller output to
+  // invalid explicitly, rather than leaving a previous successful event there.
+  if (PoseAddress(ctx.r8.u32, 8)) { Store32(b, ctx.r8.u32, UINT32_MAX); Store32(b, ctx.r8.u32+4, 0); }
+  return true;
+}
+bool PartnerBodyGrabRefusal(const uint8_t* b, uint32_t victim) {
+  // 82548BC0 explicitly returns zero without side effects for a null victim
+  // (.28:19664 -> 82548E7C). Protect only the leased body with that native path.
+  // Raptor LR8256D900 falls through to bites; Worm LR82533BA4 returns before
+  // damage, and Scorpion LR825FBEAC skips attachment. No other shared combat
+  // support is implied by refusing their attachment to an authored human.
+  return victim && kk::PartnerBodyCombatActor(b) == victim;
 }
 #if defined(KK_DEV_TOOLS)
 std::optional<ShotVector> EnemyDormantTarget(const uint8_t* b, uint32_t w, ShotVector origin) {
@@ -1095,6 +1600,50 @@ REX_HOOK_RAW(sub_8250EDE8) {
 #endif
 
 // One owner for each shared hook in both dev and production builds.
+REX_HOOK_RAW(sub_826A0920) {
+  kk::coop::ObserveHumanConsumption(ctx, base);
+}
+REX_HOOK_RAW(sub_82548BC0) {
+  if (kk::coop::PartnerBodyGrabRefusal(base, ctx.r3.u32)) {
+#if defined(KK_DEV_TOOLS)
+    static unsigned count = 0;
+    if (count++ < 32) REXLOG_INFO("BITE body grab refused victim={:08X} caller={:08X} raptor-bite-fallback={}",
+        ctx.r3.u32, uint32_t(ctx.lr), uint32_t(ctx.lr) == 0x8256D900);
+#endif
+    ctx.r3.u64 = 0;
+    __imp__sub_82548BC0(ctx, base); // native null-victim return, preserving native call semantics
+    return;
+  }
+  __imp__sub_82548BC0(ctx, base);
+}
+#if defined(KK_DEV_TOOLS)
+REX_HOOK_RAW(sub_82569A70) {
+  kk::coop::DevRaptorVision(ctx, base);
+}
+REX_HOOK_RAW(sub_8245A7B8) {
+  kk::coop::DevRaptorFilter(ctx, base);
+}
+REX_HOOK_RAW(sub_8246DC58) {
+  kk::coop::DevRaptorRegister(ctx, base);
+}
+REX_HOOK_RAW(sub_82428020) {
+  kk::coop::DevRaptorVisibility(ctx, base, true);
+}
+REX_HOOK_RAW(sub_82464680) {
+  kk::coop::DevRaptorVisibility(ctx, base, false);
+}
+REX_HOOK_RAW(sub_8254A8F8) {
+  kk::coop::DevRaptorSelection(ctx, base);
+}
+REX_HOOK_RAW(sub_8261DE68) {
+  if (REXCVAR_GET(kk_coop_enabled) && kk::coop::EnemyConnectionReady()) {
+    static unsigned count = 0;
+    if (count++ < 256) REXLOG_INFO("BITE melee-builder lr={:08X} source={:08X} victim={:08X} flags={:08X} magnitude={}",
+        uint32_t(ctx.lr), ctx.r6.u32, ctx.r8.u32, ctx.r5.u32, ctx.r9.u32);
+  }
+  __imp__sub_8261DE68(ctx, base);
+}
+#endif
 REX_HOOK_RAW(sub_8271D498) {
   const uint32_t world = ctx.r3.u32;
 #if defined(KK_DEV_TOOLS)

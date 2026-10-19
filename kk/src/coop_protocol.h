@@ -11,7 +11,7 @@
 
 namespace kk::coop {
 constexpr uint32_t kMagic = 0x4B4B4331;  // KKC1, network byte order throughout
-constexpr uint16_t kProtocolVersion = 6;
+constexpr uint16_t kProtocolVersion = 7;
 constexpr size_t kMaxDisplayNameBytes = 32;
 // Valid UTF-8, no controls or invisible direction/line formatting, bounded at a codepoint.
 // Empty or wholly invalid input becomes "Partner". Never log the input or result.
@@ -21,7 +21,8 @@ enum class MessageType : uint16_t {
   Hello = 1, HelloAck = 2, Reject = 3, Ping = 4, Pong = 5, PlayerPose = 6, Bye = 7,
   EnemySnapshot = 8, EnemyEvent = 9, ShotIntent = 10, Cheats = 11, InventoryState = 12,
   SessionStart = 13, SaveChunk = 14, LevelChange = 15, Loaded = 16, LoadRelease = 17,
-  Checkpoint = 18, ChapterFinished = 19, ReloadRequest = 20, FlowAbort = 21
+  Checkpoint = 18, ChapterFinished = 19, ReloadRequest = 20, FlowAbort = 21,
+  DamageEvent = 22, PlayerStatus = 23
 };
 
 // Session control is reliable and scoped by the packet epoch and a load generation.
@@ -83,6 +84,29 @@ struct EnemyState {
 constexpr size_t kMaxEnemyBatch = 16, kMaxEnemies = 512;
 
 struct ShotVector { float x = 0, y = 0, z = 0; };
+enum class PlayerCondition : uint8_t { Alive = 1, Hurt, Dead };
+// Header epoch scopes the session. World includes the checkpoint visit; incarnation
+// changes on each local life/load. Values only, never native addresses or handles.
+struct DamageEvent {
+  EnemyWorld world;
+  uint64_t incarnation = 0;
+  uint32_t number = 0;
+  EnemyId enemy;
+  uint32_t flags = 0, magnitude = 0; // native payload +88/+92 are integer words
+  ShotVector direction;
+  double time = 0; // host pose clock, bounds reliable transport delay as well as mailbox age
+};
+struct PlayerStatus {
+  EnemyWorld world;
+  uint64_t incarnation = 0;
+  uint32_t number = 0, last_damage = 0; // processed, not necessarily injured
+  PlayerCondition condition = PlayerCondition::Alive;
+};
+bool ValidDamageEvent(const DamageEvent& damage);
+bool ValidPlayerStatus(const PlayerStatus& status);
+inline bool IsCombatMessage(MessageType t) {
+  return t == MessageType::DamageEvent || t == MessageType::PlayerStatus;
+}
 struct ShotHit { EnemyId id; ShotVector point; };
 struct InventoryState {
   EnemyWorld world;
@@ -134,6 +158,8 @@ struct Message {
   EnemySnapshot enemies;
   EnemyEvent enemy_event;
   ShotIntent shot;
+  DamageEvent damage;
+  PlayerStatus player_status;
   CheatSet cheats;
   InventoryState inventory;
   SessionStart start;

@@ -81,18 +81,18 @@ struct Pair {
   }
 };
 void Protocol() {
-  static_assert(kProtocolVersion == 6);
+  static_assert(kProtocolVersion == 7);
   constexpr std::array types{MessageType::Hello, MessageType::HelloAck, MessageType::Reject,
       MessageType::Ping, MessageType::Pong, MessageType::PlayerPose, MessageType::Bye,
       MessageType::EnemySnapshot, MessageType::EnemyEvent, MessageType::ShotIntent,
       MessageType::Cheats, MessageType::InventoryState, MessageType::SessionStart,
       MessageType::SaveChunk, MessageType::LevelChange, MessageType::Loaded,
       MessageType::LoadRelease, MessageType::Checkpoint, MessageType::ChapterFinished,
-      MessageType::ReloadRequest, MessageType::FlowAbort};
+      MessageType::ReloadRequest, MessageType::FlowAbort, MessageType::DamageEvent, MessageType::PlayerStatus};
   for (size_t i = 0; i < types.size(); ++i) {
     const auto type = types[i];
-    Check(uint16_t(type) == i+1, "protocol 6 message IDs have no collisions or gaps");
-    Check(IsFlowMessage(type) == (i >= 12), "flow range excludes cheats and inventory");
+    Check(uint16_t(type) == i+1, "protocol 7 message IDs have no collisions or gaps");
+    Check(IsFlowMessage(type) == (i >= 12 && i <= 20), "flow range excludes combat, cheats and inventory");
     Message input;
     input.type = type; input.sequence = 0x12345678; input.epoch = 0x0123456789ABCDEFull;
     input.hello = Compatible(); input.reason = RejectReason::GameplayMods;
@@ -108,10 +108,12 @@ void Protocol() {
     input.start.chapter = 1; input.start.level = 101; input.start.start = 1;
     input.start.cheats = 0x125; input.start.difficulty = 1;
     input.save_chunk = {0, {1, 2, 3}}; input.flow = {9, 101, 5, 2};
+    input.damage = {{101, 1, 1}, 77, 3, enemy.id, 16388, 6, {1, 0, 0}};
+    input.player_status = {{101, 1, 1}, 77, 4, 3, PlayerCondition::Hurt};
     const auto bytes = Packet(input);
     Check(bytes[0] == 'K' && bytes[1] == 'K' && bytes[2] == 'C' && bytes[3] == '1', "wire magic");
-    Check(bytes[4] == 0 && bytes[5] == 6 && bytes[6] == 0 && bytes[7] == i+1,
-        "protocol 6 and message ID in wire header");
+    Check(bytes[4] == 0 && bytes[5] == 7 && bytes[6] == 0 && bytes[7] == i+1,
+        "protocol 7 and message ID in wire header");
     Check(bytes[8] == 0x12 && bytes[11] == 0x78 && bytes[12] == 1 && bytes[19] == 0xEF,
         "header byte order independent of host endianness");
     Message output;
