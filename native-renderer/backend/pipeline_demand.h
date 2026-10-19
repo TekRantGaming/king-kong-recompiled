@@ -20,6 +20,8 @@ enum class PipelineDemand : uint8_t {
   kMustDraw,  // a game draw later draws depend on: queued first, and the draw waits for it
   kMaySkip,   // a game scene draw: queued after other draws' jobs; null until a worker has made it
   kOptional,  // an extra pass (motion replay, lighting variant, memory blit): queued behind, never counted
+  kSoon,      // an extra pass the scene shows (AO on the first-person hands): queued with the draws' jobs
+              // (ahead of the prewarm), never waited for, never counted
 };
 
 // Why a game draw's missing pipeline is waited for, or kScene when the draw may be skipped.

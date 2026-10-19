@@ -259,8 +259,12 @@ occlusion). The lookup is scaled from the target's render scale to the occlusion
 occlusion of some hand pixels belongs to a hidden surface: the shader compares the stored depth GTAO worked
 from (Gtao::raw_depth) with the pixel's and leaves mismatches, and pixels within the average's reach of one,
 at 1 (else sharp dark patches and thin dark lines). A depth-aware 3 x 3 average (5 x 5 with a temporal
-upscaler, whose noise the hands drawn after its point never see). Chapters whose arms are drawn before the
-AO moment (V-Rex) are not touched. KK_DEV_AO_NO_HANDS=1 turns it off (before/after comparisons).
+upscaler, whose noise the hands drawn after its point never see). Only colour draws after the occlusion went
+in are drawn again, so nothing is darkened twice: V-Rex (entry 8) with the machine gun drawn takes the same path
+as Hayes (task 247: ALWAYS pre-pass, colour after the AO moment), arms drawn before the moment are not touched.
+The redraw's pipeline is asked for with `PipelineDemand::kSoon` (queued with the draws' jobs, ahead of the
+prewarm, never waited for; task 247), not kOptional, which waited behind the prewarm queue on a cold start.
+KK_DEV_AO_NO_HANDS=1 turns it off (before/after comparisons).
 
 ## Settings
 

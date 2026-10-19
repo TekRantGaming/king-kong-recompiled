@@ -371,7 +371,7 @@ void GameRenderer::AoRedrawHands(nvrhi::ICommandList* cl, const DrawCall& call, 
     ds.depthWriteEnable = false;
     ds.depthFunc = nvrhi::ComparisonFunc::Equal;
     ds.stencilEnable = false;
-    pipeline = GetPipeline(pd, fbi, key_hash, PipelineDemand::kOptional);
+    pipeline = GetPipeline(pd, fbi, key_hash, PipelineDemand::kSoon);
   }
   if (!pipeline) {
     ++ao_hands_stats_.waiting;
