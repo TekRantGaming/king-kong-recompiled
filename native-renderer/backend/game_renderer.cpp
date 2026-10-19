@@ -282,8 +282,9 @@ bool GameRenderer::Initialize() {
     }
   }
   const nvrhi::GraphicsAPI api = device_->getGraphicsAPI();
-  if (api == nvrhi::GraphicsAPI::D3D12 && g_buffer_pool_enabled.load(std::memory_order_relaxed)) {
-    // Task 309 (buffer_pool.h): guest vertex and index buffers from shared blocks.
+  if (g_buffer_pool_enabled.load(std::memory_order_relaxed)) {
+    // Task 309 (buffer_pool.h): guest vertex and index buffers from shared blocks (D3D12 and, task 313, Vulkan:
+    // set by the host from --native_d3d12_buffer_pool / --native_vk_buffer_pool).
     auto block = [this](bool index) {
       return [this, index](uint64_t bytes) {
         nvrhi::BufferDesc d;

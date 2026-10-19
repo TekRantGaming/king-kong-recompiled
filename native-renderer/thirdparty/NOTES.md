@@ -123,6 +123,13 @@ Changes we make to vendored code are kept as small as possible and listed here:
   `IndexBufferBinding::size`, the index buffer view's bytes from `offset` on D3D12 (0 = to the end of the buffer, as
   before; part of `operator==`). A guest index buffer suballocated from a shared block (`backend/buffer_pool.h`) keeps
   the view size its own buffer had, so indices past it still read as 0. Vulkan ignores it.
+- `nvrhi/include/nvrhi/vulkan.h`, `nvrhi/src/vulkan/vulkan-backend.h`, `vulkan-device.cpp`, `vulkan-texture.cpp` (task 313):
+  NVRHI's Vulkan backend gives every texture its own (dedicated) vkAllocateMemory. `vulkan::DeviceDesc::pooledTextureBlockSize`
+  (non-zero): textures with `TextureDesc::allowPlacedMemory` that are not render targets, UAVs, shared, tiled, virtual
+  or multisampled, at most a quarter block, are bound to ranges of pooled device-local blocks per memory type
+  (`TexturePool`, the same `PlacedRanges` bookkeeping as D3D12; one empty block kept), the range returned in
+  `~Texture` after the image. Only optimal-tiling images share a block, so bufferImageGranularity does not apply.
+  Default 0 = as before (`--native_vk_texture_pool`, `backend/vulkan_host.cpp`).
 
 ## SDKs used but not vendored
 

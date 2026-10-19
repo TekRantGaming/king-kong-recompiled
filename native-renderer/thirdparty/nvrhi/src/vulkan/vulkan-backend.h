@@ -27,6 +27,7 @@
 #include <nvrhi/common/aftermath.h>
 #include "../common/state-tracking.h"
 #include "../common/versioning.h"
+#include "../d3d12/d3d12-placed-ranges.h"
 #include <mutex>
 #include <list>
 #include <atomic>
@@ -141,6 +142,8 @@ namespace nvrhi::vulkan
         vk::Device device;
         vk::AllocationCallbacks *allocationCallbacks;
         vk::PipelineCache pipelineCache;
+        // KK task 313 (DeviceDesc::pooledTextureBlockSize): null = every texture has its own allocation.
+        class TexturePool* texturePool = nullptr;
 
         struct {
             bool EXT_debug_report = false;
@@ -380,9 +383,43 @@ namespace nvrhi::vulkan
         }
     };
 
+    // KK task 313: device-local blocks that sampled textures are bound into (DeviceDesc::pooledTextureBlockSize).
+    // Thread safe: textures are made on the renderer's workers and destroyed by garbage collection.
+    class TexturePool
+    {
+    public:
+        TexturePool(const VulkanContext& context, uint64_t blockSize) : m_Context(context), m_BlockSize(blockSize) { }
+        ~TexturePool();
+        struct Range
+        {
+            uint32_t memoryType = ~0u;
+            d3d12::PlacedRanges::Allocation allocation;
+            bool valid() const { return memoryType != ~0u; }
+        };
+        // False: the caller allocates the texture's memory itself.
+        bool allocate(const vk::MemoryRequirements& requirements, uint32_t memoryType, vk::DeviceMemory& memory, Range& out);
+        void release(const Range& range);
+        uint64_t maxResourceSize() const { return m_BlockSize / 4; }
+
+    private:
+        struct Type
+        {
+            explicit Type(uint64_t blockSize) : ranges(blockSize) { }
+            d3d12::PlacedRanges ranges;
+            std::vector<vk::DeviceMemory> blocks;
+        };
+        const VulkanContext& m_Context;
+        uint64_t m_BlockSize;
+        std::mutex m_Mutex;
+        std::vector<std::pair<uint32_t, std::unique_ptr<Type>>> m_Types;
+        bool m_Failed = false;
+    };
+
     class Texture : public MemoryResource, public RefCounter<ITexture>, public TextureStateExtension
     {
     public:
+        // KK task 313: the pooled range the image is bound to (VulkanContext::texturePool).
+        TexturePool::Range pooledRange;
 
         enum class TextureSubresourceViewType // see getSubresourceView()
         {
@@ -1259,6 +1296,7 @@ namespace nvrhi::vulkan
     private:
         // KK patch: graphics pipeline library parts (DeviceDesc::graphicsPipelineLibrary), null without it.
         std::unique_ptr<PipelineLibraryCache> m_PipelineLibrary;
+        std::unique_ptr<TexturePool> m_TexturePool; // KK task 313
         // partsOnly: the pre-rasterization and fragment shader parts of the shaders set, no link (returns null).
         GraphicsPipelineHandle createLinkedGraphicsPipeline(const GraphicsPipelineDesc& desc, FramebufferInfo const& fbinfo,
                                                             bool partsOnly = false, bool* partsMade = nullptr);

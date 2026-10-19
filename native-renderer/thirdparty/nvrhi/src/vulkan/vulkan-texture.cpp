@@ -360,6 +360,31 @@ namespace nvrhi::vulkan
 
         m_Context.nameVKObject(texture->image, vk::ObjectType::eImage, vk::DebugReportObjectTypeEXT::eImage, desc.debugName.c_str());
 
+        if (m_Context.texturePool && desc.allowPlacedMemory && !desc.isVirtual && !desc.isTiled && !desc.isRenderTarget &&
+            !desc.isUAV && desc.sampleCount <= 1 && (desc.sharedResourceFlags & SharedResourceFlags::Shared) == 0)
+        {
+            // KK task 313: bound to a range of a pooled block, like a placed texture on D3D12.
+            vk::MemoryRequirements requirements;
+            m_Context.device.getImageMemoryRequirements(texture->image, &requirements);
+            vk::PhysicalDeviceMemoryProperties memProperties;
+            m_Context.physicalDevice.getMemoryProperties(&memProperties);
+            uint32_t type = 0;
+            for (; type < memProperties.memoryTypeCount; ++type)
+                if ((requirements.memoryTypeBits & (1u << type)) &&
+                    (memProperties.memoryTypes[type].propertyFlags & vk::MemoryPropertyFlagBits::eDeviceLocal))
+                    break;
+            vk::DeviceMemory block;
+            TexturePool::Range range;
+            if (type < memProperties.memoryTypeCount && m_Context.texturePool->allocate(requirements, type, block, range))
+            {
+                // As allocateTextureMemory does (no result to check in this vulkan.hpp configuration).
+                m_Context.device.bindImageMemory(texture->image, block, range.allocation.offset);
+                texture->pooledRange = range;
+                texture->managed = true; // the image is ours to destroy; the block belongs to the pool
+                return TextureHandle::Create(texture);
+            }
+        }
+
         if (!desc.isVirtual && !desc.isTiled)
         {
             res = m_Allocator.allocateTextureMemory(texture);
@@ -806,6 +831,80 @@ namespace nvrhi::vulkan
             {
                 m_Allocator.freeTextureMemory(this);
                 memory = vk::DeviceMemory();
+            }
+            // KK task 313: the range goes back after the image that was bound to it.
+            if (pooledRange.valid() && m_Context.texturePool)
+                m_Context.texturePool->release(pooledRange);
+        }
+    }
+
+    TexturePool::~TexturePool()
+    {
+        for (auto& type : m_Types)
+            for (vk::DeviceMemory block : type.second->blocks)
+                if (block)
+                    m_Context.device.freeMemory(block, m_Context.allocationCallbacks);
+    }
+
+    bool TexturePool::allocate(const vk::MemoryRequirements& requirements, uint32_t memoryType, vk::DeviceMemory& memory,
+                               Range& out)
+    {
+        if (requirements.size == 0 || requirements.size > maxResourceSize())
+            return false;
+        const uint64_t alignment = std::max<uint64_t>(requirements.alignment, 1);
+        if ((alignment & (alignment - 1)) != 0)
+            return false;
+        std::lock_guard lock(m_Mutex);
+        if (m_Failed)
+            return false;
+        Type* type = nullptr;
+        for (auto& t : m_Types)
+            if (t.first == memoryType)
+                type = t.second.get();
+        if (!type)
+        {
+            m_Types.emplace_back(memoryType, std::make_unique<Type>(m_BlockSize));
+            type = m_Types.back().second.get();
+        }
+        d3d12::PlacedRanges::Allocation a;
+        if (!type->ranges.allocate(requirements.size, alignment, a))
+        {
+            auto info = vk::MemoryAllocateInfo().setAllocationSize(m_BlockSize).setMemoryTypeIndex(memoryType);
+            vk::DeviceMemory block;
+            if (m_Context.device.allocateMemory(&info, m_Context.allocationCallbacks, &block) != vk::Result::eSuccess)
+            {
+                // Out of memory or refused: textures get their own allocations from now on (each fails on its own).
+                m_Failed = true;
+                m_Context.error("Texture pool: vkAllocateMemory failed; textures get their own memory from now on");
+                return false;
+            }
+            const uint32_t index = type->ranges.addBlock();
+            if (index >= type->blocks.size())
+                type->blocks.resize(index + 1);
+            type->blocks[index] = block;
+            if (!type->ranges.allocate(requirements.size, alignment, a))
+                return false;
+        }
+        memory = type->blocks[a.block];
+        out.memoryType = memoryType;
+        out.allocation = a;
+        return true;
+    }
+
+    void TexturePool::release(const Range& range)
+    {
+        std::lock_guard lock(m_Mutex);
+        for (auto& t : m_Types)
+        {
+            if (t.first != range.memoryType)
+                continue;
+            Type& type = *t.second;
+            if (type.ranges.release(range.allocation) && type.ranges.emptyBlocks() > 1)
+            {
+                // Keep one empty block for the next burst; free the others.
+                type.ranges.removeBlock(range.allocation.block);
+                m_Context.device.freeMemory(type.blocks[range.allocation.block], m_Context.allocationCallbacks);
+                type.blocks[range.allocation.block] = vk::DeviceMemory();
             }
         }
     }
