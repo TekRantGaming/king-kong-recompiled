@@ -104,6 +104,15 @@ static void DownloadTable() {
   CHECK(std::string(comic->description) ==
         "A comic book style texture pack for King Kong. We recommend also enabling the Cel shading mod.");
   CHECK(std::string(comic->author) == "TekRantGaming" && std::string(comic->version) == "1.0");
+  // Task 255: Tropical Holiday and Cartoon: their mod.toml descriptions, no note, their own CREDITS.txt; Cartoon's
+  // page offers the Cel shading mod (its mod.toml recommends it).
+  const auto* tropical = DownloadPageFor(Kind::kTropical);
+  const auto* cartoon = DownloadPageFor(Kind::kCartoon);
+  CHECK(tropical && !tropical->note && !tropical->credits && !tropical->recommended_mod);
+  CHECK(cartoon && !cartoon->note && !cartoon->credits && std::string(cartoon->recommended_mod) == "builtin:cel-shading");
+  CHECK(std::string(tropical->description).find("Skull Island on holiday") == 0 &&
+        std::string(cartoon->description).find("A bright, colourful cartoon look") == 0);
+  CHECK(std::string(tropical->author) == "TekRantGaming" && std::string(cartoon->version) == "1.0");
 
   const char* langs[] = {"1", "3", "5", "4", "6"};  // English, German, Spanish, French, Italian
   const char* comic_text[] = {
@@ -150,7 +159,8 @@ static void DownloadTable() {
 // with ranged reads (ReadZipPicture), and the card pictures made from a still (workshop_art.h).
 static void ContentFacts() {
   using kk::workshop_content::FactsFor;
-  for (const char* key : {"original", "hd", "uhd", "comic", "folder", "builtin:cel-shading", "builtin:ultrawide"}) {
+  for (const char* key : {"original", "hd", "uhd", "comic", "tropical", "cartoon", "folder", "builtin:cel-shading",
+                          "builtin:ultrawide"}) {
     const auto* f = FactsFor(key);
     CHECK(f && f->changes && f->needs);
   }

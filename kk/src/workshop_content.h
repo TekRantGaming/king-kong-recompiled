@@ -52,6 +52,22 @@ inline constexpr Facts kFacts[] = {
     // The owner's wording only (DECISIONS 18 Oct): no "how it looks" of ours.
     {"comic", "The game's textures, replaced by a comic book style set.", nullptr,
      "The Cel shading mod (built in), as the pack's makers recommend.", kVramRule},
+    // Task 255: drafted from the packs' own mod.toml and README.txt, for the owner to check (DECISIONS 19 Oct).
+    {"tropical",
+     "The game's textures, at up to 4096 pixels per side, in sunny holiday colours, with free CC0 photo materials "
+     "where they fit. Fonts, buttons, menus and logos stay as they were.",
+     "Very different from the original on purpose: tropical greens, sandy stone, turquoise water and blue skies "
+     "with clouds.",
+     nullptr,
+     "About 1 GB of graphics memory per chapter. Replacement textures may use up to a quarter of your graphics "
+     "card's memory; past that the game uses the original textures."},
+    {"cartoon",
+     "The game's textures, at up to 4096 pixels per side, in a cartoon style, with free CC0 photo materials where "
+     "they fit. Fonts, buttons, menus and logos stay as they were.",
+     "Very different from the original on purpose: smooth flat colours, cheerful skies and soft outlines.",
+     "The Cel shading mod (built in), as the pack's makers recommend.",
+     "About 1 GB of graphics memory per chapter. Replacement textures may use up to a quarter of your graphics "
+     "card's memory; past that the game uses the original textures."},
     {"folder", "The textures your folder holds replace the game's own; the others stay as they are.", nullptr,
      nullptr, "A pack.txt in the folder, as MODDING.md describes."},
     {"builtin:cel-shading",
