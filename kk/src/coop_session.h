@@ -133,7 +133,7 @@ class StoryMailbox {
  public:
   bool Submit(Message m) {
     if (!IsStoryMessage(m.type) || !m.epoch || !ValidStoryEvent(m.story) ||
-        (m.type==MessageType::TriggerRequest && m.story.phase!=StoryPhase::Armed)) return false;
+        (m.type==MessageType::TriggerRequest && !ValidStoryRequest(m.story.phase))) return false;
     std::lock_guard lock(mutex_);
     if (outgoing_.size()>=kStoryQueue) return false;
     outgoing_.push_back(std::move(m)); return true;

@@ -70,6 +70,8 @@ bool SubmitOwnership(Message message);
 std::vector<Message> TakeOwnership();
 void ClearOwnership();
 bool SubmitStory(Message message);
+// Unlike EnemyLinkSnapshot, valid while the shared load barrier is still closed.
+uint64_t StorySessionEpoch();
 std::vector<Message> TakeStory();
 // Value-only snapshot, including CoopSession's interpolated pose. No transport work.
 struct PuppetSnapshot {

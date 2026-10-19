@@ -291,7 +291,7 @@ bool SessionBeforeGo(PPCContext& ctx,uint8_t* base,uint32_t g) {
   return false;
 }
 void SessionAfterGo(uint8_t* base,uint32_t g,bool loaded) {
-  if (launched && loaded) StoryLoaded();
+  if (launched && loaded && private_load) StoryLoaded(base);
   if (independent_load && loaded) {
     const auto own=*independent_load;
     independent_load.reset();
@@ -314,6 +314,7 @@ void SessionAfterGo(uint8_t* base,uint32_t g,bool loaded) {
   auto v=SessionFlowSnapshot();
   if (v.world.generation!=loading_generation) return;
   if (hfr::Load32(base,g+0x18)!=v.world.level) { Send(MessageType::FlowAbort,v.world); return; }
+  StoryLoaded(base);
   loaded_generation=loading_generation; loading_generation=0;
   observer::LevelLoaded();
   RecordProgress(v);

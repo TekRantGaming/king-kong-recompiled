@@ -36,9 +36,9 @@ using story::Binding;
 constexpr uint32_t kDetect=0x82476848, kLoop=0x82454690, kPivot=0x8244F0E8;
 constexpr uint32_t kNothing=0x824FC2D0, kActivity=0x8250EE50, kVisible=0x8250EDE8, kDoor=0x82543CA0;
 constexpr uint32_t kDetectRecord=kStoryRecords;
-struct Script {
+struct Script : story::Cursor {
   Binding binding;
-  uint32_t run=0, request_run=0;
+  uint32_t request_run=0;
   double request_until=0, next_request=0;
 };
 std::map<uint32_t,Script> scripts;
@@ -46,9 +46,13 @@ std::map<uint64_t,uint32_t> runs;
 std::vector<Binding> bindings;
 std::deque<Message> outgoing;
 story::Ordered ordered;
+story::Checksums checksums;
 uint64_t epoch=0;
 uint32_t generation=0, level=0, number=0, request_number=0, last_request=0, last_loaded=0;
 double next_census=0, request_window=0;
+double next_checksum=0;
+uint32_t checksum_actor=0;
+bool checksum_sweep=false;
 unsigned request_count=0;
 bool host=false, failed=false, disconnected=false, recovery_pending=false;
 std::atomic<bool> behind{false};
@@ -65,15 +69,20 @@ bool Trace() {
 }
 void Note(const char* what,const StoryEvent& e,const char* reason="") {
   if (Trace()) REXLOG_INFO("KK co-op story: {} role={} gen={} level={} number={} source={:016X} script={:016X} run={} record={} phase={} {}",
-      what,host ? "host" : "guest",e.generation,e.level,e.number,e.source,e.script,e.run,e.record,unsigned(e.phase),reason);
+      what,host ? "host" : "guest",e.generation ? e.generation : generation,e.level ? e.level : level,
+      e.number,e.source,e.script,e.run,e.record,unsigned(e.phase),reason);
 }
 void Refuse(const char* why,const StoryEvent& e={}) {
+  ordered.Refuse(host);
+  if (host) {
+    Note("authority observation deferred",e,why);
+    return;
+  }
   if (!failed) {
     Note("refused",e,why); REXLOG_WARN("KK co-op story: {} world behind: {}",host ? "host" : "guest",why);
-    if (host) recovery_pending=true;
   }
-  failed=true; ordered.Refuse();
-  if (!host) behind=true;
+  failed=true;
+  behind=true;
 }
 uint32_t Ptr(const uint8_t* b,uint32_t p,uint32_t offset,uint32_t bytes) {
   if (!PoseAddress(p,offset+4)) return 0;
@@ -123,7 +132,9 @@ void Census(const uint8_t* b) {
     auto it=scripts.find(actor);
     if (!vars || (it==scripts.end() && !Tracks(b,ai,kDetect) && !Tracks(b,ai,kLoop))) continue;
     if (it!=scripts.end() && (it->second.binding.ai!=ai || it->second.binding.vars!=vars)) {
-      Refuse("script allocation reused"); continue;
+      Refuse("script allocation reused");
+      if (!host) continue;
+      scripts.erase(it); it=scripts.end();
     }
     if (it==scripts.end()) {
       const auto matrix=Ptr(b,actor,12,64);
@@ -132,6 +143,7 @@ void Census(const uint8_t* b) {
       const auto source=story::Source(shape,LoadF(b,matrix+48),LoadF(b,matrix+52),LoadF(b,matrix+56));
       if (!source) continue;
       Script s; s.binding={source,shape,actor,ai,vars};
+      s.Baseline(Load32(b,vars+19812));
       if (const auto run=runs.find(source); run!=runs.end()) s.run=run->second;
       it=scripts.emplace(actor,s).first;
     }
@@ -140,19 +152,25 @@ void Census(const uint8_t* b) {
   }
   next_census=Now()+1;
 }
+void World(const FlowView& v,uint64_t session_epoch) {
+  if (epoch!=session_epoch || generation!=v.world.generation || level!=v.world.level) {
+    epoch=session_epoch; generation=v.world.generation; level=v.world.level; host=v.host;
+    number=request_number=last_request=last_loaded=0; scripts.clear(); bindings.clear(); runs.clear(); outgoing.clear();
+    ordered.Reset(generation,level); behind=false; failed=disconnected=recovery_pending=false;
+    request_count=0; request_window=next_census=0;
+    checksums={}; next_checksum=Now()+3; checksum_actor=0; checksum_sweep=false;
+  }
+}
 bool Ensure(uint8_t* b) {
   if (!REXCVAR_GET(kk_coop_enabled) || !SessionInProcess()) { behind=false; return false; }
   const auto v=SessionFlowSnapshot();
   if (!v.active || v.policy!=ChapterPolicy::Together ||
-      (v.phase!=FlowPhase::Playing && v.phase!=FlowPhase::Loading)) { behind=false; return false; }
+      !story::Observing(v.world.generation,v.world.level,v.phase==FlowPhase::Playing)) {
+    behind=false; return false;
+  }
   const auto link=EnemyLinkSnapshot();
   if (!link.epoch) return false;
-  if (epoch!=link.epoch || generation!=v.world.generation || level!=v.world.level) {
-    epoch=link.epoch; generation=v.world.generation; level=v.world.level; host=v.host;
-    number=request_number=last_request=0; scripts.clear(); bindings.clear(); runs.clear(); outgoing.clear();
-    ordered.Reset(generation,level); behind=false; failed=disconnected=recovery_pending=false;
-    request_count=0; request_window=next_census=0;
-  }
+  World(v,link.epoch);
   if (SessionPrivateReload() && !failed) Refuse("private reload has no story snapshot");
   if (!link.connected) { disconnected=true; if (!host) Refuse("connection interrupted; no script snapshot"); }
   else if (disconnected) { recovery_pending=true; disconnected=false; }
@@ -169,6 +187,17 @@ Script* Current(const uint8_t* b) {
       bind.ai!=ai || Vars(b,ai,19824)!=bind.vars || Shape(b,bind.vars)!=bind.script) return nullptr;
   return &it->second;
 }
+Script* ObservedScript(const uint8_t* b) {
+  if (auto* s=Current(b)) return s;
+  if (!host) return nullptr;
+  // A new/different local allocation or callback layout is authority evidence,
+  // not evidence that the guest differs. Rebind only our own metadata.
+  const auto actor=Load32(b,0x82CCBF6C);
+  scripts.erase(actor); Census(b);
+  auto* s=Current(b);
+  Note("authority script re-baselined",{},s ? "local identity rebound" : "identity unavailable; native continues");
+  return s;
+}
 StoryEvent Event(const Script& s,StoryPhase phase,uint32_t record) {
   return {generation,level,0,s.binding.source,s.binding.script,s.run,record,phase};
 }
@@ -178,15 +207,16 @@ void Flush() {
     outgoing.pop_front();
   }
 }
-void Emit(StoryEvent e) {
+bool Emit(StoryEvent e) {
   if (number==UINT32_MAX || outgoing.size()>=kStoryQueue) {
     Refuse("story outgoing overflow",e);
-    Message abort; abort.type=MessageType::FlowAbort; abort.flow=SessionFlowSnapshot().world; SubmitFlowMessage(abort); return;
+    Message abort; abort.type=MessageType::FlowAbort; abort.flow=SessionFlowSnapshot().world; SubmitFlowMessage(abort); return false;
   }
   e.number=number+1;
-  if (!ValidStoryEvent(e)) { Refuse("invalid observed story event",e); return; }
+  if (!ValidStoryEvent(e)) { Refuse("invalid observed story event",e); return false; }
   ++number;
   Message m; m.type=MessageType::StoryEvent; m.epoch=epoch; m.story=e; outgoing.push_back(m); Flush();
+  return true;
 }
 bool HeroPivot(const uint8_t* b,uint32_t payload) {
   const auto hero=Load32(b,0x82CCBF7C);
@@ -268,31 +298,86 @@ bool For(const StoryEvent* e,const Script& s,StoryPhase phase) {
   return e && e->source==s.binding.source && e->script==s.binding.script && e->phase==phase;
 }
 void Applied(const StoryEvent& e) { Note("applied",e); ordered.Applied(); }
+void ChecksumFrame(uint8_t* b,double now) {
+  if (!host) {
+    for (unsigned budget=0;budget<16 && !failed;++budget) {
+      const auto* front=ordered.Front();
+      if (!front || front->phase!=StoryPhase::Checksum) break;
+      const auto e=*front;
+      const auto* bind=story::Match(e.source,e.script,bindings);
+      if (!bind) break; // Ordered's apply deadline handles an actually missing script.
+      const auto& s=scripts.at(bind->actor);
+      if (Vars(b,bind->ai,19824)!=bind->vars || Shape(b,bind->vars)!=bind->script) break;
+      auto reply=e; reply.run=s.run; reply.record=Load32(b,bind->vars+19812);
+      if (!ValidStoryEvent(reply) || outgoing.size()>=kStoryQueue) break;
+      Message m; m.type=MessageType::TriggerRequest; m.epoch=epoch; m.story=reply;
+      outgoing.push_back(m); Applied(e);
+      if (reply.run!=e.run || reply.record!=e.record) Refuse("checksum record/run mismatch",reply);
+      else Note("checksum matched",reply);
+    }
+    return;
+  }
+  checksums.Expire(now);
+  if (now<next_checksum && !checksum_sweep) return;
+  checksum_sweep=true;
+  // Bound each frame's work and share story backpressure. Checksums are cheap
+  // samples, not another full object census and not recovery on lost observations.
+  auto it=scripts.upper_bound(checksum_actor);
+  for (unsigned budget=0;it!=scripts.end() && budget<16;++it,++budget) {
+    if (outgoing.size()>=kStoryQueue/2 || number==UINT32_MAX) break;
+    const auto& s=it->second;
+    const auto* bind=story::Match(s.binding.source,s.binding.script,bindings);
+    if (!bind || bind->actor!=it->first || Vars(b,bind->ai,19824)!=bind->vars || Shape(b,bind->vars)!=bind->script) {
+      checksum_actor=it->first; continue;
+    }
+    auto e=Event(s,StoryPhase::Checksum,Load32(b,bind->vars+19812)); e.number=number+1;
+    if (!ValidStoryEvent(e)) { checksum_actor=it->first; continue; }
+    if (!checksums.Remember(e,now)) break;
+    if (!Emit(e)) break;
+    checksum_actor=it->first;
+  }
+  if (it==scripts.end()) { checksum_sweep=false; checksum_actor=0; next_checksum=now+3; }
+}
 } // namespace
 
 bool StoryBehind() { return behind.load(); }
-void StoryLoaded() {
+void StoryLoaded(uint8_t* b) {
   const auto v=SessionFlowSnapshot();
-  if (v.policy==ChapterPolicy::Together && last_loaded==v.world.generation) {
+  if (!v.active || v.policy!=ChapterPolicy::Together || !v.world.generation || !v.world.level) return;
+  const auto session_epoch=StorySessionEpoch();
+  if (!session_epoch) return;
+  World(v,session_epoch);
+  if (last_loaded==v.world.generation) {
     recovery_pending=true;
+    scripts.clear(); bindings.clear(); next_census=0;
+    return;
   }
   last_loaded=v.world.generation;
-  // Never carry heap bindings across uni_go. Preserve only value IDs/run counts
-  // observed during this generation's initialization, before its Loaded barrier.
-  scripts.clear(); bindings.clear(); next_census=0;
+  // Both natives ran freely during loading. Capture all current records before
+  // Loaded/LoadRelease can release either world's first gameplay AI pass.
+  scripts.clear(); bindings.clear(); runs.clear(); Census(b);
+  REXLOG_INFO("KK co-op story: baseline role={} gen={} level={} scripts={} before load release",
+      host ? "host" : "guest",generation,level,scripts.size());
 }
 void StoryGameFrame(uint8_t* b) {
   if (!Ensure(b)) { TakeStory(); return; }
   const double now=Now();
   if (recovery_pending) {
     recovery_pending=false;
-    if (host) { StoryEvent e{generation,level,0,1,1,1,0,StoryPhase::Recovery}; Emit(e); }
     Refuse("private load or reconnect requires shared checkpoint recovery");
   }
   for (const auto& m : TakeStory()) {
     const auto& e=m.story;
     if (m.epoch!=epoch || e.generation!=generation || e.level!=level) { Note("refused",e,"stale world"); continue; }
     if (!host) { ordered.Push(e,now); continue; }
+    if (e.phase==StoryPhase::Checksum) {
+      const auto result=checksums.Compare(e);
+      if (result==story::Checksums::Result::Mismatch) {
+        Note("checksum diverged",e,"guest reported different record/run");
+        auto recovery=e; recovery.phase=StoryPhase::Recovery; Emit(recovery);
+      } else if (result==story::Checksums::Result::Match) Note("checksum matched",e);
+      continue;
+    }
     if (e.number<=last_request) continue;
     last_request=e.number;
     if (now-request_window>=1) { request_window=now; request_count=0; }
@@ -304,6 +389,7 @@ void StoryGameFrame(uint8_t* b) {
     // Recheck a fresh partner pose and native volume when this script is scheduled.
     s.request_run=e.run; s.request_until=now+.5; Note("request pending",e);
   }
+  ChecksumFrame(b,now);
   if (!host && SessionFlowSnapshot().phase==FlowPhase::Playing) {
     ordered.Tick(now);
     if (ordered.Behind()) Refuse("event gap, conflict or apply timeout");
@@ -315,7 +401,7 @@ void StoryGameFrame(uint8_t* b) {
 // Return true when co-op handled this call, including a suppressed local advance.
 bool StoryDetect(PPCContext& ctx,uint8_t* b) {
   if (!Ensure(b)) return false;
-  auto* s=Current(b);
+  auto* s=ObservedScript(b);
   if (!s) { Refuse("unmatched detection script"); if (host) return false; ctx.r3.u32=0; return true; }
   const auto flag=Load32(b,0x82CCBF60),vars=s->binding.vars;
   if (!PoseAddress(flag)) { Refuse("detection state missing"); if (host) return false; ctx.r3.u32=0; return true; }
@@ -334,7 +420,9 @@ bool StoryDetect(PPCContext& ctx,uint8_t* b) {
     if (!before && after==1) {
       if (s->run==UINT32_MAX) Refuse("script run overflow");
       else { ++s->run; runs[s->binding.source]=s->run; s->request_run=0; Emit(Event(*s,StoryPhase::Armed,kDetectRecord)); }
-    } else if (before==1 && !after && ctx.r3.u32==5) Emit(Event(*s,StoryPhase::Started,kDetectRecord));
+    } else if (before==1 && !after && ctx.r3.u32==5) {
+      s->record=Load32(b,vars+19812); Emit(Event(*s,StoryPhase::Started,kDetectRecord));
+    }
     return true;
   }
   ctx.r3.u32=0;
@@ -351,7 +439,7 @@ bool StoryDetect(PPCContext& ctx,uint8_t* b) {
     const auto e=*front;
     if (before!=1 || e.run!=s->run) { Refuse("detection start state mismatch",e); return true; }
     __imp__sub_82476848(ctx,b);
-    if (ctx.r3.u32==5 && !Load32(b,flag)) Applied(e);
+    if (ctx.r3.u32==5 && !Load32(b,flag)) { s->record=Load32(b,vars+19812); Applied(e); }
     else Refuse("native script start refused",e);
   } else if (!before) Request(ctx,b,*s);
   return true;
@@ -359,14 +447,17 @@ bool StoryDetect(PPCContext& ctx,uint8_t* b) {
 
 bool StoryLoop(PPCContext& ctx,uint8_t* b) {
   if (!Ensure(b)) return false;
-  auto* s=Current(b);
+  auto* s=ObservedScript(b);
   if (!s) { Refuse("unmatched loop script"); if (host) return false; ctx.r3.u32=0; return true; }
   const auto vars=s->binding.vars,before=Load32(b,vars+19812);
   if (host) {
     __imp__sub_82454690(ctx,b);
     if (failed) return true;
     const auto after=Load32(b,vars+19812);
-    if (!s->run || before>after || after>kStoryRecords) { Refuse("loop jump or unobserved activation"); return true; }
+    if (!s->ObserveLoop(before,after)) {
+      Note("authority script re-baselined",Event(*s,StoryPhase::Checksum,after),"loop jump or unobserved activation");
+      return true; // No synthetic callbacks. The next checksum compares actual guest state.
+    }
     for (uint32_t i=before;i<after;++i) Emit(Event(*s,StoryPhase::Advance,i));
     if (ctx.r3.u32==5) Emit(Event(*s,StoryPhase::Finished,after));
     return true;
@@ -377,7 +468,7 @@ bool StoryLoop(PPCContext& ctx,uint8_t* b) {
   // address from the packet; all calls below are fixed, locally validated natives.
   for (unsigned budget=0;budget<kStoryRecords;++budget) {
     const auto* front=ordered.Front();
-    if (!front || front->source!=s->binding.source || front->script!=s->binding.script) break;
+    if (!front || front->source!=s->binding.source || front->script!=s->binding.script || !story::LoopEvent(*front)) break;
     const auto e=*front;
     const auto index=Load32(b,vars+19812);
     if (e.run!=s->run || e.record!=index || index>kStoryRecords) { Refuse("record/run mismatch",e); break; }
@@ -403,6 +494,7 @@ bool StoryLoop(PPCContext& ctx,uint8_t* b) {
     const bool ok=ctx.r3.u32!=0; ctx=saved;
     if (!ok || Load32(b,vars+19812)!=index) { Refuse("native callback refused or changed index",e); break; }
     Store32(b,vars+19812,index+1); Store32(b,vars+19816,0);
+    s->record=index+1;
     // Native initialization of the next record's payload word +100.
     if (index+1<kStoryRecords && Load32(b,record+184)) Store32(b,record+180+72+100,0);
     Applied(e);

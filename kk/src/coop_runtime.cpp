@@ -650,6 +650,7 @@ bool SubmitStory(Message message) {
 #endif
   return steam && steam->SubmitStory(std::move(message));
 }
+uint64_t StorySessionEpoch() { return CurrentView().epoch; }
 std::vector<Message> TakeStory() {
 #if defined(KK_DEV_TOOLS)
   if (service.Running()) return service.TakeStory();

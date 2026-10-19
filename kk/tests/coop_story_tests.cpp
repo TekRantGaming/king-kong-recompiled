@@ -18,14 +18,14 @@ Message Packet(MessageType type=MessageType::StoryEvent,uint32_t number=1) {
 }
 std::vector<uint8_t> Wire(const Message& m) { std::vector<uint8_t> bytes; Check(Encode(m,bytes),"valid fixture encodes"); return bytes; }
 void Codec() {
-  static_assert(kProtocolVersion==10);
+  static_assert(kProtocolVersion==11);
   static_assert(uint16_t(MessageType::StoryEvent)==29 && uint16_t(MessageType::TriggerRequest)==30);
-  for (auto phase : {StoryPhase::Armed,StoryPhase::Started,StoryPhase::Advance,StoryPhase::Finished,StoryPhase::Recovery}) {
+  for (auto phase : {StoryPhase::Armed,StoryPhase::Started,StoryPhase::Advance,StoryPhase::Finished,StoryPhase::Recovery,StoryPhase::Checksum}) {
     for (auto type : {MessageType::StoryEvent,MessageType::TriggerRequest}) {
-      if (type==MessageType::TriggerRequest && phase!=StoryPhase::Armed) continue;
+      if (type==MessageType::TriggerRequest && !ValidStoryRequest(phase)) continue;
       auto m=Packet(type); m.story=Event(0x12345678,phase);
       auto bytes=Wire(m); Message out;
-      Check(bytes.size()==kHeaderBytes+37 && bytes[5]==10 && bytes[7]==uint8_t(type),"bounded v10 story wire");
+      Check(bytes.size()==kHeaderBytes+37 && bytes[5]==11 && bytes[7]==uint8_t(type),"bounded v11 story wire");
       Check(bytes[kHeaderBytes+8]==0x12 && bytes[kHeaderBytes+11]==0x78 &&
           bytes[kHeaderBytes+12]==1 && bytes[kHeaderBytes+19]==0xef,"network byte order, including 64-bit identity");
       Check(Decode(bytes,out) && out.story==m.story && out.epoch==17 && Wire(out)==bytes,"exact canonical story round trip");
@@ -105,6 +105,74 @@ void Identity() {
   Check(!story::Match(source,55,duplicate),"aliased mutable script vars refused");
   Check(!story::Match(source,56,a),"schema mismatch cannot invoke a different local script");
 }
+void LoadBaselineAndChecksums() {
+  story::Cursor host,guest;
+  story::Ordered events; events.Reset(2,203);
+  // SSLoop can be entered during uni_go before generation is published. No
+  // observation, request or refusal is legal at any of these boundaries.
+  constexpr std::array<std::array<uint32_t,3>,4> deferred{{{0,0,1},{0,203,1},{2,0,1},{2,203,0}}};
+  for (const auto& world : deferred) {
+    if (story::Observing(world[0],world[1],world[2]!=0)) host.ObserveLoop(7,0);
+    Check(!host.run && events.Next()==1 && !events.Behind(),"zero generation/level and loading defer all observations");
+  }
+  Check(story::Observing(2,203,true),"only valid Playing world observes");
+  for (uint32_t loaded : {0u,7u,kStoryRecords}) {
+    host.Baseline(loaded); guest.Baseline(loaded);
+    Check(host.run==guest.run && host.record==guest.record && events.Next()==1 && !events.Front(),
+        "load baseline accepts inactive, already looping and completed records without events");
+    Check(host.ObserveLoop(loaded,loaded),"first unchanged SSLoop after barrier is observed, not an unobserved activation");
+  }
+  host.Baseline(7); guest.Baseline(7);
+  for (unsigned i=0;i<3;++i) {
+    Check(!host.ObserveLoop(7,0),"host record reversal asks for a local re-baseline");
+    events.Refuse(true);
+    Check(!events.Behind() && events.Next()==1,"host is never behind and emits no recovery for missing observations");
+  }
+  Check(host.ObserveLoop(0,1),"authority continues observing after re-baseline");
+  Check(!host.ObserveLoop(3,4) && host.record==4,"unobserved native index change is locally re-baselined");
+  events.Refuse(true);
+  Check(!events.Behind() && host.ObserveLoop(4,5),"host continues after missing observations without recovery");
+
+  story::Checksums checksums;
+  auto sample=Event(1,StoryPhase::Checksum); sample.run=guest.run; sample.record=guest.record;
+  Check(checksums.Remember(sample,3),"host captures periodic per-script record sample");
+  Check(events.Push(sample,3.1),"checksum shares strict native event order");
+  auto advance=Event(2,StoryPhase::Advance); advance.run=guest.run; advance.record=guest.record;
+  Check(events.Push(advance,3.1) && events.Front()->phase==StoryPhase::Checksum,"later advance cannot overtake checksum boundary");
+  Check(!story::LoopEvent(*events.Front()),"SSLoop defers checksum to frame handler instead of refusing it as a native callback");
+  auto reply=*events.Front(); reply.run=guest.run; reply.record=guest.record;
+  events.Applied(); guest.record++;
+  Check(events.Front() && story::LoopEvent(*events.Front()),"SSLoop may resume after checksum is consumed");
+  Check(checksums.Compare(reply)==story::Checksums::Result::Match,
+      "reply compares captured state even after either native world advances");
+  Check(checksums.Compare(reply)==story::Checksums::Result::Ignored,"duplicate checksum reply is harmless");
+  events.Applied();
+  auto run_sample=sample; run_sample.number=2;
+  Check(checksums.Remember(run_sample,4),"activation run is part of checksum evidence");
+  reply=run_sample; reply.run++;
+  Check(checksums.Compare(reply)==story::Checksums::Result::Mismatch,"same index in a different run is actual divergence");
+  events.Refuse(true);
+  Check(!events.Behind(),"even a confirmed guest mismatch never marks host behind");
+  sample.number=3; sample.record=guest.record;
+  Check(checksums.Remember(sample,6),"next periodic checksum captures new state");
+  reply=sample; reply.generation++;
+  Check(checksums.Compare(reply)==story::Checksums::Result::Ignored,"wrong generation cannot claim a mismatch");
+  reply=sample; reply.script++;
+  Check(checksums.Compare(reply)==story::Checksums::Result::Ignored,"wrong identity cannot claim a mismatch");
+  reply=sample; reply.record++;
+  Check(events.Push(sample,6.1),"guest receives comparison for current boundary");
+  if (checksums.Compare(reply)==story::Checksums::Result::Mismatch) events.Refuse();
+  Check(events.Behind(),"compared guest record mismatch requires recovery");
+  sample.number=4; Check(checksums.Remember(sample,9),"outstanding sample tracked");
+  checksums.Expire(19.01);
+  Check(checksums.Compare(sample)==story::Checksums::Result::Ignored,"missing observations/replies expire without declaring divergence");
+  checksums={};
+  for (uint32_t n=1;n<=kStoryQueue/2;++n) { sample.number=n; Check(checksums.Remember(sample,20),"checksum memory bounded"); }
+  sample.number=kStoryQueue/2+1;
+  Check(!checksums.Remember(sample,20),"checksum pressure defers samples rather than evicting native events");
+  checksums={}; sample.number=1; sample.generation++;
+  Check(checksums.Compare(sample)==story::Checksums::Result::Ignored,"load reset discards old checksum samples");
+}
 struct Transport final : ICoopTransport {
   Transport* peer=nullptr;
   std::deque<std::vector<uint8_t>> incoming;
@@ -132,7 +200,7 @@ void TransportAndMailbox() {
   auto gc=hc; gc.role=Role::Guest; gc.epoch=0;
   CoopSession host(hc,ht),guest(gc,gt);
   for (int i=0;i<20;++i) { host.Tick(i*.01); guest.Tick(i*.01); }
-  Check(host.State()==SessionState::Connected && guest.State()==SessionState::Connected,"real v10 session handshake");
+  Check(host.State()==SessionState::Connected && guest.State()==SessionState::Connected,"real v11 session handshake");
   StoryMailbox hm,gm;
   Check(hm.Submit(Packet()),"host game-thread submits copied event");
   hm.Exchange(host); ht.blocked=true; host.Tick(.21); guest.Tick(.21); gm.Exchange(guest);
@@ -142,6 +210,15 @@ void TransportAndMailbox() {
   auto request=Packet(MessageType::TriggerRequest);
   Check(gm.Submit(request),"guest submits request"); gm.Exchange(guest); guest.Tick(.23); host.Tick(.23); hm.Exchange(host);
   received=hm.Take(); Check(received.size()==1 && received[0].type==MessageType::TriggerRequest,"host receives request reliably");
+  auto checksum=Packet(); checksum.story.phase=StoryPhase::Checksum; checksum.story.record=7;
+  Check(hm.Submit(checksum),"host checksum uses existing reliable mailbox");
+  hm.Exchange(host); host.Tick(.231); guest.Tick(.231); gm.Exchange(guest);
+  received=gm.Take(); Check(received.size()==1 && received[0].story==checksum.story,"ordered checksum reaches guest on real session");
+  checksum.type=MessageType::TriggerRequest; checksum.story.record=8;
+  Check(gm.Submit(checksum),"guest may reply with its actual differing index");
+  gm.Exchange(guest); guest.Tick(.232); host.Tick(.232); hm.Exchange(host);
+  received=hm.Take(); Check(received.size()==1 && received[0].story.record==8 && received[0].story.phase==StoryPhase::Checksum,
+      "differing checksum returns to authority without becoming a trigger request");
   Check(!host.QueueStory(request) && !guest.QueueStory(Packet()),"outgoing authority inversion rejected");
   auto wrong=Packet(); wrong.epoch=18; Check(!host.QueueStory(wrong),"outgoing stale epoch rejected");
   // Inject packets directly to ensure receive checks are independent of sender checks.
@@ -154,7 +231,7 @@ void TransportAndMailbox() {
   hm.Clear(); Check(hm.Submit(Packet()),"clear removes stale pending events");
   guest.End(.3); gm.Exchange(guest); Check(gm.Take().empty(),"disconnect clears mailbox");
   auto old=hc.compatibility; --old.protocol;
-  Check(CheckCompatibility(hc.compatibility,old)==RejectReason::Protocol,"v9 peers rejected at handshake");
+  Check(CheckCompatibility(hc.compatibility,old)==RejectReason::Protocol,"v10 peers rejected at handshake");
 }
 }
-int main() { Codec(); Ordering(); Identity(); TransportAndMailbox(); std::puts("co-op story tests passed"); }
+int main() { Codec(); Ordering(); Identity(); LoadBaselineAndChecksums(); TransportAndMailbox(); std::puts("co-op story tests passed"); }

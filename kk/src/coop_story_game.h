@@ -3,7 +3,7 @@
 struct PPCContext;
 namespace kk::coop {
 void StoryGameFrame(uint8_t* base);
-void StoryLoaded();
+void StoryLoaded(uint8_t* base);
 bool StoryBehind();
 // The existing partner-body PRG hook remains the sole owner of this entry point.
 bool StoryLoop(PPCContext& ctx, uint8_t* base);

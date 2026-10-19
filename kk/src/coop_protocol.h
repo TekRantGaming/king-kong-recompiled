@@ -11,7 +11,7 @@
 
 namespace kk::coop {
 constexpr uint32_t kMagic = 0x4B4B4331;  // KKC1, network byte order throughout
-constexpr uint16_t kProtocolVersion = 10;
+constexpr uint16_t kProtocolVersion = 11; // C44 ordered checksum replies and shared load baseline.
 constexpr size_t kMaxDisplayNameBytes = 32;
 // Valid UTF-8, no controls or invisible direction/line formatting, bounded at a codepoint.
 // Empty or wholly invalid input becomes "Partner". Never log the input or result.
@@ -30,7 +30,9 @@ enum class MessageType : uint16_t {
 // Values only. source is an immutable authored-position/script signature, never
 // an actor address. number orders ALL scripts within one shared load generation.
 // run distinguishes repeated activations of the same script in that generation.
-enum class StoryPhase : uint8_t { Armed = 1, Started, Advance, Finished, Recovery };
+// Checksum is an ordered host sample and a guest reply carrying its actual
+// run/record at that exact event boundary. It never executes a native callback.
+enum class StoryPhase : uint8_t { Armed = 1, Started, Advance, Finished, Recovery, Checksum };
 constexpr uint32_t kStoryRecords = 104, kStoryQueue = 256;
 struct StoryEvent {
   uint32_t generation = 0, level = 0, number = 0;
@@ -40,6 +42,9 @@ struct StoryEvent {
   auto operator<=>(const StoryEvent&) const = default;
 };
 bool ValidStoryEvent(const StoryEvent& event);
+inline bool ValidStoryRequest(StoryPhase phase) {
+  return phase == StoryPhase::Armed || phase == StoryPhase::Checksum;
+}
 inline bool IsStoryMessage(MessageType t) {
   return t == MessageType::StoryEvent || t == MessageType::TriggerRequest;
 }
