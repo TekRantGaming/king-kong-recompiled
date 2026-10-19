@@ -16,6 +16,7 @@
 #include <mutex>
 #include <set>
 #include <string>
+#include <tuple>
 #include <vector>
 #include <fmt/format.h>
 #include <rex/hook.h>
@@ -41,6 +42,13 @@ constexpr size_t kMaxNodes = 128;
 constexpr uint64_t kUnknown = ~uint64_t{0};
 thread_local NrPuppetMeshScope preparing;
 thread_local unsigned preparation_depth = 0;
+thread_local NrPuppetMeshScope building_palette;
+struct PaletteExecution {
+  uint64_t generation = 0;
+  uint32_t context = 0, material = 0, packet = 0, world_index = 0, first = 0, count = 0;
+  bool enabled = false;
+};
+thread_local PaletteExecution executing_palette;
 bool On() {
   static const bool on = [] { const char* v = std::getenv("KK_DEV_PUPPET_MESH"); return v && std::string(v) == "1"; }();
   return on;
@@ -132,6 +140,21 @@ struct Probe {
   std::map<uint32_t, NrPuppetMeshScope> prepared;
   struct Buffer { uint32_t data = 0, count = 0; };
   std::map<uint32_t, Buffer> buffers;
+  // C15: 48-byte, transposed skin constants, separate from 64-byte world matrices.
+  std::map<uint32_t, NrPuppetMeshScope> palettes;
+  std::map<uint32_t, Buffer> palette_buffers;
+  struct PaletteUse {
+    uint32_t owner = 0, node = 0, context = 0, data = 0, first = 0, count = 0;
+    uint32_t material = 0, packet = 0;
+    uint32_t world_entry = 0, local_entry = 0;
+    uint32_t source_entries = 0, copy_entries = 0, unknown_entries = 0;
+    uint64_t builds = 0, prepares = 0, draws = 0;
+    bool valid = false, saw_source = false, saw_copy = false, saw_unknown = false;
+  };
+  using PaletteKey = std::tuple<uint32_t, uint32_t, uint32_t, uint32_t, uint32_t, uint32_t>;
+  std::map<PaletteKey, PaletteUse> palette_uses;
+  uint64_t palette_dropped = 0;
+  uint64_t generation = 0;
   uint64_t draw_queries = 0, provenance_hits = 0;
   std::vector<Watch> watches;
 };
@@ -139,21 +162,33 @@ Probe& Get() { static Probe p; return p; }
 const NrPuppetProbeApi* FindApi() {
   using GetFn = const NrPuppetProbeApi* (*)();
   GetFn get = nullptr;
+  const char* module = "none";
+  bool loaded = false;
 #if defined(_WIN32)
   for (const char* name : {"rexgpu-nativerd.dll", "rexgpu-native.dll", "rexgpu-natived.dll"})
-    if (HMODULE m = GetModuleHandleA(name))
+    if (HMODULE m = GetModuleHandleA(name)) {
+      loaded = true; module = name;
       if (auto f = GetProcAddress(m, "nr_get_puppet_probe")) { get = reinterpret_cast<GetFn>(f); break; }
+    }
 #else
   for (const char* name : {"librexgpu-nativerd.so", "librexgpu-native.so", "librexgpu-natived.so"}) {
     if (void* m = dlopen(name, RTLD_NOW | RTLD_NOLOAD)) {
+      loaded = true; module = name;
       get = reinterpret_cast<GetFn>(dlsym(m, "nr_get_puppet_probe")); dlclose(m);
       if (get) break;
     }
   }
 #endif
   const auto* api = get ? get() : nullptr;
-  return api && api->version == kNrPuppetProbeVersion && api->size == sizeof(NrPuppetProbeApi) &&
-         api->scope && api->read && api->reset && api->capture && api->drain ? api : nullptr;
+  const char* state = !loaded ? "module-not-loaded" : !get ? "export-missing-rebuild-dev-plugin" :
+      !api ? "export-returned-null" : api->version != kNrPuppetProbeVersion ? "version-mismatch" :
+      api->size != sizeof(NrPuppetProbeApi) ? "size-mismatch" :
+      !(api->scope && api->read && api->reset && api->capture && api->drain) ? "callbacks-missing" : "connected";
+  const bool connected = std::string(state) == "connected";
+  if (DrawOn()) REXLOG_INFO("PUPPET draws probe state={} module={} connected={} version={}/{} size={}/{} mesh-env={} draws-env={} log-rotation=also-read-run.N.log",
+      state, module, connected, api ? api->version : 0, kNrPuppetProbeVersion,
+      api ? api->size : 0, sizeof(NrPuppetProbeApi), On(), DrawOn());
+  return connected ? api : nullptr;
 }
 bool Identity(const uint8_t* b, const Root& r) {
   return r.actor && Ptr(b, r.actor, 20, 20) == r.holder && Ptr(b, r.holder, 0, 180) == r.anim &&
@@ -334,6 +369,94 @@ void LogModifiers(const uint8_t* b, const Root& r, const char* role) {
   }
   if (entry) REXLOG_INFO("PUPPET mesh-modifiers role={} actor={:08X} stopped=cap16 next={:08X}", role, r.actor, entry);
 }
+NrPuppetMeshScope PaletteOwner(const Probe& p, uint32_t data, uint32_t count) {
+  NrPuppetMeshScope result;
+  if (!data || !count || count > 256 || !Range(data, count*48)) return result;
+  for (uint32_t i = 0; i < count; ++i) {
+    const auto it = p.palettes.find(data+48*i);
+    if (it == p.palettes.end() || !it->second.owner) return {};
+    if (!i) result = it->second;
+    else if (result.owner != it->second.owner || result.mesh != it->second.mesh) return {};
+  }
+  return result;
+}
+void RecordPaletteUse(const uint8_t* b, Probe& p, NrPuppetMeshScope scope,
+                      uint32_t context, uint32_t material, uint32_t packet, unsigned stage) {
+  // 82783580 (.106:30484..30516): float4 upload at constant parameter 5,
+  // address context[468] + 48*context[484], count 3*context[488].
+  const auto first = Word(b, context, stage ? 484 : 492), count = Word(b, context, stage ? 488 : 496);
+  const auto data = Word(b, context, 468);
+  const bool valid = count && count <= 256 && first < 16384 &&
+      uint64_t(first)+count <= Word(b, context, 472) && Range(data, (first+count)*48);
+  const auto address = valid ? data+first*48 : 0;
+  if (!scope.owner && valid) scope = PaletteOwner(p, address, count);
+  if (scope.owner != p.roots[0].actor && scope.owner != p.roots[1].actor) return;
+  const Probe::PaletteKey key{scope.owner, scope.mesh, data, first, count, material};
+  if (p.palette_uses.size() >= 512 && !p.palette_uses.contains(key)) { ++p.palette_dropped; return; }
+  auto& use = p.palette_uses[key];
+  use.owner = scope.owner; use.node = scope.mesh; use.context = context;
+  use.data = data; use.first = first; use.count = count; use.material = material; use.packet = packet;
+  const auto matrix_entry = [&](uint32_t offset) {
+    const auto matrix_data = Word(b, context, offset), index = Word(b, context, offset+12);
+    return index < Word(b, context, offset+4) && index < 16384 && Range(matrix_data, (index+1)*64) ?
+        matrix_data+index*64 : 0u;
+  };
+  use.world_entry = matrix_entry(420); use.local_entry = matrix_entry(404);
+  use.valid = valid;
+  if (stage == 2) ++use.draws; else if (stage == 1) ++use.prepares; else ++use.builds;
+  use.source_entries = use.copy_entries = use.unknown_entries = 0;
+  if (valid) for (uint32_t i = 0; i < count; ++i) {
+    const auto it = p.palettes.find(address+48*i);
+    if (it == p.palettes.end()) ++use.unknown_entries;
+    else if (it->second.owner == p.roots[0].actor) ++use.source_entries;
+    else if (it->second.owner == p.roots[1].actor) ++use.copy_entries;
+    else ++use.unknown_entries;
+  }
+  use.saw_source |= use.source_entries != 0;
+  use.saw_copy |= use.copy_entries != 0;
+  use.saw_unknown |= !valid || use.unknown_entries != 0;
+}
+void LogPaletteInputs(const uint8_t* b, const Probe& p, const Node& n, unsigned role) {
+  if (!(n.flags & 0x4000)) return;
+  const auto instance = n.component[0];
+  const auto source_skin = Ptr(b, p.roots[0].holder, 16, 8);
+  const auto source_data = Word(b, source_skin, 4), source_count = Word(b, source_skin);
+  const auto copy_skin = Ptr(b, p.roots[1].holder, 16, 8);
+  const auto copy_data = Word(b, copy_skin, 4), copy_count = Word(b, copy_skin);
+  const auto in_palette = [](uint32_t matrix, uint32_t data, uint32_t count) {
+    return count && count <= 256 && Range(data, count*80) && matrix >= data &&
+        uint64_t(matrix)+80 <= uint64_t(data)+count*80 && (matrix-data)%80 == 0;
+  };
+  uint32_t source_links = 0, copy_links = 0, unknown_links = 0;
+  if (n.links && n.skin_data) for (uint32_t i = 0; i < n.skin_count; ++i) {
+    const auto matrix = Word(b, n.skin_data+12*i);
+    if (in_palette(matrix, source_data, source_count)) ++source_links;
+    else if (in_palette(matrix, copy_data, copy_count)) ++copy_links;
+    else ++unknown_links;
+  }
+  const auto owner = p.owners.find(n.actor);
+  const bool owned = owner != p.owners.end() && owner->second == p.roots[role].actor;
+  const char* shared = !role ? "n/a" : !owned ? "unknown-shared-node" : source_links ? "true" :
+      n.links && n.skin_count && n.skin_data && !unknown_links ? "false" : "unknown";
+  uint32_t source_instance = 0;
+  if (role) {
+    const auto copy_live = Hierarchy(b, Ptr(b, p.roots[1].anim, 8, 4));
+    const auto source_live = Hierarchy(b, Ptr(b, p.roots[0].anim, 8, 4));
+    if (copy_live.valid && source_live.valid) for (uint32_t i = 0; i < copy_live.count && i < source_live.count; ++i)
+      if (Word(b, copy_live.begin+8*i) == n.actor) {
+        const auto source_node = ReadNode(b, Word(b, source_live.begin+8*i));
+        if (source_node.flags & 0x4000) source_instance = source_node.component[0];
+        break;
+      }
+  }
+  const auto constants = Word(b, instance, 48), source_constants = Word(b, source_instance, 48);
+  const char* shared_constants = !role ? "n/a" : !owned || !constants || !source_constants ? "unknown" :
+      constants == source_constants ? "true" : "false";
+  REXLOG_INFO("PUPPET mesh-palette-input role={} actor={:08X} node={:08X} instance={:08X} uniquely-owned={} skin-data={:08X} source-palette={:08X} copy-palette={:08X} source-links={} copy-links={} unknown-links={} copy-uses-source-palette={} mesh-constants={:08X} mesh-constant-count={} source-instance={:08X} source-constants={:08X} copy-uses-source-constants={} identity64={:08X} evidence=skin-input-not-draw anatomy=unknown",
+      role ? "copy" : "source", p.roots[role].actor, n.actor, instance, owned, n.skin_data,
+      source_data, copy_data, source_links, copy_links, unknown_links, shared,
+      constants, Word(b, instance, 36), source_instance, source_constants, shared_constants, Word(b, instance, 64));
+}
 void Log(const uint8_t* b, Probe& p) {
   for (unsigned role = 0; role < 2; ++role) {
     auto& r = p.roots[role];
@@ -370,6 +493,7 @@ void Log(const uint8_t* b, Probe& p) {
           n.skin, n.skin_data, n.skin_count, n.links, d.seen, d.seen-r.previous_draws[n.actor], d.last_frame,
           d.vertex_buffer, d.index_buffer, d.vertex_shader, d.start, d.count);
       r.previous_draws[n.actor] = d.seen;
+      LogPaletteInputs(b, p, n, role);
       if (n.links && n.skin_data) {
         std::string links;
         for (uint32_t i = 0; i < n.skin_count; ++i) {
@@ -383,6 +507,20 @@ void Log(const uint8_t* b, Probe& p) {
   for (const auto& w : p.watches)
     REXLOG_INFO("PUPPET bones actor={:08X} data={:08X} bytes={} hash={:016X} last-change-frame={} last-observed-write-frame={} observed-writes={} writers=82728BC0/82728C90 coverage=partial unknown-is-not-proof-of-no-update",
         w.owner, w.data, w.bytes, w.hash, Stamp(w.changed_frame), Stamp(w.write_frame), w.writes);
+  for (const auto& [key, use] : p.palette_uses) {
+    const bool copy = use.owner == p.roots[1].actor;
+    const char* shared = !copy ? "n/a" : use.saw_source ? "true" :
+        use.saw_unknown || !use.saw_copy ? "unknown" : "false";
+    REXLOG_INFO("PUPPET mesh-palette-use role={} actor={:08X} node={:08X} context={:08X} constants={:08X} first={} matrices={} address={:08X} valid={} material={:08X} packet={:08X} world-entry={:08X} local-entry={:08X} builder-prepares={} shader-prepares={} decoded-draw-attempts={} source-entries={} copy-entries={} unknown-entries={} copy-uses-source-palette={} provenance=constant-builder any-source={} any-copy={} any-unknown={} anatomy=unknown",
+        copy ? "copy" : "source", use.owner, use.node, use.context, use.data, use.first, use.count,
+        use.valid ? use.data+48*use.first : 0, use.valid, use.material, use.packet, use.world_entry, use.local_entry,
+        use.builds, use.prepares, use.draws,
+        use.source_entries, use.copy_entries, use.unknown_entries, shared,
+        use.saw_source, use.saw_copy, use.saw_unknown);
+  }
+  if (DrawOn()) REXLOG_INFO("PUPPET draws probe state=heartbeat connected={} epoch={} tracked-constants={} palette-use-dropped={} capture-game-frames-left={} log-rotation=also-read-run.N.log",
+      p.api != nullptr, p.epoch, p.palettes.size(), p.palette_dropped, p.lists_left);
+  p.palette_uses.clear(); p.palette_dropped = 0;
 }
 // These functions set GDI+156 to their r3 actor, then invoke mesh preparation
 // (.125:33826+, .110:35404+). Actual D3D work can execute later.
@@ -414,6 +552,85 @@ struct RenderScope {
   }
   ~RenderScope() { if (entered) { preparing = previous; --preparation_depth; } }
 };
+// 827B8B80(r3=actor,r4=mesh resource) reads actor skin links, then
+// 820DF468 appends transposed 48-byte constants to *828D1CD4 + 468.
+struct PaletteBuildScope {
+  NrPuppetMeshScope previous = building_palette;
+  uint32_t actor = 0, mesh = 0;
+  uint32_t context = 0, before_count = 0;
+  bool entered = false;
+  PaletteBuildScope(const uint8_t* b, uint32_t a, uint32_t m) : actor(a), mesh(m) {
+    auto& p = Get();
+    if (!DrawOn() || !p.active.load(std::memory_order_acquire)) return;
+    entered = true; building_palette = {};
+    context = Word(b, 0x828D1CD4); before_count = Word(b, context, 472);
+    std::lock_guard lock(p.mutex);
+    const auto it = p.owners.find(actor);
+    if (it != p.owners.end() && it->second) building_palette = {it->second, actor};
+  }
+  void Complete(const uint8_t* b) {
+    if (!entered || Word(b, mesh, 76)) return;  // Nonzero means CPU skinning, no GPU palette append.
+    auto& p = Get();
+    std::lock_guard lock(p.mutex);
+    if (!p.active.load()) return;
+    // Early exits leave 492/496 unchanged. Never attribute the preceding actor's range.
+    const auto after_count = Word(b, context, 472);
+    if (Word(b, 0x828D1CD4) != context || after_count <= before_count ||
+        Word(b, context, 492) != before_count || Word(b, context, 496) != after_count-before_count) return;
+    RecordPaletteUse(b, p, building_palette, context, 0, 0, 0);
+  }
+  ~PaletteBuildScope() { if (entered) building_palette = previous; }
+};
+void PaletteAppended(const uint8_t* b, uint32_t header) {
+  auto& p = Get();
+  if (!DrawOn() || !p.active.load(std::memory_order_acquire) ||
+      header != uint64_t(Word(b, 0x828D1CD4))+468) return;
+  const auto data = Word(b, header), count = Word(b, header, 4);
+  if (!count || count > 16384 || !Range(data, count*48)) return;
+  std::lock_guard lock(p.mutex);
+  if (p.palette_buffers.size() >= 16 && !p.palette_buffers.contains(header)) {
+    p.palette_buffers.clear(); p.palettes.clear(); ++p.palette_dropped;
+  }
+  auto& buffer = p.palette_buffers[header];
+  if (buffer.data && buffer.data != data) {
+    std::vector<std::pair<uint32_t, NrPuppetMeshScope>> copied;
+    for (auto it = p.palettes.lower_bound(buffer.data); it != p.palettes.end() &&
+         uint64_t(it->first) < uint64_t(buffer.data)+48*buffer.count;) {
+      const auto slot = (it->first-buffer.data)/48;
+      if (slot < count-1) copied.emplace_back(data+48*slot, it->second);
+      it = p.palettes.erase(it);
+    }
+    for (const auto& entry : copied) p.palettes.insert_or_assign(entry.first, entry.second);
+  }
+  buffer = {data, count};
+  const auto address = data+48*(count-1);
+  if (!building_palette.owner) p.palettes.erase(address);
+  else {
+    if (p.palettes.size() >= 16384 && !p.palettes.contains(address)) {
+      p.palettes.clear(); ++p.palette_dropped;
+    }
+    p.palettes[address] = building_palette;
+  }
+}
+void ShaderPalette(const uint8_t* b, uint32_t material, uint32_t packet) {
+  executing_palette = {};
+  auto& p = Get();
+  if (!DrawOn() || !p.active.load(std::memory_order_acquire)) return;
+  const auto context = Word(b, 0x828D1CD8);
+  // Exact enable predicates for the parameter-5 upload in 82783580.
+  const bool enabled = Word(b, material, 32) && (Word(b, context, 0xDC44C) & 0x10000000);
+  std::lock_guard lock(p.mutex);
+  executing_palette = {p.generation, context, material, packet, Word(b, context, 432),
+      Word(b, context, 484), Word(b, context, 488), enabled};
+  if (!enabled) return;
+  NrPuppetMeshScope scope = preparing;
+  const auto matrix = Word(b, context, 420), index = Word(b, context, 432);
+  if (index < 16384 && Range(matrix, (index+1)*64)) {
+    const auto it = p.prepared.find(matrix+index*64);
+    if (it != p.prepared.end()) scope = it->second;
+  }
+  RecordPaletteUse(b, p, scope, context, material, packet, 1);
+}
 void MatrixPrepared(const uint8_t* b, uint32_t context, uint32_t offset, uint32_t index) {
   auto& p = Get();
   if (!p.active.load(std::memory_order_acquire) || index >= 16384) return;
@@ -485,12 +702,21 @@ void DevPuppetMeshReset() {
   p.active.store(false, std::memory_order_release);
   std::lock_guard lock(p.mutex);
   p.owners.clear(); p.watches.clear(); p.prepared.clear(); p.buffers.clear();
+  p.palettes.clear(); p.palette_buffers.clear(); p.palette_uses.clear(); p.palette_dropped = 0;
+  ++p.generation;
   p.draw_queries = p.provenance_hits = 0;
   p.world = p.lists_left = 0; p.list_frame = kUnknown;
   for (auto& r : p.roots) r = {};
   if (p.api) p.api->reset();
 }
 void DevPuppetMeshFrame(uint64_t frame) {
+  // Emit even if MESH was omitted or no copy ever reaches Arm.
+  static const bool announced = [] {
+    if (DrawOn()) REXLOG_INFO("PUPPET draws probe state={} mesh-env={} draws-env=true log-rotation=also-read-run.N.log",
+        On() ? "waiting-for-spawn" : "mesh-env-disabled", On());
+    return true;
+  }();
+  (void)announced;
   if (!On()) return;
   auto& p = Get(); p.frame.store(frame);
   if (!p.active.load(std::memory_order_acquire)) return;
@@ -527,6 +753,7 @@ void DevPuppetMeshTick(const uint8_t* b) {
   if (Word(b, 0x828E8388) != p.world || !Identity(b, p.roots[0]) || !Identity(b, p.roots[1])) {
     p.active.store(false, std::memory_order_release);
     p.owners.clear(); p.watches.clear(); p.prepared.clear(); p.buffers.clear();
+    p.palettes.clear(); p.palette_buffers.clear(); p.palette_uses.clear(); ++p.generation;
     if (p.api) p.api->reset();
     REXLOG_INFO("PUPPET mesh stopped root-identity-changed no-stale-reads");
     return;
@@ -543,7 +770,6 @@ uint64_t DevPuppetMeshDrawBegin(const uint8_t* b) {
   auto& p = Get();
   if (!p.active.load(std::memory_order_acquire)) return kUnknown;
   std::lock_guard lock(p.mutex);
-  if (!p.api) return kUnknown;
   NrPuppetMeshScope next = preparing;  // Also supports immediate draws inside preparation.
   ++p.draw_queries;
   // The executor uses *828D1CD8 as its context. Its current world/view matrix
@@ -559,6 +785,19 @@ uint64_t DevPuppetMeshDrawBegin(const uint8_t* b) {
       if (it != p.prepared.end()) { next = it->second; ++p.provenance_hits; break; }
     }
   }
+  if (DrawOn() && executing_palette.enabled && executing_palette.generation == p.generation &&
+      (Word(b, context, 0xDC44C) & 0x10000000) &&
+      executing_palette.context == context && executing_palette.world_index == Word(b, context, 432) &&
+      executing_palette.first == Word(b, context, 484) && executing_palette.count == Word(b, context, 488)) {
+    if (!next.owner) {
+      const auto first = executing_palette.first, count = executing_palette.count;
+      const auto data = Word(b, context, 468);
+      if (count <= 256 && first < 16384 && Range(data, (first+count)*48))
+        next = PaletteOwner(p, data+first*48, count);
+    }
+    RecordPaletteUse(b, p, next, context, executing_palette.material, executing_palette.packet, 2);
+  }
+  if (!p.api) return kUnknown;
   const auto previous = p.api->scope(next);
   return (uint64_t(previous.owner) << 32) | previous.mesh;
 }
@@ -570,6 +809,23 @@ void DevPuppetMeshDrawEnd(uint64_t previous) {
 }
 }  // namespace kk
 
+REX_EXTERN(__imp__sub_827B8B80);
+REX_HOOK_RAW(sub_827B8B80) {
+  kk::PaletteBuildScope scope(base, ctx.r3.u32, ctx.r4.u32);
+  __imp__sub_827B8B80(ctx, base);
+  scope.Complete(base);
+}
+REX_EXTERN(__imp__sub_820DF468);
+REX_HOOK_RAW(sub_820DF468) {
+  const uint32_t header = ctx.r3.u32;
+  __imp__sub_820DF468(ctx, base);
+  kk::PaletteAppended(base, header);
+}
+REX_EXTERN(__imp__sub_82783580);
+REX_HOOK_RAW(sub_82783580) {
+  kk::ShaderPalette(base, ctx.r4.u32, ctx.r5.u32);
+  __imp__sub_82783580(ctx, base);
+}
 REX_EXTERN(__imp__sub_82876D00);
 REX_HOOK_RAW(sub_82876D00) {
   kk::RenderScope scope(base, ctx.r3.u32, 0x82876D00);
