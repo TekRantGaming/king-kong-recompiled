@@ -2,6 +2,7 @@
 #include "coop_pose.h"
 #include "coop_enemies_game.h"
 #include "coop_observer.h"
+#include "coop_story_game.h"
 #include "play_internal.h"
 #include "hfr.h"
 #include "settings.h"
@@ -27,6 +28,9 @@ int progress_slot=-1;
 std::atomic<int> session_cheats{-1};
 std::atomic<bool> stopping{false};
 std::atomic<bool> move_offer{false};
+std::atomic<uint32_t> move_request{0};
+uint32_t pending_move=0;
+double move_until=0;
 uint32_t loaded_generation=0, loading_generation=0, recorded_checkpoint=0;
 uint64_t applied_progress=0;
 BehindRule behind;
@@ -108,6 +112,7 @@ void AskLoad(uint8_t* base,uint32_t g,const FlowView& v) {
   Store32(base,0x82CCAA80,0); Store32(base,0x82CCBFD4,0);
   loading_generation=v.world.generation;
   move_offer=false;
+  move_request=0; pending_move=0;
   behind=BehindRule{};
   recorded_checkpoint=v.world.start;
   REXLOG_INFO("KK co-op flow: load generation {} level {} start {}",v.world.generation,v.world.level,v.world.start);
@@ -115,12 +120,19 @@ void AskLoad(uint8_t* base,uint32_t g,const FlowView& v) {
 }
 int SessionCheats() { return session_cheats.load(); }
 bool MoveToPartnerOffered() { return move_offer.load(); }
-void MoveToPartner() {
+void MoveToPartner(bool checkpoint_recovery) {
   const auto v=SessionFlowSnapshot();
-  if (move_offer.exchange(false) && !v.host && v.phase==FlowPhase::Playing && v.policy==ChapterPolicy::Together)
-    Send(MessageType::ReloadRequest,v.world);
+  if (move_offer.exchange(false) && !v.host && v.phase==FlowPhase::Playing && v.policy==ChapterPolicy::Together) {
+    if (checkpoint_recovery && StoryBehind()) {
+      if (Send(MessageType::ReloadRequest,v.world)) REXLOG_INFO("KK co-op story: checkpoint recovery accepted after catch-up offer");
+    } else {
+      // UI submits a generation only. Native memory/teleport stays on the AI thread.
+      move_request=v.world.generation;
+      REXLOG_INFO("KK co-op story: soft fix requested, move to partner without reload");
+    }
+  }
 }
-void StopSessionFlow() { stopping=true; observer::SetPartnerSpectating(false); }
+void StopSessionFlow() { stopping=true; move_request=0; observer::SetPartnerSpectating(false); }
 bool SessionInProcess() { return launched; }
 bool SessionPrivateReload() { return private_load; }
 void ApplySessionSettings() {
@@ -283,12 +295,14 @@ bool SessionBeforeGo(PPCContext& ctx,uint8_t* base,uint32_t g) {
     const auto local=ReadJackPose([base](uint32_t a){return Load32(base,a);},[base](uint32_t a){return Load16(base,a);},[base](uint32_t a){return LoadF(base,a);},Now());
     if (!link.connected) behind.Tick(Now(),{},{});
     else if (behind.Tick(Now(),local.pose,link.partner)) move_offer=true;
-    if (local.pose && link.partner && local.pose->level==link.partner->level &&
+    if (StoryBehind() || StoryNeedsMove()) move_offer=true;
+    if (!StoryBehind() && !StoryNeedsMove() && local.pose && link.partner && local.pose->level==link.partner->level &&
         PartnerDistance(*local.pose,*link.partner)<=100) move_offer=false;
   }
   return false;
 }
 void SessionAfterGo(uint8_t* base,uint32_t g,bool loaded) {
+  if (launched && loaded && private_load) StoryLoaded(base);
   if (independent_load && loaded) {
     const auto own=*independent_load;
     independent_load.reset();
@@ -311,6 +325,7 @@ void SessionAfterGo(uint8_t* base,uint32_t g,bool loaded) {
   auto v=SessionFlowSnapshot();
   if (v.world.generation!=loading_generation) return;
   if (hfr::Load32(base,g+0x18)!=v.world.level) { Send(MessageType::FlowAbort,v.world); return; }
+  StoryLoaded(base);
   loaded_generation=loading_generation; loading_generation=0;
   observer::LevelLoaded();
   RecordProgress(v);
@@ -406,6 +421,23 @@ bool SessionDevChapterEnd() {
 }
 #endif
 void SessionReviveBeforeAi(PPCContext& ctx,uint8_t* base) {
+  const uint32_t requested_move=move_request.exchange(0);
+  if (requested_move) { pending_move=requested_move; move_until=Now()+5; }
+  if (pending_move) {
+    const auto v=SessionFlowSnapshot(); const auto link=EnemyLinkSnapshot();
+    if (!REXCVAR_GET(kk_coop_enabled) || stopping || !launched || !v.active || v.host ||
+        v.phase!=FlowPhase::Playing || v.policy!=ChapterPolicy::Together || v.world.generation!=pending_move) {
+      pending_move=0;
+    } else if (!recovery.Downed() && !observer::Active() && PartnerAliveHere(v,link,Now()) &&
+        ReviveTeleport(ctx,base,*link.partner)) {
+      pending_move=0; move_offer=false; behind=BehindRule{};
+      StoryPartnerMoved();
+      REXLOG_INFO("KK co-op story: soft fix applied, native teleport beside host; no reload");
+    } else if (Now()>move_until) {
+      pending_move=0; move_offer=true;
+      REXLOG_INFO("KK co-op story: soft fix deferred, safe live partner/Jack/controller unavailable; no reload");
+    }
+  }
   if (!REXCVAR_GET(kk_coop_enabled) || !launched || recovery.phase!=revive::Phase::Placing) return;
   const auto v=SessionFlowSnapshot(); const auto link=EnemyLinkSnapshot();
   if (!v.active || v.phase!=FlowPhase::Playing || v.world.generation!=recovery_generation ||

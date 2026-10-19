@@ -153,6 +153,7 @@ struct SteamRuntime::Impl
   ShotMailbox shots;
   CombatMailbox combat;
   OwnershipMailbox ownership;
+  StoryMailbox story;
   CameraMailbox camera;
   FlowMailbox flow;
   const char* local_failure = "not-published";
@@ -316,6 +317,7 @@ struct SteamRuntime::Impl
     shots.Clear();
     combat.Clear();
     ownership.Clear();
+    story.Clear();
     camera.Clear();
   }
   void RetireCalls() {
@@ -593,6 +595,7 @@ struct SteamRuntime::Impl
     shots.Exchange(*session);
     combat.Exchange(*session, now);
     ownership.Exchange(*session);
+    story.Exchange(*session);
     camera.Exchange(*session, now);
     flow.Exchange(*session, now);
     SteamSessionView view{session->SessionRole(), session->State(), session->Rejection(), session->Stats(), pose, session->Partner(now), now};
@@ -745,6 +748,8 @@ void SteamRuntime::ClearCombat() { impl_->combat.Clear(); }
 bool SteamRuntime::SubmitOwnership(Message m) { return impl_->ownership.Submit(std::move(m)); }
 std::vector<Message> SteamRuntime::TakeOwnership() { return impl_->ownership.Take(); }
 void SteamRuntime::ClearOwnership() { impl_->ownership.Clear(); }
+bool SteamRuntime::SubmitStory(Message m) { return impl_->story.Submit(std::move(m)); }
+std::vector<Message> SteamRuntime::TakeStory() { return impl_->story.Take(); }
 void SteamRuntime::Shutdown() { impl_->Shutdown(); }
 #if defined(KK_DEV_TOOLS)
 int SteamRuntime::SelfTest(std::function<void(const std::string&)> log) {

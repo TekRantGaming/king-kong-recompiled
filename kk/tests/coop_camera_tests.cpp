@@ -14,6 +14,29 @@ CameraPose Pose(double time=1) {
   CameraPose p; p.time=time; p.generation=1; p.level=102; p.cut=1; return p;
 }
 std::vector<uint8_t> Packet(Message m) { std::vector<uint8_t> b; Check(Encode(m,b),"encode fixture"); return b; }
+void TogetherCinematics() {
+  TogetherCutscene follow;
+  auto p=Pose();
+  follow.Update(p,1,102,1);
+  Check(!follow.Active() && !follow.Skip(1),"Together gameplay keeps its own camera and input");
+  p.scripted=true; p.cut++;
+  follow.Update(p,1,102,2);
+  Check(follow.Active(),"host in-engine cinematic enables temporary camera follow without a native guest trigger");
+  follow.Update(p,1,102,3);
+  Check(follow.Active() && !follow.Skip(3),"camera cuts alone never synthesize a skip");
+  ++p.skip; p.scripted=false; ++p.cut;
+  follow.Update(p,1,102,4);
+  Check(!follow.Active() && follow.Skip(4.1),"host skip reaches native input even when the same packet ends the cinematic");
+  Check(!follow.Skip(4.26),"skip injection expires rather than skipping a later unrelated scene");
+  p.skip=9; p.generation=2; p.scripted=true;
+  follow.Update(p,2,102,5);
+  Check(follow.Active() && !follow.Skip(5),"new generation rebases historical skip counters");
+  follow.Update(p,2,203,5.1);
+  Check(!follow.Active() && !follow.Skip(5.1),"different level camera never claims cinematic control");
+  follow.Update(p,2,102,6);
+  follow.Update({},2,102,7);
+  Check(!follow.Active() && !follow.Skip(7),"expired stream, disconnect or leaving Together releases its independent lease");
+}
 void Codec() {
   for (auto type : {MessageType::CameraPose,MessageType::CameraCut}) {
     Message m; m.type=type; m.epoch=0x123456789abcdef0ull; m.sequence=0xabcdef01;
@@ -21,7 +44,7 @@ void Codec() {
     m.camera.qx=.5f; m.camera.qy=-.5f; m.camera.qz=.5f; m.camera.qw=.5f;
     m.camera.cut=19; m.camera.skip=7; m.camera.scripted=true; m.camera.paused=true; m.camera.fov=2.2f;
     auto bytes=Packet(m); Message decoded;
-    Check(bytes.size()==kHeaderBytes+57 && bytes[5]==9 && bytes[7]==uint16_t(type),"bounded v9 camera payload");
+    Check(bytes.size()==kHeaderBytes+57 && bytes[5]==11 && bytes[7]==uint16_t(type),"bounded v11 camera payload");
     Check(Decode(bytes,decoded) && Packet(decoded)==bytes,"exact camera fields round trip");
     for (size_t size=0;size<bytes.size();++size) {
       Message out; out.sequence=19;
@@ -156,9 +179,16 @@ void Sessions() {
   Check(sample && Near(sample->x,20),"fresh host pose automatically recovers after prolonged camera loss");
   Check(receive.Info().accepted_count>info.accepted_count && Near(receive.Info().accepted,10.01),
       "mailbox carries actual accepted receipt time and counters");
-  guest.End(10.02); receive.Exchange(guest,10.02); Check(!receive.Sample(10.02),"session end clears camera mailbox");
+  TogetherCutscene together;
+  together.Update(sample,1,102,10.01);
+  Check(together.Active(),"Together consumes the existing authoritative camera mailbox");
+  p.time=10.02; ++p.cut; ++p.skip; p.scripted=false;
+  host.PublishCamera(p); host.Tick(10.02); guest.Tick(10.02); receive.Exchange(guest,10.02);
+  together.Update(receive.Sample(10.02),1,102,10.02);
+  Check(!together.Active() && together.Skip(10.02),"reliable CameraCut end/skip restores local view and retains the host skip edge");
+  guest.End(10.03); receive.Exchange(guest,10.03); Check(!receive.Sample(10.03),"session end clears camera mailbox");
   auto disabled=Config(Role::Host); disabled.enabled=false; Transport dt; CoopSession off(disabled,dt);
   off.PublishCamera(Pose(1)); off.Tick(1); Check(!dt.poses && !dt.cuts,"co-op off emits no camera");
 }
 }
-int main() { Codec(); RotationAndBuffer(); Sessions(); std::puts("observer camera tests passed"); }
+int main() { Codec(); RotationAndBuffer(); TogetherCinematics(); Sessions(); std::puts("observer camera tests passed"); }

@@ -43,7 +43,7 @@ void SessionReviveBeforeAi(PPCContext& ctx, uint8_t* base);
 int SessionCheats();  // -1 outside a C24 launch, otherwise immutable host settings
 void StopSessionFlow();
 bool MoveToPartnerOffered();
-void MoveToPartner();
+void MoveToPartner(bool checkpoint_recovery=false);
 struct EnemyLink {
   bool connected = false;
   Role role = Role::Host;
@@ -69,6 +69,10 @@ void ClearCombat();
 bool SubmitOwnership(Message message);
 std::vector<Message> TakeOwnership();
 void ClearOwnership();
+bool SubmitStory(Message message);
+// Unlike EnemyLinkSnapshot, valid while the shared load barrier is still closed.
+uint64_t StorySessionEpoch();
+std::vector<Message> TakeStory();
 // Value-only snapshot, including CoopSession's interpolated pose. No transport work.
 struct PuppetSnapshot {
   bool enabled = false, fresh = false;

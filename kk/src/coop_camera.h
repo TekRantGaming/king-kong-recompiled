@@ -12,6 +12,23 @@ using CameraAxes = std::array<std::array<float,3>,3>;
 // Freeze through chapter-start/render hitches; receipt time, never host clock,
 // owns the lease. A repeated source timestamp cannot renew it.
 inline constexpr double kCameraExpirySeconds=8.0;
+// A Together cinematic owns a separate lease from the downed-player request.
+// Skip edges survive the end-camera packet long enough to reach native input.
+class TogetherCutscene {
+ public:
+  void Update(const std::optional<CameraPose>& p,uint32_t generation,uint32_t level,double now) {
+    if (!p || p->generation!=generation || p->level!=level || !std::isfinite(now)) { *this={}; return; }
+    if (generation_!=generation) { *this={}; generation_=generation; skip_=p->skip; }
+    else if (p->skip>skip_) { skip_=p->skip; skip_until_=now+.25; }
+    active_=p->scripted;
+  }
+  bool Active() const { return active_; }
+  bool Skip(double now) const { return skip_until_>0 && now<skip_until_ && now>=skip_until_-.25; }
+ private:
+  uint32_t generation_=0, skip_=0;
+  double skip_until_=0;
+  bool active_=false;
+};
 struct CameraDiagnostics {
   double received=-1, accepted=-1, rejected_at=-1;
   uint32_t sequence=0, accepted_sequence=0;

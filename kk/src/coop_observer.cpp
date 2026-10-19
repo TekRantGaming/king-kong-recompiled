@@ -28,6 +28,7 @@ const char* host_capture_reason="no scene view";
 std::optional<CameraPose> host_previous,remote;
 uint32_t cut=1,skip=0,consumed_skip=0;
 bool start_down=false,local_scripted=false,parked=false;
+TogetherCutscene together_scene;
 float origin[3]{};
 
 bool World(const uint8_t* b,const FlowView& v) {
@@ -54,6 +55,7 @@ void Reset() {
   start_down=false; local_scripted=false; mismatch_since=skip_until=0; failed=false; observing=false; screen=true;
   began=Now(); last_camera=0; checkpoint_mismatch=0; status="Observer: waiting for host camera.";
   camera_timeout_since=host_capture_time=0; host_capture_reason="no scene view";
+  together_scene={};
 }
 }
 void SetPartnerSpectating(bool enabled) {
@@ -100,7 +102,7 @@ void Fallback(const char* why) {
 void GameFrame(uint8_t* b) {
   const auto v=SessionFlowSnapshot();
   if (!REXCVAR_GET(kk_coop_enabled) || !v.active || v.phase!=FlowPhase::Playing || !play::SessionActive()) {
-    observing=false; temporary=false; PublishHostCamera({}); return;
+    observing=false; temporary=false; together_scene={}; PublishHostCamera({}); return;
   }
   // The flow generation resets local actor identities even on a same-level checkpoint reload.
   if (generation!=v.world.generation) {
@@ -110,9 +112,20 @@ void GameFrame(uint8_t* b) {
   if (v.host && host_previous && (play::PauseMenuOpen() || play::GamePausePageUp())) {
     auto p=*host_previous; p.time=Now(); p.paused=true; PublishHostCamera(p);
   }
-  const bool wanted=!v.host && (v.policy==ChapterPolicy::Observer || temporary);
+  const bool was_cinematic=together_scene.Active();
+  const bool was_skip=together_scene.Skip(Now());
+  together_scene.Update(!v.host && v.policy==ChapterPolicy::Together && CameraConnectionReady() ?
+      HostCameraSnapshot(Now()) : std::optional<CameraPose>{},v.world.generation,v.world.level,Now());
+  const bool cinematic=together_scene.Active();
+  if (was_cinematic!=cinematic)
+    REXLOG_INFO("KK co-op story: host cinematic view {} generation {} level {}; native guest scripts continue",
+        cinematic ? "started" : "ended",generation,v.world.level);
+  if (!was_skip && together_scene.Skip(Now()))
+    REXLOG_INFO("KK co-op story: host cinematic skip received generation {} level {}; forwarding to local cinematic input",
+        generation,v.world.level);
+  const bool wanted=!v.host && (v.policy==ChapterPolicy::Observer || temporary || cinematic);
   if (wanted && !observing) {
-    // Re-entering a temporary downed view starts a new lease, even in the same chapter.
+    // Each temporary downed/cinematic view starts a new lease in this chapter.
     failed=false; began=Now(); last_camera=0; mismatch_since=0; remote.reset();
     camera_timeout_since=0;
     REXLOG_INFO("KK co-op observer: camera follow enabled, generation {} level {} temporary={}",
@@ -124,12 +137,12 @@ void GameFrame(uint8_t* b) {
   if (!b || !World(b,v) || play::StartLevelLoading() || play::CoverScreen()) return;
   // Native movie playback is a separate presentation path. Its scene matrix
   // cannot establish matching movie identity or playback time on the guest.
-  if (!temporary && Movie(b)) {
+  if (!temporary && !cinematic && Movie(b)) {
     Fallback("Observer unavailable: movie playback has no validated host start/skip synchronization."); return;
   }
   const bool menu=play::PauseMenuOpen() || play::GamePausePageUp();
   if (menu) mismatch_since=checkpoint_mismatch=0;
-  if (!menu && !temporary && v.checkpoint!=local_checkpoint) {
+  if (!menu && !temporary && !cinematic && v.checkpoint!=local_checkpoint) {
     if (!checkpoint_mismatch) checkpoint_mismatch=Now();
     if (Now()-checkpoint_mismatch>2) {
       Fallback("Observer unavailable: local script checkpoint diverged from host."); return;
@@ -201,7 +214,7 @@ bool View(uint8_t* b,uint32_t view,uint32_t caller,std::array<uint8_t,68>& saved
   const auto info=HostCameraDiagnostics();
   const bool fresh=info.accepted>=0 && Now()-info.accepted<=.5;
   if (!fresh) mismatch_since=0;
-  if (!temporary && fresh && !remote->paused && caller==0x8287390C) {
+  if (!temporary && !together_scene.Active() && fresh && !remote->paused && caller==0x8287390C) {
     bool diverged=local_scripted!=remote->scripted;
     if (local_scripted && remote->scripted) {
       CameraPose local;
@@ -233,13 +246,19 @@ void FilterPad(uint32_t user,uint8_t* state) {
   const bool down=(buttons&0x10)!=0;
   if (v.host) {
     if (user) return;
-    if (down && !start_down && local_scripted && !play::PauseMenuOpen()) ++skip;
+    if (down && !start_down && local_scripted && !play::PauseMenuOpen()) {
+      ++skip;
+      REXLOG_INFO("KK co-op story: host cinematic skip queued generation {} level {} skip={}",generation,v.world.level,skip);
+    }
     start_down=down; return;
   }
-  if (!observing || play::PauseMenuOpen() || play::GamePausePageUp()) return;
+  if (play::PauseMenuOpen() || play::GamePausePageUp()) return;
+  const bool together_skip=!user && v.policy==ChapterPolicy::Together && together_scene.Skip(Now()) && local_scripted;
+  if (!observing) { if (together_skip) state[5]|=0x10; return; }
   // Pause remains available in play. During a cutscene only the host can skip.
   const uint16_t allowed=local_scripted ? 0 : buttons&0x30;
   std::memset(state+4,0,12); state[4]=uint8_t(allowed>>8); state[5]=uint8_t(allowed);
+  if (together_skip) state[5]|=0x10;
   if (remote && !local_scripted) { consumed_skip=remote->skip; skip_until=0; }
   if (!user && remote && remote->skip>consumed_skip && local_scripted) {
     consumed_skip=remote->skip; skip_until=Now()+.12;
@@ -248,8 +267,8 @@ void FilterPad(uint32_t user,uint8_t* state) {
 }
 void LateWorld(PPCContext& ctx,uint8_t* b) {
   if (!observing || failed || !b || play::PauseMenuOpen() || play::StartLevelLoading() || play::CoverScreen()) return;
-  // A downed temporary spectator keeps the death system's actor/physics intact.
-  if (temporary) return;
+  // Downed and cinematic viewers keep their native actor/physics intact.
+  if (temporary || together_scene.Active()) return;
   // Let the native chapter-start drop settle before fixing an on-foot origin.
   // Gameplay input is already suppressed throughout this short settling period.
   if (Now()-began<1) return;

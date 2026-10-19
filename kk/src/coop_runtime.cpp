@@ -4,6 +4,7 @@
 #include "coop_pose.h"
 #include "coop_nametag.h"
 #include "coop_observer.h"
+#include "coop_story_game.h"
 #include "settings.h"
 #include "steam_runtime.h"
 #include "social_fake.h"
@@ -125,6 +126,7 @@ class Service {
         shots_.Exchange(session);
         combat_.Exchange(session, now);
         ownership_.Exchange(session);
+        story_.Exchange(session);
         camera_.Exchange(session, now);
         flow_.Exchange(session, now);
         View view{config.role, session.State(), session.Rejection(), session.Stats(), local, session.Partner(now), now};
@@ -158,6 +160,7 @@ class Service {
     shots_.Clear();
     combat_.Clear();
     ownership_.Clear();
+    story_.Clear();
     camera_.Clear();
   }
   bool Running() const { return running_; }
@@ -177,6 +180,8 @@ class Service {
   bool SubmitOwnership(Message m) { return ownership_.Submit(std::move(m)); }
   std::vector<Message> TakeOwnership() { return ownership_.Take(); }
   void ClearOwnership() { ownership_.Clear(); }
+  bool SubmitStory(Message m) { return story_.Submit(std::move(m)); }
+  std::vector<Message> TakeStory() { return story_.Take(); }
   void PublishCamera(std::optional<CameraPose> camera) { camera_.Publish(std::move(camera)); }
   std::optional<CameraPose> HostCamera(double now) const { return camera_.Sample(now); }
   CameraDiagnostics CameraInfo() const { return camera_.Info(); }
@@ -193,6 +198,7 @@ class Service {
   ShotMailbox shots_;
   CombatMailbox combat_;
   OwnershipMailbox ownership_;
+  StoryMailbox story_;
   CameraMailbox camera_;
   std::optional<CheatSet> local_cheats_;
   FlowMailbox flow_;
@@ -247,9 +253,11 @@ class PartnerOverlay final : public rex::ui::ImGuiDialog {
         ImGui::SetNextWindowPos(ImVec2(24,190),ImGuiCond_Always);
         ImGui::SetNextWindowBgAlpha(.9f);
         if (ImGui::Begin("##coop-catchup",nullptr,ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoDecoration)) {
-          ImGui::TextUnformatted("Your partner is far ahead.");
-          ImGui::TextUnformatted("Recovery reloads both players at the host's last checkpoint.");
-          if (ImGui::Button("Move to partner")) MoveToPartner();
+          const bool checkpoint_recovery=StoryBehind();
+          ImGui::TextUnformatted(checkpoint_recovery || StoryNeedsMove() ? "Your world needs to catch up with the host." : "Your partner is far ahead.");
+          ImGui::TextUnformatted(checkpoint_recovery ? "Recovery reloads both players at the host's last checkpoint." :
+              "Move beside the host and let your story catch up.");
+          if (ImGui::Button(checkpoint_recovery ? "Recover checkpoint" : "Move to partner")) MoveToPartner(checkpoint_recovery);
         }
         ImGui::End();
       }
@@ -497,6 +505,7 @@ bool SocialFakeScenario(std::string_view scenario) {
 void GameFrame(uint8_t* base) {
   RefreshSessionCheats();
   kk::PartnerBodyGameFrame(base);
+  StoryGameFrame(base);
   if (!REXCVAR_GET(kk_coop_enabled)) { observer::GameFrame(base); return; }
   SessionReloadFrame(base);
   observer::GameFrame(base);
@@ -634,6 +643,20 @@ void ClearOwnership() {
   if (service.Running()) { service.ClearOwnership(); return; }
 #endif
   if (steam) steam->ClearOwnership();
+}
+bool SubmitStory(Message message) {
+  if (!EnemyConnectionReady()) return false;
+#if defined(KK_DEV_TOOLS)
+  if (service.Running()) return service.SubmitStory(std::move(message));
+#endif
+  return steam && steam->SubmitStory(std::move(message));
+}
+uint64_t StorySessionEpoch() { return CurrentView().epoch; }
+std::vector<Message> TakeStory() {
+#if defined(KK_DEV_TOOLS)
+  if (service.Running()) return service.TakeStory();
+#endif
+  return steam ? steam->TakeStory() : std::vector<Message>{};
 }
 PuppetSnapshot PartnerBodySnapshot() {
   if (!REXCVAR_GET(kk_coop_enabled)) return {};

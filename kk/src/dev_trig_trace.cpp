@@ -62,7 +62,6 @@ KK_TRIG(82453078, "ActorLifeState")
 KK_TRIG(8244EA98, "Enemy")
 KK_TRIG(8244E9A8, "EnemyGAO")
 KK_TRIG(8245D2E0, "ObjOfAIModelInBV")
-KK_TRIG(8244F0E8, "PivotInBV")
 KK_TRIG(82448250, "Munition")
 KK_TRIG(82448478, "Arme")
 KK_TRIG(82449E50, "Timer")
@@ -78,6 +77,9 @@ KK_TRIG(8244F020, "IsNearEnough")
 KK_TRIG(82466878, "On_Screen")
 // Shared body service owns CapaBit in both builds; retain this dev trace there.
 namespace kk {
+void DevTrigPivotResult(uint8_t* base, uint32_t record, uint32_t caller, uint32_t result) {
+  if (On()) DevTrigNote("PivotInBV", base, record, caller, result);
+}
 void DevTrigCapaResult(uint8_t* base, uint32_t record, uint32_t caller, uint32_t result) {
   if (On()) DevTrigNote("CapaBit", base, record, caller, result);
 }
