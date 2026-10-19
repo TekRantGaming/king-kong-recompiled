@@ -44,6 +44,7 @@
 #include "art.h"
 #include "freecam.h"
 #include "glyphs.h"
+#include "key_glyphs.h"
 #include "hooks/kk_native_photo.h"
 #include "launcher_art.h"
 #include "launcher_text.h"
@@ -551,7 +552,20 @@ class Panel final : public rex::ui::ImGuiDialog {
     if (!hidden_) {
       const std::string hint = T("Move: left stick or W A S D. Look: right stick, or hold the right mouse button. "
                                  "Down and up: triggers, or Ctrl and Space.");
-      dl->AddText(ui::GetFonts().text, 14 * s, ImVec2(o_.x + 28 * s, cy - 8 * s), color::kTextDim, hint.c_str());
+      float x = o_.x + 28 * s;
+      // Keyboard and mouse (Beta 12): the mouse's pictures for looking (hold the right button, move the mouse).
+      if (PromptSet() == "keyboard") {
+        for (const char* name : {key_glyphs::kMouseRight, key_glyphs::kMouseMove}) {
+          float aspect = 1.0f;
+          if (auto* t = glyphs_.Named("keyboard", name, &aspect)) {
+            const float gh = 24 * s, gw = gh * aspect;
+            dl->AddImage(ui::Tex(t), ImVec2(x, cy - gh * 0.5f), ImVec2(x + gw, cy + gh * 0.5f));
+            x += gw + 4 * s;
+          }
+        }
+        x += 6 * s;
+      }
+      dl->AddText(ui::GetFonts().text, 14 * s, ImVec2(x, cy - 8 * s), color::kTextDim, hint.c_str());
     }
     const Action clicked = ui::DrawPrompts(dl, glyphs_, PromptSet(), Prompts(), o_.x + w_ - 28 * s, cy, m_, true);
     if (clicked != Action::kCount) input_.Inject(clicked, ui::Device::kKeyboard);
@@ -636,7 +650,7 @@ class Panel final : public rex::ui::ImGuiDialog {
   // KK_DEV_PHOTO_STEPS="<s>:<step>,..." on the script clock (seconds since the chapter's level loaded):
   // enter, exit, resume, set:<row>=<value>, tab:<n>, panel:<0|1>, take, take:<name>, shot:<name> (the game's
   // frame into KK_DEV_PHOTO_DIR and "KK dev: window shot <name>" for a window capture with the panel),
-  // pad:<a|b|x|y|lb|rb|up|down|left|right|start>, done.
+  // pad:<a|b|x|y|lb|rb|up|down|left|right|start>, mouse:<dx>/<dy> (a mouse move for the camera), done.
   void DevSteps() {
     static std::vector<std::pair<double, std::string>> steps = [] {
       std::vector<std::pair<double, std::string>> out;
@@ -659,6 +673,11 @@ class Panel final : public rex::ui::ImGuiDialog {
     if (w == "resume") return Exit(true);
     if (w == "take") return TakePicture();
     if (w.rfind("take:", 0) == 0) return TakePicture(w.substr(5));
+    if (w.rfind("mouse:", 0) == 0) {  // mouse:<dx>/<dy>, a mouse move for the free camera (Beta 12 check)
+      const std::string v = w.substr(6);
+      const size_t slash = v.find('/');
+      return freecam::DevMouse(std::atof(v.c_str()), slash == std::string::npos ? 0 : std::atof(v.c_str() + slash + 1));
+    }
     if (w == "pos") {  // the game's clock, its paused total and the player's position (freeze checks)
       if (uint8_t* b = g_base.load()) {
         auto f32 = [b](uint32_t a) {

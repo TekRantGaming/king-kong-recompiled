@@ -61,7 +61,7 @@ int main() {
 
   // Everything: Save game next to Score in the lower group; Cheats and Options only in the Settings list.
   Available all;
-  all.photo = all.cheats = all.game_options = all.checkpoint = all.score = all.save = true;
+  all.photo = all.game_options = all.checkpoint = all.score = all.save = true;
   const std::vector<Entry> full = Only(Entries(all));
   Check(full == std::vector<Entry>{Entry::kResume, Entry::kPhotoMode, Entry::kControls, Entry::kGameplay,
                                    Entry::kSettings, Entry::kLoadCheckpoint, Entry::kScore, Entry::kSave,
@@ -71,8 +71,10 @@ int main() {
   Check(full_settings == std::vector<Entry>{Entry::kDisplay, Entry::kGraphics, Entry::kAudio, Entry::kCheats,
                                             Entry::kGameOptions},
         "full Settings list");
-  // Players (no cheats, no developer Options): Display, Graphics, Audio.
-  Check(Only(SettingsEntries(a)) == std::vector<Entry>{Entry::kDisplay, Entry::kGraphics, Entry::kAudio},
+  // Players (no developer Options): Display, Graphics, Audio, Cheats. Cheats is listed whatever the main Cheats
+  // switch says (Beta 12), so a player who switched it off can switch it on again from the pause menu.
+  Check(Only(SettingsEntries(a)) == std::vector<Entry>{Entry::kDisplay, Entry::kGraphics, Entry::kAudio,
+                                                        Entry::kCheats},
         "players' Settings list");
   for (const Listed& l : SettingsEntries(all)) Check(!l.gap_before && InSettings(l.entry), "Settings list entries");
   for (Entry e : full) Check(!InSettings(e), "main list entries are not in Settings");
@@ -117,13 +119,14 @@ int main() {
         "Controls and Gameplay go back to the main list");
   Check(EntryOfPage(all, Page::kCheats) == Entry::kCheats && InSettings(Entry::kCheats), "Cheats is in Settings");
 
-  // LB / RB: the pages of the same list, wrapping; Cheats only while listed.
+  // LB / RB: the pages of the same list, wrapping; Cheats is always listed (Beta 12).
   const std::vector<Listed> sl = ListWithPage(a, Page::kDisplay);
   Check(Only(sl) == Only(SettingsEntries(a)), "Display's list is the Settings list");
   Check(NextPage(sl, Page::kDisplay, 1) == Page::kGraphics, "RB from Display");
-  Check(NextPage(sl, Page::kDisplay, -1) == Page::kAudio, "LB from Display wraps to Audio");
-  Check(NextPage(sl, Page::kAudio, 1) == Page::kDisplay, "RB from Audio wraps to Display");
-  Check(NextPage(ListWithPage(all, Page::kAudio), Page::kAudio, 1) == Page::kCheats, "RB from Audio to Cheats when listed");
+  Check(NextPage(sl, Page::kDisplay, -1) == Page::kCheats, "LB from Display wraps to Cheats");
+  Check(NextPage(sl, Page::kAudio, 1) == Page::kCheats, "RB from Audio to Cheats");
+  Check(NextPage(sl, Page::kCheats, 1) == Page::kDisplay, "RB from Cheats wraps to Display");
+  Check(NextPage(ListWithPage(all, Page::kAudio), Page::kAudio, 1) == Page::kCheats, "RB from Audio to Cheats");
   Check(NextPage(ListWithPage(all, Page::kCheats), Page::kCheats, 1) == Page::kDisplay,
         "RB from Cheats skips Options (no page) and wraps to Display");
   const std::vector<Listed> ml = ListWithPage(a, Page::kControls);
@@ -131,8 +134,8 @@ int main() {
   Check(NextPage(ml, Page::kControls, 1) == Page::kGameplay && NextPage(ml, Page::kGameplay, 1) == Page::kControls &&
             NextPage(ml, Page::kControls, -1) == Page::kGameplay,
         "Controls and Gameplay between themselves");
-  Check(NextPage(ListWithPage(a, Page::kCheats), Page::kCheats, 1) == Page::kCheats,
-        "an unlisted page stays (Cheats while off)");
+  Check(NextPage(ListWithPage(a, Page::kCheats), Page::kCheats, 1) == Page::kDisplay,
+        "Cheats is listed for players too (Beta 12): RB from it wraps to Display");
   Check(NextPage(ListWithPage(a, Page::kAdvanced), Page::kAdvanced, 1) == Page::kAdvanced, "Advanced stays");
 
   // Page order: live rows under their sections first (a section without live rows goes), then the quiet caption

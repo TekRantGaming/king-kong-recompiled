@@ -40,7 +40,7 @@
 // loadout is in.
 //
 // Some cheats are off in some levels (cheat_rules.h; owner 19 Oct 2026: the weapon cheats in the Hayes
-// chapter, level 303): there they are never given, at the chapter start, after a checkpoint or when switched
+// chapter, level 303, and from Beta 12 the two chapters before it, 301 and 302): there they are never given, at the chapter start, after a checkpoint or when switched
 // on in play, so the chapter's own loadout is what the player has. The settings are not changed.
 
 #include "cheats.h"
@@ -134,7 +134,7 @@ void WatchLevel(const uint8_t* base) {
   const uint32_t before = g_level.exchange(level);
   const cheat_rules::LevelCheatsOff *was = cheat_rules::RuleFor(before), *now = cheat_rules::RuleFor(level);
   if (was == now) return;
-  if (was)
+  if (was && !now)
     REXLOG_INFO("KK: cheats switched off in level {} ({}) apply again as set (now level {})", was->level, was->chapter,
                 level);
   if (now) {

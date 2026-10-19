@@ -1,5 +1,5 @@
 // Task 251: cheats that are off in some chapters (cheat_rules.h; owner 19 Oct 2026): the weapon cheats are off in
-// the Hayes chapter (level 303) and nowhere else, every other cheat applies everywhere, every id in the table is a
+// the Hayes chapter (level 303) and, from Beta 12, the two chapters before it (301, 302) and nowhere else, every other cheat applies everywhere, every id in the table is a
 // real cheat (cheats.h), and the pause menu's note has its 5 languages (pause_text_table.inc).
 #include <cstdio>
 #include <string_view>
@@ -28,19 +28,22 @@ int main() {
   using namespace kk::cheat_rules;
   constexpr std::string_view kWeapons[] = {"revolver", "machine_gun", "shotgun", "sniper"};
 
-  // Hayes (level 303, chapter select entry 7): the four weapon cheats are off.
-  Check(RuleFor(303) != nullptr, "level 303 has a rule");
-  for (std::string_view w : kWeapons) Check(Suppressed(w, 303), "a weapon cheat is off in level 303");
-  static_assert(Suppressed("machine_gun", 303) && !Suppressed("machine_gun", 302), "usable at compile time");
+  // Hayes (level 303, chapter select entry 7) and the two chapters before it (Beta 12: Sacrifice 301 = entry 5,
+  // On Kong's tracks 302 = entry 6), so no cheat gun is carried into Hayes: the four weapon cheats are off.
+  for (uint32_t level : {301u, 302u, 303u}) {
+    Check(RuleFor(level) != nullptr, "levels 301, 302 and 303 have a rule");
+    for (std::string_view w : kWeapons) Check(Suppressed(w, level), "a weapon cheat is off in levels 301 to 303");
+    // The other cheats are unchanged there.
+    for (std::string_view other : {"healing", "one_hit", "ammo", "spears", "bonus", ""})
+      Check(!Suppressed(other, level), "a cheat that is not a weapon cheat applies in levels 301 to 303");
+  }
+  static_assert(Suppressed("machine_gun", 302) && !Suppressed("machine_gun", 204), "usable at compile time");
 
-  // The other cheats are unchanged there.
-  for (std::string_view other : {"healing", "one_hit", "ammo", "spears", "bonus", ""})
-    Check(!Suppressed(other, 303), "a cheat that is not a weapon cheat applies in level 303");
-
-  // The chapters before and after Hayes, the start menu and "no level yet": every cheat applies.
-  for (uint32_t level : {0u, 302u, 304u, 301u, 3030u, 33u}) {
-    Check(RuleFor(level) == nullptr, "no rule outside level 303");
-    for (const kk::CheatInfo& c : kk::kCheats) Check(!Suppressed(c.id, level), "every cheat applies outside 303");
+  // The chapters before and after (The wall 204, V-Rex 305, 304), the start menu and "no level yet": every cheat
+  // applies.
+  for (uint32_t level : {0u, 204u, 304u, 305u, 300u, 3030u, 33u}) {
+    Check(RuleFor(level) == nullptr, "no rule outside levels 301 to 303");
+    for (const kk::CheatInfo& c : kk::kCheats) Check(!Suppressed(c.id, level), "every cheat applies outside 301-303");
   }
 
   // Every id in the table is one of the launcher's cheats (a typo would silently suppress nothing), and each level

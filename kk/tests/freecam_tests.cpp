@@ -59,6 +59,15 @@ int main() {
       for (int j = 4; j < 16; ++j)
         Check(state[j] == 0, "all buttons/triggers/sticks suppressed");
     }
+  // Beta 12: the mouse turns the free camera (F9, photo mode) the same way as in play: up looks up, right turns
+  // right; kk_mouse_invert_y turns only the vertical round.
+  for (bool invert_y : {false, true}) {
+    Camera up, right;
+    MouseLook(up, 0, -40, .01f, invert_y);  // window y grows downwards: the mouse moved up
+    Check((-up.Forward().z > 0) != invert_y, "mouse up raises visible forward; inverted lowers it");
+    MouseLook(right, 40, 0, .01f, invert_y);
+    Check(-right.Forward().y > 0, "mouse right turns visible forward toward screen right (either invert)");
+  }
   uint8_t drift[16]{};
   drift[8] = drift[12] = 1;
   const auto quiet = ConsumePad(drift, .15f, false, false);

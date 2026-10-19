@@ -3,6 +3,17 @@
 Every release of the King Kong PC port, newest first. The launcher shows this on its About page, and a
 version's notes the first time you start it.
 
+## v2.0.0-beta.12 (unreleased)
+
+**Beta 12**: fixes from the beta channel (**About** > **Change version**). Your saves and settings are kept. Windows only for this beta.
+
+### Fixed
+- **A cheat gun could still reach the Hayes chapter.** A Revolver, Machine gun, Shotgun or Sniper rifle cheat switched on in On Kong's tracks stayed with Jack into Hayes and could leave the raptor fight stuck. The weapon cheats are now also not available in Sacrifice and On Kong's tracks, so nothing is carried into Hayes. Your cheat settings are not changed.
+- **The Cheats page in the pause menu no longer disappears** when the main Cheats switch is off, so you can switch it on again while you play.
+- **Keyboard and mouse pictures**: Settings > Controls shows the mouse buttons and the mouse as pictures (the keyboard bindings rows and the mouse rows), and photo mode shows the mouse for looking around.
+- **Photo mode's free camera turned the wrong way up and down with the mouse.** Moving the mouse up now looks up, as in play, and Mouse vertical in Settings > Controls turns it round. The F9 free camera is the same. The controller is unchanged.
+- **When the game saves**: in story play, the pause menu's Quit to main menu and Quit game questions now say that the game saves when you quit from that menu or choose Save game, not at checkpoints, so closing the window another way loses unsaved progress.
+
 ## v2.0.0-beta.11 (19 October 2026)
 
 **Beta 11**: new features and fixes, from the beta channel (**About** > **Change version**). Your saves and settings are kept. Windows only for this beta.

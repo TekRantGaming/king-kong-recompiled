@@ -43,6 +43,7 @@
 #include <rex/system/xmemory.h>
 #include <rex/ui/image_decode.h>
 
+#include "key_glyphs.h"
 #include "settings.h"
 
 namespace kk {
@@ -288,29 +289,21 @@ void DrawInto(Canvas& c, const Slot& s, const Picture& pic) {
     }
 }
 
-// Keyboard: the image for a key bound to the button (ignoring modifiers). When
-// several are bound (A is "Semicolon,Space"), a punctuation key is only used if
-// nothing else is, since Space reads better than ";".
+// Keyboard: the image for a key bound to the button (ignoring modifiers; the
+// mouse buttons LMB / RMB / MMB are Mouse_Left / Mouse_Right / Mouse_Middle,
+// key_glyphs.h). When several are bound (A is "Semicolon,Space"), a punctuation
+// key is only used if nothing else is, since Space reads better than ";".
 std::filesystem::path KeyImage(const std::filesystem::path& dir, const char* keybind) {
   static constexpr const char* kPunctuation[] = {"Semicolon", "Quote",  "Comma",    "Period",   "Slash", "Backslash",
                                                  "LBracket",  "RBracket", "Backtick", "Minus", "Plus"};
-  const std::string binds = rex::cvar::GetFlagByName(keybind);
   std::filesystem::path fallback;
-  size_t start = 0;
-  while (start <= binds.size()) {
-    size_t end = binds.find(',', start);
-    if (end == std::string::npos) end = binds.size();
-    std::string key = binds.substr(start, end - start);
-    if (const size_t plus = key.rfind('+'); plus != std::string::npos) key = key.substr(plus + 1);
-    key.erase(0, key.find_first_not_of(' '));
-    key.erase(key.find_last_not_of(' ') + 1);
+  for (const std::string& key : key_glyphs::PictureNames(rex::cvar::GetFlagByName(keybind))) {
     std::error_code ec;
-    if (!key.empty() && std::filesystem::exists(dir / (key + ".png"), ec)) {
+    if (std::filesystem::exists(dir / (key + ".png"), ec)) {
       if (std::find(std::begin(kPunctuation), std::end(kPunctuation), key) == std::end(kPunctuation))
         return dir / (key + ".png");
       if (fallback.empty()) fallback = dir / (key + ".png");
     }
-    start = end + 1;
   }
   return fallback;
 }

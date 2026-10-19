@@ -27,7 +27,7 @@ constexpr std::array<CheatInfo, 8> kCheats = {{
 }};
 
 // True while the level being played switches cheat `id` off (cheat_rules.h: the weapon cheats in the Hayes
-// chapter). The pause menu's Cheats page greys its row then; the setting itself is not changed.
+// chapter and the two before it). The pause menu's Cheats page greys its row then; the setting itself is not changed.
 bool CheatSuppressedNow(std::string_view id);
 
 }  // namespace kk

@@ -196,7 +196,6 @@ class PauseMenu final : public rex::ui::ImGuiDialog {
   pause::Available Availability() const {
     pause::Available a;
     a.photo = photo::Available();  // photo_mode.cpp (task 208)
-    a.cheats = GetBool("kk_cheats");
 #if defined(KK_DEV_TOOLS)
     // Keep the original pages reachable in test builds for profile compatibility checks.
     a.game_options = play::PauseActionAvailable(play::PauseAction::kGameOptions);
@@ -223,10 +222,12 @@ class PauseMenu final : public rex::ui::ImGuiDialog {
       case Entry::kSave: return play::RunPauseAction(PauseAction::kSave);
       // The launcher is the game's main menu now: two ways out, both through the game's quit (and its saving).
       case Entry::kQuitToMainMenu:
-        return Confirm("Quit to main menu", "Leave the game and go back to the main menu?", "Leave",
+        return Confirm("Quit to main menu",
+                       Availability().save ? pause::kQuitToMainMenuSaves : "Leave the game and go back to the main menu?",
+                       "Leave",
                        [] { play::RunPauseAction(PauseAction::kQuitToLauncher); });
       case Entry::kQuitGame:
-        return Confirm("Quit game", "Leave the game and close it?", "Quit",
+        return Confirm("Quit game", Availability().save ? pause::kQuitGameSaves : "Leave the game and close it?", "Quit",
                        [] { play::RunPauseAction(PauseAction::kQuitToDesktop); });
       default:
         if (pause::PageOf(e) >= 0) OpenPage(InGameSettings::Page(pause::PageOf(e)));
@@ -757,7 +758,7 @@ class PauseMenu final : public rex::ui::ImGuiDialog {
         if (fit > 0) REXLOG_INFO("KK dev: stripfit {} {} '{}' fit {}", lang, page, label, fit);
       };
       pause::Available all;
-      all.photo = all.cheats = all.checkpoint = all.score = all.save = true;
+      all.photo = all.checkpoint = all.score = all.save = true;
       std::vector<pause::Listed> entries = pause::Entries(all), sub = pause::SettingsEntries(all);
       entries.insert(entries.end(), sub.begin(), sub.end());
       for (const pause::Listed& l : entries)

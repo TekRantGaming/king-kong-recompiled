@@ -23,7 +23,7 @@ enum class Entry {
   kDisplay,
   kGraphics,
   kAudio,
-  kCheats,        // only while the cheats are switched on (coordinator's placement, owner 19 Oct)
+  kCheats,        // always (Beta 12, owner 19 Oct: the main Cheats switch on it must stay reachable when off)
   kGameOptions,   // "Options", the game's own Options pages: developer builds only
   // After the gap in the main list:
   kLoadCheckpoint,  // "Load last checkpoint" (owner 18 Oct, replaces the chapter restart): the reload a death makes
@@ -33,10 +33,9 @@ enum class Entry {
   kQuitGame,      // the game's Quit game, then the program closes
 };
 
-// What the game offers right now (play::PauseActionAvailable, photo::Available, kk_cheats).
+// What the game offers right now (play::PauseActionAvailable, photo::Available).
 struct Available {
   bool photo = false;
-  bool cheats = false;
   bool game_options = false;
   bool checkpoint = false;
   bool score = false;
@@ -72,11 +71,11 @@ inline std::vector<Listed> Entries(const Available& a) {
   return out;
 }
 
-// The Settings list ("PAUSED / SETTINGS"): Display, Graphics, Audio, Cheats (while on), Options (developer builds).
+// The Settings list ("PAUSED / SETTINGS"): Display, Graphics, Audio, Cheats, Options (developer builds). Cheats is
+// always listed (Beta 12): with the main Cheats switch off the page still shows, so it can be switched on again.
 inline std::vector<Listed> SettingsEntries(const Available& a) {
   std::vector<Listed> out;
-  for (Entry e : {Entry::kDisplay, Entry::kGraphics, Entry::kAudio}) out.push_back({e, false});
-  if (a.cheats) out.push_back({Entry::kCheats, false});
+  for (Entry e : {Entry::kDisplay, Entry::kGraphics, Entry::kAudio, Entry::kCheats}) out.push_back({e, false});
   if (a.game_options) out.push_back({Entry::kGameOptions, false});
   return out;
 }
@@ -108,6 +107,14 @@ inline const char* Label(Entry e) {
   }
   return "";
 }
+
+// The Quit confirmations in a story run, where the game offers Save game (Beta 12, owner 19 Oct: a player lost
+// progress closing the window). True to the game: it writes the save only from its save pages, the pause menu's
+// Save game and the save its Quit game makes (pause_hooks.cpp; both of the menu's ways out go through it); a
+// checkpoint is only a snapshot in memory (ES_CheckPoint) for Load last checkpoint. Translated as drawn.
+inline constexpr const char* kQuitToMainMenuSaves =
+    "Leave the game and go back to the main menu? The game saves when you quit from this menu or choose Save game, not at checkpoints. Closing the window another way loses unsaved progress.";
+inline constexpr const char* kQuitGameSaves = "Leave the game and close it? The game saves when you quit from this menu or choose Save game, not at checkpoints. Closing the window another way loses unsaved progress.";
 
 // The description strip's sentence for the entry (English, translated as drawn).
 inline const char* What(Entry e) {
