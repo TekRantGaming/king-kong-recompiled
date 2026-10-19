@@ -17,6 +17,7 @@
 #include <atomic>
 #include <chrono>
 #include <cmath>
+#include <cstdlib>
 #include <cstring>
 #include <fstream>
 #include <optional>
@@ -331,8 +332,22 @@ std::vector<uint8_t> BuildSheet(const uint8_t* original, const std::string& styl
   const bool keyboard = style == "keyboard";
   Canvas c = DecodeSheet(original);
   int drawn = 0;
+#if defined(KK_DEV_TOOLS)
+  // KK_DEV_GLYPH_PROBE=1 (keyboard style): slot i shows keyboard/<i>.png, to see which cells a prompt uses.
+  static const bool probe = std::getenv("KK_DEV_GLYPH_PROBE") != nullptr;
+#endif
   for (const Slot& s : kSlots) {
-    const auto path = SlotImage(dir, keyboard, s.name);
+    auto path = SlotImage(dir, keyboard, s.name);
+#if defined(KK_DEV_TOOLS)
+    if (probe && keyboard) {
+      // Letters that read differently upside down or mirrored, for the stick and pad cells.
+      static constexpr std::pair<const char*, const char*> kProbe[] = {
+          {"dpad", "G"}, {"dpad_up", "J"}, {"stick", "F"}, {"stick_click", "P"}, {"stick_move", "R"}};
+      path = dir / (std::to_string(&s - kSlots) + ".png");
+      for (auto& [slot, letter] : kProbe)
+        if (std::string_view(s.name) == slot) path = dir / (std::string(letter) + ".png");
+    }
+#endif
     if (path.empty()) continue;
     if (auto pic = LoadPng(path)) {
       DrawInto(c, s, *pic);
