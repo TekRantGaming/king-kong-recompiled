@@ -10,6 +10,7 @@
 #include "dev_puppet.h"
 #include <rex/logging.h>
 #include <chrono>
+#include <cstdlib>
 #include <cstring>
 #include <map>
 #include <set>
@@ -99,6 +100,97 @@ bool Read(const uint8_t* b, uint32_t actor, Binding& bind, EnemyState& e) {
   e.id.source = 1;
   return ValidEnemy(e);
 }
+#if defined(KK_DEV_TOOLS)
+struct DevEnemy {
+  uint32_t actor = 0, state = 0;
+  EnemyFamily family = EnemyFamily::None;
+  ShotVector position;
+  float distance = 0, life = -1;
+  bool scheduled = false, initializing = false;
+};
+const char* DevFamilyName(EnemyFamily family) {
+  switch (family) {
+    case EnemyFamily::Raptor: return "raptor";
+    case EnemyFamily::Worm: return "worm";
+    case EnemyFamily::Scorpion: return "scorpion";
+    default: return "none";
+  }
+}
+bool DevWorld(const uint8_t* b, uint32_t w) {
+  const auto game = Load32(b, 0x82CC97C0);
+  return w == Load32(b, 0x828E8388) && PoseAddress(game, 13652) &&
+      !Load32(b, game+4) && !play::StartLevelLoading() && !photo::Active();
+}
+// Read the full registry independently of replication identity/connection. Init
+// actors have a position but their life is not yet meaningful. "Dormant" here
+// means absent from the scheduled AI table, not proof of a specific trigger.
+std::vector<DevEnemy> DevEnemies(const uint8_t* b, uint32_t w, ShotVector origin) {
+  std::vector<DevEnemy> out;
+  uint32_t begin, end, active_begin, active_end;
+  if (!DevWorld(b, w) || !Table(b, w, begin, end, true) || !Table(b, w, active_begin, active_end)) return out;
+  std::set<uint32_t> active;
+  for (auto p = active_begin; p < active_end; p += 8) active.insert(Load32(b, p));
+  for (auto p = begin; p < end; p += 8) {
+    DevEnemy e; e.actor = Load32(b, p);
+    if (!PoseAddress(e.actor, 32) || e.actor == Load32(b, 0x82CCBF7C) || (Load32(b, e.actor)&0x00400001)) continue;
+    const auto ai = Ptr(b, Ptr(b, e.actor, 24, 8), 4, 88);
+    bool spawner = false;
+    e.family = Tracks(b, ai, e.state, spawner, &e.initializing);
+    const auto matrix = Ptr(b, e.actor, 12, 64);
+    if (spawner || e.family == EnemyFamily::None || !matrix) continue;
+    e.position = {LoadF(b, matrix+48), LoadF(b, matrix+52), LoadF(b, matrix+56)};
+    if (!AuthoredKey(uint32_t(e.family), e.position.x, e.position.y, e.position.z)) continue;
+    if (!e.initializing) {
+      Binding binding; EnemyState observed;
+      if (!Read(b, e.actor, binding, observed)) continue;
+      e.life = observed.life;
+    }
+    e.scheduled = active.contains(e.actor);
+    e.distance = ShotDistance(origin, e.position);
+    out.push_back(e);
+  }
+  return out;
+}
+void DevEnemyNear(const uint8_t* b, uint32_t w) {
+  static const bool enabled = [] {
+    const char* value = std::getenv("KK_DEV_ENEMY_NEAR");
+    return value && std::strcmp(value, "1") == 0;
+  }();
+  if (!enabled) return;
+  static double next = 0;
+  const auto now = Now();
+  if (now < next) return;
+  next = now+1;
+  const auto jack = ReadJackPose([&](uint32_t p) { return Load32(b, p); },
+      [&](uint32_t p) { return Load16(b, p); }, [&](uint32_t p) { return LoadF(b, p); }, now);
+  if (!jack.pose || !DevWorld(b, w)) {
+    REXLOG_INFO("KK dev enemy near: waiting reason={}", jack.pose ? "world-loading-or-photo" : jack.failure);
+    return;
+  }
+  const auto& pose = *jack.pose;
+  const auto all = DevEnemies(b, w, {pose.x, pose.y, pose.z});
+  const DevEnemy* nearest = nullptr;
+  size_t scheduled = 0, dormant = 0;
+  for (const auto& e : all) {
+    e.scheduled ? ++scheduled : ++dormant;
+    if (!nearest || e.distance < nearest->distance) nearest = &e;
+  }
+  const auto game = Load32(b, 0x82CC97C0);
+  const auto weapon = Load32(b, game+13128);
+  constexpr uint32_t ammo_offsets[] = {13432, 13504, 13576, 13648};
+  const auto ammo = weapon >= 1 && weapon <= 4 ? Load32(b, game+ammo_offsets[weapon-1]) : 0;
+  if (!nearest) {
+    REXLOG_INFO("KK dev enemy near: level={} start={} nearest=none scheduled=0 dormant=0 weapon={} ammo={} jack=({:.3f},{:.3f},{:.3f})",
+        pose.level, Load32(b, game+12), weapon, ammo, pose.x, pose.y, pose.z);
+    return;
+  }
+  const auto& e = *nearest;
+  REXLOG_INFO("KK dev enemy near: level={} start={} family={} distance={:.3f} status={} init={} life={:.2f} actor={:08X} state={:08X} pos=({:.3f},{:.3f},{:.3f}) jack=({:.3f},{:.3f},{:.3f}) weapon={} ammo={} scheduled={} dormant={}",
+      pose.level, Load32(b, game+12), DevFamilyName(e.family), e.distance, e.scheduled ? "live" : "dormant",
+      e.initializing, e.life, e.actor, e.state, e.position.x, e.position.y, e.position.z,
+      pose.x, pose.y, pose.z, weapon, ammo, scheduled, dormant);
+}
+#endif
 struct Authored {
   uint64_t key; uint32_t ai, matrix; EnemyFamily family;
   float x, y, z; bool ambiguous = false;
@@ -586,8 +678,11 @@ void HostShots(PPCContext& ctx, uint8_t* b) {
 }
 void BeforeAi(PPCContext& ctx, uint8_t* b, uint32_t w) {
   auto& s = Get(); s.prepared = false; s.driving.clear();
-  if (!REXCVAR_GET(kk_coop_enabled)) return;
   if (uint32_t(ctx.lr) != 0x82881CF0) return;
+#if defined(KK_DEV_TOOLS)
+  DevEnemyNear(b, w);
+#endif
+  if (!REXCVAR_GET(kk_coop_enabled)) return;
   // Capture before connection, at the first AI pass of this load. Waiting for
   // the peer could otherwise hash actors that already moved locally.
   if (s.capture) Capture(b, w);
@@ -698,6 +793,17 @@ void EnemyGameFrame() {
   }
 }
 #if defined(KK_DEV_TOOLS)
+std::optional<ShotVector> EnemyDormantTarget(const uint8_t* b, uint32_t w, ShotVector origin) {
+  std::optional<ShotVector> best;
+  float distance = 200;
+  for (const auto& e : DevEnemies(b, w, origin)) {
+    // Avoid large vertical warps, uninitialized templates, corpses, and active
+    // combat. This is synthetic placement; collision/visibility are not proven.
+    if (e.scheduled || e.initializing || e.life <= 0 || std::abs(e.position.z-origin.z) > 2 || e.distance >= distance) continue;
+    distance = e.distance; best = e.position;
+  }
+  return best;
+}
 std::optional<ShotVector> EnemyAimTarget(const uint8_t* b, ShotVector origin) {
   auto& s = Get();
   if (!Connected() || s.link.role != Role::Guest || !Environment(b, s.world) || Now()-s.prepared_at > .5) return {};
