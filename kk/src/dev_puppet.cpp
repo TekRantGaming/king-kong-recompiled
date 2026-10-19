@@ -1,6 +1,7 @@
 // Disposable, dev-only H-rig experiment. No spawning, networking or save writes.
-// KK_DEV_PUPPET=scan (or 1), borrow:nearest, or borrow:<hex key>:<decimal ordinal>
-// [:<decimal action>:<decimal item>]. Ordinals are zero-based active-table order.
+// KK_DEV_PUPPET=scan (or 1), borrow:nearest[:<max guest units>],
+// borrow:index:<zero-based active-table index>[:<action>:<item>], or the legacy
+// borrow:<hex key>:<ordinal>[:<action>:<item>]. Indices belong to the current epoch.
 #if defined(KK_DEV_TOOLS)
 
 #include "dev_puppet.h"
@@ -60,8 +61,9 @@ float Distance(Vec a, Vec b) {
 std::string XYZ(Vec v) { return fmt::format("({:.4f},{:.4f},{:.4f})", v.x, v.y, v.z); }
 
 struct Options {
-  bool on = false, borrow = false, nearest = false, valid = true, action_set = false;
-  uint32_t key = 0, ordinal = 0, action = 0, item = 0;
+  bool on = false, borrow = false, nearest = false, index = false, valid = true, action_set = false;
+  uint32_t key = 0, ordinal = 0, census_index = 0, action = 0, item = 0;
+  float max_units = 15.0f;
   Options() {
     const char* env = std::getenv("KK_DEV_PUPPET");
     if (!env || !*env) return;
@@ -69,7 +71,6 @@ struct Options {
     const std::string s(env);
     if (s == "scan" || s == "1") return;
     borrow = true;
-    if (s == "borrow:nearest") { nearest = true; return; }
     std::vector<std::string> fields;
     std::stringstream input(s);
     for (std::string f; std::getline(input, f, ':');) fields.push_back(f);
@@ -78,9 +79,23 @@ struct Options {
       const auto r = std::from_chars(f.data(), f.data() + f.size(), n, radix);
       return !f.empty() && r.ec == std::errc{} && r.ptr == f.data() + f.size();
     };
-    valid = !s.empty() && s.back() != ':' && (fields.size() == 3 || fields.size() == 5) &&
-            fields[0] == "borrow" && number(fields[1], key, 16) && key != 0 &&
-            number(fields[2], ordinal, 10);
+    valid = s.back() != ':' && fields.size() >= 2 && fields[0] == "borrow";
+    if (!valid) return;
+    if (fields[1] == "nearest") {
+      nearest = true;
+      valid = fields.size() == 2 || fields.size() == 3;
+      if (valid && fields.size() == 3) {
+        const auto& f = fields[2];
+        const auto r = std::from_chars(f.data(), f.data() + f.size(), max_units);
+        valid = !f.empty() && r.ec == std::errc{} && r.ptr == f.data() + f.size() &&
+                std::isfinite(max_units) && max_units > 0;
+      }
+      return;
+    }
+    index = fields[1] == "index";
+    valid = (fields.size() == 3 || fields.size() == 5) &&
+            (index ? number(fields[2], census_index, 10) :
+             number(fields[1], key, 16) && key != 0 && number(fields[2], ordinal, 10));
     if (valid && fields.size() == 5) {
       action_set = true;
       valid = number(fields[3], action, 10) && action < 0x8000 &&
@@ -101,6 +116,20 @@ bool Same(const Rig& a, const Rig& b) {
   return a.actor == b.actor && a.ai == b.ai && a.vars == b.vars && a.matrix == b.matrix &&
          a.rig == b.rig && a.anim == b.anim && a.table == b.table;
 }
+bool ReadTracks(const uint8_t* b, Rig& r) {
+  if (!Range(r.ai, 88)) return false;
+  const uint32_t first = Load16(b, r.ai + 80), last = Load16(b, r.ai + 82);
+  if (first > last || last > 4096 || last - first >= 64 || !Range(r.ai, (last + 12) * 4)) return false;
+  for (uint32_t t = first; t <= last; ++t) {
+    const uint32_t block = Load32(b, r.ai + (t + 6) * 4);
+    if (!block) { r.tracks += fmt::format("{}{}:0", t == first ? "" : "|", t); continue; }
+    if (!Range(block, 24)) return false;
+    const uint32_t fn = Load32(b, block + 20);
+    r.tracks += fmt::format("{}{}:{:08X}@{:08X}", t == first ? "" : "|", t, fn, block);
+    r.dead_track |= fn == 0x826B95A0;  // H_ETAT_IA_mort (pause_hooks.cpp).
+  }
+  return true;
+}
 bool ReadRig(const uint8_t* b, uint32_t actor, Rig& r) {
   r = {};
   r.actor = actor;
@@ -120,17 +149,24 @@ bool ReadRig(const uint8_t* b, uint32_t actor, Rig& r) {
   // Engine getter 8270FA58 negates the matrix's second axis.
   r.forward = ReadVec(b, r.matrix + 16);
   r.forward = {-r.forward.x, -r.forward.y, -r.forward.z};
-  const uint32_t first = Load16(b, r.ai + 80), last = Load16(b, r.ai + 82);
-  if (first > last || last > 4096 || last - first >= 64 || !Range(r.ai, (last + 12) * 4)) return false;
-  for (uint32_t t = first; t <= last; ++t) {
-    const uint32_t block = Load32(b, r.ai + (t + 6) * 4);
-    if (!block) { r.tracks += fmt::format("{}{}:0", t == first ? "" : "|", t); continue; }
-    if (!Range(block, 24)) return false;
-    const uint32_t fn = Load32(b, block + 20);
-    r.tracks += fmt::format("{}{}:{:08X}@{:08X}", t == first ? "" : "|", t, fn, block);
-    r.dead_track |= fn == 0x826B95A0;  // H_ETAT_IA_mort, never a generic health offset.
-  }
-  return Finite(r.pos) && Finite(r.forward);
+  return ReadTracks(b, r) && Finite(r.pos) && Finite(r.forward);
+}
+// Census only: a matrix and a rig component are enough to report an actor.
+// No H proof, vars, action table or live layer is required and no guest call is made.
+void CensusOtherRig(const uint8_t* b, uint32_t actor, uint32_t index, uint64_t epoch,
+                    uint32_t world, uint32_t level, uint32_t hero) {
+  if (!Range(actor, 32)) return;
+  Rig r;
+  r.actor = actor; r.matrix = Ptr(b, actor, 12, 60); r.rig = Ptr(b, actor, 20, 16);
+  if (!r.matrix || !r.rig) return;
+  r.anim = Ptr(b, r.rig, 0, 176);
+  r.ai = Ptr(b, Ptr(b, actor, 24, 8), 4, 88);
+  r.vars = Ptr(b, r.ai, 64, 8);
+  r.pos = ReadVec(b, r.matrix + 48);
+  const bool tracks_ok = ReadTracks(b, r);
+  REXLOG_INFO("PUPPET census-other epoch={} world={:08X} level={} hero={:08X} index={} actor={:08X} ai={:08X} vars={:08X} matrix={:08X} rig={:08X} anim={:08X} xyz={} family=not-observed-H tracks={} tracks-valid={} qualified=false reason=census-only-no-natural-H-init",
+              epoch, world, level, hero, index, actor, r.ai, r.vars, r.matrix, r.rig, r.anim,
+              Finite(r.pos) ? XYZ(r.pos) : "unavailable", r.tracks, tracks_ok);
 }
 bool LegalAction(const uint8_t* b, const Rig& r, uint32_t action) {
   if (action >= 0x8000 || action >= Load16(b, r.table)) return false;
@@ -165,8 +201,9 @@ bool Member(const uint8_t* b, uint32_t world, uint32_t actor) {
   return n == 1;
 }
 
-// Ambiguous address-to-key joins are deliberately unselectable. Use the exact
-// loaded object's key, as dev_sample does; do not guess keys from a shared mesh.
+// Resource lookup, not an instance identity: 827061B0 (.88) uses these tables
+// via 82732250 (.0). Live actors need not be registered at a loaded file address.
+// Keep keys for diagnostics/legacy selectors; nearest/index do not require one.
 std::map<uint32_t, uint32_t> Keys(const uint8_t* b) {
   std::map<uint32_t, uint32_t> indices, keys;
   for (uint32_t bucket = 0; bucket < 256; ++bucket) {
@@ -194,6 +231,7 @@ std::map<uint32_t, uint32_t> Keys(const uint8_t* b) {
 struct Observation {
   Rig rig;
   uint64_t generation = 0;
+  uint32_t index = 0;
   double stable = 0;
   bool present = false;
   bool bound = false;
@@ -212,6 +250,7 @@ struct State {
   Rig selected;
   uint64_t selected_generation = 0;
   uint32_t action = 0, item = 0, last_block = 0, last_track = 0;
+  unsigned env_fail_logs = 0;
   double elapsed = 0;
   float dt = 0;
   Vec origin, initial_forward, desired, facing, early_pos, early_forward;
@@ -227,7 +266,7 @@ struct State {
   }
   bool Environment(const uint8_t* b, uint32_t w) const {
     return ready && !loading && w == world && Range(game, 28) &&
-           Load32(b, 0x82CC97C0) == game &&  // 0x828E8378 is not the world (Claude, run 14:25)
+           Load32(b, 0x82CC97C0) == game &&  // Universe G, play_session.cpp; world comes from r3.
            Load32(b, game + 8) == level && Load32(b, game + 4) == 0 &&
            Load32(b, 0x82CCBF7C) == hero && !play::StartLevelLoading();
   }
@@ -298,12 +337,19 @@ void CensusAndSelect(PPCContext& ctx, uint8_t* b, uint32_t w) {
   std::map<uint32_t, uint32_t> ordinals;
   std::vector<Candidate> candidates;
   std::set<uint32_t> seen;
+  std::map<uint32_t, unsigned> membership;
+  for (uint32_t p = begin; p < end; p += 8) ++membership[Load32(b, p)];
   for (uint32_t p = begin; p < end; p += 8) {
     const uint32_t actor = Load32(b, p);
+    const uint32_t index = (p-begin)/8;
     auto it = s.humans.find(actor);
-    if (it == s.humans.end()) continue;  // Only naturally observed H_TRACK_init.
+    if (it == s.humans.end()) {
+      if (log) CensusOtherRig(b, actor, index, s.epoch, w, s.level, s.hero);
+      continue;  // Other families remain census-only, including possible KAnn.
+    }
     auto& obs = it->second;
-    const bool duplicate = !seen.insert(actor).second;
+    seen.insert(actor);
+    const bool duplicate = membership.at(actor) != 1;
     const auto key_it = s.keys.find(actor);
     const uint32_t key = key_it == s.keys.end() ? 0 : key_it->second;
     const uint32_t ordinal = ordinals[key]++;
@@ -317,10 +363,13 @@ void CensusAndSelect(PPCContext& ctx, uint8_t* b, uint32_t w) {
       continue;
     }
     if (!obs.bound) { obs.rig = rig; obs.bound = true; }
-    obs.stable = obs.present ? obs.stable + s.dt : 0;
+    // Index is local to this epoch, not a persistent actor ID. Require the same
+    // slot and full identity for the stability interval, then bind the actor.
+    obs.stable = obs.present && obs.index == index && !duplicate ? obs.stable + s.dt : 0;
+    obs.index = index;
     obs.present = true;
     const char* reason = jack_ok ? s.Qualify(b, rig, jack) : "hero-rig-unavailable";
-    if (!*reason && (!key || duplicate)) reason = "unresolved-key-or-duplicate";
+    if (!*reason && duplicate) reason = "duplicate-active-membership";
     if (!*reason && obs.stable < 1.0) reason = "not-stable-one-second";
     if (LegalAction(b, rig, rig.action)) obs.actions.insert((rig.action << 8) | rig.item);
     if (log) {
@@ -340,16 +389,17 @@ void CensusAndSelect(PPCContext& ctx, uint8_t* b, uint32_t w) {
   if (!Opt().borrow || s.attempted || s.terminal || now - s.loaded < std::chrono::seconds(5)) return;
   s.attempted = true;
   const Candidate* pick = nullptr;
-  float closest = 15.0f;
+  float closest = Opt().max_units;
   bool tied = false;
   for (const auto& c : candidates) {
     if (*c.reason) continue;
     if (Opt().nearest) {
       const float d = Distance(c.rig.pos, jack.pos);
-      if (d > 15.0f) continue;
+      if (d > Opt().max_units) continue;
       if (!pick || d < closest - 0.0001f) { pick = &c; closest = d; tied = false; }
       else if (std::fabs(d - closest) <= 0.0001f) tied = true;
-    } else if (c.key == Opt().key && c.ordinal == Opt().ordinal) {
+    } else if (Opt().index ? c.index == Opt().census_index :
+               c.key == Opt().key && c.ordinal == Opt().ordinal) {
       if (pick) { tied = true; break; }
       pick = &c;
     }
@@ -368,10 +418,11 @@ void CensusAndSelect(PPCContext& ctx, uint8_t* b, uint32_t w) {
   const float len = std::hypot(s.initial_forward.x, s.initial_forward.y);
   s.initial_forward = {s.initial_forward.x / len, s.initial_forward.y / len, 0};
   s.desired = s.origin; s.facing = s.initial_forward; s.elapsed = 0; s.driving = true;
-  REXLOG_INFO("PUPPET select epoch={} mode={} key={:08X} ordinal={} index={} actor={:08X} ai={:08X} vars={:08X} matrix={:08X} anim={:08X} generation={} distance={:.3f} units=guest action={} item={} observed-action={} observed-item={}",
-              s.epoch, Opt().nearest ? "nearest" : "key", pick->key, pick->ordinal, pick->index,
+  REXLOG_INFO("PUPPET select epoch={} mode={} key={:08X} ordinal={} index={} actor={:08X} ai={:08X} vars={:08X} matrix={:08X} anim={:08X} generation={} human={}/{} distance={:.3f} units=guest nearest-limit={} action={} item={} observed-action={} observed-item={}",
+              s.epoch, Opt().nearest ? "nearest" : Opt().index ? "index" : "key", pick->key, pick->ordinal, pick->index,
               s.selected.actor, s.selected.ai, s.selected.vars, s.selected.matrix, s.selected.anim,
-              s.selected_generation, Distance(s.origin, jack.pos), s.action, s.item,
+              s.selected_generation, Load32(b, s.selected.vars), Load32(b, s.selected.vars + 4),
+              Distance(s.origin, jack.pos), Opt().nearest ? Opt().max_units : 0.0f, s.action, s.item,
               s.selected.action, s.selected.item);
 }
 }  // namespace
@@ -383,6 +434,7 @@ void DevPuppetBeforeLoad() {
   s.selected = {}; s.humans.clear(); s.keys.clear(); ++s.epoch;
   s.world = s.hero = s.game = 0; s.loading = true; s.ready = false;
   s.census_at = {}; s.tick_at = {};
+  s.env_fail_logs = 0;
 }
 void DevPuppetAfterLoad(const uint8_t* b, uint32_t game) {
   if (!Opt().on) return;
@@ -396,24 +448,24 @@ void DevPuppetBeforeAi(PPCContext& ctx, uint8_t* b, uint32_t w) {
   auto& s = Get();
   if (!Opt().valid) { s.Abort("invalid-KK_DEV_PUPPET-syntax"); return; }
   if (s.loading || !s.game || play::StartLevelLoading()) return;
+  // 82881B70 passes its saved world in r3 at this call (.124, return 82881CF0).
+  // Check the caller before binding an epoch to the supplied world.
+  if (uint32_t(ctx.lr) != 0x82881CF0) { if (s.driving) s.Abort("unexpected-AI-pass-caller"); return; }
   const uint32_t hero = Load32(b, 0x82CCBF7C);
   if (!s.ready && Range(w, 308) && Range(hero, 32)) { s.world = w; s.hero = hero; s.ready = true; }
   if (!s.ready && Clock::now() - s.loaded >= std::chrono::seconds(5)) {
     s.Abort("world-or-hero-unavailable-after-load"); return;
   }
   if (!s.Environment(b, w)) {
-    static int why = 0;
-    if (s.ready && why++ < 3)
-      REXLOG_INFO("PUPPET env-fail w={:08X} s.world={:08X} game={:08X}/{:08X} world828E8378={:08X} level={}/{} "
+    if (s.ready && s.env_fail_logs++ < 3)
+      REXLOG_INFO("PUPPET env-fail hook-world={:08X} s.world={:08X} game={:08X}/{:08X} level={}/{} "
                   "game+4={} hero={:08X}/{:08X} startloading={}", w, s.world, Load32(b, 0x82CC97C0), s.game,
-                  Load32(b, 0x828E8378), Range(s.game, 28) ? Load32(b, s.game + 8) : 0, s.level,
+                  Range(s.game, 28) ? Load32(b, s.game + 8) : 0, s.level,
                   Range(s.game, 28) ? Load32(b, s.game + 4) : 0, Load32(b, 0x82CCBF7C), s.hero,
                   play::StartLevelLoading());
     if (s.ready) { s.Abort("world-level-load-or-hero-changed"); s.humans.clear(); s.ready = false; }
     return;
   }
-  // This hook is entered once by the normal per-world update. Reject other callers.
-  if (uint32_t(ctx.lr) != 0x82881CF0) { if (s.driving) s.Abort("unexpected-AI-pass-caller"); return; }
   s.dt = FrameTime(b);
   if (!std::isfinite(s.dt) || s.dt < 0 || s.dt > 0.25f) { s.Abort("invalid-simulation-dt"); return; }
   if (!Scratch::CanUse(ctx)) { s.Abort("invalid-guest-scratch-stack"); return; }
