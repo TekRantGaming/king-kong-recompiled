@@ -8,6 +8,13 @@
 // ultrawide_logic.h WidenProjection) and the scratch matrix put back afterwards, so the game never sees a change.
 // Orthographic projections (HUD, menus, full-screen passes) and the menus' 3D pieces stay as they are.
 //
+// Edge culling (task 311): the game skips objects outside a frustum it builds from the view's angle, which
+// stayed 16:9, so things at the new edges were left out. fov.cpp now widens the scene views' angle by the same
+// factor (the half-angle tangent) before the view is set up, so the frustum covers the wide picture. The
+// projection the callback then builds is already wider; if it also got shorter (its height comes from the same
+// angle: the ratio y / x is still 16:9), the height column is put back here, so the picture stays hor+. Views
+// not widened that way (the first-person weapon, which has its own angle) get column 0 divided as before.
+//
 // HUD (task 231, moved in task 239): the draws of the executor's HUD pass (pass 4 of sub_82796C10: HUD text and
 // icons, the ammo counter, subtitles, loading text) are tagged for the native renderer (nr_set_draw_tags,
 // native-renderer/backend/draw_tags.h), which puts them in a centred 16:9 box; a draw covering the whole width
@@ -19,6 +26,7 @@
 // ones (fades) and 3D ones. Not while a loading screen is up (its text stays) nor in photo mode (unchanged).
 
 #include <array>
+#include <cmath>
 #include <atomic>
 #include <bit>
 #include <cstdint>
@@ -53,7 +61,9 @@ namespace {
 
 constexpr uint32_t kProjectionScratch = 0x83090510;  // sub_8278AB00's perspective matrix
 thread_local int g_in_projection = 0;
+thread_local float g_view_widened = 1.0f;  // fov.cpp widened this view's angle by this factor
 std::atomic<bool> g_logged{false};
+std::atomic<bool> g_logged_view{false};
 
 constexpr uint32_t kTagHud = 1u;        // draw_tags.h kDrawTagHud
 constexpr uint32_t kTagHideHud = 2u;    // draw_tags.h kDrawTagHideHud
@@ -116,6 +126,10 @@ bool HideHudPass(const uint8_t* base) {
 
 }  // namespace
 
+namespace kk::ultrawide {
+void SetViewWidened(float factor) { g_view_widened = factor; }
+}  // namespace kk::ultrawide
+
 // The render executor's pass runner (r4 = pass number; called from the frame's pass sequence sub_82797460,
 // pass 4 at 0x827977A8). The game records its draws into passes while it updates and draws them here, on
 // the drawing thread, so the HUD tag is set around the pass itself (task 239; the display-list hooks of task 231
@@ -157,7 +171,24 @@ REX_HOOK_RAW(sub_820E0D08) {
     std::memcpy(&v, saved.data() + i * 4, 4);
     m[i] = std::bit_cast<float>(std::byteswap(v));
   }
-  if (!kk::ultrawide::WidenProjection(m.data(), factor)) {
+  if (g_view_widened != 1.0f) {
+    // The angle was widened (fov.cpp): x is already right. Put the height back when it shrank with it.
+    if (m[11] == 0.0f || m[15] != 0.0f || m[0] == 0.0f) {
+      __imp__sub_820E0D08(ctx, base);
+      return;
+    }
+    const float ratio = std::fabs(m[5] / m[0]);
+    const float game = float(kk::ultrawide::kGameAspect);
+    const bool shorter = std::fabs(ratio - game) < 0.03f * game;
+    if (!g_logged_view.exchange(true))
+      REXLOG_INFO("KK: ultrawide: view angle widened {:.3f} times for culling; y/x {:.3f}, height {}", g_view_widened,
+                  ratio, shorter ? "put back" : "kept");
+    if (!shorter) {
+      __imp__sub_820E0D08(ctx, base);
+      return;
+    }
+    for (int i : {1, 5, 9, 13}) m[i] *= g_view_widened;
+  } else if (!kk::ultrawide::WidenProjection(m.data(), factor)) {
     __imp__sub_820E0D08(ctx, base);
     return;
   }

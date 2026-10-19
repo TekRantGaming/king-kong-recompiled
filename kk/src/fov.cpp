@@ -15,12 +15,17 @@
 // never sees (or compounds) the wider angle. The first-person weapon is drawn
 // with its own fixed angle (sub_827C6660 sets 1.0 directly) and is unchanged.
 // The menus keep their own angle (see g_views_since_menu); the port's pause menu does not (task 243).
+//
+// The Ultrawide mod (task 311): the view's angle is also made UltrawideFactor() times wider (the half-angle
+// tangent) so the frustum that skips objects covers the wider picture (no pop-in at the new edges); the
+// projection's height is put back in ultrawide.cpp (ViewWidened), so the picture stays hor+ (the same height).
 
 #include <algorithm>
 #include <atomic>
 #include <bit>
 #include <cmath>
 #include <cstdint>
+#include <cstdlib>
 #include <cstring>
 
 #include <rex/hook.h>
@@ -30,6 +35,10 @@
 #include "freecam.h"
 #include "photo_mode.h"
 #include "play_session.h"
+
+namespace kk::ultrawide {
+void SetViewWidened(float factor);  // ultrawide.cpp
+}
 
 namespace {
 
@@ -57,9 +66,22 @@ void StoreF(uint8_t* base, uint32_t a, float f) {
 // Photo mode and the game's own pages from the pause (Score, Save, Options) are not the port's menu.
 std::atomic<int> g_views_since_menu{0};
 
+// Photo mode (task 311) is not the menus either: the pause's menu script runs meanwhile, but photo mode shows
+// the game (with the Ultrawide mod: hor+, the HUD pass in its box).
 bool MenusShow() {
-  return g_views_since_menu.load(std::memory_order_relaxed) < 8 && !kk::play::PauseMenuOpen();
+  return g_views_since_menu.load(std::memory_order_relaxed) < 8 && !kk::play::PauseMenuOpen() &&
+         !kk::photo::Active();
 }
+
+// The Ultrawide mod's view widening (task 311; 1 = unchanged, always with the mod off).
+float WidenAngle(float radians, float factor) {
+  return factor == 1.0f ? radians : 2.0f * std::atan(factor * std::tan(radians * 0.5f));
+}
+struct ViewWidenedScope {
+  explicit ViewWidenedScope(float factor) : on(factor != 1.0f) { if (on) kk::ultrawide::SetViewWidened(factor); }
+  ~ViewWidenedScope() { if (on) kk::ultrawide::SetViewWidened(1.0f); }
+  bool on;
+};
 
 // How much wider than the game's own angle (1 = unchanged).
 float LensFactor() {
@@ -90,20 +112,31 @@ REX_HOOK_RAW(sub_82872DB8) {
   const float fov = LoadF(base, at);
   const int since_menu = g_views_since_menu.load(std::memory_order_relaxed);
   if (since_menu < 1000) g_views_since_menu.store(since_menu + 1, std::memory_order_relaxed);
-  const bool menus = since_menu < 8 && !kk::play::PauseMenuOpen();
+  const bool photo = kk::photo::Active();
+  const bool menus = since_menu < 8 && !kk::play::PauseMenuOpen() && !photo;
+  // The Ultrawide mod (1 with it off, and in the menus): the angle also widened for the frustum (see the top).
+  static const bool old_cull = [] {  // KK_ULTRAWIDE_OLD_CULL=1 (diagnostics): the 16:9 frustum of task 223
+    const char* e = std::getenv("KK_ULTRAWIDE_OLD_CULL");
+    return e && *e == '1';
+  }();
+  const float uw = menus || old_cull ? 1.0f : kk::UltrawideFactor();
   // Photo mode: its own field of view for the scene view it flies (the pause's menu script runs meanwhile).
-  if (freecam && kk::photo::Active() && fov > 0.01f && fov < 3.0f) {
+  if (freecam && photo && fov > 0.01f && fov < 3.0f) {
     const float wide = k == 1.0f ? fov : 2.0f * std::atan(k * std::tan(fov * 0.5f));
-    StoreF(base, at, kk::photo::SceneFieldOfView(wide));
+    const float scene = kk::photo::SceneFieldOfView(wide);
+    const float shown = scene < 2.9f ? WidenAngle(scene, uw) : scene;
+    ViewWidenedScope widened(shown == scene ? 1.0f : uw);
+    StoreF(base, at, shown);
     __imp__sub_82872DB8(ctx, base);
     StoreF(base, at, fov);
     return;
   }
-  if (k == 1.0f || menus || !(fov > 0.01f && fov < 3.0f)) {
+  if ((k == 1.0f && uw == 1.0f) || menus || !(fov > 0.01f && fov < 3.0f)) {
     __imp__sub_82872DB8(ctx, base);
     return;
   }
-  StoreF(base, at, 2.0f * std::atan(k * std::tan(fov * 0.5f)));
+  ViewWidenedScope widened(uw);
+  StoreF(base, at, WidenAngle(2.0f * std::atan(k * std::tan(fov * 0.5f)), uw));
   __imp__sub_82872DB8(ctx, base);
   StoreF(base, at, fov);
 }
