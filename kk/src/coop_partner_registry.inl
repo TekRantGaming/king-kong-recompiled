@@ -122,7 +122,16 @@ void RefreshRegistryEvidence(const uint8_t* b, uint32_t world) {
 void LogRegistry(const uint8_t* b) {
   auto& s = Get(); auto& e = registry_evidence;
   const auto now = Clock::now();
-  if (e.logged != Clock::time_point{} && now - e.logged < std::chrono::seconds(1)) return;
+  // A census can contain hundreds of reference lines. Keep normal co-op smoke
+  // logs long enough to retain session/load evidence; explicit scans keep the
+  // original one-second cadence for body investigations.
+  static const bool detailed = [] {
+    const char* puppet = std::getenv("KK_DEV_PUPPET");
+    const char* registry = std::getenv("KK_DEV_PUPPET_REGISTRY");
+    return (puppet && (std::string(puppet) == "scan" || std::string(puppet) == "1")) ||
+        (registry && std::string(registry) == "1");
+  }();
+  if (e.logged != Clock::time_point{} && now - e.logged < std::chrono::seconds(detailed ? 1 : 30)) return;
   e.logged = now;
   REXLOG_INFO("PUPPET registry epoch={} level={} world={:08X} valid={} entries={} owners-complete={} skipped={} budget-exhausted={} refs={} refs-dropped={} pool-valid={} human-observations={} absence-is-not-global-proof=true",
       s.epoch, s.level, s.world, e.valid, e.entries, e.complete, e.skipped, e.budget_exhausted,
