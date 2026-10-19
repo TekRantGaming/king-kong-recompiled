@@ -222,7 +222,7 @@ namespace {
 // of the wait, then a short spin for precision.
 void LimitFrameRate() {
   static pacing::Limiter limiter;
-  limiter.Wait(REXCVAR_GET(kk_frame_rate));
+  limiter.Wait(REXCVAR_GET(kk_frame_rate), REXCVAR_GET(kk_cpu_priority) >= 1);  // task 295
 }
 
 }  // namespace
