@@ -14,6 +14,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <map>
+#include <optional>
 #include <set>
 
 REX_EXTERN(__imp__sub_82454690);
@@ -38,8 +39,11 @@ constexpr uint32_t kNothing=0x824FC2D0, kActivity=0x8250EE50, kVisible=0x8250EDE
 constexpr uint32_t kDetectRecord=kStoryRecords;
 struct Script : story::Cursor {
   Binding binding;
-  uint32_t request_run=0;
-  double request_until=0, next_request=0;
+  story::RequestLatch requested;
+  std::optional<StoryEvent> request;
+  double request_until=0;
+  uint32_t recovery_run=0;
+  bool saw_detect=false, saw_loop=false;
 };
 std::map<uint32_t,Script> scripts;
 std::map<uint64_t,uint32_t> runs;
@@ -68,18 +72,25 @@ bool Trace() {
 #endif
 }
 void Note(const char* what,const StoryEvent& e,const char* reason="") {
-  if (Trace()) REXLOG_INFO("KK co-op story: {} role={} gen={} level={} number={} source={:016X} script={:016X} run={} record={} phase={} {}",
-      what,host ? "host" : "guest",e.generation ? e.generation : generation,e.level ? e.level : level,
+  if (Trace()) REXLOG_INFO("KK co-op {}: {} role={} gen={} level={} number={} source={:016X} script={:016X} run={} record={} phase={} {}",
+      e.phase==StoryPhase::Checksum ? "story checksum" : "story",what,host ? "host" : "guest",e.generation ? e.generation : generation,e.level ? e.level : level,
       e.number,e.source,e.script,e.run,e.record,unsigned(e.phase),reason);
 }
-void Refuse(const char* why,const StoryEvent& e={}) {
+void FinishRequest(Script& s,const char* outcome,const char* reason="") {
+  if (!s.request) return;
+  Note(outcome,*s.request,reason); s.request.reset();
+}
+// Copy before clearing Ordered: the caller may be passing its current Front().
+void Refuse(const char* why,StoryEvent e={}) {
   ordered.Refuse(host);
   if (host) {
     Note("authority observation deferred",e,why);
     return;
   }
   if (!failed) {
-    Note("refused",e,why); REXLOG_WARN("KK co-op story: {} world behind: {}",host ? "host" : "guest",why);
+    Note("refused",e,why);
+    REXLOG_WARN("KK co-op story: guest world behind: {} expected={} received={} source={:016X} script={:016X} run={} record={} phase={}",
+        why,ordered.Next(),e.number,e.source,e.script,e.run,e.record,unsigned(e.phase));
   }
   failed=true;
   behind=true;
@@ -105,6 +116,10 @@ bool Tracks(const uint8_t* b,uint32_t ai,uint32_t tag) {
     if (block && Load32(b,block+20)==tag) return true;
   }
   return false;
+}
+bool LoopProgram(const uint8_t* b) {
+  const auto block=Load32(b,0x82CCBF5C);
+  return PoseAddress(block,24) && Load32(b,block+20)==kLoop;
 }
 uint64_t Shape(const uint8_t* b,uint32_t vars) {
   if (!PoseAddress(vars,19824)) return 0;
@@ -132,6 +147,7 @@ void Census(const uint8_t* b) {
     auto it=scripts.find(actor);
     if (!vars || (it==scripts.end() && !Tracks(b,ai,kDetect) && !Tracks(b,ai,kLoop))) continue;
     if (it!=scripts.end() && (it->second.binding.ai!=ai || it->second.binding.vars!=vars)) {
+      FinishRequest(it->second,"request refused","script allocation reused");
       Refuse("script allocation reused");
       if (!host) continue;
       scripts.erase(it); it=scripts.end();
@@ -154,6 +170,7 @@ void Census(const uint8_t* b) {
 }
 void World(const FlowView& v,uint64_t session_epoch) {
   if (epoch!=session_epoch || generation!=v.world.generation || level!=v.world.level) {
+    for (auto& [actor,s] : scripts) FinishRequest(s,"request refused","world retired");
     epoch=session_epoch; generation=v.world.generation; level=v.world.level; host=v.host;
     number=request_number=last_request=last_loaded=0; scripts.clear(); bindings.clear(); runs.clear(); outgoing.clear();
     ordered.Reset(generation,level); behind=false; failed=disconnected=recovery_pending=false;
@@ -193,6 +210,8 @@ Script* ObservedScript(const uint8_t* b) {
   // A new/different local allocation or callback layout is authority evidence,
   // not evidence that the guest differs. Rebind only our own metadata.
   const auto actor=Load32(b,0x82CCBF6C);
+  if (const auto it=scripts.find(actor); it!=scripts.end())
+    FinishRequest(it->second,"request refused","script identity rebound");
   scripts.erase(actor); Census(b);
   auto* s=Current(b);
   Note("authority script re-baselined",{},s ? "local identity rebound" : "identity unavailable; native continues");
@@ -203,7 +222,10 @@ StoryEvent Event(const Script& s,StoryPhase phase,uint32_t record) {
 }
 void Flush() {
   while (!outgoing.empty() && SubmitStory(outgoing.front())) {
-    Note(outgoing.front().type==MessageType::StoryEvent ? "sent (reliable queued)" : "request sent",outgoing.front().story);
+    const auto& m=outgoing.front();
+    Note(m.story.phase==StoryPhase::Checksum ?
+        (m.type==MessageType::StoryEvent ? "sample queued" : "reply queued") :
+        (m.type==MessageType::StoryEvent ? "sent (reliable queued)" : "request sent"),m.story);
     outgoing.pop_front();
   }
 }
@@ -263,6 +285,18 @@ bool SafeRequest(const uint8_t* b,const Script& s) {
   }
   return false;
 }
+bool ReplaySafe(const uint8_t* b,const Script& s,uint32_t index) {
+  if (index>=kStoryRecords) return false;
+  const auto payload=s.binding.vars+992+180*index;
+  const auto fn=Load32(b,s.binding.vars+924+180*index);
+  return fn && (SafeAction(b,fn,payload) || (fn==kPivot && HeroPivot(b,payload)));
+}
+void UnsafeRecord(const uint8_t* b,const Script& s,const StoryEvent& e) {
+  Note("unsupported record",e,"checkpoint recovery required");
+  if (Trace()) REXLOG_INFO("KK co-op story: unsupported callback={:08X} actor={:08X} ai={:08X} vars={:08X} detect-seen={} loop-seen={}",
+      e.record<kStoryRecords ? Load32(b,s.binding.vars+924+180*e.record) : 0,
+      s.binding.actor,s.binding.ai,s.binding.vars,s.saw_detect,s.saw_loop);
+}
 bool NativeInside(PPCContext& ctx,uint8_t* b,uint32_t volume,const PlayerPose& pose) {
   // 82847478 only reads volume flags, bound data, and the second object's XYZ.
   // Its only writes are its caller's stack scratch (.34:32210-32440).
@@ -282,22 +316,43 @@ bool NativeInside(PPCContext& ctx,uint8_t* b,uint32_t volume,const PlayerPose& p
 }
 void Request(PPCContext& ctx,uint8_t* b,Script& s) {
   const auto payload=s.binding.vars+88;
-  if (Now()<s.next_request || Load32(b,s.binding.vars+20)!=kPivot || !HeroPivot(b,payload)) return;
+  if (failed || s.run==UINT32_MAX || s.requested.run>=s.run+1 ||
+      Load32(b,s.binding.vars+20)!=kPivot || !HeroPivot(b,payload)) return;
   const auto saved=ctx;
   uint8_t old[108]; std::memcpy(old,b+payload,sizeof old);
   ctx.r3.u32=payload; __imp__sub_8244F0E8(ctx,b);
   const bool entered=ctx.r3.u32!=0;
   std::memcpy(b+payload,old,sizeof old); ctx=saved;
   if (!entered) return;
-  s.next_request=Now()+1;
-  if (request_number==UINT32_MAX || s.run==UINT32_MAX || outgoing.size()>=kStoryQueue) { Refuse("request overflow"); return; }
+  if (!s.requested.Begin(s.run+1)) return;
+  if (request_number==UINT32_MAX || outgoing.size()>=kStoryQueue) { Refuse("request overflow"); return; }
   auto e=Event(s,StoryPhase::Armed,kDetectRecord); e.run=s.run+1; e.number=++request_number;
   Message m; m.type=MessageType::TriggerRequest; m.epoch=epoch; m.story=e; outgoing.push_back(m); Flush();
 }
 bool For(const StoryEvent* e,const Script& s,StoryPhase phase) {
   return e && e->source==s.binding.source && e->script==s.binding.script && e->phase==phase;
 }
-void Applied(const StoryEvent& e) { Note("applied",e); ordered.Applied(); }
+void Applied(const StoryEvent& e) {
+  if (e.phase!=StoryPhase::Checksum) Note("applied",e);
+  ordered.Applied(Now());
+}
+void OrderedFailure(uint8_t* b) {
+  if (failed || !ordered.Behind()) return;
+  const auto& error=ordered.Error();
+  const auto& e=error.received;
+  if (Trace()) {
+    REXLOG_INFO("KK co-op story: ordered failure expected={} received={} reason={} source={:016X} script={:016X} run={} record={} phase={}",
+        error.expected,e.number,story::Ordered::Reason(error.reason),e.source,e.script,e.run,e.record,unsigned(e.phase));
+    if (const auto* bind=story::Match(e.source,e.script,bindings)) {
+      const auto& s=scripts.at(bind->actor);
+      const auto index=Load32(b,bind->vars+19812);
+      REXLOG_INFO("KK co-op story: blocked local actor={:08X} ai={:08X} vars={:08X} run={} record={} detect-seen={} loop-seen={} detect-track={} loop-track={} detect-callback={:08X} record-callback={:08X}",
+          bind->actor,bind->ai,bind->vars,s.run,index,s.saw_detect,s.saw_loop,Tracks(b,bind->ai,kDetect),Tracks(b,bind->ai,kLoop),
+          Load32(b,bind->vars+20),index<=kStoryRecords ? Load32(b,bind->vars+924+180*index) : 0);
+    } else Note("blocked identity unavailable",e,"missing/ambiguous script");
+  }
+  Refuse(story::Ordered::Reason(error.reason),e);
+}
 void ChecksumFrame(uint8_t* b,double now) {
   if (!host) {
     for (unsigned budget=0;budget<16 && !failed;++budget) {
@@ -347,6 +402,7 @@ void StoryLoaded(uint8_t* b) {
   const auto session_epoch=StorySessionEpoch();
   if (!session_epoch) return;
   World(v,session_epoch);
+  for (auto& [actor,s] : scripts) FinishRequest(s,"request refused","level load invalidated request");
   if (last_loaded==v.world.generation) {
     recovery_pending=true;
     scripts.clear(); bindings.clear(); next_census=0;
@@ -360,7 +416,14 @@ void StoryLoaded(uint8_t* b) {
       host ? "host" : "guest",generation,level,scripts.size());
 }
 void StoryGameFrame(uint8_t* b) {
-  if (!Ensure(b)) { TakeStory(); return; }
+  if (!Ensure(b)) {
+    for (auto& [actor,s] : scripts) FinishRequest(s,"request refused","story world inactive");
+    for (const auto& m : TakeStory()) if (m.type==MessageType::TriggerRequest && m.story.phase==StoryPhase::Armed) {
+      Note("request received",m.story);
+      Note("request refused",m.story,"story world inactive or loading");
+    }
+    return;
+  }
   const double now=Now();
   if (recovery_pending) {
     recovery_pending=false;
@@ -368,8 +431,14 @@ void StoryGameFrame(uint8_t* b) {
   }
   for (const auto& m : TakeStory()) {
     const auto& e=m.story;
-    if (m.epoch!=epoch || e.generation!=generation || e.level!=level) { Note("refused",e,"stale world"); continue; }
-    if (!host) { ordered.Push(e,now); continue; }
+    if (host && e.phase!=StoryPhase::Checksum) Note("request received",e);
+    if (m.epoch!=epoch || e.generation!=generation || e.level!=level) {
+      Note(host && e.phase!=StoryPhase::Checksum ? "request refused" : "refused",e,"stale world"); continue;
+    }
+    if ((host && m.type!=MessageType::TriggerRequest) || (!host && m.type!=MessageType::StoryEvent)) {
+      Note(host ? "request refused" : "refused",e,"wrong direction"); continue;
+    }
+    if (!host) { if (ordered.Push(e,now)) Note("received",e); continue; }
     if (e.phase==StoryPhase::Checksum) {
       const auto result=checksums.Compare(e);
       if (result==story::Checksums::Result::Mismatch) {
@@ -378,21 +447,38 @@ void StoryGameFrame(uint8_t* b) {
       } else if (result==story::Checksums::Result::Match) Note("checksum matched",e);
       continue;
     }
-    if (e.number<=last_request) continue;
+    if (e.number<=last_request) { Note("request refused",e,"duplicate or old request number"); continue; }
     last_request=e.number;
     if (now-request_window>=1) { request_window=now; request_count=0; }
     if (++request_count>4) { Note("request refused",e,"rate limit"); continue; }
     const auto* bind=story::Match(e.source,e.script,bindings);
     if (!bind) { Note("request refused",e,"missing/ambiguous identity"); continue; }
     auto& s=scripts.at(bind->actor);
-    if (failed || e.run!=s.run+1 || !SafeRequest(b,s)) { Note("request refused",e,"unsafe kind or stale run"); continue; }
+    if (s.request) { Note("request refused",e,"activation already pending"); continue; }
+    if (failed || s.run==UINT32_MAX || e.run!=s.run+1) { Note("request refused",e,"stale activation run"); continue; }
+    if (!SafeRequest(b,s)) { Note("request refused",e,"unsafe predicate or action chain"); continue; }
     // Recheck a fresh partner pose and native volume when this script is scheduled.
-    s.request_run=e.run; s.request_until=now+.5; Note("request pending",e);
+    s.request=e; s.request_until=now+.5; Note("request pending",e);
   }
+  if (host) for (auto& [actor,s] : scripts) if (s.request && now>s.request_until)
+    FinishRequest(s,"request refused","script not scheduled before request deadline");
   ChecksumFrame(b,now);
   if (!host && SessionFlowSnapshot().phase==FlowPhase::Playing) {
+    // A gated detector may never schedule SSLoop. Diagnose an unsupported
+    // authoritative record immediately, without waiting for that local hook.
+    if (const auto* front=ordered.Front(); front && front->phase==StoryPhase::Advance) {
+      const auto e=*front;
+      if (const auto* bind=story::Match(e.source,e.script,bindings);
+          bind && Vars(b,bind->ai,19824)==bind->vars && Shape(b,bind->vars)==bind->script) {
+        const auto& s=scripts.at(bind->actor);
+        if (!ReplaySafe(b,s,e.record)) {
+          UnsafeRecord(b,s,e);
+          Refuse("unsupported story callback; use checkpoint recovery",e);
+        }
+      }
+    }
     ordered.Tick(now);
-    if (ordered.Behind()) Refuse("event gap, conflict or apply timeout");
+    OrderedFailure(b);
     if (const auto* e=ordered.Front(); e && e->phase==StoryPhase::Recovery) Refuse("host requested checkpoint catch-up",*e);
   }
   Flush();
@@ -403,24 +489,36 @@ bool StoryDetect(PPCContext& ctx,uint8_t* b) {
   if (!Ensure(b)) return false;
   auto* s=ObservedScript(b);
   if (!s) { Refuse("unmatched detection script"); if (host) return false; ctx.r3.u32=0; return true; }
+  if (!s->saw_detect) { s->saw_detect=true; Note("native detect scheduled",Event(*s,StoryPhase::Armed,kDetectRecord)); }
   const auto flag=Load32(b,0x82CCBF60),vars=s->binding.vars;
   if (!PoseAddress(flag)) { Refuse("detection state missing"); if (host) return false; ctx.r3.u32=0; return true; }
   const auto before=Load32(b,flag);
   if (host) {
-    if (!failed && !before && s->request_run==s->run+1 && Now()<=s->request_until && SafeRequest(b,*s)) {
-      const auto link=EnemyLinkSnapshot();
-      if (link.connected && link.partner && link.partner->level==level &&
-          NativeInside(ctx,b,Load32(b,vars+92),*link.partner)) {
-        forced_pivot=vars+88; Note("request accepted",Event(*s,StoryPhase::Armed,kDetectRecord));
+    if (s->request) {
+      if (Now()>s->request_until) FinishRequest(*s,"request refused","request deadline elapsed");
+      else if (failed || !story::DetectIdle(before) || s->run==UINT32_MAX || s->request->run!=s->run+1)
+        FinishRequest(*s,"request refused","script already armed or activation changed");
+      else if (!SafeRequest(b,*s)) FinishRequest(*s,"request refused","action chain changed or became unsafe");
+      else {
+        const auto link=EnemyLinkSnapshot();
+        if (!link.connected || !link.partner || link.partner->level!=level)
+          FinishRequest(*s,"request refused","fresh guest position unavailable");
+        else if (!NativeInside(ctx,b,Load32(b,vars+92),*link.partner))
+          FinishRequest(*s,"request refused","guest outside native trigger volume");
+        else forced_pivot=vars+88;
       }
     }
     __imp__sub_82476848(ctx,b); forced_pivot=0;
     if (failed) return true;
     const auto after=Load32(b,flag);
-    if (!before && after==1) {
+    if (story::DetectArmed(before,after)) {
       if (s->run==UINT32_MAX) Refuse("script run overflow");
-      else { ++s->run; runs[s->binding.source]=s->run; s->request_run=0; Emit(Event(*s,StoryPhase::Armed,kDetectRecord)); }
-    } else if (before==1 && !after && ctx.r3.u32==5) {
+      else {
+        ++s->run; runs[s->binding.source]=s->run;
+        FinishRequest(*s,"request applied","native detection armed");
+        Emit(Event(*s,StoryPhase::Armed,kDetectRecord));
+      }
+    } else if (story::DetectStarted(before,ctx.r3.u32,LoopProgram(b))) {
       s->record=Load32(b,vars+19812); Emit(Event(*s,StoryPhase::Started,kDetectRecord));
     }
     return true;
@@ -430,7 +528,7 @@ bool StoryDetect(PPCContext& ctx,uint8_t* b) {
   const auto* front=ordered.Front();
   if (For(front,*s,StoryPhase::Armed)) {
     const auto e=*front;
-    if (before || e.run!=s->run+1 || Load32(b,vars+20)!=kPivot || !HeroPivot(b,vars+88) || Load32(b,vars+8)) {
+    if (!story::DetectIdle(before) || e.run!=s->run+1 || Load32(b,vars+20)!=kPivot || !HeroPivot(b,vars+88) || Load32(b,vars+8)) {
       Refuse("detection callback or state is not replay-safe",e); return true;
     }
     forced_pivot=vars+88; __imp__sub_82476848(ctx,b); forced_pivot=0;
@@ -439,9 +537,9 @@ bool StoryDetect(PPCContext& ctx,uint8_t* b) {
     const auto e=*front;
     if (before!=1 || e.run!=s->run) { Refuse("detection start state mismatch",e); return true; }
     __imp__sub_82476848(ctx,b);
-    if (ctx.r3.u32==5 && !Load32(b,flag)) { s->record=Load32(b,vars+19812); Applied(e); }
+    if (story::DetectStarted(before,ctx.r3.u32,LoopProgram(b))) { s->record=Load32(b,vars+19812); Applied(e); }
     else Refuse("native script start refused",e);
-  } else if (!before) Request(ctx,b,*s);
+  } else if (story::DetectIdle(before)) Request(ctx,b,*s);
   return true;
 }
 
@@ -449,6 +547,7 @@ bool StoryLoop(PPCContext& ctx,uint8_t* b) {
   if (!Ensure(b)) return false;
   auto* s=ObservedScript(b);
   if (!s) { Refuse("unmatched loop script"); if (host) return false; ctx.r3.u32=0; return true; }
+  if (!s->saw_loop) { s->saw_loop=true; Note("native loop scheduled",Event(*s,StoryPhase::Advance,Load32(b,s->binding.vars+19812))); }
   const auto vars=s->binding.vars,before=Load32(b,vars+19812);
   if (host) {
     __imp__sub_82454690(ctx,b);
@@ -458,7 +557,21 @@ bool StoryLoop(PPCContext& ctx,uint8_t* b) {
       Note("authority script re-baselined",Event(*s,StoryPhase::Checksum,after),"loop jump or unobserved activation");
       return true; // No synthetic callbacks. The next checksum compares actual guest state.
     }
-    for (uint32_t i=before;i<after;++i) Emit(Event(*s,StoryPhase::Advance,i));
+    for (uint32_t i=before;i<after;++i) {
+      auto e=Event(*s,StoryPhase::Advance,i);
+      if (!ReplaySafe(b,*s,i)) {
+        // Native authority keeps running. An unsafe action cannot be replayed
+        // by a guest whose detector is still gated. Send an explicit recovery
+        // boundary rather than an event that can only time out off-schedule.
+        if (s->recovery_run!=s->run) {
+          e.number=number==UINT32_MAX ? number : number+1;
+          UnsafeRecord(b,*s,e); s->recovery_run=s->run;
+          e.phase=StoryPhase::Recovery; Emit(e);
+        }
+        break;
+      }
+      Emit(e);
+    }
     if (ctx.r3.u32==5) Emit(Event(*s,StoryPhase::Finished,after));
     return true;
   }
@@ -477,7 +590,7 @@ bool StoryLoop(PPCContext& ctx,uint8_t* b) {
       if (fn) { Refuse("terminator mismatch",e); break; }
       ctx.r3.u32=Load32(b,0x82CC9B0C); __imp__sub_826F9E70(ctx,b); ctx.r3.u32=5; Applied(e); return true;
     }
-    if (index==kStoryRecords || e.phase!=StoryPhase::Advance || !fn || !(SafeAction(b,fn,payload) || (fn==kPivot && HeroPivot(b,payload)))) {
+    if (e.phase!=StoryPhase::Advance || !ReplaySafe(b,*s,index)) {
       Refuse("unsupported story callback; use checkpoint recovery",e); break;
     }
     Store32(b,payload,Load32(b,0x82CCBF6C));

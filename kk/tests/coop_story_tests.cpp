@@ -70,25 +70,79 @@ void Ordering() {
   Check(queue.Push(Event(2,StoryPhase::Started),1) && !queue.Front(),"native schedule cannot bypass earlier script event");
   Check(queue.Push(Event(1),1.1) && queue.Front()->number==1,"out-of-order delivery reassembles");
   Check(!queue.Push(Event(1),2) && !queue.Behind(),"identical duplicate is idempotent");
-  queue.Applied(); Check(queue.Front() && queue.Front()->number==2,"strict order across script phases");
-  queue.Applied(); Check(!queue.Front() && queue.Next()==3,"consumed exactly once");
+  queue.Applied(2); Check(queue.Front() && queue.Front()->number==2,"strict order across script phases");
+  queue.Applied(2); Check(!queue.Front() && queue.Next()==3,"consumed exactly once");
   Check(!queue.Push(Event(1),2.1) && !queue.Behind(),"reliable retransmission cannot replay consumed event");
   auto e=Event(3); e.generation=1; Check(!queue.Push(e,3),"old checkpoint visit rejected");
   e.generation=3; Check(!queue.Push(e,3),"future visit does not reset active world");
   e.generation=2; e.level=201; Check(!queue.Push(e,3),"another level rejected");
   Check(queue.Push(Event(4),3),"gap held"); queue.Tick(8.01);
   Check(queue.Behind() && !queue.Front(),"missing event offers recovery after five seconds");
+  Check(queue.Error().reason==story::Ordered::Failure::Gap && queue.Error().expected==3 &&
+      queue.Error().received==Event(4),"gap keeps expected number and real received script after clearing queue");
   queue.Reset(2,203); Check(queue.Push(Event(),1),"reset ready");
   e=Event(); ++e.script; Check(!queue.Push(e,1.1) && queue.Behind(),"conflicting duplicate refuses rather than selecting one");
+  Check(queue.Error().reason==story::Ordered::Failure::Conflict && queue.Error().expected==1 &&
+      queue.Error().received==e,"conflict preserves actual conflicting identity");
   queue.Reset(2,203); Check(!queue.Push(Event(1+kStoryQueue),1) && queue.Behind(),"bounded reorder window");
+  Check(queue.Error().reason==story::Ordered::Failure::Window && queue.Error().received.number==1+kStoryQueue,
+      "window overflow is distinct from missing event timeout");
   queue.Reset(2,203);
   for (uint32_t i=1;i<=kStoryQueue;++i) Check(queue.Push(Event(i),1),"bounded ordering capacity");
   Check(!queue.Push(Event(1),2) && !queue.Behind(),"duplicate at full capacity remains harmless");
   queue.Reset(2,203); Check(queue.Push(Event(),1),"waiting callback"); queue.Tick(6.01);
   Check(queue.Behind(),"unmatched or unscheduled native script times out too");
+  Check(queue.Error().reason==story::Ordered::Failure::ApplyTimeout && queue.Error().expected==1 &&
+      queue.Error().received==Event(),"present head timeout never reports a missing packet or default event");
+  queue.Reset(2,203);
+  auto other=Event(2,StoryPhase::Advance); ++other.source; ++other.script;
+  Check(queue.Push(Event(),1) && queue.Push(other,1),"two scripts arrive in one ordered batch");
+  queue.Applied(5.9); queue.Tick(6.1);
+  Check(!queue.Behind() && queue.Front() && *queue.Front()==other,
+      "time waiting behind an earlier native script does not consume the next script's apply deadline");
+  queue.Tick(10.91);
+  Check(queue.Behind() && queue.Error().received==other,"new head still times out after five seconds without progress");
+  queue.Reset(2,203); Check(queue.Push(Event(2),1),"gap with no progress");
+  Check(queue.Push(Event(3),5.9),"later traffic arrives during gap"); queue.Tick(6.01);
+  Check(queue.Behind() && queue.Error().reason==story::Ordered::Failure::Gap && queue.Error().expected==1,
+      "checksum or later-script traffic cannot keep a real gap alive indefinitely");
+  queue.Reset(2,203); Check(queue.Push(Event(2),1) && queue.Push(Event(),5.9),"missing head arrives just before gap deadline");
+  queue.Tick(6.1);
+  Check(!queue.Behind() && queue.Front()->number==1,"a repaired delivery gap gets its own native apply deadline");
   queue.Reset(3,203); e=Event(); e.generation=3;
+  Check(queue.Error().reason==story::Ordered::Failure::None,"new world clears old failure evidence");
   Check(queue.Push(e,10) && !queue.Behind() && queue.Front(),"same-level shared reload clears old visit and starts from one");
   queue.Refuse(); Check(!queue.Front() && !queue.Push(e,11),"refusal holds all subsequent local story");
+}
+void Requests() {
+  // 8271D1D8/826F9E70 store -1 for a newly selected native program. The
+  // initial Armed and Started events must survive that scheduler convention.
+  Check(story::DetectIdle(UINT32_MAX) && story::DetectIdle(0) && !story::DetectIdle(1),
+      "native idle sentinel permits guest requests and replay without admitting an armed detector");
+  Check(story::DetectArmed(UINT32_MAX,1) && story::DetectArmed(0,1) && !story::DetectArmed(1,1),
+      "host emits one Armed transition when native detection starts from minus one");
+  Check(story::DetectStarted(1,5,true) && !story::DetectStarted(1,0,true) && !story::DetectStarted(1,5,false),
+      "Started follows the actual native loop-program switch rather than its overwritten state word");
+  story::Cursor authority,replica; authority.Baseline(0); replica.Baseline(0);
+  story::Ordered stream; stream.Reset(2,203);
+  auto armed=Event(1); armed.run=authority.run+1;
+  if (story::DetectArmed(UINT32_MAX,1)) { ++authority.run; Check(stream.Push(armed,1),"authority publishes native-sentinel Armed"); }
+  if (story::DetectIdle(UINT32_MAX) && stream.Front()) { replica.run=stream.Front()->run; stream.Applied(1.1); }
+  auto started=armed; started.number=2; started.phase=StoryPhase::Started;
+  if (story::DetectStarted(1,5,true)) Check(stream.Push(started,1.2),"authority publishes Started after native state becomes minus one again");
+  Check(stream.Front() && stream.Front()->phase==StoryPhase::Started && replica.run==authority.run,
+      "guest receives the activation before any cross-script loop advances");
+  stream.Applied(1.3);
+  auto advance=Event(3,StoryPhase::Advance); advance.run=authority.run; advance.record=0;
+  Check(stream.Push(advance,1.4) && stream.Front()->run==replica.run,
+      "first loop event has the shared activation run instead of waiting on a gated detector");
+  story::RequestLatch pending;
+  Check(pending.Begin(2),"first local entry submits next activation");
+  for (unsigned frame=0;frame<3600;++frame)
+    Check(!pending.Begin(2),"reliable pending or refused activation is not resubmitted each frame/second");
+  Check(pending.Begin(3) && !pending.Begin(2),"only a newer native activation permits a new request");
+  pending={}; Check(pending.Begin(2),"shared world reset permits the activation in the new generation");
+  Check(!pending.Begin(0),"zero run is never a valid request");
 }
 void Identity() {
   const auto source=story::Source(55,-48,146,12);
@@ -141,12 +195,12 @@ void LoadBaselineAndChecksums() {
   Check(events.Push(advance,3.1) && events.Front()->phase==StoryPhase::Checksum,"later advance cannot overtake checksum boundary");
   Check(!story::LoopEvent(*events.Front()),"SSLoop defers checksum to frame handler instead of refusing it as a native callback");
   auto reply=*events.Front(); reply.run=guest.run; reply.record=guest.record;
-  events.Applied(); guest.record++;
+  events.Applied(3.2); guest.record++;
   Check(events.Front() && story::LoopEvent(*events.Front()),"SSLoop may resume after checksum is consumed");
   Check(checksums.Compare(reply)==story::Checksums::Result::Match,
       "reply compares captured state even after either native world advances");
   Check(checksums.Compare(reply)==story::Checksums::Result::Ignored,"duplicate checksum reply is harmless");
-  events.Applied();
+  events.Applied(3.3);
   auto run_sample=sample; run_sample.number=2;
   Check(checksums.Remember(run_sample,4),"activation run is part of checksum evidence");
   reply=run_sample; reply.run++;
@@ -219,6 +273,11 @@ void TransportAndMailbox() {
   gm.Exchange(guest); guest.Tick(.232); host.Tick(.232); hm.Exchange(host);
   received=hm.Take(); Check(received.size()==1 && received[0].story.record==8 && received[0].story.phase==StoryPhase::Checksum,
       "differing checksum returns to authority without becoming a trigger request");
+  request.story=Event(2);
+  Check(gm.Submit(request),"real activation request follows checksum reply on same worker");
+  gm.Exchange(guest); guest.Tick(.233); host.Tick(.233); hm.Exchange(host);
+  received=hm.Take(); Check(received.size()==1 && received[0].story.phase==StoryPhase::Armed && received[0].story.number==2,
+      "host receives actual Armed request separately from phase-six diagnostic replies");
   Check(!host.QueueStory(request) && !guest.QueueStory(Packet()),"outgoing authority inversion rejected");
   auto wrong=Packet(); wrong.epoch=18; Check(!host.QueueStory(wrong),"outgoing stale epoch rejected");
   // Inject packets directly to ensure receive checks are independent of sender checks.
@@ -234,4 +293,4 @@ void TransportAndMailbox() {
   Check(CheckCompatibility(hc.compatibility,old)==RejectReason::Protocol,"v10 peers rejected at handshake");
 }
 }
-int main() { Codec(); Ordering(); Identity(); LoadBaselineAndChecksums(); TransportAndMailbox(); std::puts("co-op story tests passed"); }
+int main() { Codec(); Ordering(); Requests(); Identity(); LoadBaselineAndChecksums(); TransportAndMailbox(); std::puts("co-op story tests passed"); }
