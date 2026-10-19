@@ -2874,7 +2874,7 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
       return;
     }
 
-    input_.set_keyboard_enabled(capturing_.empty() && !editing_name_);  // keys go to the binding or the name
+    input_.set_keyboard_enabled(capturing_.empty() && !editing_name_ && !social_.editing());
     // Controllers count only while the launcher is the active window (REPORT-188: a controller used in
     // another program pressed buttons here). Ours again once the player brings it back (a click, the taskbar,
     // a notification), e.g. for a finished download's pop-up after Run in background.
@@ -3007,7 +3007,7 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
       DrawBottomBar(dl);  // over a pop-up's shade: its prompts stay clear
     }
     social_.Draw(dl, o_, ImVec2(w_, h_), m_, input_, glyphs_, PromptSet(), immediate_, coop::Social(),
-                 coop::SocialAllowed(GetBool("kk_coop_enabled"), SocialContext()));
+                 coop::SocialAllowed(GetBool("kk_coop_enabled"), SocialContext()), [this] { OpenSteamPrompt(); });
     ImGui::End();
     NoteActivity(io);
     handoff::ContentDrawn();  // started by the game going back: it closes once this page is on screen
@@ -7573,7 +7573,11 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
     }
     std::string t = steps[next++];
     at = now + 0.45;
-    REXLOG_INFO("KK dev: input {}", t);
+    REXLOG_INFO("KK dev: input {}", t.rfind("direct:",0)==0 ? "direct panel action" : t);
+    if (t.rfind("direct:",0)==0) {
+      if (!social_.DirectInput(t.substr(7),coop::Social())) { --next; at=now+.5; }
+      return;
+    }
     // Same SessionStart path as the Social Start action, no direct game boot.
     if (t.rfind("session:",0)==0) {
       const auto value=t.substr(8);

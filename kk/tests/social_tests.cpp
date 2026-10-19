@@ -65,7 +65,7 @@ void FocusAndActions() {
   Check(Find(rows, SocialRowKind::Create).enabled, "idle may create lobby");
   std::vector<SocialRowKind> order;
   for (const auto& r : rows) if (r.focusable()) order.push_back(r.key.kind);
-  Check(order.size() == 8 && order[0] == SocialRowKind::Accept && order[1] == SocialRowKind::Decline &&
+  Check(order.size() == 14 && order[0] == SocialRowKind::Accept && order[1] == SocialRowKind::Decline &&
         order[2] == SocialRowKind::Create && order[3] == SocialRowKind::Friend, "focus order follows invites, lobby, friends");
   Check(SocialFocus(rows, {}) == 1, "first focus skips section header");
   const SocialRowKey friend_key{SocialRowKind::Friend, 2};
@@ -75,7 +75,7 @@ void FocusAndActions() {
   const int focus = SocialFocus(rows, friend_key);
   Check(focus >= 0 && rows[size_t(focus)].key == friend_key, "focus follows ID through reorder and duplicate names");
   auto off = std::find_if(rows.begin(), rows.end(), [](const auto& r) { return r.key.kind == SocialRowKind::Friend && r.detail == "Offline"; });
-  Check(off != rows.end() && off == rows.end() - 1, "offline friends are last");
+  Check(off != rows.end() && std::none_of(off+1,rows.end(),[](const auto& r) { return r.key.kind==SocialRowKind::Friend; }), "offline friends are last in the Steam section");
   Check(SocialFocus({}, friend_key) == -1, "empty model has no focus");
   const auto invite = Find(rows, SocialRowKind::Accept, m.pending_invites.front().lobby);
   auto cmd = SocialRowCommand(invite, m); Check(cmd && fake->Act(*cmd), "panel accepts through service action");
@@ -122,10 +122,10 @@ void FocusAndActions() {
     m = fake->Snapshot(); Check(!std::string_view(SocialStatusKey(m)).empty(), "every scene has status");
   }
   fake->Scenario("needed");
-  Check(std::string_view(SocialStatusKey(fake->Snapshot())) == "Steam is needed for co-op", "missing client state");
-  Check(!Find(SocialRows(fake->Snapshot()), SocialRowKind::Create).enabled, "missing Steam disables lobby creation");
+  Check(std::string_view(SocialStatusKey(fake->Snapshot())) == "Steam is unavailable. You can connect by IP.", "missing client points to Direct IP");
+  Check(Find(SocialRows(fake->Snapshot()), SocialRowKind::DirectHost).enabled, "missing Steam leaves Direct IP available");
   fake->Scenario("unavailable");
-  Check(std::string_view(SocialStatusKey(fake->Snapshot())) == "Steam not available in this build", "SDK-missing state");
+  Check(std::string_view(SocialStatusKey(fake->Snapshot())) == "Steam is unavailable. You can connect by IP.", "SDK-missing state points to Direct IP");
   fake->Scenario("mismatch");
   Check(std::string_view(SocialStatusKey(fake->Snapshot())) == "Versions don't match: {0}", "mismatch reason template");
   fake->Scenario("left");
@@ -152,7 +152,7 @@ void PreviewScenes() {
     Check(m.can_start == (name == "ready"), "only ready scene permits Start");
     Check(m.start_requested == (name == "starting"), "starting scene performs fake Start");
     Check(std::any_of(rows.begin(), rows.end(), [](const auto& r) { return r.key.kind == SocialRowKind::Create; })
-          == !joined, "host/guest/ready/starting never show Create lobby");
+          == (!joined && name!="needed" && name!="unavailable"), "Create lobby requires Steam and no existing lobby");
     if (joined) {
       Check(m.status == (name == "starting" ? SocialStatus::Starting : SocialStatus::Lobby), "actual joined scene status");
       Check(m.pending_invites.empty(), "lobby capture is not obscured by stale incoming invites");
@@ -183,5 +183,21 @@ void PreviewScenes() {
           "bad scene preserves the previous fake world");
   }
 }
+void DirectRows() {
+  SocialModel m; m.status=SocialStatus::Unavailable;
+  auto rows=SocialRows(m);
+  Check(Find(rows,SocialRowKind::DirectHost).enabled && Find(rows,SocialRowKind::DirectJoin).enabled,"Direct IP works without Steam");
+  Check(Find(rows,SocialRowKind::AddSteam).enabled,"recommendation links to existing Add to Steam");
+  m.status=SocialStatus::Lobby; m.direct=true; m.self=m.owner=1; m.lobby=99;
+  m.members={{1,"Host",false},{2,"Guest",false}};
+  rows=SocialRows(m);
+  Check(Find(rows,SocialRowKind::Ready).enabled && !Find(rows,SocialRowKind::Start).enabled,"Direct IP readiness is explicit");
+  Check(std::none_of(rows.begin(),rows.end(),[](const auto& r) { return r.key.kind==SocialRowKind::Friend || r.key.kind==SocialRowKind::OverlayInvite || r.key.kind==SocialRowKind::DirectHost; }),"active Direct session has no Steam invites or second host");
+  m.members[0].ready=m.members[1].ready=true; m.can_start=true;
+  Check(SocialRowCommand(Find(SocialRows(m),SocialRowKind::Start),m).has_value(),"Direct host uses shared Start command");
+  m.self=2;
+  rows=SocialRows(m);
+  Check(std::none_of(rows.begin(),rows.end(),[](const auto& r) { return r.key.kind==SocialRowKind::Start; }),"Direct guest cannot Start");
 }
-int main() { InputPolicy(); FocusAndActions(); PreviewScenes(); std::printf("Social panel: %u checks passed\n", checks); }
+}
+int main() { InputPolicy(); FocusAndActions(); PreviewScenes(); DirectRows(); std::printf("Social panel: %u checks passed\n", checks); }

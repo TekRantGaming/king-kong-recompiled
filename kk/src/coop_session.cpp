@@ -77,7 +77,7 @@ void CoopSession::Transition(SessionState s) {
   if (changed_) changed_(s);
 }
 bool CoopSession::Send(Message m, bool reliable) {
-  if (m.type == MessageType::Hello) m.display_name = config_.display_name;
+  if (m.type == MessageType::Hello) { m.display_name = config_.display_name; m.join_code = config_.join_code; }
   m.protocol = config_.compatibility.protocol;
   m.sequence = ++sequence_;
   m.epoch = epoch_;
@@ -211,11 +211,14 @@ void CoopSession::Tick(double now, const std::optional<PlayerPose>& local, const
     Receive(m, now);
     if (state_ == SessionState::Ended) return;
   }
+  const bool waiting = config_.wait_for_peer && config_.role == Role::Host &&
+      state_ == SessionState::Connecting && transport_.Stats().received == 0;
+  if (waiting) started_ = now;
   if (now - (state_ == SessionState::Connecting ? started_ : last_receive_) >= 20) {
     End(now); return;
   }
   if (state_ == SessionState::Connecting) {
-    if (now - last_hello_ >= .5) {
+    if (!waiting && now - last_hello_ >= .5) {
       Message hello; hello.type = MessageType::Hello; hello.hello = config_.compatibility;
       // A guest always initiates with epoch zero, even after learning the host's epoch.
       const uint64_t saved = epoch_;

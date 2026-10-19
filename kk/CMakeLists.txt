@@ -21,6 +21,7 @@ set(KINGKONG_SOURCES
     src/benchmark_monitor.cpp
     src/sampler.cpp
     src/settings.cpp
+    src/coop_direct_udp.cpp
     src/coop_protocol.cpp
     src/coop_session.cpp
     src/coop_flow_game.cpp
@@ -220,9 +221,7 @@ if(TARGET kk_ffmpeg)
 endif()
 if(WIN32)
     target_link_libraries(king_kong PRIVATE windowscodecs ole32 pdh psapi runtimeobject shell32)
-    if(KK_DEV_TOOLS)
-        target_link_libraries(king_kong PRIVATE ws2_32)
-    endif()
+    target_link_libraries(king_kong PRIVATE ws2_32)
     # UTF-8 as the program's code page (src/king_kong.manifest, issue #37).
     target_link_options(king_kong PRIVATE "LINKER:/MANIFEST:EMBED" "LINKER:/MANIFESTUAC:NO"
                         "LINKER:/MANIFESTINPUT:${CMAKE_CURRENT_SOURCE_DIR}/src/king_kong.manifest")
@@ -292,6 +291,13 @@ if(KK_DEV_TOOLS)
     add_executable(kk-coop-tests tests/coop_tests.cpp src/coop_protocol.cpp src/coop_session.cpp)
     target_include_directories(kk-coop-tests PRIVATE src)
     add_test(NAME coop-net-core COMMAND kk-coop-tests)
+    add_executable(kk-direct-tests tests/direct_udp_tests.cpp src/coop_direct_udp.cpp src/coop_protocol.cpp src/coop_session.cpp src/steam_lobby.cpp)
+    target_include_directories(kk-direct-tests PRIVATE src)
+    target_link_libraries(kk-direct-tests PRIVATE Threads::Threads)
+    if(WIN32)
+        target_link_libraries(kk-direct-tests PRIVATE ws2_32)
+    endif()
+    add_test(NAME coop-direct-udp COMMAND kk-direct-tests)
     add_executable(kk-camera-tests tests/coop_camera_tests.cpp src/coop_protocol.cpp src/coop_session.cpp)
     target_include_directories(kk-camera-tests PRIVATE src)
     add_test(NAME coop-observer-camera COMMAND kk-camera-tests)

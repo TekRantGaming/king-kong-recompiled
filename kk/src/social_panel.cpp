@@ -3,8 +3,10 @@
 #include "ui_paint.h"
 #include "toast.h"
 #include "coop_runtime.h"
+#include "coop_direct_udp.h"
 #include <rex/ui/immediate_drawer.h>
 #include <algorithm>
+#include <charconv>
 
 namespace kk::ui {
 using namespace coop;
@@ -30,7 +32,7 @@ struct SocialPanel::Avatars {
     return e.texture.get();
   }
 };
-SocialPanel::SocialPanel() : avatars_(std::make_unique<Avatars>()) {}
+SocialPanel::SocialPanel() : avatars_(std::make_unique<Avatars>()), direct_code_(NewJoinCode()) {}
 SocialPanel::~SocialPanel() = default;
 #if defined(KK_DEV_TOOLS)
 void SocialPanel::ResetPreview() {
@@ -44,17 +46,34 @@ void SocialPanel::ResetPreview() {
 #endif
 void SocialPanel::Update(bool enabled, SocialPage page, Input& in, ISocialService& service) {
   const bool was = state_.open();
-  just_opened_ = state_.Update(enabled, page, in.Pressed(Action::kSocial), in.Pressed(Action::kBack), ImGui::GetIO().DeltaTime);
+  just_opened_ = state_.Update(enabled, page, !editing() && in.Pressed(Action::kSocial), !editing() && in.Pressed(Action::kBack), ImGui::GetIO().DeltaTime);
   if (just_opened_) { service.Act({SocialAction::Open}); Cue(Sound::kSelect); }
   if (was && !state_.open()) Cue(Sound::kBack);
   // The closing press cannot reach the page, including a zero-duration closing animation.
   if (was || state_.blocking()) {
     in.Consume(Action::kSocial);
-    in.Consume(Action::kBack);
+    if (!editing()) in.Consume(Action::kBack);
   }
   if (was && !state_.blocking()) in.ConsumeAll();
 }
 void SocialPanel::Activate(const SocialRow& row, ISocialService& service) {
+  const auto rows=SocialRows(service.Snapshot());
+  const auto current=std::find_if(rows.begin(),rows.end(),[&](const auto& r) { return r.key==row.key; });
+  if (current==rows.end() || !current->enabled) { Cue(Sound::kDeny); return; }
+  const auto kind=row.key.kind;
+  if (kind==SocialRowKind::AddSteam) { if (add_steam_) { state_.Update(true,SocialPage::Page,false,true,0); add_steam_(); } return; }
+  if (kind==SocialRowKind::DirectAddress || kind==SocialRowKind::DirectPort || kind==SocialRowKind::DirectCode) {
+    editor_=kind==SocialRowKind::DirectAddress ? 1 : kind==SocialRowKind::DirectPort ? 2 : 3;
+    editor_text_=editor_==1 ? direct_address_ : editor_==2 ? direct_port_ : direct_code_;
+    editor_key_=0; editor_just_opened_=true; editor_lowercase_=editor_symbols_=false; return;
+  }
+  if (kind==SocialRowKind::DirectHost || kind==SocialRowKind::DirectJoin) {
+    unsigned port=0; const auto parsed=std::from_chars(direct_port_.data(),direct_port_.data()+direct_port_.size(),port);
+    bool ok=parsed.ec==std::errc{} && parsed.ptr==direct_port_.data()+direct_port_.size() && port && port<=65535 && ValidJoinCode(direct_code_);
+    if (ok) ok=kind==SocialRowKind::DirectHost ? HostDirect(uint16_t(port),direct_code_) : JoinDirect(direct_address_,uint16_t(port),direct_code_);
+    notice_=ok ? "" : "Enter an IP, port 1 to 65535 and a code of 6 to 32 characters";
+    notice_until_=ImGui::GetTime()+6; return;
+  }
   const auto command = SocialRowCommand(row, service.Snapshot());
   if (!command) { Cue(Sound::kDeny); return; }
   if (command->action == SocialAction::Start) notice_ = RequestSessionStart() ? "Starting co-op..." : "Choose Continue or a chapter before starting co-op";
@@ -65,8 +84,9 @@ void SocialPanel::Activate(const SocialRow& row, ISocialService& service) {
 }
 void SocialPanel::Draw(ImDrawList* dl, ImVec2 o, ImVec2 size, const Metrics& m, Input& in,
                        Glyphs& glyphs, const std::string& set, rex::ui::ImmediateDrawer* drawer,
-                       ISocialService& service, bool active) {
+                       ISocialService& service, bool active, std::function<void()> add_steam) {
   if (!blocking()) return;
+  add_steam_=std::move(add_steam);
   const float s = m.s, slide = state_.slide();
   const float width = std::min(size.x, 490 * s), right = o.x + size.x;
   const float x = right - width * slide;
@@ -80,6 +100,12 @@ void SocialPanel::Draw(ImDrawList* dl, ImVec2 o, ImVec2 size, const Metrics& m, 
   dl->AddText(fonts.display, 30 * s, ImVec2(left, o.y + 22 * s), color::kText,
               Ellipsize(fonts.display, 30 * s, T("Social"), available).c_str());
   const SocialModel model = service.Snapshot();
+  const std::string recommendation=T("For the easiest way to play with friends, add King Kong to Steam and invite them from here.");
+  const float note_height=fonts.text->CalcTextSizeA(14*s,1e6f,available,recommendation.c_str()).y;
+  dl->AddText(fonts.text,14*s,ImVec2(left,o.y+88*s),color::kTextDim,recommendation.c_str(),nullptr,available);
+  if (active && !editing() && ImGui::IsMouseClicked(0) && ImGui::IsMouseHoveringRect(ImVec2(left,o.y+88*s),ImVec2(left+available,o.y+88*s+note_height)) && add_steam_) {
+    state_.Update(true,SocialPage::Page,false,true,0); add_steam_();
+  }
   if (model.lobby && model.lobby == seen_lobby_ && seen_members_ == 2 && model.members.size() < 2) {
     notice_ = "Your partner left";
     notice_until_ = ImGui::GetTime() + 4.0;
@@ -109,6 +135,14 @@ void SocialPanel::Draw(ImDrawList* dl, ImVec2 o, ImVec2 size, const Metrics& m, 
                 kind == SocialRowKind::Member ? ItemType::kInfo : ItemType::kAction;
     const bool person = kind == SocialRowKind::Member || kind == SocialRowKind::Friend;
     item.label = row.label;
+    if (kind==SocialRowKind::Text && !row.detail.empty()) {
+      item.type=ItemType::kInfo; item.tall=true;
+      item.subtitle=row.detail; item.literal_subtitle=true;
+    }
+    if (kind==SocialRowKind::DirectAddress || kind==SocialRowKind::DirectPort || kind==SocialRowKind::DirectCode) {
+      item.tall=true; item.subtitle=kind==SocialRowKind::DirectAddress ? direct_address_ : kind==SocialRowKind::DirectPort ? direct_port_ : direct_code_;
+      item.literal_subtitle=true;
+    }
     item.literal_label = person;
     item.disabled = !row.enabled && item.type == ItemType::kAction;
     item.focus_subtitle_color = color::kOnFocus;
@@ -139,12 +173,16 @@ void SocialPanel::Draw(ImDrawList* dl, ImVec2 o, ImVec2 size, const Metrics& m, 
     item.on_activate = [this, row, &service] { Activate(row, service); };
     items.push_back(std::move(item));
   }
-  const bool interactive = active && state_.open() && !just_opened_;
+  const bool interactive = active && state_.open() && !just_opened_ && !editing();
   // Tab stays in the drawer; arrows/stick/d-pad use the launcher's own list model.
   if (interactive && (in.Pressed(Action::kNextTab) || in.Pressed(Action::kPrevTab))) {
     in.Inject(in.Pressed(Action::kPrevTab) ? Action::kUp : Action::kDown, in.device());
   }
-  const float top = o.y + 100 * s;
+  const std::string nat=T("Host: forward the UDP port on your router. Share your public IP and join code with your partner.");
+  const float nat_y=o.y+96*s+note_height;
+  const float nat_height=fonts.text->CalcTextSizeA(13*s,1e6f,available,nat.c_str()).y;
+  dl->AddText(fonts.text,13*s,ImVec2(left,nat_y),color::kTextDim,nat.c_str(),nullptr,available);
+  const float top = nat_y + nat_height + 12*s;
   DrawList(dl, items, list_, ImVec2(left, top), ImVec2(x + width - 24 * s, end.y - 106 * s), m, in,
            interactive, &glyphs, set);
   if (list_.focus >= 0 && list_.focus < int(rows.size())) {
@@ -163,7 +201,74 @@ void SocialPanel::Draw(ImDrawList* dl, ImVec2 o, ImVec2 size, const Metrics& m, 
                     end.y - 72 * s, m, interactive) == Action::kDefault && list_.focus >= 0)
       Activate(rows[size_t(list_.focus)], service);
   }
+  if (editing()) DrawEditor(dl,ImVec2(x,o.y),ImVec2(width,size.y),m,in,glyphs,set);
   dl->PopClipRect();
   if (animating()) RequestUiPaint();
 }
+void SocialPanel::DrawEditor(ImDrawList* dl,ImVec2 o,ImVec2 size,const Metrics& m,Input& in,Glyphs& glyphs,const std::string& set) {
+  const auto f=GetFonts(); const float s=m.s;
+  dl->AddRectFilled(o,ImVec2(o.x+size.x,o.y+size.y),IM_COL32(14,16,20,255));
+  const char* title=editor_==1 ? "IP address" : editor_==2 ? "UDP port" : "Join code";
+  dl->AddText(f.display,26*s,ImVec2(o.x+24*s,o.y+30*s),color::kText,T(title));
+  dl->AddText(f.text,18*s,ImVec2(o.x+24*s,o.y+90*s),color::kText,
+      Ellipsize(f.text,18*s,editor_text_+"_",size.x-48*s).c_str());
+  if (editor_just_opened_) { editor_just_opened_=false; in.ConsumeAll(); RequestUiPaint(); return; }
+  const size_t limit=editor_==1 ? 64 : editor_==2 ? 5 : 32;
+  auto append=[&](char c) {
+    if (editor_text_.size()<limit && c>=33 && c<=126 && (editor_!=2 || (c>='0' && c<='9'))) editor_text_+=c;
+  };
+  for (const auto c : ImGui::GetIO().InputQueueCharacters) if (c<127) append(char(c));
+  const std::string_view keys=editor_symbols_ ? "!\"#$%&'()*+,-./:;<=>?@[\\]^_`{|}~" :
+      editor_lowercase_ ? "0123456789abcdefghijklmnopqrstuvwxyz.:%-" : "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ.:%-";
+  constexpr int count=44, columns=10;
+  if (in.Pressed(Action::kLeft)) editor_key_=(editor_key_+count-1)%count;
+  if (in.Pressed(Action::kRight)) editor_key_=(editor_key_+1)%count;
+  if (in.Pressed(Action::kUp)) editor_key_=std::max(0,editor_key_-columns);
+  if (in.Pressed(Action::kDown)) editor_key_=std::min(count-1,editor_key_+columns);
+  bool erase=ImGui::IsKeyPressed(ImGuiKey_Backspace) || in.Pressed(Action::kDefault);
+  bool done=ImGui::IsKeyPressed(ImGuiKey_Enter) || ImGui::IsKeyPressed(ImGuiKey_KeypadEnter);
+  bool cancel=ImGui::IsKeyPressed(ImGuiKey_Escape) || in.Pressed(Action::kBack);
+  const float cell=(size.x-48*s)/columns;
+  for (int i=0;i<count;++i) {
+    const ImVec2 a(o.x+24*s+(i%columns)*cell,o.y+150*s+(i/columns)*46*s), b(a.x+cell-3*s,a.y+42*s);
+    const bool hover=ImGui::IsMouseHoveringRect(a,b);
+    if (hover && ImGui::IsMouseClicked(0)) editor_key_=i;
+    dl->AddRectFilled(a,b,editor_key_==i ? color::kFocus : IM_COL32(34,38,42,255));
+    const std::string label=i<40 ? (size_t(i)<keys.size() ? std::string(1,keys[size_t(i)]) : "") :
+        i==40 ? "a/A" : i==41 ? "#" : i==42 ? "<" : ">";
+    dl->AddText(f.text,18*s,ImVec2(a.x+9*s,a.y+10*s),editor_key_==i ? color::kOnFocus : color::kText,label.c_str());
+    if ((in.Pressed(Action::kAccept) && editor_key_==i) || (hover && ImGui::IsMouseClicked(0))) {
+      if (i<40) { if (size_t(i)<keys.size()) append(keys[size_t(i)]); }
+      else if (i==40) editor_lowercase_=!editor_lowercase_;
+      else if (i==41) editor_symbols_=!editor_symbols_;
+      else if (i==42) erase=true;
+      else done=true;
+    }
+  }
+  dl->AddText(f.text,14*s,ImVec2(o.x+24*s,o.y+410*s),color::kTextDim,T("Select a character. a/A changes case. # shows symbols. > keeps it."),nullptr,size.x-48*s);
+  const auto clicked=DrawPrompts(dl,glyphs,set,{{Action::kDefault,"Delete"},{Action::kBack,"Cancel"}},
+      o.x+size.x-24*s,o.y+size.y-31*s,m,true);
+  erase=erase || clicked==Action::kDefault; cancel=cancel || clicked==Action::kBack;
+  if (erase && !editor_text_.empty()) editor_text_.pop_back();
+  if (done) {
+    (editor_==1 ? direct_address_ : editor_==2 ? direct_port_ : direct_code_)=editor_text_;
+  }
+  if (done || cancel) { editor_=0; Cue(cancel ? Sound::kBack : Sound::kSelect); }
+  in.ConsumeAll(); RequestUiPaint();
+}
+#if defined(KK_DEV_TOOLS)
+bool SocialPanel::DirectInput(std::string_view command,ISocialService& service) {
+  if (command.starts_with("address:")) { direct_address_=command.substr(8,64); return true; }
+  if (command.starts_with("port:")) { direct_port_=command.substr(5,5); return true; }
+  if (command.starts_with("code:")) { direct_code_=command.substr(5,32); return true; }
+  const auto kind=command=="host" ? SocialRowKind::DirectHost : command=="join" ? SocialRowKind::DirectJoin :
+      command=="ready" ? SocialRowKind::Ready : command=="edit-address" ? SocialRowKind::DirectAddress :
+      command=="edit-port" ? SocialRowKind::DirectPort : command=="edit-code" ? SocialRowKind::DirectCode :
+      command=="leave" ? SocialRowKind::Leave : SocialRowKind::Start;
+  const auto rows=SocialRows(service.Snapshot());
+  const auto row=std::find_if(rows.begin(),rows.end(),[&](const auto& r) { return r.key.kind==kind; });
+  if (row==rows.end() || !row->enabled) return false;
+  focus_=row->key; Activate(*row,service); return true;
+}
+#endif
 }  // namespace kk::ui

@@ -16,6 +16,9 @@ void Configure(const std::filesystem::path& user_data);
 void Start(const std::filesystem::path& user_data);
 // Available to the launcher before Play. Open is the explicit lazy Steam opt-in.
 ISocialService& Social();
+// Explicit UI choice. Shipping hosts bind dual-stack all interfaces; dev tests opt into loopback.
+bool HostDirect(uint16_t port, std::string code);
+bool JoinDirect(std::string address, uint16_t port, std::string code);
 // UI-thread start handoff; all peers launch through the existing Play callback.
 void SelectSessionStart(const play::StartRequest& request);
 bool RequestSessionStart();

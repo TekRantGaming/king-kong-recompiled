@@ -23,6 +23,9 @@ const char* SocialFriendState(FriendState state) {
   return "Offline";
 }
 const char* SocialStatusKey(const SocialModel& m) {
+  if (m.direct) return !m.last_error.empty() ? m.last_error.c_str() : m.status_text.c_str();
+  if (m.status==SocialStatus::Unavailable || m.last_error=="Steam is needed for co-op")
+    return "Steam is unavailable. You can connect by IP.";
   if (m.last_error == "The host left the lobby" || m.last_error == "The partner left the session" ||
       m.last_error == "Lobby membership changed during the session") return "Your partner left";
   if (m.last_error == "Lobby unavailable or incompatible" || m.last_error == "Lobby compatibility changed")
@@ -61,6 +64,8 @@ std::vector<SocialRow> SocialRows(const SocialModel& m) {
   const bool idle = m.status == SocialStatus::Idle || m.status == SocialStatus::Ended;
   const bool lobby = m.status == SocialStatus::Lobby && m.lobby != 0;
   const bool free = idle && !m.lobby;
+  const bool show_steam=!m.direct && m.status!=SocialStatus::Unavailable && m.status!=SocialStatus::Disabled;
+  if (show_steam) {
   add(SocialRowKind::Section, 1, "Invites");
   if (m.pending_invites.empty()) add(SocialRowKind::Text, 2, "No invites");
   for (const auto& invite : m.pending_invites) {
@@ -70,9 +75,16 @@ std::vector<SocialRow> SocialRows(const SocialModel& m) {
     add(SocialRowKind::Decline, invite.lobby, "Decline invite", name,
         m.status != SocialStatus::Unavailable && m.status != SocialStatus::Disabled && m.status != SocialStatus::Dormant);
   }
-  add(SocialRowKind::Section, 3, "Lobby");
-  if (!m.lobby) add(SocialRowKind::Create, 0, "Create lobby", "", free);
-  else {
+  }
+  if (m.direct && m.lobby) {
+    add(SocialRowKind::Section, 6, "Direct connection");
+    add(SocialRowKind::Text, 10, "UDP port", std::to_string(m.direct_port));
+    add(SocialRowKind::Text, 11, "Join code", m.direct_code);
+    add(SocialRowKind::Text, 12, "Local IP", m.direct_addresses);
+  }
+  if (show_steam || m.lobby) add(SocialRowKind::Section, 3, "Lobby");
+  if (!m.lobby && show_steam) add(SocialRowKind::Create, 0, "Create lobby", "", free);
+  else if (m.lobby) {
     bool ready = false, self_seen = false;
     for (const auto& member : m.members) {
       add(SocialRowKind::Member, member.id, member.name, member.ready ? "Ready" : "Not ready");
@@ -80,9 +92,10 @@ std::vector<SocialRow> SocialRows(const SocialModel& m) {
     }
     add(SocialRowKind::Ready, 0, ready ? "Not ready" : "Ready", "", lobby && self_seen);
     if (m.owner == m.self) add(SocialRowKind::Start, 0, "Start", "", lobby && m.can_start && CanStartLobby(m));
-    add(SocialRowKind::OverlayInvite, 0, "Invite friend", "", lobby && m.members.size() < 2 && m.overlay_available);
+    if (!m.direct) add(SocialRowKind::OverlayInvite, 0, "Invite friend", "", lobby && m.members.size() < 2 && m.overlay_available);
     add(SocialRowKind::Leave, 0, "Leave lobby", "", true);
   }
+  if (show_steam) {
   add(SocialRowKind::Section, 4, "Friends");
   std::vector<SocialFriend> friends = m.friends;
   auto rank = [](FriendState s) { return s == FriendState::Offline ? 1 : 0; };
@@ -97,6 +110,18 @@ std::vector<SocialRow> SocialRows(const SocialModel& m) {
         lobby && m.members.size() < 2 && f.state != FriendState::Offline && !member);
   }
   if (friends.empty()) add(SocialRowKind::Section, 5, "No friends to show");
+  }
+  if (!m.lobby) {
+    const bool available = m.status != SocialStatus::Creating && m.status != SocialStatus::Joining &&
+        m.status != SocialStatus::Starting && m.status != SocialStatus::Connected;
+    add(SocialRowKind::AddSteam, 0, "Add to Steam", "", !m.direct);
+    add(SocialRowKind::Section, 6, "Direct connection");
+    add(SocialRowKind::DirectAddress, 0, "IP address", "", available);
+    add(SocialRowKind::DirectPort, 0, "UDP port", "", available);
+    add(SocialRowKind::DirectCode, 0, "Join code", "", available);
+    add(SocialRowKind::DirectHost, 0, "Host by IP", "", available);
+    add(SocialRowKind::DirectJoin, 0, "Join by IP", "", available);
+  }
   return rows;
 }
 int SocialFocus(const std::vector<SocialRow>& rows, std::optional<SocialRowKey> key, int fallback) {

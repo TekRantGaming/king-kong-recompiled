@@ -216,6 +216,8 @@ struct Message {
   uint64_t epoch = 0;
   Compatibility hello;
   std::string display_name = "Partner";  // Hello only, separate from compatibility/lobby metadata.
+  // Optional Direct IP Hello extension. Empty keeps the Steam protocol-12 wire unchanged.
+  std::string join_code;
   RejectReason reason = RejectReason::None;
   uint64_t clock_ms = 0;
   PlayerPose pose;
