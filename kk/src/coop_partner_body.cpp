@@ -40,6 +40,7 @@
 #include "coop_runtime.h"
 #include "coop_nametag.h"
 #include "coop_observer.h"
+#include "coop_story_game.h"
 #include "coop_enemies_game.h"
 #include "photo_mode.h"
 #include "settings.h"
@@ -1574,7 +1575,7 @@ void PartnerBodyScriptRecord(const uint8_t* b) {
 
 REX_HOOK_RAW(sub_82454690) {
   kk::PartnerBodyScriptRecord(base);
-  __imp__sub_82454690(ctx, base);
+  if (!kk::coop::StoryLoop(ctx, base)) __imp__sub_82454690(ctx, base);
 }
 REX_HOOK_RAW(sub_8271E4E8) {
   if (kk::PartnerBodyStimulus(ctx, base)) return;

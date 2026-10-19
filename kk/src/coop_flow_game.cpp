@@ -2,6 +2,7 @@
 #include "coop_pose.h"
 #include "coop_enemies_game.h"
 #include "coop_observer.h"
+#include "coop_story_game.h"
 #include "play_internal.h"
 #include "hfr.h"
 #include "settings.h"
@@ -250,12 +251,14 @@ bool SessionBeforeGo(PPCContext& ctx,uint8_t* base,uint32_t g) {
     const auto local=ReadJackPose([base](uint32_t a){return Load32(base,a);},[base](uint32_t a){return Load16(base,a);},[base](uint32_t a){return LoadF(base,a);},Now());
     if (!link.connected) behind.Tick(Now(),{},{});
     else if (behind.Tick(Now(),local.pose,link.partner)) move_offer=true;
-    if (local.pose && link.partner && local.pose->level==link.partner->level &&
+    if (StoryBehind()) move_offer=true;
+    if (!StoryBehind() && local.pose && link.partner && local.pose->level==link.partner->level &&
         PartnerDistance(*local.pose,*link.partner)<=100) move_offer=false;
   }
   return false;
 }
 void SessionAfterGo(uint8_t* base,uint32_t g,bool loaded) {
+  if (launched && loaded) StoryLoaded();
   if (private_load && loaded) {
     if (hfr::Load32(base,g+0x18)==SessionFlowSnapshot().world.level) recovery.Loaded();
     else recovery.phase=revive::Phase::ReloadBoth;

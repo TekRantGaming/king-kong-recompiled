@@ -11,7 +11,7 @@
 
 namespace kk::coop {
 constexpr uint32_t kMagic = 0x4B4B4331;  // KKC1, network byte order throughout
-constexpr uint16_t kProtocolVersion = 9;
+constexpr uint16_t kProtocolVersion = 10;
 constexpr size_t kMaxDisplayNameBytes = 32;
 // Valid UTF-8, no controls or invisible direction/line formatting, bounded at a codepoint.
 // Empty or wholly invalid input becomes "Partner". Never log the input or result.
@@ -23,8 +23,26 @@ enum class MessageType : uint16_t {
   SessionStart = 13, SaveChunk = 14, LevelChange = 15, Loaded = 16, LoadRelease = 17,
   Checkpoint = 18, ChapterFinished = 19, ReloadRequest = 20, FlowAbort = 21,
   DamageEvent = 22, PlayerStatus = 23, OwnershipChange = 24,
-  PlayerDowned = 25, PlayerRevived = 26, CameraPose = 27, CameraCut = 28
+  PlayerDowned = 25, PlayerRevived = 26, CameraPose = 27, CameraCut = 28,
+  StoryEvent = 29, TriggerRequest = 30
 };
+
+// Values only. source is an immutable authored-position/script signature, never
+// an actor address. number orders ALL scripts within one shared load generation.
+// run distinguishes repeated activations of the same script in that generation.
+enum class StoryPhase : uint8_t { Armed = 1, Started, Advance, Finished, Recovery };
+constexpr uint32_t kStoryRecords = 104, kStoryQueue = 256;
+struct StoryEvent {
+  uint32_t generation = 0, level = 0, number = 0;
+  uint64_t source = 0, script = 0;
+  uint32_t run = 0, record = 0;
+  StoryPhase phase = StoryPhase::Armed;
+  auto operator<=>(const StoryEvent&) const = default;
+};
+bool ValidStoryEvent(const StoryEvent& event);
+inline bool IsStoryMessage(MessageType t) {
+  return t == MessageType::StoryEvent || t == MessageType::TriggerRequest;
+}
 
 // Session control is reliable and scoped by the packet epoch and a load generation.
 // Saves are bounded opaque game data, never addresses or paths supplied by a peer.
@@ -207,6 +225,7 @@ struct Message {
   SaveChunk save_chunk;
   FlowEvent flow;
   PlayerLife life;
+  StoryEvent story;
 };
 // Encoders also reject invalid input. Decoding leaves out untouched on failure.
 bool Encode(const Message& message, std::vector<uint8_t>& out);
