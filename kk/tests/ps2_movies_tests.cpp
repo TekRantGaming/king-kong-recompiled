@@ -24,6 +24,15 @@ int main() {
   CHECK(!StoryBoundary(levels, 100, 200, true, true, false));
   CHECK(!StoryBoundary(levels, 100, 200, true, false, true));
   CHECK(!StoryBoundary({}, 100, 200, true, false, false));
+  // Story play and the end of a chapter-select run show the movie; the benchmark's chained starts never.
+  CHECK(MovieRun(false, false));
+  CHECK(MovieRun(true, false));
+  CHECK(!MovieRun(true, true));
+  CHECK(StoryBoundary(levels, 100, 200, MovieRun(true, false), false, false));
+  CHECK(!StoryBoundary(levels, 100, 200, MovieRun(true, true), false, false));
+  // A chapter-select run's Quit (the menu level) or Start again (the same level) never shows one.
+  CHECK(!StoryBoundary(levels, 200, 3, MovieRun(true, false), false, false));
+  CHECK(!StoryBoundary(levels, 200, 200, MovieRun(true, false), false, false));
   constexpr uint32_t base = 0x90000000;
   std::map<uint32_t,uint32_t> memory{{base+0xBEC, 3}, {base+0x24, 100}, {base+0x28, 200},
       {base+0x2C, 350}, {base+0x280, 0xAA001234}, {base+0x284, 0xBB00ABCD}, {base+0x288, 0xCC005678}};
