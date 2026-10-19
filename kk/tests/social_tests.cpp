@@ -129,5 +129,56 @@ void FocusAndActions() {
   Check(std::string_view(SocialStatusKey(fake->Snapshot())) == "Your partner left", "partner departure state");
   Check(!fake->Scenario("not-a-scene"), "unknown preview leaves current scene intact");
 }
+void PreviewScenes() {
+  auto fake = MakeSocialPreview();
+  const char* scenes[] = {"invites", "host", "guest", "ready", "offline", "needed", "unavailable",
+      "mismatch", "left", "busy", "starting", "long"};
+  // Exercise every transition, including returning from a started/full/error lobby.
+  for (const char* from : scenes) for (const char* scene : scenes) {
+    Check(fake->Scenario(from) && fake->Scenario(scene), "scene transition succeeds");
+    Check(fake->Act({SocialAction::Open}) == (std::string_view(scene) != "needed" &&
+          std::string_view(scene) != "unavailable"), "opening drawer preserves scene availability");
+    const auto m = fake->Snapshot();
+    const auto rows = SocialRows(m);
+    const std::string_view name = scene;
+    const bool host = name == "host" || name == "ready" || name == "starting";
+    const bool joined = host || name == "guest";
+    Check((m.lobby != 0) == joined, "scene has the requested lobby membership after Open");
+    Check((m.owner == m.self) == host, "scene has the requested owner");
+    Check(m.members.size() == (name == "host" ? 1u : joined ? 2u : 0u), "scene has correct member count");
+    Check(m.can_start == (name == "ready"), "only ready scene permits Start");
+    Check(m.start_requested == (name == "starting"), "starting scene performs fake Start");
+    Check(std::any_of(rows.begin(), rows.end(), [](const auto& r) { return r.key.kind == SocialRowKind::Create; })
+          == !joined, "host/guest/ready/starting never show Create lobby");
+    if (joined) {
+      Check(m.status == (name == "starting" ? SocialStatus::Starting : SocialStatus::Lobby), "actual joined scene status");
+      Check(m.pending_invites.empty(), "lobby capture is not obscured by stale incoming invites");
+    }
+    if (name == "ready" || name == "starting")
+      Check(std::all_of(m.members.begin(), m.members.end(), [](const auto& p) { return p.ready; }), "both fake members ready");
+    if (name == "left") Check(m.status == SocialStatus::Ended && !m.last_error.empty(), "host departure actually ends guest lobby");
+    if (name == "mismatch") Check(m.last_error == "Lobby unavailable or incompatible", "incompatible fake invite is rejected");
+    if (name == "busy") Check(m.status == SocialStatus::Creating && !Find(rows, SocialRowKind::Create).enabled, "pending-create display");
+    if (name == "needed" || name == "unavailable") Check(m.status == SocialStatus::Unavailable, "unavailable fake service");
+    if (name == "offline")
+      Check(std::all_of(m.friends.begin(), m.friends.end(), [](const auto& f) { return f.state == FriendState::Offline; }), "offline friend scene");
+    if (name == "long") {
+      Check(!m.pending_invites.empty() && m.friends.front().name.size() >= 24, "long inviter fixture");
+      Check(fake->Act({SocialAction::CreateLobby}), "long-name host can be created for capture");
+      Check(fake->Snapshot().members.front().name.size() >= 24, "long member fixture");
+    }
+    bool offline_seen = false;
+    for (const auto& row : rows) if (row.key.kind == SocialRowKind::Friend) {
+      if (row.detail == "Offline") offline_seen = true;
+      else Check(!offline_seen, "every online/away/busy/in-game friend precedes offline friends");
+    }
+    const auto before = fake->Snapshot();
+    Check(!fake->Scenario("not-a-scene"), "bad scene fails visibly");
+    const auto after = fake->Snapshot();
+    Check(after.status == before.status && after.lobby == before.lobby && after.owner == before.owner &&
+          after.members.size() == before.members.size() && after.last_error == before.last_error,
+          "bad scene preserves the previous fake world");
+  }
 }
-int main() { InputPolicy(); FocusAndActions(); std::printf("Social panel: %u checks passed\n", checks); }
+}
+int main() { InputPolicy(); FocusAndActions(); PreviewScenes(); std::printf("Social panel: %u checks passed\n", checks); }

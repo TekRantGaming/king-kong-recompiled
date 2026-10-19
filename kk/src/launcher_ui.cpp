@@ -457,7 +457,7 @@ namespace {
 // One button picture `h` tall at (x, cy); a key name in a box if the picture
 // is missing. Returns its width.
 float DrawGlyph(ImDrawList* dl, Glyphs& glyphs, Action a, const std::string& set, float x, float cy, float h,
-                const Metrics& m, bool draw) {
+                const Metrics& m, bool draw, ImU32 fallback_color = color::kText) {
   float aspect = 1.0f;
   if (auto* t = glyphs.Get(a, set, &aspect)) {
     const float w = h * aspect;
@@ -471,8 +471,8 @@ float DrawGlyph(ImDrawList* dl, Glyphs& glyphs, Action a, const std::string& set
   const float fs = h * 0.5f;
   const float w = TextSize(f.semibold, fs, name).x + 12 * m.s;
   if (draw) {
-    dl->AddRect(ImVec2(x, cy - h * 0.42f), ImVec2(x + w, cy + h * 0.42f), WithAlpha(color::kText, 0.5f), 4 * m.s);
-    dl->AddText(f.semibold, fs, ImVec2(x + 6 * m.s, cy - fs * 0.5f), color::kText, name);
+    dl->AddRect(ImVec2(x, cy - h * 0.42f), ImVec2(x + w, cy + h * 0.42f), WithAlpha(fallback_color, 0.5f), 4 * m.s);
+    dl->AddText(f.semibold, fs, ImVec2(x + 6 * m.s, cy - fs * 0.5f), fallback_color, name);
   }
   return w;
 }
@@ -572,7 +572,13 @@ std::string ValueText(const Item& it) {
   return T(it.value_text);
 }
 
-RowGeom Geometry(const Item& it, float x0, float x1, const Metrics& m, const Fonts& f) {
+std::string BoundedValueText(const Item& it, const Metrics& m, const Fonts& f) {
+  const std::string value = ValueText(it);
+  return it.value_max_width > 0 ? Ellipsize(f.semibold, 16 * m.s, value, it.value_max_width) : value;
+}
+
+RowGeom Geometry(const Item& it, float x0, float x1, const Metrics& m, const Fonts& f,
+                 Glyphs* glyphs = nullptr, const std::string& set = {}) {
   const float s = m.s;
   RowGeom g;
   const float right = x1 - 18 * s;
@@ -586,13 +592,15 @@ RowGeom Geometry(const Item& it, float x0, float x1, const Metrics& m, const Fon
     g.bar_l = g.bar_r - std::min(190 * s, (x1 - x0) * 0.32f);
   } else {
     // In line with the choices' values; a link's arrow sits where their right arrow does.
-    g.value_l = g.value_r - TextSize(f.semibold, 16 * s, ValueText(it)).x;
+    g.value_l = g.value_r - TextSize(f.semibold, 16 * s, BoundedValueText(it, m, f)).x;
+    if (glyphs && it.value_action != Action::kCount)
+      g.value_l -= DrawGlyph(nullptr, *glyphs, it.value_action, set, 0, 0, 24 * s, m, false) + 8 * s;
   }
   return g;
 }
 
 void DrawItem(ImDrawList* dl, const Item& it, float x0, float y0, float x1, float h, bool band, bool focused,
-              const Metrics& m, const Fonts& f) {
+              const Metrics& m, const Fonts& f, Glyphs* glyphs, const std::string& set) {
   const float s = m.s;
   if (it.type == ItemType::kSection) {
     const float fs = 13 * s, ty = y0 + h - 16 * s - fs;
@@ -606,7 +614,8 @@ void DrawItem(ImDrawList* dl, const Item& it, float x0, float y0, float x1, floa
   // A greyed row under the focus bar: dark enough to read on the bone bar, still lighter than a live row (task 261).
   const ImU32 text = band ? (it.disabled ? color::kOnFocusGreyed : color::kOnFocus)
                           : (it.disabled ? color::kTextFaint : color::kText);
-  const ImU32 dim = band ? (it.disabled ? color::kOnFocusGreyed : color::kOnFocusDim)
+  const ImU32 dim = band ? (it.focus_subtitle_color ? it.focus_subtitle_color :
+                           it.disabled ? color::kOnFocusGreyed : color::kOnFocusDim)
                          : (it.disabled ? color::kTextFaint : color::kTextDim);
   const float cy = y0 + h * 0.5f;
   float lx = x0 + 18 * s;
@@ -619,7 +628,7 @@ void DrawItem(ImDrawList* dl, const Item& it, float x0, float y0, float x1, floa
                  ImVec2(1, 1), it.icon_dim ? IM_COL32(120, 124, 132, 190) : IM_COL32_WHITE);
     lx += slot + (it.tall ? 16 : 12) * s;
   }
-  const RowGeom g = Geometry(it, x0, x1, m, f);
+  const RowGeom g = Geometry(it, x0, x1, m, f, glyphs, set);
   const float label_room = (it.type == ItemType::kSlider ? g.bar_l : g.value_l) - 24 * s - lx;
   if (it.tall) {
     dl->AddText(f.semibold, 16.5f * s, ImVec2(lx, cy - 20 * s), text,
@@ -679,8 +688,14 @@ void DrawItem(ImDrawList* dl, const Item& it, float x0, float y0, float x1, floa
       [[fallthrough]];
     case ItemType::kAction:
     case ItemType::kInfo:
-      if (!it.value_text.empty())
-        dl->AddText(f.semibold, vs, ImVec2(g.value_l, cy - vs * 0.5f - 1 * s), value_col, ValueText(it).c_str());
+      if (!it.value_text.empty()) {
+        float vx = g.value_l;
+        if (glyphs && it.value_action != Action::kCount)
+          vx += DrawGlyph(dl, *glyphs, it.value_action, set, vx, cy, 24 * s, m,
+                          focused && !it.disabled, value_col) + 8 * s;
+        dl->AddText(f.semibold, vs, ImVec2(vx, cy - vs * 0.5f - 1 * s), value_col,
+                    BoundedValueText(it, m, f).c_str());
+      }
       break;
     default:
       break;
@@ -690,7 +705,7 @@ void DrawItem(ImDrawList* dl, const Item& it, float x0, float y0, float x1, floa
 }  // namespace
 
 const Item* DrawList(ImDrawList* dl, std::vector<Item>& items, ListState& st, ImVec2 p0, ImVec2 p1,
-                     const Metrics& m, Input& in, bool active) {
+                     const Metrics& m, Input& in, bool active, Glyphs* glyphs, const std::string& prompt_set) {
   const float s = m.s;
   const Fonts f = GetFonts();
   const float view_h = p1.y - p0.y;
@@ -825,7 +840,7 @@ const Item* DrawList(ImDrawList* dl, std::vector<Item>& items, ListState& st, Im
     if (focusable(hovered) && (in.mouse_moved() || ImGui::IsMouseClicked(0))) st.focus = hovered;
     if (focusable(hovered) && ImGui::IsMouseClicked(0)) {
       Item& it = items[size_t(hovered)];
-      const RowGeom g = Geometry(it, p0.x, p1.x, m, f);
+      const RowGeom g = Geometry(it, p0.x, p1.x, m, f, glyphs, prompt_set);
       const float mx = io.MousePos.x;
       if (!it.disabled) {
         if (it.type == ItemType::kChoice && !it.options.empty()) {
@@ -846,7 +861,7 @@ const Item* DrawList(ImDrawList* dl, std::vector<Item>& items, ListState& st, Im
   }
   if (st.dragging >= 0) {
     Item& it = items[size_t(st.dragging)];
-    const RowGeom g = Geometry(it, p0.x, p1.x, m, f);
+    const RowGeom g = Geometry(it, p0.x, p1.x, m, f, glyphs, prompt_set);
     const float t = std::clamp((io.MousePos.x - g.bar_l) / std::max(1.0f, g.bar_r - g.bar_l), 0.0f, 1.0f);
     float v = it.lo + (it.hi - it.lo) * t;
     if (it.step > 0) v = it.lo + std::round((v - it.lo) / it.step) * it.step;
@@ -887,7 +902,7 @@ const Item* DrawList(ImDrawList* dl, std::vector<Item>& items, ListState& st, Im
   for (int i = 0; i < count; ++i) {
     const float y = p0.y + top[size_t(i)] - st.scroll;
     if (!visible(i, y)) continue;
-    DrawItem(dl, items[size_t(i)], p0.x, y, p1.x, height[size_t(i)], false, false, m, f);
+    DrawItem(dl, items[size_t(i)], p0.x, y, p1.x, height[size_t(i)], false, false, m, f, glyphs, prompt_set);
     // A hairline between neighbouring rows.
     if (i + 1 < count && items[size_t(i)].type != ItemType::kSection &&
         items[size_t(i) + 1].type != ItemType::kSection) {
@@ -903,7 +918,7 @@ const Item* DrawList(ImDrawList* dl, std::vector<Item>& items, ListState& st, Im
     for (int i = 0; i < count; ++i) {
       const float y = p0.y + top[size_t(i)] - st.scroll;
       if (y + height[size_t(i)] < b0.y || y > b1.y) continue;
-      DrawItem(dl, items[size_t(i)], p0.x, y, p1.x, height[size_t(i)], true, i == st.focus, m, f);
+      DrawItem(dl, items[size_t(i)], p0.x, y, p1.x, height[size_t(i)], true, i == st.focus, m, f, glyphs, prompt_set);
     }
     dl->PopClipRect();
   }

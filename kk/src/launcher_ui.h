@@ -256,6 +256,9 @@ struct Item {
   const char* applies = nullptr;       // when a change takes effect (English), or nullptr
   bool literal_label = false;         // Social persona names are data, not translation keys.
   bool literal_subtitle = false;
+  ImU32 focus_subtitle_color = 0;  // optional stronger contrast on the focus fill
+  float value_max_width = 0;       // optional bound in layout pixels, before the action glyph
+  Action value_action = Action::kCount;  // focused action prompt beside the right-hand text
 };
 
 // Kept per page: focus, scroll and the focus band's animation.
@@ -277,7 +280,8 @@ struct Metrics {
 // Lays out, draws and drives a column of items between p0 and p1. Returns the
 // focused item (or nullptr). `active`: this list has the input (no pop-up).
 const Item* DrawList(ImDrawList* dl, std::vector<Item>& items, ListState& st, ImVec2 p0, ImVec2 p1,
-                     const Metrics& m, Input& in, bool active);
+                     const Metrics& m, Input& in, bool active, Glyphs* glyphs = nullptr,
+                     const std::string& prompt_set = {});
 
 // The description panel for the focused item.
 void DrawDescription(ImDrawList* dl, const Item* item, ImVec2 p0, ImVec2 p1, const Metrics& m);
