@@ -343,7 +343,7 @@ namespace nvrhi::d3d12
         const D3D12_RESOURCE_FLAGS notPlaced = D3D12_RESOURCE_FLAG_ALLOW_RENDER_TARGET |
             D3D12_RESOURCE_FLAG_ALLOW_DEPTH_STENCIL | D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS |
             D3D12_RESOURCE_FLAG_ALLOW_SIMULTANEOUS_ACCESS | D3D12_RESOURCE_FLAG_ALLOW_CROSS_ADAPTER;
-        if (m_Resources.placedTextures && !isShared && !d.isTiled && !d.isVirtual && rd.SampleDesc.Count <= 1 &&
+        if (m_Resources.placedTextures && d.allowPlacedMemory && !isShared && !d.isTiled && !d.isVirtual && rd.SampleDesc.Count <= 1 &&
             (rd.Flags & notPlaced) == 0)
         {
             D3D12_RESOURCE_ALLOCATION_INFO info = m_Context.device->GetResourceAllocationInfo(

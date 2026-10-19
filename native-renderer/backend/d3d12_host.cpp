@@ -24,6 +24,7 @@
 #include "backend/gpu_loss.h"
 #include "backend/cpu_profile.h"
 #include "backend/dev_gpu_stats.h"
+#include "backend/placed_textures.h"
 #include "backend/d3d12_requirements.h"
 
 REXCVAR_DECLARE(bool, native_validation);
@@ -104,6 +105,8 @@ class D3D12Host final : public HostDevice {
                                           : std::string("NVRHI's default"));
     }
     device_ = nvrhi::d3d12::createDevice(desc);
+    // Task 304: the game renderer zeroes the subresources a guest texture upload leaves out.
+    g_texture_memory_not_zeroed.store(desc.placedTextureHeapSize != 0, std::memory_order_relaxed);
     g_dev_gpu_stats_enabled.store((REXCVAR_GET(native_debug) & 32768) != 0, std::memory_order_relaxed);
     if (!device_) {
       return false;

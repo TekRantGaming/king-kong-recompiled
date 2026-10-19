@@ -6,6 +6,7 @@
 
 #include "backend/game_renderer.h"
 #include "backend/log.h"
+#include "backend/placed_textures.h"
 #include "backend/texture_workers.h"
 #include "backend/upload_batch.h"
 #include "backend/resource_upload_workers.h"
@@ -239,6 +240,38 @@ nvrhi::IFramebuffer* GameRenderer::GetFramebuffer(const std::array<HostTarget*, 
 
 // ---------------------------------------------------------------- textures
 
+namespace {
+// Task 304 (placed_textures.h): with texture memory that is not zeroed, the subresources a conversion
+// leaves unwritten get zeros, as a committed texture's would have. Nothing happens otherwise.
+void ZeroUnwrittenSubresources(nvrhi::ICommandList* list, nvrhi::ITexture* texture, const kknr::HostTextureData& data) {
+  if (!g_texture_memory_not_zeroed.load(std::memory_order_relaxed)) return;
+  const nvrhi::TextureDesc& d = texture->getDesc();
+  const bool volume = d.dimension == nvrhi::TextureDimension::Texture3D;
+  const uint32_t layers = volume ? 1u : std::max(d.arraySize, 1u);
+  if (data.subresources.size() >= size_t(d.mipLevels) * layers) return;
+  std::vector<std::pair<uint32_t, uint32_t>> written;
+  for (const kknr::HostSubresource& sub : data.subresources) written.emplace_back(sub.level, sub.layer);
+  const auto missing = MissingSubresources(d.mipLevels, layers, written);
+  if (missing.empty()) return;
+  const nvrhi::FormatInfo& f = nvrhi::getFormatInfo(d.format);
+  const uint32_t block = std::max<uint32_t>(f.blockSize, 1);
+  static thread_local std::vector<uint8_t> zeros;
+  for (const auto& [level, layer] : missing) {
+    const uint32_t w = std::max(d.width >> level, 1u), h = std::max(d.height >> level, 1u);
+    const uint32_t depth = volume ? std::max(d.depth >> level, 1u) : 1u;
+    const size_t row = size_t((w + block - 1) / block) * f.bytesPerBlock;
+    const size_t slice = row * ((h + block - 1) / block);
+    if (zeros.size() < slice * depth) zeros.resize(slice * depth, 0);
+    list->writeTexture(texture, layer, level, zeros.data(), row, slice);
+  }
+  static std::atomic<uint32_t> logged{0};
+  if (logged.fetch_add(1, std::memory_order_relaxed) < 20) {
+    Logf(LogLevel::kInfo, "rexgpu-native: texture %ux%u, %u levels x %u layers: %zu unwritten subresources zeroed "
+         "(placed texture memory is not zeroed)", d.width, d.height, d.mipLevels, layers, missing.size());
+  }
+}
+}  // namespace
+
 GameRenderer::HostTexture* GameRenderer::CreateHostTexture(const kknr::HostTexturePlan& plan,
                                                            bool render_target, float scale_x, float scale_y,
                                                            kknr::ResourceWork* profile) {
@@ -271,6 +304,9 @@ GameRenderer::HostTexture* GameRenderer::CreateHostTexture(const kknr::HostTextu
       break;
   }
   desc.isRenderTarget = render_target;
+  // Task 304: guest textures and pack replacements are written in full before use (unwritten
+  // subresources get zeros: ZeroUnwrittenSubresources), so D3D12 may place them in the pool.
+  desc.allowPlacedMemory = !render_target;
   desc.initialState = nvrhi::ResourceStates::ShaderResource;
   desc.keepInitialState = true;
   desc.debugName = render_target ? "Resolved texture" : "Guest texture";
@@ -424,6 +460,7 @@ GameRenderer::HostTexture* GameRenderer::UploadTexture(nvrhi::ICommandList* cl,
     upload->writeTexture(host->texture, sub.layer, sub.level, data.bytes.data() + sub.offset, sub.row_pitch,
                      sub.depth_pitch);
   }
+  if (created) ZeroUnwrittenSubresources(upload, host->texture, data);
   upload->setTextureState(host->texture, nvrhi::AllSubresources, nvrhi::ResourceStates::ShaderResource);
   }
   host->alias_source = nullptr;
@@ -1095,6 +1132,7 @@ void GameRenderer::PrepareResourceRequests(nvrhi::ICommandList* cl,
         for (const auto& sub : scratch.texture.subresources)
           upload->writeTexture(job.host_texture->texture, sub.layer, sub.level,
               scratch.texture.bytes.data() + sub.offset, sub.row_pitch, sub.depth_pitch);
+        ZeroUnwrittenSubresources(upload, job.host_texture->texture, scratch.texture);
         upload->setTextureState(job.host_texture->texture, nvrhi::AllSubresources, nvrhi::ResourceStates::ShaderResource);
       } else {
         kknr::ResourceWorkTimer timer(profile, kknr::ResourceWork::BufferStage);

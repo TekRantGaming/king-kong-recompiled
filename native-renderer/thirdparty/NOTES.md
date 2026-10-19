@@ -104,13 +104,14 @@ Changes we make to vendored code are kept as small as possible and listed here:
   `vulkan::IDevice::getPipelineLibraryStats` counts parts made and reused, links and failures. Without the field,
   or on D3D12, nothing changes. Tests: `PipelineLibrary_*` in nr_game_tests (the state tests on linked pipelines,
   under the Khronos layer).
-- `nvrhi/include/nvrhi/d3d12.h`, `nvrhi/src/d3d12/d3d12-backend.h`, `d3d12-device.cpp`, `d3d12-texture.cpp`,
+- `nvrhi/include/nvrhi/d3d12.h`, `nvrhi/include/nvrhi/nvrhi.h`, `nvrhi/src/d3d12/d3d12-backend.h`, `d3d12-device.cpp`, `d3d12-texture.cpp`,
   `d3d12-upload.cpp`, `d3d12-commandlist.cpp`, new `d3d12-placed-ranges.h` (task 300, D3D12 allocation cost). NVRHI made
   every D3D12 texture a committed resource (its own implicit heap: ~0.3 ms to make and ~0.13 ms to release on an RTX
   4070 Ti, against ~0.03 / ~0.003 ms placed) and every upload chunk a new committed UPLOAD buffer of at least 64 KiB
   (~0.2-0.8 ms each, so each larger texture upload made one). `d3d12::DeviceDesc::placedTextureHeapSize` (non-zero):
-  textures that are not render targets, depth, UAVs, simultaneous-access, shared, tiled, virtual or multisampled, at
-  most a quarter of that size, are placed resources in pooled heaps (`DeviceResources::placedTextures`, first fit with
+  textures that ask for it (`TextureDesc::allowPlacedMemory`, a field we added, task 304: the application writes every
+  subresource before reading it, since the memory is not zeroed) and are not render targets, depth, UAVs,
+  simultaneous-access, shared, tiled, virtual or multisampled, at most a quarter of that size, are placed resources in pooled heaps (`DeviceResources::placedTextures`, first fit with
   merging in `PlacedRanges`, 4 KiB placement for textures whose most detailed level fits 64 KiB when the driver allows
   it, heaps `ALLOW_ONLY_NON_RT_DS_TEXTURES` and not zeroed, one empty heap kept). A texture's range is returned in
   `~Texture` after its resource, i.e. when NVRHI's own lifetime tracking would have released a committed one. Any

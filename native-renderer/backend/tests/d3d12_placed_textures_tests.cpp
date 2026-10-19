@@ -11,6 +11,7 @@
 #include <nvrhi/d3d12.h>
 #include <nvrhi/utils.h>
 
+#include "backend/placed_textures.h"
 #include "backend/tests/check.h"
 #include "d3d12-placed-ranges.h"
 
@@ -68,6 +69,15 @@ TEST(PlacedRanges_BlocksAreAddedAndReused) {
   CHECK(!r.release(a));        // a stale range of a removed block is ignored
 }
 
+TEST(PlacedTextures_MissingSubresourcesAreListed) {
+  CHECK(nr::MissingSubresources(3, 2, {{0, 0}, {0, 1}, {1, 0}, {1, 1}, {2, 0}, {2, 1}}).empty());
+  const auto missing = nr::MissingSubresources(3, 1, {{0, 0}});  // no mip data
+  CHECK_EQ(missing.size(), 2u);
+  CHECK(missing[0] == std::make_pair(1u, 0u));
+  CHECK(missing[1] == std::make_pair(2u, 0u));
+  CHECK_EQ(nr::MissingSubresources(1, 6, {{0, 0}, {0, 2}}).size(), 4u);  // cube faces that were not read
+}
+
 namespace {
 struct Messages final : nvrhi::IMessageCallback {
   int errors = 0;
@@ -117,6 +127,7 @@ TEST(D3D12PlacedTextures_WriteReadBackAndReuse) {
       td.initialState = nvrhi::ResourceStates::ShaderResource;
       td.keepInitialState = true;
       td.debugName = "placed test";
+      td.allowPlacedMemory = true;
       made.emplace_back(device->createTexture(td), ++seed);
       CHECK(bool(made.back().first));
     }
@@ -172,6 +183,7 @@ TEST(D3D12PlacedTextures_WriteReadBackAndReuse) {
     td.width = td.height = 256;
     td.format = nvrhi::Format::BC1_UNORM;
     td.mipLevels = 9;
+    td.allowPlacedMemory = true;
     const auto t0 = std::chrono::steady_clock::now();
     for (int i = 0; i < 200; ++i) many.push_back(dev->createTexture(td));
     const auto t1 = std::chrono::steady_clock::now();
