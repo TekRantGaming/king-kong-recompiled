@@ -1,0 +1,133 @@
+// SDK/UI-free source tests. Claude builds and runs them, never starts Steam or a game.
+#include "social_panel_logic.h"
+#include "social_fake.h"
+#include <algorithm>
+#include <cstdio>
+#include <cstdlib>
+#include <string_view>
+
+using namespace kk::coop;
+namespace {
+unsigned checks = 0;
+void Check(bool yes, const char* message) {
+  ++checks;
+  if (!yes) { std::fprintf(stderr, "FAIL: %s\n", message); std::exit(1); }
+}
+const SocialRow& Find(const std::vector<SocialRow>& rows, SocialRowKind kind, SocialId id = 0) {
+  auto i = std::find_if(rows.begin(), rows.end(), [&](const auto& row) { return row.key == SocialRowKey{kind, id}; });
+  Check(i != rows.end(), "expected panel row exists"); return *i;
+}
+void InputPolicy() {
+  for (auto page : {SocialPage::Page, SocialPage::Display, SocialPage::Graphics, SocialPage::Audio,
+                    SocialPage::Controls, SocialPage::Gameplay, SocialPage::Cheats, SocialPage::Advanced,
+                    SocialPage::About, SocialPage::Achievements, SocialPage::Workshop, SocialPage::PlayMenu,
+                    SocialPage::Load, SocialPage::NewGame, SocialPage::Chapters, SocialPage::Extras,
+                    SocialPage::Artbook, SocialPage::Setup, SocialPage::Shaders, SocialPage::Modal, SocialPage::Capture}) {
+    SocialPanelState state;
+    Check(!state.Update(false, page, true, false, 0.1f) && !state.blocking(), "disabled never opens on any page");
+    const bool allowed = page <= SocialPage::Extras;
+    Check(state.Update(true, page, true, false, 0.1f) == allowed && state.open() == allowed,
+          "only normal launcher pages open Social; Artbook and input-priority contexts do not");
+  }
+  SocialPanelState state;
+  Check(state.Update(true, SocialPage::Page, true, false, 0.1f), "RT/F4/click toggle opens");
+  Check(state.slide() > 0 && state.slide() < 1 && state.blocking(), "partial slide blocks background");
+  state.Update(true, SocialPage::Page, false, false, 0.1f);
+  Check(state.slide() == 1, "slide completes in 0.2 seconds");
+  state.Update(true, SocialPage::Page, false, true, 0.1f);
+  Check(!state.open() && state.blocking(), "B/Esc closes and traps input through closing animation");
+  state.Update(true, SocialPage::Page, false, false, 0.1f);
+  Check(!state.blocking(), "background focus is available after close");
+  state.Update(true, SocialPage::Page, true, false, 0.2f);
+  state.Update(true, SocialPage::Page, true, false, 0.2f);
+  Check(!state.open(), "RT again closes");
+  state.Update(true, SocialPage::Page, true, false, 0.2f);
+  state.Update(true, SocialPage::Modal, true, false, 0.2f);
+  Check(!state.blocking(), "modal takes priority and prevents reopening");
+  state.Update(true, SocialPage::Page, true, false, 0.2f);
+  state.Update(false, SocialPage::Page, true, false, 0.01f);
+  Check(!state.blocking(), "disabling co-op clears the drawer immediately");
+  SocialTrigger trigger;
+  Check(trigger.Update(true), "first RT press is an edge");
+  for (int i = 0; i < 120; ++i) Check(!trigger.Update(true), "held RT never repeats");
+  Check(!trigger.Update(false) && trigger.Update(true), "release rearms RT");
+  trigger.Update(false);
+  Check(!trigger.Update(true, false) && !trigger.Update(true, true), "inactive-window press stays stale");
+  trigger.Update(false); Check(trigger.Update(true), "release after focus return rearms");
+  // Context/off-state still tracks physical edges, before routing or suppressing page actions.
+  trigger.Update(false); trigger.Update(true);
+  Check(!trigger.Update(true), "holding RT while leaving Artbook cannot open Social");
+}
+void FocusAndActions() {
+  auto fake = MakeSocialPreview();
+  auto m = fake->Snapshot(); auto rows = SocialRows(m);
+  Check(Find(rows, SocialRowKind::Accept, m.pending_invites.front().lobby).enabled, "idle may accept invite");
+  Check(Find(rows, SocialRowKind::Create).enabled, "idle may create lobby");
+  std::vector<SocialRowKind> order;
+  for (const auto& r : rows) if (r.focusable()) order.push_back(r.key.kind);
+  Check(order.size() == 8 && order[0] == SocialRowKind::Accept && order[1] == SocialRowKind::Decline &&
+        order[2] == SocialRowKind::Create && order[3] == SocialRowKind::Friend, "focus order follows invites, lobby, friends");
+  Check(SocialFocus(rows, {}) == 1, "first focus skips section header");
+  const SocialRowKey friend_key{SocialRowKind::Friend, 2};
+  m.friends.front().name = "Duplicate"; m.friends.back().name = "Duplicate";
+  std::reverse(m.friends.begin(), m.friends.end());
+  rows = SocialRows(m);
+  const int focus = SocialFocus(rows, friend_key);
+  Check(focus >= 0 && rows[size_t(focus)].key == friend_key, "focus follows ID through reorder and duplicate names");
+  auto off = std::find_if(rows.begin(), rows.end(), [](const auto& r) { return r.key.kind == SocialRowKind::Friend && r.detail == "Offline"; });
+  Check(off != rows.end() && off == rows.end() - 1, "offline friends are last");
+  Check(SocialFocus({}, friend_key) == -1, "empty model has no focus");
+  const auto invite = Find(rows, SocialRowKind::Accept, m.pending_invites.front().lobby);
+  auto cmd = SocialRowCommand(invite, m); Check(cmd && fake->Act(*cmd), "panel accepts through service action");
+  m = fake->Snapshot(); rows = SocialRows(m);
+  Check(SocialFocus(rows, invite.key, 1) >= 0, "removed invite focus falls back inside drawer");
+  Check(std::none_of(rows.begin(), rows.end(), [](const auto& r) { return r.key.kind == SocialRowKind::Start; }), "guest cannot Start");
+  Check(std::string_view(SocialStatusKey(m)) == "Waiting for host", "guest waits for host");
+  Check(!SocialRowCommand(invite, m), "removed/stale invite cannot act");
+  Check(fake->Scenario("host"), "host preview");
+  m = fake->Snapshot(); rows = SocialRows(m);
+  Check(!Find(rows, SocialRowKind::Start).enabled, "one member cannot Start");
+  Check(Find(rows, SocialRowKind::Ready).enabled, "host may ready");
+  Check(Find(rows, SocialRowKind::OverlayInvite).enabled, "available overlay may invite");
+  m.overlay_available = false;
+  Check(!Find(SocialRows(m), SocialRowKind::OverlayInvite).enabled, "missing overlay disables its action");
+  m = fake->Snapshot(); rows = SocialRows(m);
+  auto ready = SocialRowCommand(Find(rows, SocialRowKind::Ready), m);
+  Check(ready && ready->ready && fake->Act(*ready), "Ready toggles through fake");
+  ready = SocialRowCommand(Find(SocialRows(fake->Snapshot()), SocialRowKind::Ready), fake->Snapshot());
+  Check(ready && !ready->ready, "Ready toggles back");
+  auto invite_friend = SocialRowCommand(Find(rows, SocialRowKind::Friend, 3), m);
+  Check(invite_friend && invite_friend->action == SocialAction::Invite, "A and X share validated friend invitation");
+  Check(!Find(rows, SocialRowKind::Friend, 6).enabled, "offline friend cannot be invited");
+  Check(fake->Scenario("ready"), "two ready members preview");
+  m = fake->Snapshot(); rows = SocialRows(m);
+  const auto start_row = Find(rows, SocialRowKind::Start);
+  Check(start_row.enabled && SocialRowCommand(start_row, m)->action == SocialAction::Start, "both-ready host can select Start");
+  Check(!Find(rows, SocialRowKind::OverlayInvite).enabled && !Find(rows, SocialRowKind::Friend, 2).enabled, "full lobby cannot invite");
+  m.members[1].ready = false;
+  Check(!SocialRowCommand(start_row, m), "latest snapshot revokes stale Start enablement");
+  m = fake->Snapshot(); m.members[1].id = m.self;
+  Check(!Find(SocialRows(m), SocialRowKind::Start).enabled, "duplicate member cannot Start");
+  for (auto status : {SocialStatus::Creating, SocialStatus::Joining, SocialStatus::Starting, SocialStatus::Connected}) {
+    m = fake->Snapshot(); m.status = status;
+    rows = SocialRows(m);
+    Check(!Find(rows, SocialRowKind::Start).enabled && !Find(rows, SocialRowKind::Ready).enabled &&
+          Find(rows, SocialRowKind::Leave).enabled, "busy/starting lobby only permits leaving");
+  }
+  for (const char* scene : {"offline", "needed", "unavailable", "mismatch", "left", "busy", "starting", "guest"}) {
+    Check(fake->Scenario(scene), "preview scene selectable without Steam");
+    m = fake->Snapshot(); Check(!std::string_view(SocialStatusKey(m)).empty(), "every scene has status");
+  }
+  fake->Scenario("needed");
+  Check(std::string_view(SocialStatusKey(fake->Snapshot())) == "Steam is needed for co-op", "missing client state");
+  Check(!Find(SocialRows(fake->Snapshot()), SocialRowKind::Create).enabled, "missing Steam disables lobby creation");
+  fake->Scenario("unavailable");
+  Check(std::string_view(SocialStatusKey(fake->Snapshot())) == "Steam not available in this build", "SDK-missing state");
+  fake->Scenario("mismatch");
+  Check(std::string_view(SocialStatusKey(fake->Snapshot())) == "Versions don't match: {0}", "mismatch reason template");
+  fake->Scenario("left");
+  Check(std::string_view(SocialStatusKey(fake->Snapshot())) == "Your partner left", "partner departure state");
+  Check(!fake->Scenario("not-a-scene"), "unknown preview leaves current scene intact");
+}
+}
+int main() { InputPolicy(); FocusAndActions(); std::printf("Social panel: %u checks passed\n", checks); }
