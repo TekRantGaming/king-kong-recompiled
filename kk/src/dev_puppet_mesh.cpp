@@ -100,6 +100,7 @@ struct Root {
   uint32_t actor = 0, holder = 0, anim = 0, ext = 0, matrix = 0;
   uint64_t animation_frame = kUnknown, animation_calls = 0, scope_calls = 0;
   uint64_t skeleton_frame = kUnknown, skeleton_calls = 0;
+  uint64_t hierarchy_frame = kUnknown, hierarchy_calls = 0;
   std::vector<Node> nodes;
   std::map<uint32_t, uint64_t> previous_draws;
 };
@@ -197,6 +198,26 @@ void Refresh(const uint8_t* b, Probe& p) {
   p.watches = std::move(watches);
 }
 std::string Stamp(uint64_t frame) { return frame == kUnknown ? "unknown" : std::to_string(frame); }
+void LogModifiers(const uint8_t* b, const Root& r, const char* role) {
+  // 82855D08 clones this list; 828688C8 binds +24 to the live hierarchy and
+  // invokes table+24. Read only: these callbacks can have more than visual effects.
+  uint32_t entry = Word(b, r.ext, 28);
+  REXLOG_INFO("PUPPET mesh-modifiers role={} actor={:08X} head={:08X}", role, r.actor, entry);
+  std::set<uint32_t> seen;
+  for (unsigned i = 0; entry && i < 16; ++i) {
+    if (!Range(entry, 28) || !seen.insert(entry).second) {
+      REXLOG_INFO("PUPPET mesh-modifiers role={} actor={:08X} stopped=invalid-or-cycle entry={:08X}", role, r.actor, entry);
+      return;
+    }
+    const auto table = Word(b, entry);
+    REXLOG_INFO("PUPPET mesh-modifier role={} actor={:08X} entry={:08X} table={:08X} type={} flags={:08X} data={:08X} owner={:08X} bound={:08X} live={:08X} slots4/12/16/20/24={:08X}/{:08X}/{:08X}/{:08X}/{:08X}",
+        role, r.actor, entry, table, Word(b, table), Word(b, entry, 4), Word(b, entry, 8),
+        Word(b, entry, 20), Word(b, entry, 24), Word(b, r.anim, 8),
+        Word(b, table, 4), Word(b, table, 12), Word(b, table, 16), Word(b, table, 20), Word(b, table, 24));
+    entry = Word(b, entry, 12);
+  }
+  if (entry) REXLOG_INFO("PUPPET mesh-modifiers role={} actor={:08X} stopped=cap16 next={:08X}", role, r.actor, entry);
+}
 void Log(const uint8_t* b, Probe& p) {
   for (unsigned role = 0; role < 2; ++role) {
     auto& r = p.roots[role];
@@ -211,6 +232,12 @@ void Log(const uint8_t* b, Probe& p) {
         r.nodes.size(), r.nodes.size() == kMaxNodes,
         Stamp(r.animation_frame), r.animation_calls, Stamp(r.skeleton_frame), r.skeleton_calls,
         r.scope_calls, connected, total.seen, total.seen-r.previous_draws[0]);
+    REXLOG_INFO("PUPPET mesh-pose role={} actor={:08X} hierarchy-pass-frame={} hierarchy-passes={} auxiliary-pass-frame={} auxiliary-passes={} active-layer-mask={:02X} reload-retained={} ai-gate-bit={} hierarchy-gate-bit={} modifier-gate-bit={}",
+        role ? "copy" : "source", r.actor, Stamp(r.hierarchy_frame), r.hierarchy_calls,
+        Stamp(r.skeleton_frame), r.skeleton_calls, b[r.anim+1] & 15,
+        (b[r.actor+31] & 16) != 0, (b[r.actor+31] & 32) != 0,
+        (b[r.actor+31] & 64) != 0, (b[r.actor+31] & 128) != 0);
+    LogModifiers(b, r, role ? "copy" : "source");
     REXLOG_INFO("PUPPET mesh-animation actor={:08X} state={}/{} layers={:08X},{:08X},{:08X},{:08X} blends={:08X},{:08X},{:08X},{:08X} action={} item={} prepared-matrices={} global-draw-queries={} provenance-hits={}",
         r.actor, b[r.anim], b[r.anim+1], Word(b,r.anim,132), Word(b,r.anim,136), Word(b,r.anim,140), Word(b,r.anim,144),
         Word(b,r.anim,96), Word(b,r.anim,100), Word(b,r.anim,104), Word(b,r.anim,108), Load16(b,r.anim+156), b[r.anim+160],
@@ -220,7 +247,7 @@ void Log(const uint8_t* b, Probe& p) {
       NrPuppetMeshDraws d;
       if (p.api) p.api->read(r.actor, n.actor, &d);
       const auto owner = p.owners.find(n.actor);
-      REXLOG_INFO("PUPPET mesh-node role={} actor={:08X} node={:08X} shared={} flags={:08X}/{:08X} matrix={:08X} bounds={:08X} holder={:08X} components={:08X},{:08X},{:08X},{:08X},{:08X} mesh={:08X} ext={:08X} resource={:08X} resource-data={:08X} activation={} importance={} descriptor-flags={:04X} skin={:08X} skin-data={:08X} skin-count={} skin-links={} renderer-seen={} renderer-delta={} draw-frame={} vb={:08X} ib={:08X} vs={:08X} start={} count={}",
+      REXLOG_INFO("PUPPET mesh-node role={} actor={:08X} node={:08X} shared={} flags={:08X}/{:08X} matrix={:08X} bounds={:08X} holder={:08X} components={:08X},{:08X},{:08X},{:08X},{:08X} mesh={:08X} ext={:08X} resource={:08X} resource-data={:08X} lifecycle-flags={} importance={} descriptor-flags={:04X} skin={:08X} skin-data={:08X} skin-count={} skin-links={} renderer-seen={} renderer-delta={} draw-frame={} vb={:08X} ib={:08X} vs={:08X} start={} count={}",
           role ? "copy" : "source", r.actor, n.actor, owner != p.owners.end() && !owner->second,
           n.flags, n.flags4, n.matrix, n.bounds, n.holder, n.component[0], n.component[1], n.component[2], n.component[3], n.component[4],
           Word(b, n.component[0]), n.ext, n.resource, Word(b, n.resource), b[n.actor+31], b[n.actor+28], n.ext ? Load16(b, n.ext+46) : 0,
@@ -308,9 +335,17 @@ void SkeletonCalled(uint32_t actor) {
   auto& p = Get();
   if (!p.active.load(std::memory_order_acquire)) return;
   std::lock_guard lock(p.mutex);
-  // 8280F6E0 evaluates/restores the live hierarchy's bone transforms (.26:32000+).
-  // Completion is a pass observation, not proof that a particular bone was written.
+  // 828724C0 calls 8280F6E0 only for active layers above zero (.75:34794).
+  // A stopped count with mask=1 does not imply that the base pose stopped.
   for (auto& r : p.roots) if (r.actor == actor) { r.skeleton_frame = p.frame.load(); ++r.skeleton_calls; }
+}
+void HierarchyCalled(uint32_t actor) {
+  auto& p = Get();
+  if (!p.active.load(std::memory_order_acquire)) return;
+  std::lock_guard lock(p.mutex);
+  // 828724C0 includes layer zero's inline matrix copy (.75:35125..35146).
+  // Completion still does not prove writes to every bone or visible pixels.
+  for (auto& r : p.roots) if (r.actor == actor) { r.hierarchy_frame = p.frame.load(); ++r.hierarchy_calls; }
 }
 }  // namespace
 
@@ -420,6 +455,12 @@ REX_HOOK_RAW(sub_8280F6E0) {
   const uint32_t actor = ctx.r3.u32;
   __imp__sub_8280F6E0(ctx, base);
   kk::SkeletonCalled(actor);
+}
+REX_EXTERN(__imp__sub_828724C0);
+REX_HOOK_RAW(sub_828724C0) {
+  const uint32_t actor = ctx.r3.u32;
+  __imp__sub_828724C0(ctx, base);
+  kk::HierarchyCalled(actor);
 }
 // The engine's append helpers return the newly stored matrix's index (.56:150+,
 // .37:146+). Preserve provenance rather than matching floats or a shared VB.
