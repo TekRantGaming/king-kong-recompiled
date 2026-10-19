@@ -51,6 +51,7 @@
 #include "backend/scene_gi.h"
 #include "backend/scene_lighting.h"
 #include "backend/memory_budget.h"
+#include "backend/buffer_pool.h"
 #include "backend/retire_budget.h"
 #include "backend/draw_sink.h"
 #include "backend/driver_pipeline_cache.h"
@@ -687,7 +688,10 @@ class GameRenderer {
   // extra_lod_bias: added to the fetch constant's (the upscalers' mip bias for the scene's draws).
   uint32_t BindSampler(const uint32_t words[6], const kkshaders::SamplerBinding& binding, float extra_lod_bias = 0.0f);
   struct HostBuffer {
-    nvrhi::BufferHandle buffer;
+    nvrhi::BufferHandle buffer;  // a pooled one's block (task 309)
+    BufferPool::Range range;     // pooled (--native_d3d12_buffer_pool): the bytes of `buffer` it owns
+    BufferPool* pool = nullptr;  // the pool `range` is from
+    uint32_t view_bytes = 0;     // bytes of its view (the size its own buffer would have had)
     uint32_t slot = 0;  // kBuffers descriptor (vertex data)
     uint32_t bytes = 0;
     // Dynamic vertex data (Options::dynamic_vertex_buffers): re-uploaded in consecutive frames.
@@ -697,6 +701,14 @@ class GameRenderer {
     bool preloaded = false;
     kknr::BufferCache::Entry* entry = nullptr;
   };
+  // Task 309: the guest buffer's memory, pooled when --native_d3d12_buffer_pool is on (buffer_pool.h).
+  bool MakeHostBuffer(HostBuffer* host, const nvrhi::BufferDesc& desc, bool index);
+  uint64_t BufferOffset(const HostBuffer* host) const { return host->range.valid() ? host->range.allocation.offset : 0; }
+  nvrhi::BindingSetItem VertexView(const HostBuffer* host) const;
+  // A pooled range's bytes past the upload (up to view_bytes) hold an old owner's data: zeroed, as a
+  // new buffer's were.
+  void ZeroPooledTail(nvrhi::ICommandList* list, const HostBuffer* host, uint64_t written);
+  std::unique_ptr<BufferPool> vertex_pool_, index_pool_;
   std::unordered_set<HostTexture*> descriptor_textures_;
   std::unordered_set<HostBuffer*> descriptor_buffers_;
   // used_begin / used_end: the bytes of the buffer this draw reads (a dynamic buffer uploads only

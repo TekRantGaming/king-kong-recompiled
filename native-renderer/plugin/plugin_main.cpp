@@ -66,6 +66,12 @@ REXCVAR_DEFINE_INT32(native_d3d12_upload_chunk_kib, 0, "Native renderer",
                      "64 KiB, so every larger texture upload made a new upload buffer: before task 300)")
     .range(0, 65536).lifecycle(rex::cvar::Lifecycle::kInitOnly);
 
+// Task 309: built off (today's behaviour). Proposed for Craig after the game check: true. Vulkan ignores it.
+REXCVAR_DEFINE_BOOL(native_d3d12_buffer_pool, false, "Native renderer",
+                    "D3D12: guest vertex and index buffers share large 32 MiB buffers instead of one committed "
+                    "resource each (task 309; false = before task 309)")
+    .lifecycle(rex::cvar::Lifecycle::kInitOnly);
+
 REXCVAR_DEFINE_BOOL(native_wvp_transpose, false, "Native renderer",
                     "Placeholder draws: read vertex shader constants c0..c3 as the columns of "
                     "the world-view-projection matrix instead of its rows")

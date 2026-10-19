@@ -24,6 +24,7 @@
 #include "backend/gpu_loss.h"
 #include "backend/cpu_profile.h"
 #include "backend/dev_gpu_stats.h"
+#include "backend/buffer_pool.h"
 #include "backend/placed_textures.h"
 #include "backend/d3d12_requirements.h"
 
@@ -31,6 +32,7 @@ REXCVAR_DECLARE(bool, native_validation);
 REXCVAR_DECLARE(int32_t, native_debug);
 REXCVAR_DECLARE(bool, native_d3d12_placed_textures);
 REXCVAR_DECLARE(int32_t, native_d3d12_upload_chunk_kib);
+REXCVAR_DECLARE(bool, native_d3d12_buffer_pool);
 
 namespace nr {
 
@@ -107,6 +109,9 @@ class D3D12Host final : public HostDevice {
     device_ = nvrhi::d3d12::createDevice(desc);
     // Task 304: the game renderer zeroes the subresources a guest texture upload leaves out.
     g_texture_memory_not_zeroed.store(desc.placedTextureHeapSize != 0, std::memory_order_relaxed);
+    // Task 309: the game renderer suballocates guest vertex and index buffers (buffer_pool.h).
+    g_buffer_pool_enabled.store(REXCVAR_GET(native_d3d12_buffer_pool), std::memory_order_relaxed);
+    if (REXCVAR_GET(native_d3d12_buffer_pool)) REXLOG_INFO("rexgpu-native: D3D12 guest buffers: pooled in 32 MiB buffers");
     g_dev_gpu_stats_enabled.store((REXCVAR_GET(native_debug) & 32768) != 0, std::memory_order_relaxed);
     if (!device_) {
       return false;

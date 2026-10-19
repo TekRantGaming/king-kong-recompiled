@@ -147,7 +147,9 @@ GameRenderer::GameRenderer(nvrhi::IDevice* device, const GuestMemory& memory,
   auto release_buffer = [this](kknr::BufferCache::Entry& e) {
     auto* h = static_cast<HostBuffer*>(e.host);
     if (h && h->slot) RetireSlot(kBuffers, h->slot);
-    if (h) RetireResource(h->buffer);
+    // Task 309: a pooled range goes back to its pool kRetireFrames later (buffer_pool.h).
+    if (h && h->pool) h->pool->Retire(h->range, frame_);
+    else if (h) RetireResource(h->buffer);
     descriptor_buffers_.erase(h);
     delete h;
     e.host = nullptr;
@@ -280,6 +282,26 @@ bool GameRenderer::Initialize() {
     }
   }
   const nvrhi::GraphicsAPI api = device_->getGraphicsAPI();
+  if (api == nvrhi::GraphicsAPI::D3D12 && g_buffer_pool_enabled.load(std::memory_order_relaxed)) {
+    // Task 309 (buffer_pool.h): guest vertex and index buffers from shared blocks.
+    auto block = [this](bool index) {
+      return [this, index](uint64_t bytes) {
+        nvrhi::BufferDesc d;
+        d.byteSize = bytes;
+        d.canHaveRawViews = !index;
+        d.isIndexBuffer = index;
+        d.initialState = index ? nvrhi::ResourceStates::IndexBuffer : nvrhi::ResourceStates::ShaderResource;
+        d.keepInitialState = true;
+        d.debugName = index ? "Guest indices (pool)" : "Guest vertex data (pool)";
+        nvrhi::BufferHandle b = device_->createBuffer(d);
+        Logf(b ? LogLevel::kInfo : LogLevel::kWarning, "rexgpu-native: buffer pool: %s block of %llu MiB %s",
+             index ? "index" : "vertex", static_cast<unsigned long long>(bytes >> 20), b ? "made" : "NOT made");
+        return b;
+      };
+    };
+    vertex_pool_ = std::make_unique<BufferPool>(block(false));
+    index_pool_ = std::make_unique<BufferPool>(block(true));
+  }
   if (options_.table_capacities != kNativeTableCapacities && options_.upscale.enabled()) {
     // Motion replay retains indices until the upscale point, beyond a possible
     // descriptor drain. Keep them disabled for prewarm and standalone users too.
@@ -716,6 +738,8 @@ void GameRenderer::ReleaseRetiredResources() {
     }
   }
   const auto start = std::chrono::steady_clock::now();
+  if (vertex_pool_) vertex_pool_->Release(frame_);
+  if (index_pool_) index_pool_->Release(frame_);
   // Under memory pressure the memory matters more than the frame: release all of them, as before.
   const bool all = pack_pressure_ || retire_budget_.budget_ms <= 0;
   const RetireRelease r = ReleaseRetired(retired_resources_, frame_, 8, all, retire_budget_);
@@ -2665,7 +2689,8 @@ void GameRenderer::Draw(nvrhi::ICommandList* cl, const DrawCall& call) {
       gs.indexBuffer = nvrhi::IndexBufferBinding()
                            .setBuffer(host->buffer)
                            .setFormat(ib.index32 ? nvrhi::Format::R32_UINT : nvrhi::Format::R16_UINT)
-                           .setOffset(0);
+                           .setOffset(uint32_t(BufferOffset(host)))
+                           .setSize(host->range.valid() ? host->view_bytes : 0);  // task 309: a pooled range
       args.vertexCount = call.count;
       args.startIndexLocation = call.start;
     } else {
