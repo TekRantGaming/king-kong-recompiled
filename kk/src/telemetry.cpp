@@ -33,6 +33,7 @@
 
 #include "benchmark.h"
 #include "content.h"
+#include "crash_dump.h"
 #include "frame_stats.h"
 #include "guest.h"
 #include "hooks/kk_native_ui.h"
@@ -66,6 +67,10 @@ struct RendererSeen {
   int api = 0;  // 1 Vulkan, 2 Direct3D 12
   uint32_t vendor = 0, in_w = 0, in_h = 0, out_w = 0, out_h = 0;
   std::string upscaler;
+  // Task 270: the session's highest video memory use and the budget then (MiB), and whether texture pack
+  // replacements were loaded (-1: the renderer's figures are not known).
+  int64_t vram_peak_mib = -1, vram_peak_budget_mib = -1;
+  int pack_used = -1;
 } g_renderer;
 
 // The game thread's own (NoteFrame).
@@ -90,6 +95,7 @@ Snapshot g_prev;
 bool g_prev_valid = false;
 struct Pending {
   bool active = false;
+  bool hitch = false;  // task 270: a 50-250 ms frame, only counted by cause
   int frames_left = 0;
   WorstFrame f;
   Snapshot start;
@@ -97,6 +103,7 @@ struct Pending {
 constexpr int kPendingFrames = 2;  // the renderer runs up to 2 frames behind the game
 Clock::time_point g_visit_start{};
 int g_focus_sampled = -1;  // FocusState() at the last once-a-second sample
+int64_t g_vram_peak_seen = -1;  // task 270: g_renderer.vram_peak_mib, without the lock
 #if defined(_WIN32)
 HWND g_own_window = nullptr;
 #endif
@@ -128,12 +135,67 @@ double DevNowSeconds() {
   return 0;
 }
 
-double ThreadCpuMs() {
 #if defined(_WIN32)
+// GetThreadTimes: in clock ticks (15.6 ms).
+double CoarseThreadCpuMs() {
   FILETIME created, exited, kernel, user;
   if (!GetThreadTimes(GetCurrentThread(), &created, &exited, &kernel, &user)) return -1;
   const auto ticks = [](const FILETIME& t) { return (uint64_t(t.dwHighDateTime) << 32) | t.dwLowDateTime; };
   return double(ticks(kernel) + ticks(user)) / 10000.0;
+}
+
+double QpcMs() {
+  static const double per_ms = [] {
+    LARGE_INTEGER f{};
+    QueryPerformanceFrequency(&f);
+    return double(f.QuadPart) / 1000.0;
+  }();
+  LARGE_INTEGER t{};
+  QueryPerformanceCounter(&t);
+  return per_ms > 0 ? double(t.QuadPart) / per_ms : -1;
+}
+
+// Task 270: the processor's cycle rate (cycles per ms), measured against QPC from the first call on: 0 for
+// the first second, then fixed; -1 when it makes no sense.
+double CyclesPerMs() {
+  static const uint64_t tsc0 = __rdtsc();
+  static const double ms0 = QpcMs();
+  static double rate = 0;
+  if (rate == 0) rate = PreciseCpuClock::Rate(tsc0, ms0, __rdtsc(), QpcMs());
+  return rate;
+}
+
+PreciseCpuClock g_cpu_clock;  // game thread
+
+// The cycle-based thread time (ms): -1 while the rate is being measured or when the cycle count is not used.
+double PreciseThreadCpuMs() {
+  if (!g_cpu_clock.Trusted()) return -1;
+  const double rate = CyclesPerMs();
+  ULONG64 cycles = 0;
+  if (rate < 0 || (rate > 0 && !QueryThreadCycleTime(GetCurrentThread(), &cycles))) {
+    g_cpu_clock.Fail();
+    REXLOG_INFO("KK uploads: thread cycle time unavailable; frame CPU times use the 15.6 ms system clock");
+    return -1;
+  }
+  return rate > 0 ? double(cycles) / rate : -1;
+}
+#endif
+
+// The game thread's CPU time (ms): at full resolution where the cycle count is trusted (task 270).
+double ThreadCpuMs() {
+#if defined(_WIN32)
+  if (g_cpu_clock.Trusted()) {
+    const double ms = PreciseThreadCpuMs();
+    if (g_cpu_clock.Trusted()) return ms;
+  }
+  static bool coarse = false;
+  if (!coarse) {  // the cycle count was just dropped: no difference across the change
+    coarse = true;
+    g_cpu_valid = false;
+    g_prev.cpu_ms = -1;
+    return -1;
+  }
+  return CoarseThreadCpuMs();
 #else
   timespec t{};
   if (clock_gettime(CLOCK_THREAD_CPUTIME_ID, &t) != 0) return -1;
@@ -227,10 +289,14 @@ Snapshot TakeSnapshot() {  // every frame: a few reads, no allocation
 }
 
 // A slow frame just ended: what the game's side knows now; the renderer's part follows in FinishPending.
-void StartPending(double frame_ms, double swap_ms, double cap_ms, bool level_load, const Snapshot& now,
-                  Clock::time_point t) {
+void StartPending(double frame_ms, double swap_ms, double cap_ms, bool level_load, bool hitch,
+                  const Snapshot& now, Clock::time_point t) {
   WorstFrame f;
   f.ms = frame_ms;
+  if (now.native && now.n.memory_valid && now.n.vram_budget) {
+    f.vram_mib = int64_t(now.n.vram_used >> 20);
+    f.budget_mib = int64_t(now.n.vram_budget >> 20);
+  }
   if (g_visit_start != Clock::time_point{}) f.at_s = std::chrono::duration<double>(t - g_visit_start).count();
   f.loading = level_load || LoadingScreenUp();
   if (swap_ms >= 0) f.swap_ms = std::min(swap_ms, frame_ms);
@@ -262,6 +328,7 @@ void StartPending(double frame_ms, double swap_ms, double cap_ms, bool level_loa
     f.upscaler = g_renderer.upscaler;
   }
   g_pending.active = true;
+  g_pending.hitch = hitch;
   g_pending.frames_left = kPendingFrames;
   g_pending.f = std::move(f);
   g_pending.start = g_prev_valid ? g_prev : Snapshot{};
@@ -298,13 +365,29 @@ void FinishPending() {
     f.renderer_loading = a.resource_loading || b.resource_loading;
     f.worker_jobs = int(std::min<uint32_t>(std::max(a.worker_jobs, b.worker_jobs), 1u << 20));
   }
-  AddWorstFrame(g_current.worst, f);
+  // Task 270: the likely cause; a 50-250 ms frame is only counted by it.
+  const Hitch cause = ClassifyHitch(f);
+  f.cause = HitchName(cause);
+  if (g_pending.hitch) g_current.AddHitch(cause);
+  else AddWorstFrame(g_current.worst, f);
 }
 
 void Sample(bool attribute) {  // game thread, once a second
+#if defined(_WIN32)
+  // Task 270: the cycle-based CPU time checked against the system's (ThreadCpuMs drops it when they disagree).
+  if (g_cpu_clock.Trusted()) {
+    const double precise = PreciseThreadCpuMs();
+    if (precise >= 0 && !g_cpu_clock.Check(precise, CoarseThreadCpuMs()))
+      REXLOG_INFO("KK uploads: thread cycle time disagrees with the system clock; frame CPU times use the 15.6 ms clock");
+  }
+#endif
   const double cpu = ThreadCpuMs();
   NrBenchmarkStats native;
   const bool have = ReadNative(native);
+  if (have) {
+    std::lock_guard lock(g_mutex);
+    g_renderer.pack_used = native.pack_textures > 0 ? 1 : 0;
+  }
   if (attribute) {
     if (g_cpu_valid && cpu >= g_cpu_base && g_frames_since_sample) {
       g_current.game_cpu_ms += cpu - g_cpu_base;
@@ -331,6 +414,7 @@ void Sample(bool attribute) {  // game thread, once a second
       g_renderer.in_w = e.input_width, g_renderer.in_h = e.input_height;
       g_renderer.out_w = e.output_width, g_renderer.out_h = e.output_height;
       g_renderer.upscaler.assign(e.upscaler, strnlen(e.upscaler, sizeof(e.upscaler)));
+      if (e.api == 1 || e.api == 2) kk::SetCrashReportApi(int(e.api));  // task 270
     }
   }
   Commit();
@@ -516,6 +600,9 @@ std::string BuildPerfJson(const Context& c) {
   };
   s.pipeline_library = c.api == "vulkan" && CvarOn("native_vk_pipeline_library");
   s.startup_fallback = !Cvar("native_failed_backends").empty();
+  s.vram_peak_mib = r.vram_peak_mib;  // task 270
+  s.vram_peak_budget_mib = r.vram_peak_budget_mib;
+  s.texture_pack_used = r.pack_used;
   return PerfJson(s);
 }
 
@@ -634,9 +721,13 @@ void NoteFrame(double frame_ms, double swap_ms, double cap_wait_ms) {
   static CutsceneFrames cutscenes;
   const bool cutscene = cutscenes.Spans(movies::LoaderWaitsEnded(), movies::LoaderWaiting());
   const bool slow = !cutscene && WorstFrameWanted(entry, frame_ms);
+  // Task 270: a 50-250 ms gameplay frame is measured the same way, then only counted by cause.
+  const bool hitch_frame =
+      !cutscene && HitchWanted(entry, frame_ms) && g_skip.load(std::memory_order_relaxed) <= 0;
   // Task 211: a slow frame's detail is finished kPendingFrames later, or sooner when the chapter changes or
   // another slow frame comes.
-  if (g_pending.active && (entry != g_current.entry || slow || --g_pending.frames_left <= 0)) FinishPending();
+  if (g_pending.active && (entry != g_current.entry || slow || hitch_frame || --g_pending.frames_left <= 0))
+    FinishPending();
   const auto now = Clock::now();
   if (entry != g_current.entry) {
     Commit();
@@ -645,7 +736,7 @@ void NoteFrame(double frame_ms, double swap_ms, double cap_wait_ms) {
     g_visit_start = now;
   }
   bool attribute = entry >= 0;
-  bool level_load = false;
+  bool level_load = false, counted = false;
   if (g_skip.load(std::memory_order_relaxed) > 0) {
     g_skip.fetch_sub(1, std::memory_order_relaxed);
     g_cpu_valid = false;  // the load's CPU time is not a frame's
@@ -657,10 +748,24 @@ void NoteFrame(double frame_ms, double swap_ms, double cap_wait_ms) {
   } else if (entry >= 0) {
     g_current.AddFrame(frame_ms);
     ++g_frames_since_sample;
+    counted = true;
   }
   // Task 211: the running totals every frame (cheap reads); the detail only for a slow frame.
   const Snapshot snap = TakeSnapshot();
-  if (slow) StartPending(frame_ms, swap_ms, cap_wait_ms, level_load, snap, now);
+  // Task 270: video memory (the renderer refreshes it once a second): the session's peak, the chapter's
+  // peak and the value at the chapter's worst frame.
+  const bool vram = snap.native && snap.n.memory_valid && snap.n.vram_budget;
+  const int64_t vram_mib = vram ? int64_t(snap.n.vram_used >> 20) : -1;
+  const int64_t budget_mib = vram ? int64_t(snap.n.vram_budget >> 20) : -1;
+  if (vram && vram_mib > g_vram_peak_seen) {
+    g_vram_peak_seen = vram_mib;
+    std::lock_guard lock(g_mutex);
+    g_renderer.vram_peak_mib = vram_mib;
+    g_renderer.vram_peak_budget_mib = budget_mib;
+  }
+  if (counted) g_current.AddVram(vram_mib, budget_mib, frame_ms >= g_current.worst_ms);
+  if (slow || (hitch_frame && counted))
+    StartPending(frame_ms, swap_ms, cap_wait_ms, level_load, !slow, snap, now);
   g_prev = snap;
   g_prev_valid = true;
   if (now - g_last_sample >= std::chrono::seconds(1)) {

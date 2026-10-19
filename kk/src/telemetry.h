@@ -3,10 +3,12 @@
 //   on quit:            the pipeline record file (gzip) and one performance summary for the session
 //                       (per chapter: time, average FPS, 1% low, worst frame, frames over 50 ms, GPU,
 //                       game-thread and pipeline-wait times, and what the 3 slowest frames over 250 ms were
-//                       doing; the graphics card, driver, CPU, RAM, display and main graphics settings; no
-//                       names, no paths);
+//                       doing; task 270: 50-250 ms frames counted by likely cause, video memory use and
+//                       budget at the peak and the worst frame, whether pack textures were loaded; the
+//                       graphics card, driver, CPU, RAM, display and main graphics settings; no names, no paths);
 //   on the next start:  a crash or hang report from this version (its text, gzip, user names and personal
-//                       folders removed), then remembered as sent.
+//                       folders removed), then remembered as sent; labelled with the API of the session
+//                       that crashed (its "Graphics API:" line), not this one's.
 // Network work runs on its own threads. Quitting waits for it at most about 2 s; what is not done by then
 // is kept and tried next time. Developer builds: KK_DEV_TELEMETRY_URL=http://127.0.0.1:<port> sends to a
 // local server instead (KK_DEV_ONLINE_URL too, when that is set), and KK_DEV_TELEMETRY_NOW=<seconds> runs

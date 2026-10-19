@@ -44,8 +44,9 @@ bool WriteFileAtomic(const fs::path& path, const std::string& text) {
   return !ec;
 }
 
-std::vector<std::string> Headers(const Context& c) {
-  return {"X-KK-Install: " + c.install_id, "X-KK-Version: " + c.version, "X-KK-Api: " + c.api};
+// `api`: the session the data is from (task 270: a crash report's own session), else this one's.
+std::vector<std::string> Headers(const Context& c, const std::string& api = {}) {
+  return {"X-KK-Install: " + c.install_id, "X-KK-Version: " + c.version, "X-KK-Api: " + (api.empty() ? c.api : api)};
 }
 
 std::string Hex32(uint32_t v) {
@@ -157,12 +158,13 @@ int SendCrashReports(const Context& c, int max) {
     std::string text;
     if (!ReadFile(p, text, 4 * kMaxCrashText)) continue;
     const std::string name = p.filename().string();
+    const std::string api = ReportApi(text);  // the crashed session's API, not this one's
     const std::vector<uint8_t> gz = CrashGzip(RedactForUpload(std::move(text), c.personal));
     if (gz.empty()) {
       MarkSent(c, name);  // nothing to send
       continue;
     }
-    std::vector<std::string> headers = Headers(c);
+    std::vector<std::string> headers = Headers(c, api);
     headers.push_back(std::string("X-KK-Kind: ") + (name.rfind("hang-", 0) == 0 ? "hang" : "crash"));
     const int status = c.send({"/v1/crash", "application/gzip", headers, std::string(gz.begin(), gz.end())});
     ++sent;

@@ -23,4 +23,9 @@ void NoteGuestFrame();
 // runtime argument), with `reason` in the .txt. Once per process (shares the crash handler's guard).
 void WriteCrashReportNow(const char* reason);
 
+// Task 270: the graphics API this session renders with (1 Vulkan, 2 Direct3D 12, 0 not known yet), written
+// into crash and hang reports as "Graphics API: ..." so their upload names this session's API, not the API
+// of the later session that sends them. Any thread.
+void SetCrashReportApi(int api);
+
 }  // namespace kk
