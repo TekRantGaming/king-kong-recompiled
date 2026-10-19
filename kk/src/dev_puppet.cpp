@@ -652,7 +652,14 @@ void DevPuppetAfterAi(PPCContext& ctx, uint8_t* b, uint32_t w) {
     }
   }
   if (!s.Validate(b, w, rig)) return;
-  if (rig.action != s.action || rig.item != s.item) { s.Abort("action-item-readback-mismatch"); return; }
+  // A requested action can take a few frames to show, and the rig may refuse one: never drop the body for it
+  // (Claude, run c08 14:49: released after 1 update). Log, then follow what the rig really plays.
+  if (rig.action != s.action || rig.item != s.item) {
+    static int logged = 0;
+    if (logged++ < 5)
+      REXLOG_INFO("PUPPET readback action={} item={} wanted={} {} (kept driving)", rig.action, rig.item, s.action, s.item);
+    s.action = rig.action; s.item = rig.item;
+  }
   s.early_pos = rig.pos; s.early_forward = rig.forward; s.early_frame = Frame(ctx, b, rig.actor);
   s.measure = true;
   if (Opt().partner) coop::SetPartnerBodyDriven(true);
