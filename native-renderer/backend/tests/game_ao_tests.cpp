@@ -958,7 +958,8 @@ TEST(GameAo_DumpFrameNamesTheMoments) {
   f.game->options().dump_frame = 0;
   Captured().clear();
   SetLogSink([](LogLevel, const char* text) {
-    if (std::strstr(text, "AO draw")) Captured().push_back(text);
+    // The "AO draw N extra:" detail lines (task 240: depth func, count, arms, projection) are not moments.
+    if (std::strstr(text, "AO draw") && !std::strstr(text, " extra:")) Captured().push_back(text);
   });
   f.Render({}, "dump");
   SetLogSink(nullptr);

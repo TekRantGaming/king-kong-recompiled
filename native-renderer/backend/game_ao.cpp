@@ -4,11 +4,16 @@
 // --native_ao_method=legacy none of this runs (scene_ao_ stays null) and the legacy AO
 // (ambient_occlusion.h) is used exactly as before.
 
+#include <algorithm>
+#include <cstdlib>
 #include <cstring>
 
 #include "backend/game_renderer.h"
+#include "backend/shaders/generated/ao_hands_ps_dxil.h"
+#include "backend/shaders/generated/ao_hands_ps_spirv.h"
 #include "backend/game_upscale.h"
 #include "backend/log.h"
+#include "backend/photo_config.h"
 #include "kknr/render_targets.h"
 
 namespace nr {
@@ -60,6 +65,17 @@ void GameRenderer::AoInitialize() {
     return;
   }
   scene_ao_->SetTimer(ao_timer_.get());
+  // The hands' second colour draw (task 244): its pixel shader, built for the game's layout.
+  nvrhi::ShaderDesc hd;
+  hd.shaderType = nvrhi::ShaderType::Pixel;
+  hd.entryName = "main";
+  hd.debugName = "ao_hands_ps";
+  ao_hands_ps_ = device_->getGraphicsAPI() == nvrhi::GraphicsAPI::VULKAN
+                     ? device_->createShader(hd, k_ao_hands_ps_spirv, sizeof(k_ao_hands_ps_spirv))
+                     : device_->createShader(hd, k_ao_hands_ps_dxil, sizeof(k_ao_hands_ps_dxil));
+  if (!ao_hands_ps_) Logf(LogLevel::kWarning, "rexgpu-native: AO: no shader for the first-person hands; they keep no occlusion");
+  // Debugging aid (before/after comparisons): KK_DEV_AO_NO_HANDS=1 leaves the hands as before.
+  if (const char* v = std::getenv("KK_DEV_AO_NO_HANDS"); v && *v == '1') ao_hands_ps_ = nullptr;
 }
 
 std::shared_ptr<const kkshaders::AmbientTable> GameRenderer::ao_ambient_table() const {
@@ -154,6 +170,14 @@ void GameRenderer::AoDrawHook(nvrhi::ICommandList* cl, const DrawCall& call, con
          int(st.depth_write), st.blend_control, int(st.alpha_test), st.primitive, static_cast<unsigned long long>(st.vs_hash),
          static_cast<unsigned long long>(st.ps_hash), static_cast<unsigned long long>(a.color.key),
          static_cast<unsigned long long>(a.depth.key));
+    // Task 240 diagnostics: depth function, index count, the photo mode's arms mesh, the draw's projection.
+    float rows[16];
+    AoProjection p;
+    const bool persp = FindAoPerspectiveRegister(a.vs_constants, rows) >= 0 && ExtractAoProjection(rows, p);
+    const bool arms = call.indexed && PhotoMeshCountCandidate(call.count) && PhotoHidesMesh(GeometryContentHash(call), call.count);
+    Logf(LogLevel::kInfo, "rexgpu-native:   AO draw %u extra: zfunc %u count %u arms %d near %.4f px %.3f",
+         call.index_in_frame, (d.u32(dev::kRbDepthControl) >> 4) & 7, call.count, int(arms), persp ? p.near_plane() : -1.0f,
+         persp ? p.px : -1.0f);
   }
 }
 
@@ -196,15 +220,7 @@ void GameRenderer::AoWriteAmbientConstants(nvrhi::ICommandList* cl, bool reads) 
   const SceneAo::AmbientView v = scene_ao_ ? scene_ao_->ambient_view() : SceneAo::AmbientView{};
   AmbientConstants k = {};
   if (reads && v.texture) {
-    // The occlusion in the bindless 2D table (a new slot when Gtao made a new image).
-    if (v.texture != ao_slot_texture_ || !ao_slot_) {
-      if (ao_slot_) RetireSlot(kTex2D, ao_slot_);
-      ao_slot_ = AllocateSlot(kTex2D);
-      if (ao_slot_) WriteSlot(kTex2D, nvrhi::BindingSetItem::Texture_SRV(ao_slot_, v.texture));
-      ao_slot_texture_ = v.texture;
-    }
-    k.texture[0] = ao_slot_;
-    TouchSlot(kTex2D, ao_slot_);
+    k.texture[0] = AoOcclusionSlot(v.texture);
     k.texture[1] = uint32_t(v.x);
     k.texture[2] = uint32_t(v.y);
     k.params[0] = 1.0f;
@@ -255,6 +271,148 @@ void GameRenderer::AoClearHook(const ClearCall& call, const HostTarget* depth) {
 void GameRenderer::AoPresentHook(nvrhi::ICommandList* cl) {
   if (scene_ao_) scene_ao_->OnPresent(cl, AoSettingsFor(ao_settings_frame_));
   if (ao_timer_) ao_timer_->FrameEnd();
+}
+
+
+// ---------------------------------------------------------------- AO on the first-person hands (task 244)
+
+uint32_t GameRenderer::AoOcclusionSlot(nvrhi::ITexture* texture) {
+  if (!texture) return 0;
+  // The occlusion in the bindless 2D table (a new slot when Gtao made a new image).
+  if (texture != ao_slot_texture_ || !ao_slot_) {
+    if (ao_slot_) RetireSlot(kTex2D, ao_slot_);
+    ao_slot_ = AllocateSlot(kTex2D);
+    if (ao_slot_) WriteSlot(kTex2D, nvrhi::BindingSetItem::Texture_SRV(ao_slot_, texture));
+    ao_slot_texture_ = texture;
+  }
+  if (ao_slot_) TouchSlot(kTex2D, ao_slot_);
+  return ao_slot_;
+}
+
+void GameRenderer::AoNoteHandsDepth(const DrawCall& call, const PipelineRecord& record, bool writes_color) {
+  if (!scene_ao_ || !ao_hands_ps_ || !call.indexed) return;
+  const AoSettings s = AoSettingsFor(call.frame);
+  if (s.mode <= 0) return;
+  if (ao_hands_frame_ != call.frame) {
+    ao_hands_.clear();
+    ao_hands_frame_ = call.frame;
+  }
+  // The pre-pass's depth-only geometry with depth func ALWAYS: the game's first-person arms (and what
+  // Jack holds), drawn in front of everything whatever the world's depth (REPORT-240).
+  const uint32_t dc = record.depth_control;
+  if (writes_color || !record.depth_format || (dc & 6) != 6 || ((dc >> 4) & 7) != 7) return;
+  const AoHandsKey key{call.index_info.physical, call.start, call.count, call.base_vertex};
+  if (ao_hands_.size() >= 16 || std::find(ao_hands_.begin(), ao_hands_.end(), key) != ao_hands_.end()) return;
+  ao_hands_.push_back(key);
+  if (options_.ao.dump_every && call.frame % options_.ao.dump_every == 0)
+    Logf(LogLevel::kInfo, "rexgpu-native:   AO hands: draw %u noted (count %u ib %08X start %u)", call.index_in_frame, call.count,
+         call.index_info.physical, call.start);
+  ++ao_hands_stats_.noted;
+}
+
+void GameRenderer::AoRedrawHands(nvrhi::ICommandList* cl, const DrawCall& call, const PipelineRecord& record,
+                                 const GameShader& vs, const nvrhi::GraphicsState& gs, const nvrhi::DrawArguments& args,
+                                 bool indexed, const HostTarget& target) {
+  if (ao_hands_.empty() || ao_hands_frame_ != call.frame || !call.indexed || !scene_ao_) return;
+  // Its opaque colour draw: render target 0 written without blending, depth tested and written.
+  const uint32_t dc = record.depth_control, bc = record.color_control[0];
+  const bool opaque = (bc & 0x1F) == 1 && ((bc >> 5) & 7) == 0 && ((bc >> 8) & 0x1F) == 0;
+  if (!record.color_count || record.color_index[0] != 0 || !(record.color_mask[0] & 7) || !opaque ||
+      !record.depth_format || (dc & 6) != 6 || ((dc >> 4) & 7) == 7 || (record.flags & kRecordTessellation))
+    return;
+  const AoHandsKey key{call.index_info.physical, call.start, call.count, call.base_vertex};
+  if (std::find(ao_hands_.begin(), ao_hands_.end(), key) == ao_hands_.end()) return;
+  const bool dump = options_.ao.dump_every && call.frame % options_.ao.dump_every == 0;
+  auto skip = [&](const char* why) {
+    if (dump) Logf(LogLevel::kInfo, "rexgpu-native:   AO hands: draw %u not drawn again: %s", call.index_in_frame, why);
+  };
+  // Only after the occlusion went into the scene (a colour draw before that moment gets it already).
+  const AoSettings s = AoSettingsFor(call.frame);
+  SceneAo::AppliedView v;
+  if (s.mode <= 0 || s.mode > 2 || !scene_ao_->applied_view(call.frame, v) || !v.image.texture) return skip("no occlusion yet");
+  const uint32_t slot = AoOcclusionSlot(v.image.texture);
+  if (!slot || !v.depth) return skip(!slot ? "no slot" : "no depth image");
+  // The depth the occlusion was worked out from: the pre-pass draws the hands' parts with ALWAYS, so where a
+  // farther part was drawn after a nearer one that depth is the farther one's, and its occlusion belongs to a
+  // hidden surface (sharp dark patches). The shader leaves those pixels alone.
+  if (v.depth != ao_hands_depth_texture_ || !ao_hands_depth_slot_) {
+    if (ao_hands_depth_slot_) RetireSlot(kTex2D, ao_hands_depth_slot_);
+    ao_hands_depth_slot_ = AllocateSlot(kTex2D);
+    if (ao_hands_depth_slot_) WriteSlot(kTex2D, nvrhi::BindingSetItem::Texture_SRV(ao_hands_depth_slot_, v.depth));
+    ao_hands_depth_texture_ = v.depth;
+  }
+  if (!ao_hands_depth_slot_) return skip("no depth slot");
+  TouchSlot(kTex2D, ao_hands_depth_slot_);
+  // The pipeline: the hands' vertex shader and state, ao_hands.hlsl, depth EQUAL without writes, the colour
+  // times the occlusion (mode 1) or the occlusion itself (mode 2); alpha and the other targets untouched.
+  PipelineRecord r = record;
+  r.ps_hash = UINT64_C(0x414F48414E445300) | uint64_t(s.mode);  // "AOHANDS" + mode: its own key
+  r.ps_input = r.ps_hash;
+  const uint64_t key_hash = PipelineKey(r);
+  nvrhi::IGraphicsPipeline* pipeline = nullptr;
+  if (auto known = pipelines_.find(key_hash); known != pipelines_.end()) {
+    pipeline = known->second;
+  } else {
+    nvrhi::GraphicsPipelineDesc pd;
+    nvrhi::FramebufferInfo fbi;
+    BuildPipelineDesc(record, vs.handle, ao_hands_ps_, pd, fbi);
+    for (uint32_t i = 0; i < 8; ++i) pd.renderState.blendState.targets[i].colorWriteMask = nvrhi::ColorMask(0);
+    nvrhi::BlendState::RenderTarget& t = pd.renderState.blendState.targets[0];
+    t.colorWriteMask = nvrhi::ColorMask(uint8_t(record.color_mask[0] & 7));
+    t.blendEnable = s.mode == 1;
+    t.srcBlend = nvrhi::BlendFactor::DstColor;
+    t.destBlend = nvrhi::BlendFactor::Zero;
+    t.blendOp = nvrhi::BlendOp::Add;
+    t.srcBlendAlpha = nvrhi::BlendFactor::Zero;
+    t.destBlendAlpha = nvrhi::BlendFactor::One;
+    t.blendOpAlpha = nvrhi::BlendOp::Add;
+    nvrhi::DepthStencilState& ds = pd.renderState.depthStencilState;
+    ds.depthTestEnable = true;
+    ds.depthWriteEnable = false;
+    ds.depthFunc = nvrhi::ComparisonFunc::Equal;
+    ds.stencilEnable = false;
+    pipeline = GetPipeline(pd, fbi, key_hash, PipelineDemand::kSoon);
+  }
+  if (!pipeline) {
+    ++ao_hands_stats_.waiting;
+    return skip("pipeline not ready");
+  }
+  if (!NoteVolatileDraw(cl, false)) return skip("volatile budget");
+  // The pixel constants for this draw alone (ao_hands.hlsl); the next game draw writes its own again.
+  std::array<float, 1024> k = last_ps_;
+  std::memcpy(&k[0], &slot, sizeof(slot));
+  k[1] = target.scale_x > 0.0f ? v.host_scale_x / target.scale_x : 1.0f;
+  k[2] = target.scale_y > 0.0f ? v.host_scale_y / target.scale_y : 1.0f;
+  std::memcpy(&k[3], &ao_hands_depth_slot_, sizeof(uint32_t));
+  k[4] = float(v.image.x);
+  k[5] = float(v.image.y);
+  k[6] = float(v.image.width);
+  k[7] = float(v.image.height);
+  k[8] = float(v.step);
+  k[9] = 0.002f;  // the largest depth difference of the same surface (stored depth units; upscaled pixel centres)
+  // With a temporal upscaler the occlusion is left noisy for it to settle, but the hands drawn after its point
+  // never go through it: a 5 x 5 average of the same surface's occlusion instead (3 x 3 otherwise).
+  k[10] = s.temporal_upscaler ? 2.0f : 1.0f;
+  // Both images are read through the bindless table, which tracks no states: shader resources before the draw.
+  cl->setTextureState(v.image.texture, nvrhi::AllSubresources, nvrhi::ResourceStates::ShaderResource);
+  cl->setTextureState(v.depth, nvrhi::AllSubresources, nvrhi::ResourceStates::ShaderResource);
+  cl->commitBarriers();
+  cl->writeBuffer(ps_constants_, k.data(), sizeof(k));
+  constants_valid_ = false;
+  nvrhi::GraphicsState redraw = gs;
+  redraw.pipeline = pipeline;
+  cl->setGraphicsState(redraw);
+  if (indexed) {
+    cl->drawIndexed(args);
+  } else {
+    cl->draw(args);
+  }
+  ++ao_hands_stats_.drawn;
+  if (dump)
+    Logf(LogLevel::kInfo, "rexgpu-native:   AO hands: draw %u drawn again (count %u)", call.index_in_frame, call.count);
+  if (ao_hands_stats_.drawn == 1)
+    Logf(LogLevel::kInfo, "rexgpu-native: AO: first-person hands shaded (frame %llu, %u indices, occlusion scale %.3f x %.3f)",
+         static_cast<unsigned long long>(call.frame), call.count, k[1], k[2]);
 }
 
 }  // namespace nr

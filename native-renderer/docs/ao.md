@@ -245,6 +245,27 @@ test corpus and their input hashes compared with the commit before the hook).
 Hooked shaders are not in the shader packs: DXC compiles them at their first use (a stutter the first time each
 appears). If the mode is adopted, `kkshaders db-build` should learn to read the list and build them into the pack.
 
+### The first-person hands (task 244)
+
+Some chapters (Hayes, entry 7) draw Jack's arms and what he holds depth-only in the pre-pass with depth func
+ALWAYS, but their colour only after the fog draw (the AO moment), sometimes after the upscale point at the
+output size: the colour overwrote the darkened pixels. `GameRenderer::AoNoteHandsDepth` notes the pre-pass's
+depth-only ALWAYS draws (index buffer, start, count, base vertex); `AoRedrawHands` draws their opaque colour
+draw (depth tested and written, no blend) a second time once the occlusion is in the scene: same vertex
+shader and state, `shaders/ao_hands.hlsl` (built for the game's layout; constants in the pixel constants
+buffer for that draw alone), depth EQUAL without writes, colour times the occlusion (ao_mode 2: the
+occlusion). The lookup is scaled from the target's render scale to the occlusion's (after the upscale point
+0.667 with DLSS Quality). Because ALWAYS lets a farther part overwrite a nearer one in the pre-pass, the
+occlusion of some hand pixels belongs to a hidden surface: the shader compares the stored depth GTAO worked
+from (Gtao::raw_depth) with the pixel's and leaves mismatches, and pixels within the average's reach of one,
+at 1 (else sharp dark patches and thin dark lines). A depth-aware 3 x 3 average (5 x 5 with a temporal
+upscaler, whose noise the hands drawn after its point never see). Only colour draws after the occlusion went
+in are drawn again, so nothing is darkened twice: V-Rex (entry 8) with the machine gun drawn takes the same path
+as Hayes (task 247: ALWAYS pre-pass, colour after the AO moment), arms drawn before the moment are not touched.
+The redraw's pipeline is asked for with `PipelineDemand::kSoon` (queued with the draws' jobs, ahead of the
+prewarm, never waited for; task 247), not kOptional, which waited behind the prewarm queue on a cold start.
+KK_DEV_AO_NO_HANDS=1 turns it off (before/after comparisons).
+
 ## Settings
 
 | Setting | Values (default first) | What it does |

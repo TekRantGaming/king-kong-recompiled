@@ -172,6 +172,8 @@ bool SceneAo::Compute(nvrhi::ICommandList* cl, const AoSettings& s, nvrhi::IText
          p.near_plane(), p.far_plane(), p.px, p.py, radius, s.strength, in.width, in.height, in.x, in.y);
   }
   computed_ = true;
+  computed_scale_x_ = sc.host_scale_x;
+  computed_scale_y_ = sc.host_scale_y;
   ++stats_.computed;
   return true;
 }

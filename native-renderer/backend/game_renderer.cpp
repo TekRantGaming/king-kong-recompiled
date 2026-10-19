@@ -1322,8 +1322,10 @@ nvrhi::IGraphicsPipeline* GameRenderer::GetPipeline(const nvrhi::GraphicsPipelin
   auto it = pipelines_.find(key);
   if (it != pipelines_.end()) return it->second;
   // optional (the upscalers' motion pass, lighting variants, memory blits): made on the workers, never
-  // waited for, not counted as a draw that waited or was skipped.
-  const bool optional = demand == PipelineDemand::kOptional;
+  // waited for, not counted as a draw that waited or was skipped. kSoon too, but queued with the draws' jobs
+  // (task 247: else the AO hands redraw waited ~50 s behind a cold start's prewarm).
+  const bool soon = demand == PipelineDemand::kSoon;
+  const bool optional = demand == PipelineDemand::kOptional || soon;
   const bool for_draws = demand == PipelineDemand::kMustDraw || demand == PipelineDemand::kMaySkip;
   const bool async = optional || (for_draws && options_.async_pipelines);
   if (async) {
@@ -1335,14 +1337,14 @@ nvrhi::IGraphicsPipeline* GameRenderer::GetPipeline(const nvrhi::GraphicsPipelin
     if (!was_pending) {
       EnsureWorkers();
       pipelines_pending_[key] = true;
-      if (optional) {
+      if (optional && !soon) {
         pipeline_jobs_.push_back({key, desc, framebuffer});
         pipeline_cv_.notify_one();
       } else {
         QueueDrawJob(pipeline_jobs_, PipelineJob{key, desc, framebuffer}, first);
         pipeline_cv_.notify_all();
       }
-    } else if (!optional) {
+    } else if (!optional || soon) {
       // Promote an unstarted prewarm job too. An already active job needs no duplicate.
       if (PromoteDrawJob(pipeline_jobs_, key, first)) pipeline_cv_.notify_all();
     }
@@ -2195,6 +2197,11 @@ void GameRenderer::Draw(nvrhi::ICommandList* cl, const DrawCall& call) {
   PrepareDescriptorDraw(cl, *vs, ps.get());
   if (!NoteVolatileDraw(cl, false)) return;
   if (scene_ao_ || ao_constants_) AoDrawHook(cl, call, d, colors, depth, record, *vs, ps.get());
+  if (scene_ao_) {  // task 244: the pre-pass's depth-only ALWAYS geometry (the first-person hands)
+    bool writes_color = false;
+    for (uint32_t i = 0; i < record.color_count; ++i) writes_color = writes_color || record.color_mask[i];
+    AoNoteHandsDepth(call, record, writes_color);
+  }
   // GI hook (game_gi.cpp): at the end of the opaque pass the bounce light goes in (after the AO's occlusion).
   if (scene_gi_) GiDrawHook(cl, call, d, colors, depth, record, *vs, ps.get());
   // Cel hook (game_cel.cpp): at the end of the opaque pass the lines and bands go in (after AO and GI).
@@ -2659,6 +2666,8 @@ void GameRenderer::Draw(nvrhi::ICommandList* cl, const DrawCall& call) {
     cl->draw(args);
   }
   ++stats_.draws;
+  // AO on the first-person hands (game_ao.cpp): their colour drawn again, times the occlusion.
+  if (scene_ao_ && !ao_hands_.empty()) AoRedrawHands(cl, call, record, *vs, gs, args, indexed_draw, *size_from);
   if (tessellated) {
     tessellation_drawn_this_frame_=true;
     ++tessellation_draws_this_frame_;

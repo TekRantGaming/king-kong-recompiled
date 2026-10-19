@@ -30,6 +30,18 @@ if ($Only -eq "" -or $Only -eq "cel") {
     if ($Only -eq "cel") { Write-Host "Shaders written to $out"; exit 0 }
 }
 
+# AO on the first-person hands (ao_hands.hlsl, docs/ao.md): drawn with the game's vertex shaders, so built
+# like the translated shaders (the game's layout, no binding shifts). -Only aohands compiles just this.
+if ($Only -eq "" -or $Only -eq "aohands") {
+    $hands = Join-Path $here "ao_hands.hlsl"
+    & $Dxc -nologo -T ps_6_0 -E main -HV 2021 -O3 -Gis -Qstrip_debug -Fh (Join-Path $out "ao_hands_ps_dxil.h") -Vn "k_ao_hands_ps_dxil" $hands
+    if ($LASTEXITCODE -ne 0) { throw "dxc (DXIL) failed on $hands" }
+    & $Dxc -nologo -T ps_6_0 -E main -HV 2021 -O3 -Gis -Qstrip_debug -spirv "-fspv-target-env=vulkan1.2" `
+        -fvk-use-dx-layout -Fh (Join-Path $out "ao_hands_ps_spirv.h") -Vn "k_ao_hands_ps_spirv" $hands
+    if ($LASTEXITCODE -ne 0) { throw "dxc (SPIR-V) failed on $hands" }
+    if ($Only -eq "aohands") { Write-Host "Shaders written to $out"; exit 0 }
+}
+
 # Photo mode (photo.hlsl, docs/photo-mode.md): one blob per entry point. -Only photo compiles just these.
 if ($Only -eq "" -or $Only -eq "photo") {
     Compile-Entries (Join-Path $here "photo.hlsl") @("photo_vs:vs:vs_main", "photo_ps:ps:ps_photo")
