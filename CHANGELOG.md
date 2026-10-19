@@ -9,6 +9,7 @@ version's notes the first time you start it.
 
 ### Fixed
 - **A cheat gun could still reach the Hayes chapter.** A Revolver, Machine gun, Shotgun or Sniper rifle cheat switched on in On Kong's tracks stayed with Jack into Hayes and could leave the raptor fight stuck. The weapon cheats are now also not available in Sacrifice and On Kong's tracks, so nothing is carried into Hayes. Your cheat settings are not changed.
+- **Kong could get stuck lifting the stone slab away from the gate in The Skull Islanders** at 60 FPS and above, and the gang could not go on. The lift now works at any frame rate.
 - **The Cheats page in the pause menu no longer disappears** when the main Cheats switch is off, so you can switch it on again while you play.
 - **Keyboard and mouse pictures**: Settings > Controls shows the mouse buttons and the mouse as pictures (the keyboard bindings rows and the mouse rows), and photo mode shows the mouse for looking around.
 - **Photo mode's free camera turned the wrong way up and down with the mouse.** Moving the mouse up now looks up, as in play, and Mouse vertical in Settings > Controls turns it round. The F9 free camera is the same. The controller is unchanged.
