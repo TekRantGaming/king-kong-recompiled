@@ -1,8 +1,10 @@
 // Source-only handoff. No game memory, native calls, SDK, sockets or wall clock.
 #include "coop_session.h"
+#include "coop_stimulus_debug.h"
 #include <cstdio>
 #include <cstdlib>
 #include <limits>
+#include <map>
 #include <utility>
 
 using namespace kk::coop;
@@ -20,6 +22,34 @@ Message Status(uint32_t number = 1, uint64_t life = 11, PlayerCondition conditio
 }
 std::vector<uint8_t> Packet(const Message& m) {
   std::vector<uint8_t> out; Check(Encode(m, out), "fixture encodes"); return out;
+}
+void StimulusDiagnostics() {
+  using namespace stimulus_debug;
+  constexpr uint32_t entries = 0x41000000, handle = 0x42000000, body = 0x43000000, source = 0x44000000;
+  std::map<uint32_t, uint32_t> words{
+      {kPools+16, entries}, {kPools+24, 1}, {kPools+28, 2},
+      {handle, 0x01000000}, {handle+4, 7}, {entries, 1}, {entries+112, 7},
+      {entries+8, source}, {entries+12, body}};
+  auto u32 = [&](uint32_t p) { return words.at(p); }; // any unbounded read fails the fixture
+  auto r = ReadHandle(u32, handle);
+  Check(r.valid && !r.enumerable && r.source == source && r.target == body,
+      "queued pending stimulus is valid but not enumerated; source is not victim");
+  words[entries] = 0; r = ReadHandle(u32, handle);
+  Check(r.valid && r.enumerable, "native update exposes pending stimulus");
+  words[handle+4] = 6;
+  Check(!ReadHandle(u32, handle).valid, "recycled stimulus generation refused");
+  words[handle+4] = 7; words[entries+112] = 0; words[entries] = 6;
+  Check(!ReadHandle(u32, handle).valid, "expired free-list record refused");
+  words[entries+112] = 7; words[entries] = 0; words[handle] = 0x01000001;
+  Check(!ReadHandle(u32, handle).valid, "index equal to count refused before dereference");
+  words[handle] = UINT32_MAX;
+  Check(!ReadHandle(u32, handle).valid, "invalid native handle cannot address a pool");
+  Check(!ReadHandle(u32, handle+1).valid && !ReadHandle(u32, 0x9FFFFFFC).valid,
+      "unaligned and overflowing handle spans refused");
+  words[kPools+24] = 3;
+  Check(!ReadPool(u32, 1).valid, "pool count beyond capacity refused");
+  words[kPools+24] = 1; words[kPools+16] = 0x9FFFFFFC;
+  Check(!ReadPool(u32, 1).valid, "record span overflow refused");
 }
 void Codecs() {
   static_assert(kProtocolVersion == 7);
@@ -229,6 +259,6 @@ void StatusCoalescingAndCaps() {
 }
 } // namespace
 int main() {
-  Codecs(); Replay(); VictimsAndLease(); Deaths(); Handoff(); StatusCoalescingAndCaps();
+  StimulusDiagnostics(); Codecs(); Replay(); VictimsAndLease(); Deaths(); Handoff(); StatusCoalescingAndCaps();
   std::puts("co-op combat tests passed");
 }

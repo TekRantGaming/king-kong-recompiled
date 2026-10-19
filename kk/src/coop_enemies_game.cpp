@@ -8,6 +8,9 @@
 #include "play_internal.h"
 #include "photo_mode.h"
 #include "coop_partner_body.h"
+#if defined(KK_DEV_TOOLS)
+#include "coop_stimulus_debug.h"
+#endif
 #include <algorithm>
 #include <bit>
 #include <rex/logging.h>
@@ -35,6 +38,11 @@ REX_EXTERN(__imp__sub_826A0920);
 REX_EXTERN(__imp__sub_82548BC0);
 #if defined(KK_DEV_TOOLS)
 REX_EXTERN(__imp__sub_8254A8F8);
+REX_EXTERN(__imp__sub_82569A70);
+REX_EXTERN(__imp__sub_8245A7B8);
+REX_EXTERN(__imp__sub_8246DC58);
+REX_EXTERN(__imp__sub_82428020);
+REX_EXTERN(__imp__sub_82464680);
 #endif
 #if defined(KK_DEV_TOOLS)
 REX_EXTERN(__imp__sub_8250EE50);
@@ -338,6 +346,12 @@ struct Authored {
 };
 struct Pending { EnemyId id; uint32_t ai, matrix; float x, y, z; };
 struct Spawner { uint64_t key; uint32_t ai, vars, sequence = 0; std::map<uint32_t, uint64_t> sources; };
+#if defined(KK_DEV_TOOLS)
+struct DevRaptorLog {
+  double select_next = 0, vision_next = 0, filter_next = 0, register_next = 0, ray_next = 0, gate_next = 0;
+  unsigned select_count = 0, vision_count = 0, filter_count = 0, register_count = 0, ray_count = 0, gate_count = 0;
+};
+#endif
 struct State {
   uint32_t world = 0, game = 0;
   std::map<std::pair<uint32_t, uint32_t>, uint32_t> visits;
@@ -377,6 +391,8 @@ struct State {
   bool shot_matched = false;
   const char* shot_hit_reason = "no-hit";
   unsigned shot_target_diagnostics = 0;
+  std::map<uint32_t, DevRaptorLog> raptor_logs;
+  unsigned raptor_candidate_lines = 0;
 #endif
   double census_until = 0, next_numbers = 0, next_shot_log = 0;
   double error_sum = 0, error_max = 0;
@@ -396,6 +412,9 @@ struct State {
     next_damage = next_status = 0; pending_damage.clear(); sent_status.reset();
     damage_replay = {}; status_replay = {}; injecting_damage = false;
     next_status_time = 0; partner_status_time = -1;
+#if defined(KK_DEV_TOOLS)
+    raptor_logs.clear(); raptor_candidate_lines = 0;
+#endif
   }
 };
 State& Get() { static State s; return s; }
@@ -936,21 +955,140 @@ void DevBait(PPCContext& ctx, uint8_t* b) {
   REXLOG_INFO("KK dev bait: at {:.2f} guest teleported by native 82538B70 raptor={:016X}/{} from=({:.3f},{:.3f},{:.3f}) to=({:.3f},{:.3f},{:.3f}) stand-off=3 collision-unverified=true",
       t, e.id.source, e.id.sequence, origin.x, origin.y, origin.z, target.x, target.y, target.z);
 }
-void DevRaptorSelection(PPCContext& ctx, uint8_t* b) {
-  if (!REXCVAR_GET(kk_coop_enabled) || !Connected()) { __imp__sub_8254A8F8(ctx, b); return; }
-  const auto ai = Load32(b, 0x82CCBF64), actor = Load32(b, 0x82CCBF6C);
-  const auto vars = Ptr(b, ai, 64, 5220);
-  const bool observe = REXCVAR_GET(kk_coop_enabled) && Connected() && vars;
-  const auto before = observe ? Load32(b, vars+5216) : 0;
-  __imp__sub_8254A8F8(ctx, b);
-  if (!observe || Ptr(b, ai, 64, 5220) != vars) return;
-  static double next = 0; static unsigned count = 0;
-  const auto after = Load32(b, vars+5216);
-  if (count < 160 && (before != after || Now() >= next)) {
-    ++count; next = Now()+1;
-    REXLOG_INFO("BITE raptor-select actor={:08X} hero-cache+5100={:08X} target-handle+5216={:08X}->{:08X} body={:08X}",
-        actor, Load32(b, vars+5100), before, after, kk::PartnerBodyCombatActor(b));
+// Diagnostics are per validated host raptor, bounded and reset on load. The old
+// process-wide timer hid other raptors; a handle alone did not identify a victim.
+uint32_t DevRaptorVars(const uint8_t* b, uint32_t actor, uint32_t ai) {
+  const auto& s = Get();
+  if (!REXCVAR_GET(kk_coop_enabled) || !Connected() || s.link.role != Role::Host || !Environment(b, s.world)) return 0;
+  const auto it = s.bindings.find(actor);
+  if (it == s.bindings.end() || it->second.id.family != EnemyFamily::Raptor ||
+      it->second.ai != ai || !ValidBinding(b, it->second)) return 0;
+  const auto vars = Ptr(b, ai, 64, 14200);
+  return vars == it->second.vars ? vars : 0;
+}
+DevRaptorLog* DevRaptorBudget(uint32_t actor) {
+  auto& logs = Get().raptor_logs;
+  if (!logs.contains(actor) && logs.size() >= 16) return nullptr;
+  return &logs[actor];
+}
+bool DevSample(double& next, unsigned& count, bool changed = false) {
+  const auto now = Now();
+  if (count >= 64 || (!changed && now < next)) return false;
+  ++count; next = now+1; return true;
+}
+int32_t DevBodySlot(const uint8_t* b, uint32_t vars, uint32_t body) {
+  const auto count = Load32(b, vars+5236);
+  if (!body || count > 20) return -1;
+  for (uint32_t i = 0; i < count; ++i) if (Load32(b, vars+6244+4*i) == body) return int32_t(i);
+  return -1;
+}
+void DevRaptorCandidates(const uint8_t* b, uint32_t actor, uint32_t vars, uint32_t body) {
+  const auto count = Load32(b, vars+5236);
+  if (count > 20) { REXLOG_WARN("BITE raptor-candidates actor={:08X} invalid-count={} limit=20", actor, count); return; }
+  for (uint32_t i = 0; i < count; ++i) {
+    const auto target = Load32(b, vars+6244+4*i), off = 4*i, pos = vars+6000+12*i;
+    // Reserve evidence for a late body registration even after the other-row
+    // budget is spent. Body rows remain bounded by each raptor's 64 samples.
+    if (!(body && target == body)) {
+      if (Get().raptor_candidate_lines >= 1024) continue;
+      ++Get().raptor_candidate_lines;
+    }
+    // Best-interest has several priority passes, not one scalar score. +5748 is
+    // native distance; +5832 is compared as a score in 8254AABC. Log both plus
+    // eligibility/priority fields rather than infer why a lower score won.
+    REXLOG_INFO("BITE raptor-candidate actor={:08X} slot={} candidate={:08X} body={} selected={} visited={} class+5664={} flags+5496={:08X} seen+5244={} area+5328={} area-id+5412={} group+5580={} distance+5748={:.3f} score+5832={:.3f} life+5916={:.3f} pos=({:.3f},{:.3f},{:.3f})",
+        actor, i, target, body && target == body, Load32(b, vars+5228) == i,
+        (Load32(b, vars+5232) & (1u << i)) != 0, Load32(b, vars+5664+off), Load32(b, vars+5496+off),
+        Load32(b, vars+5244+off), Load32(b, vars+5328+off), Load32(b, vars+5412+off), Load32(b, vars+5580+off),
+        LoadF(b, vars+5748+off), LoadF(b, vars+5832+off), LoadF(b, vars+5916+off),
+        LoadF(b, pos), LoadF(b, pos+4), LoadF(b, pos+8));
   }
+}
+void DevRaptorVision(PPCContext& ctx, uint8_t* b) {
+  const auto ai = Load32(b, 0x82CCBF64), actor = Load32(b, 0x82CCBF6C);
+  const auto vars = DevRaptorVars(b, actor, ai), body = vars ? kk::PartnerBodyCombatActor(b) : 0;
+  auto* budget = vars ? DevRaptorBudget(actor) : nullptr;
+  const bool sample = budget && body && DevSample(budget->vision_next, budget->vision_count);
+  if (sample) {
+    const auto u32 = [&](uint32_t p) { return Load32(b, p); };
+    const auto pool = stimulus_debug::ReadPool(u32, 1);
+    unsigned found = 0, enumerable = 0;
+    if (pool.valid && pool.count <= 4096) for (uint32_t i = 0; i < pool.count; ++i) {
+      const auto r = stimulus_debug::ReadSlot(u32, pool, i);
+      if (!r.valid || r.source != body) continue;
+      ++found; enumerable += r.enumerable;
+      if (found <= 4) REXLOG_INFO("BITE vision-stimulus actor={:08X} body={:08X} id={:08X}/{} pool-flags={:08X} enumerable={} lifetime={:.6f} class={} status={} life={:.3f} pos=({:.3f},{:.3f},{:.3f})",
+          actor, body, r.id, r.generation, r.flags, r.enumerable, LoadF(b, r.address+4),
+          Load32(b, r.address+8+96), Load32(b, r.address+8+92), LoadF(b, r.address+8+48),
+          LoadF(b, r.address+8+24), LoadF(b, r.address+8+28), LoadF(b, r.address+8+32));
+    }
+    REXLOG_INFO("BITE vision-input actor={:08X} body={:08X} pool-valid={} scan-complete={} pool={}/{} body-records={} enumerable={} cached+5144={} candidates={} body-slot={}",
+        actor, body, pool.valid, pool.valid && pool.count <= 4096, pool.count, pool.capacity,
+        found, enumerable, Load32(b, vars+5144), Load32(b, vars+5236), DevBodySlot(b, vars, body));
+  }
+  __imp__sub_82569A70(ctx, b);
+  if (sample && DevRaptorVars(b, actor, ai) == vars)
+    REXLOG_INFO("BITE vision-output actor={:08X} body={:08X} candidates={} body-slot={} visited-mask={:08X}",
+        actor, body, Load32(b, vars+5236), DevBodySlot(b, vars, body), Load32(b, vars+5232));
+}
+void DevRaptorFilter(PPCContext& ctx, uint8_t* b) {
+  const auto ai = Load32(b, 0x82CCBF64), actor = Load32(b, 0x82CCBF6C);
+  const auto vars = uint32_t(ctx.lr) == 0x82569BD8 ? DevRaptorVars(b, actor, ai) : 0;
+  const auto body = vars ? kk::PartnerBodyCombatActor(b) : 0;
+  const auto r = body ? stimulus_debug::ReadHandle([&](uint32_t p) { return Load32(b, p); }, ctx.r3.u32) : stimulus_debug::Record{};
+  const auto classification = r.valid ? Load32(b, r.address+8+96) : 0;
+  __imp__sub_8245A7B8(ctx, b);
+  auto* budget = r.valid && r.source == body ? DevRaptorBudget(actor) : nullptr;
+  if (budget && DevSample(budget->filter_next, budget->filter_count))
+    REXLOG_INFO("BITE body-filter actor={:08X} body={:08X} id={:08X}/{} class={} rejected={}",
+        actor, body, r.id, r.generation, classification, ctx.r3.u32 != 0);
+}
+void DevRaptorRegister(PPCContext& ctx, uint8_t* b) {
+  const auto ai = Load32(b, 0x82CCBF64), actor = Load32(b, 0x82CCBF6C);
+  const auto vars = uint32_t(ctx.lr) == 0x82569BF8 ? DevRaptorVars(b, actor, ai) : 0;
+  const auto body = vars ? kk::PartnerBodyCombatActor(b) : 0;
+  const bool observe = body && ctx.r3.u32 == body;
+  const auto before = observe ? Load32(b, vars+5236) : 0;
+  __imp__sub_8246DC58(ctx, b);
+  auto* budget = observe && DevRaptorVars(b, actor, ai) == vars ? DevRaptorBudget(actor) : nullptr;
+  if (budget && DevSample(budget->register_next, budget->register_count))
+    REXLOG_INFO("BITE body-register actor={:08X} body={:08X} returned-slot={} body-slot={} candidates={}->{} full-before={}",
+        actor, body, ctx.r3.s32, DevBodySlot(b, vars, body), before, Load32(b, vars+5236), before == 20);
+}
+void DevRaptorVisibility(PPCContext& ctx, uint8_t* b, bool ray) {
+  const auto ai = Load32(b, 0x82CCBF64), actor = Load32(b, 0x82CCBF6C), caller = uint32_t(ctx.lr);
+  const auto vars = caller == (ray ? 0x82569FE8u : 0x8256A0DCu) ? DevRaptorVars(b, actor, ai) : 0;
+  const auto body = vars ? kk::PartnerBodyCombatActor(b) : 0;
+  const auto index = ctx.r3.u32;
+  const bool observe = body && (ray ? index == body : index < 20 && index < Load32(b, vars+5236) && Load32(b, vars+6244+4*index) == body);
+  if (ray) __imp__sub_82428020(ctx, b); else __imp__sub_82464680(ctx, b);
+  auto* budget = observe ? DevRaptorBudget(actor) : nullptr;
+  if (budget && DevSample(ray ? budget->ray_next : budget->gate_next, ray ? budget->ray_count : budget->gate_count))
+    REXLOG_INFO("BITE body-visibility actor={:08X} body={:08X} helper={} caller={:08X} result={} (native-vision-ray-nonzero-passes; gate-zero-passes)",
+        actor, body, ray ? "82428020" : "82464680", caller, ctx.r3.u32);
+}
+void DevRaptorSelection(PPCContext& ctx, uint8_t* b) {
+  const auto ai = Load32(b, 0x82CCBF64), actor = Load32(b, 0x82CCBF6C);
+  const auto vars = DevRaptorVars(b, actor, ai);
+  const auto before = vars ? Load32(b, vars+5216) : 0;
+  const auto cached = vars ? Load32(b, vars+5168) : 0;
+  __imp__sub_8254A8F8(ctx, b);
+  if (!vars || DevRaptorVars(b, actor, ai) != vars) return;
+  auto* budget = DevRaptorBudget(actor);
+  const auto after = Load32(b, vars+5216), body = kk::PartnerBodyCombatActor(b);
+  if (!budget || !DevSample(budget->select_next, budget->select_count, before != after)) return;
+  const auto u32 = [&](uint32_t p) { return Load32(b, p); };
+  const auto target = stimulus_debug::ReadHandle(u32, vars+5216);
+  const auto force = stimulus_debug::ReadHandle(u32, vars+8436);
+  uint32_t state = 0; bool spawner = false; Tracks(b, ai, state, spawner);
+  REXLOG_INFO("BITE raptor-select actor={:08X} hero-cache+5100={:08X} target-handle+5216={:08X}->{:08X}/{} valid={} source={:08X} victim={:08X} body={:08X} victim-is-body={} slot={} body-slot={} candidates={} state={:08X} cached-before+5168={} mode+5108={} kind+32={} script+13932={} script-actor+10808={:08X} script-op+10904={} force+8436={:08X}/{} force-owner={:08X} force-victim={:08X} force-active+8432={} human-policy+8316={:.3f} interest-value+36={:.3f}",
+      actor, Load32(b, vars+5100), before, after, target.generation, target.valid, target.source, target.target,
+      body, body && target.valid && target.target == body, int32_t(Load32(b, vars+5228)), DevBodySlot(b, vars, body),
+      Load32(b, vars+5236), state, cached, Load32(b, vars+5108), Load32(b, vars+32), Load32(b, vars+13932),
+      Load32(b, vars+10808), Load32(b, vars+10904), force.id, force.generation, force.target,
+      force.valid ? Load32(b, force.address+16) : 0,
+      Load32(b, vars+8432), LoadF(b, vars+8316), target.valid ? LoadF(b, target.address+44) : 0.0f);
+  DevRaptorCandidates(b, actor, vars, body);
 }
 #endif
 void ObserveHumanConsumption(PPCContext& ctx, uint8_t* b) {
@@ -1479,6 +1617,21 @@ REX_HOOK_RAW(sub_82548BC0) {
   __imp__sub_82548BC0(ctx, base);
 }
 #if defined(KK_DEV_TOOLS)
+REX_HOOK_RAW(sub_82569A70) {
+  kk::coop::DevRaptorVision(ctx, base);
+}
+REX_HOOK_RAW(sub_8245A7B8) {
+  kk::coop::DevRaptorFilter(ctx, base);
+}
+REX_HOOK_RAW(sub_8246DC58) {
+  kk::coop::DevRaptorRegister(ctx, base);
+}
+REX_HOOK_RAW(sub_82428020) {
+  kk::coop::DevRaptorVisibility(ctx, base, true);
+}
+REX_HOOK_RAW(sub_82464680) {
+  kk::coop::DevRaptorVisibility(ctx, base, false);
+}
 REX_HOOK_RAW(sub_8254A8F8) {
   kk::coop::DevRaptorSelection(ctx, base);
 }

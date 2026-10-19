@@ -11,6 +11,7 @@
 #include "coop_partner_body.h"
 #if defined(KK_DEV_TOOLS)
 #include "dev_puppet_mesh.h"
+#include "coop_stimulus_debug.h"
 #endif
 
 #include <algorithm>
@@ -1486,12 +1487,28 @@ bool PartnerBodyStimulus(PPCContext& ctx, uint8_t* b) {
     // The publisher alone may mention its own body; no arbitrary stimulus or
     // mission/cinematic payload receives this exemption.
 #if defined(KK_DEV_TOOLS)
-    static uint64_t count = 0;
-    if (++count <= 8 || count%120 == 0)
-      REXLOG_INFO("BITE human-publish body={:08X} class={} lifetime={:.3f} count={}",
-          body, Load32(b, ctx.r6.u32+96), ctx.f1.f64, count);
+    const auto output = ctx.r8.u32, payload = ctx.r6.u32;
+    const bool readable = Range(output, 8);
+    const auto old_id = readable ? Load32(b, output) : UINT32_MAX;
+    const auto old_generation = readable ? Load32(b, output+4) : 0;
+    const auto classification = Load32(b, payload+96);
+    const auto lifetime = ctx.f1.f64;
 #endif
     __imp__sub_8271E4E8(ctx, b);
+#if defined(KK_DEV_TOOLS)
+    const auto u32 = [&](uint32_t p) { return Load32(b, p); };
+    const auto record = coop::stimulus_debug::ReadHandle(u32, output);
+    const bool queued = readable && record.valid && record.source == body && (record.id >> 24) == 1 &&
+        (record.id != old_id || record.generation != old_generation);
+    static uint64_t count = 0, succeeded = 0, refused = 0;
+    ++count; if (queued) ++succeeded; else ++refused;
+    if (count <= 8 || count%120 == 0 || (!queued && refused <= 8)) {
+      const auto pool = coop::stimulus_debug::ReadPool(u32, 1);
+      REXLOG_INFO("BITE human-publish body={:08X} class={} lifetime={:.3f} queued={} id={:08X}/{} record={:08X} pool-flags={:08X} enumerable={} source={:08X} pool={}/{} count={} succeeded={} refused={}",
+          body, classification, lifetime, queued, record.id, record.generation, record.address, record.flags,
+          record.enumerable, record.source, pool.count, pool.capacity, count, succeeded, refused);
+    }
+#endif
     return true;
   }
   return false;
