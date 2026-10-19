@@ -41,11 +41,15 @@
 #include "backend/vk_pipeline_library.h"
 #include "backend/vulkan_dispatch.h"
 #include "backend/vulkan_requirements.h"
+#include "backend/buffer_pool.h"
+#include "backend/placed_textures.h"
 
 REXCVAR_DECLARE(bool, native_validation);
 REXCVAR_DECLARE(bool, native_vk_pipeline_cache);
 REXCVAR_DECLARE(bool, native_vk_pipeline_library);
 REXCVAR_DECLARE(int32_t, native_debug);
+REXCVAR_DECLARE(bool, native_vk_texture_pool);
+REXCVAR_DECLARE(bool, native_vk_buffer_pool);
 REXCVAR_DECLARE(bool, native_vk_small_tables);
 REXCVAR_DECLARE(bool, native_vk_minimum_tables);
 
@@ -146,6 +150,17 @@ class VulkanHost final : public HostDevice {
       } else {
         REXLOG_INFO("rexgpu-native: Vulkan graphics pipeline library off ({}): pipelines are compiled whole", why);
       }
+    }
+    // Task 313: NVRHI gives every Vulkan texture and buffer its own vkAllocateMemory. Pooled textures share
+    // 64 MiB blocks (vendored NVRHI, thirdparty/NOTES.md); pooled guest buffers share 32 MiB buffers
+    // (buffer_pool.h, the game renderer).
+    if (REXCVAR_GET(native_vk_texture_pool)) desc.pooledTextureBlockSize = 64ull << 20;
+    g_texture_memory_not_zeroed.store(desc.pooledTextureBlockSize != 0, std::memory_order_relaxed);
+    g_buffer_pool_enabled.store(REXCVAR_GET(native_vk_buffer_pool), std::memory_order_relaxed);
+    if (desc.pooledTextureBlockSize || REXCVAR_GET(native_vk_buffer_pool)) {
+      REXLOG_INFO("rexgpu-native: Vulkan allocation: textures {}, guest buffers {}",
+                  desc.pooledTextureBlockSize ? "pooled in 64 MiB blocks" : "one allocation each",
+                  REXCVAR_GET(native_vk_buffer_pool) ? "pooled in 32 MiB buffers" : "one allocation each");
     }
     nvrhi::vulkan::DeviceHandle vulkan_nvrhi = nvrhi::vulkan::createDevice(desc);
     device_ = vulkan_nvrhi;

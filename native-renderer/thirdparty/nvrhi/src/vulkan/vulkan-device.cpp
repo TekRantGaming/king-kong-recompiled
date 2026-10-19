@@ -245,6 +245,11 @@ namespace nvrhi::vulkan
 #endif
         if (desc.graphicsPipelineLibrary)
             m_PipelineLibrary = std::make_unique<PipelineLibraryCache>();
+        if (desc.pooledTextureBlockSize)
+        {
+            m_TexturePool = std::make_unique<TexturePool>(m_Context, desc.pooledTextureBlockSize);
+            m_Context.texturePool = m_TexturePool.get();
+        }
 
         vk::Result res = vk::Result::eSuccess;
         if (desc.pipelineCache)

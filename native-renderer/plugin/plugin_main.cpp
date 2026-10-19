@@ -73,6 +73,16 @@ REXCVAR_DEFINE_BOOL(native_d3d12_buffer_pool, false, "Native renderer",
                     "resource each (task 309; false = before task 309)")
     .lifecycle(rex::cvar::Lifecycle::kInitOnly);
 
+// Task 313: Vulkan allocation cost, built off (today's behaviour). Proposed for Craig after the game check: both true.
+REXCVAR_DEFINE_BOOL(native_vk_texture_pool, false, "Native renderer",
+                    "Vulkan: guest textures share 64 MiB device memory blocks instead of one vkAllocateMemory each "
+                    "(task 313; false = before task 313)")
+    .lifecycle(rex::cvar::Lifecycle::kInitOnly);
+REXCVAR_DEFINE_BOOL(native_vk_buffer_pool, false, "Native renderer",
+                    "Vulkan: guest vertex and index buffers share 32 MiB buffers instead of one allocation each "
+                    "(task 313; false = before task 313)")
+    .lifecycle(rex::cvar::Lifecycle::kInitOnly);
+
 REXCVAR_DEFINE_BOOL(native_wvp_transpose, false, "Native renderer",
                     "Placeholder draws: read vertex shader constants c0..c3 as the columns of "
                     "the world-view-projection matrix instead of its rows")
