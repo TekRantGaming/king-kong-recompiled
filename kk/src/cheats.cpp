@@ -263,9 +263,12 @@ std::chrono::steady_clock::time_point g_loadout_seen{};
 #if defined(KK_DEV_TOOLS)
 // A synthetic checkpoint can clear the early cheat grant and never supply a
 // nonempty authored loadout. Keep the normal player's checkpoint watcher intact:
-// only KK_DEV_START_POINT opts into this empty-but-playable fallback.
+// KK_DEV_START_POINT and the lobby sweep's explicit KK_DEV_EMPTY_LOADOUT=1
+// opt into this empty-but-playable fallback without changing authored starts.
 bool DevEmptyLoadoutReady(const uint8_t* base, bool empty) {
   static const bool enabled = [] {
+    if (const char* sweep = std::getenv("KK_DEV_EMPTY_LOADOUT"); sweep && std::strcmp(sweep, "1") == 0)
+      return true;
     const char* value = std::getenv("KK_DEV_START_POINT");
     if (!value || !*value) return false;
     char* end = nullptr;
