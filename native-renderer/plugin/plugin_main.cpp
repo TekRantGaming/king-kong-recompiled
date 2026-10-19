@@ -211,6 +211,11 @@ REXCVAR_DEFINE_DOUBLE(native_pipeline_wait_budget_ms, 4.0, "Native renderer",
                       "Without native_pipeline_wait: milliseconds a frame may wait in all for scene draws' "
                       "pipelines being created before those draws are skipped (0: skip at once, never wait)")
     .lifecycle(rex::cvar::Lifecycle::kInitOnly);
+REXCVAR_DEFINE_DOUBLE(native_pipeline_must_wait_ms, 4.0, "Native renderer",
+                      "Without native_pipeline_wait: milliseconds a gameplay frame may wait in all for the pipelines "
+                      "of draws later draws depend on (depth-only, stencil, screen-space) before those are skipped "
+                      "too (task 267; -1: no limit, the old behaviour)")
+    .lifecycle(rex::cvar::Lifecycle::kInitOnly);
 
 REXCVAR_DEFINE_STRING(native_render_scale, "auto", "Native renderer",
                       "Render scale: the game's render targets, viewports, resolves and textures made from "

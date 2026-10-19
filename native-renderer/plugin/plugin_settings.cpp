@@ -38,6 +38,7 @@ REXCVAR_DECLARE(int32_t, native_debug);
 REXCVAR_DECLARE(bool, native_async_pipelines);
 REXCVAR_DECLARE(bool, native_pipeline_wait);
 REXCVAR_DECLARE(double, native_pipeline_wait_budget_ms);
+REXCVAR_DECLARE(double, native_pipeline_must_wait_ms);
 REXCVAR_DECLARE(bool, native_dynamic_vertex_buffers);
 REXCVAR_DECLARE(bool, native_render_thread);
 REXCVAR_DECLARE(int32_t, native_render_thread_presents);
@@ -330,6 +331,7 @@ GameSettings ReadGameSettings(bool vulkan) {
     game.fxaa = aa == "smaa" ? 3u : (aa == "fxaa" ? 1u : (aa == "fxaa_extreme" ? 2u : 0u));
   }
   game.pipeline_wait_budget_ms = REXCVAR_GET(native_pipeline_wait_budget_ms);
+  game.pipeline_must_wait_ms = REXCVAR_GET(native_pipeline_must_wait_ms);
   if (const char* frame_log = std::getenv("REX_DEV_FRAME_LOG")) game.frame_log = frame_log;
   game.render_scale = REXCVAR_GET(native_render_scale);
   if (game.render_scale == "auto") {

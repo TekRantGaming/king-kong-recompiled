@@ -252,6 +252,12 @@ bool GameRenderer::Initialize() {
       if (shader) QueueShaderParts(kind == kkshaders::ShaderKind::Vertex, shader->handle);
     });
   }
+  // Dev (task 267): a slow PC's cold compiles on a fast one (A/B runs; the cap: --native_pipeline_must_wait_ms).
+  if (const char* v = std::getenv("KK_DEV_PIPELINE_DELAY_MS"); v && *v) {
+    dev_compile_delay_ms_ = std::clamp(std::atoi(v), 0, 2000);
+    Logf(LogLevel::kInfo, "rexgpu-native: KK_DEV_PIPELINE_DELAY_MS: each worker compile takes %d ms longer (dev)",
+         dev_compile_delay_ms_);
+  }
   // Keep the scale-aware shader ABI at the native-resolution floor too. It
   // was selected before shader creation for these initially scaled runs.
   memory_floor_x_ = std::min(options_.render_scale_x, 1.0f);
@@ -1138,6 +1144,10 @@ void GameRenderer::PipelineWorker() {
     if (job.urgent && build != PipelineBuild::kReplace && build != PipelineBuild::kParts)
       build = pipeline_library_ ? PipelineBuild::kLinked : PipelineBuild::kWhole;
     const auto start = std::chrono::steady_clock::now();
+    // Dev (task 267): KK_DEV_PIPELINE_DELAY_MS=N adds N ms to each worker compile (not a link), as a slow PC's
+    // cold driver compiles: a laptop's chapter-start backlog reproduced on a fast PC.
+    if (dev_compile_delay_ms_ > 0 && build != PipelineBuild::kLinked)
+      std::this_thread::sleep_for(std::chrono::milliseconds(dev_compile_delay_ms_));
     nvrhi::GraphicsPipelineHandle p;
     if (build == PipelineBuild::kParts) {
       const bool made = PrepareLibraryParts(job.desc, job.framebuffer);
@@ -1351,23 +1361,42 @@ nvrhi::IGraphicsPipeline* GameRenderer::GetPipeline(const nvrhi::GraphicsPipelin
     if (optional) return nullptr;
     const char* demand_kind = was_pending ? "pending" : "new";
     if (demand == PipelineDemand::kMustDraw) {
-      // Wait for the worker that has this pipeline (the draw's own job, or the prewarm's).
-      const auto start = std::chrono::steady_clock::now();
-      pipeline_done_cv_.wait(lock, [&] {
+      // Wait for the worker that has this pipeline (the draw's own job, at the front, or the prewarm's). Task 267:
+      // within a hard cap per frame (all such draws together); after it the draw is skipped until it is ready.
+      if (must_wait_frame_ != frame_) {
+        must_wait_frame_ = frame_;
+        must_wait_ms_ = 0;
+      }
+      const double cap = miss_class == PipelineMissClass::kBlockAll ? -1.0
+                         : miss_class == PipelineMissClass::kLoading ? options_.pipeline_loading_wait_ms
+                                                                     : options_.pipeline_must_wait_ms;
+      const double left = MustDrawWaitLeft(cap, must_wait_ms_);
+      auto ready = [&] {
         DrainDonePipelinesLocked();
         return pipelines_.count(key) != 0 || pipeline_stop_;
-      });
-      ++stats_.pipeline_waits;
-      ++stats_.pipeline_waits_by_class[size_t(miss_class)];
+      };
+      const auto start = std::chrono::steady_clock::now();
+      if (left < 0) {
+        pipeline_done_cv_.wait(lock, ready);
+      } else if (left > 0) {
+        pipeline_done_cv_.wait_for(lock, std::chrono::duration<double, std::milli>(left), ready);
+      } else {
+        ready();
+      }
       const double waited = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - start).count();
+      must_wait_ms_ += waited;
       stats_.pipeline_wait_ms += waited;
-      NoteFrameWait(waited);
       auto found = pipelines_.find(key);
-      if (pipeline_log_ || !pipeline_log_checked_)
-        LogPipelineDemand(key, demand_kind, waited, found != pipelines_.end() && found->second, miss_class);
-      return found != pipelines_.end() ? found->second.Get() : nullptr;
-    }
-    if (options_.pipeline_wait_budget_ms > 0) {
+      if (found != pipelines_.end() || pipeline_stop_ || waited > 0.05) NoteFrameWait(waited);
+      if (found != pipelines_.end() || pipeline_stop_) {
+        ++stats_.pipeline_waits;
+        ++stats_.pipeline_waits_by_class[size_t(miss_class)];
+        if (pipeline_log_ || !pipeline_log_checked_)
+          LogPipelineDemand(key, demand_kind, waited, found != pipelines_.end() && found->second, miss_class);
+        return found != pipelines_.end() ? found->second.Get() : nullptr;
+      }
+      ++stats_.must_draw_skips;  // not ready within the cap: skipped below as a scene draw (its job stays first)
+    } else if (options_.pipeline_wait_budget_ms > 0) {
       // Wait within what is left of this frame's budget.
       if (wait_budget_frame_ != frame_) {
         wait_budget_frame_ = frame_;
@@ -1436,7 +1465,8 @@ void GameRenderer::LogPipelineMisses(bool final) {
   const Stats& s = stats_;
   const Stats& p = miss_log_previous_;
   if (!final && s.skipped_pending == p.skipped_pending && s.pipeline_waits == p.pipeline_waits &&
-      s.pipeline_budget_waits == p.pipeline_budget_waits && s.pipelines_missed_ready == p.pipelines_missed_ready)
+      s.pipeline_budget_waits == p.pipeline_budget_waits && s.pipelines_missed_ready == p.pipelines_missed_ready &&
+      s.must_draw_skips == p.must_draw_skips)
     return;
   if (final && s.skipped_pending == 0 && s.pipeline_waits == 0 && s.pipeline_budget_waits == 0) return;
   miss_log_previous_ = stats_;
@@ -1445,11 +1475,17 @@ void GameRenderer::LogPipelineMisses(bool final) {
     std::lock_guard lock(stutter_mutex_);
     frames_skipped = stutter_.frames_skipped;
   }
+  size_t queued = 0;
+  {
+    std::lock_guard lock(pipeline_mutex_);
+    queued = pipeline_jobs_.size();
+  }
   const auto& w = s.pipeline_waits_by_class;
   Logf(LogLevel::kInfo,
        "rexgpu-native: pipelines not ready %s frame %llu: %llu draws skipped in %llu frames, %llu pipelines missed "
        "(%llu ready after avg %.1f max %llu frames, max %.0f ms); waits %llu (depth-only %llu, stencil %llu, "
-       "screen-space %llu, loading %llu, block-all %llu, budget %llu), %.0f ms",
+       "screen-space %llu, loading %llu, block-all %llu, budget %llu), %.0f ms; %llu skipped after the wait cap; "
+       "%zu jobs queued",
        final ? "at the end," : "so far,", static_cast<unsigned long long>(frame_),
        static_cast<unsigned long long>(s.skipped_pending), static_cast<unsigned long long>(frames_skipped),
        static_cast<unsigned long long>(s.pipelines_missed), static_cast<unsigned long long>(s.pipelines_missed_ready),
@@ -1461,7 +1497,8 @@ void GameRenderer::LogPipelineMisses(bool final) {
        static_cast<unsigned long long>(w[size_t(PipelineMissClass::kScreenSpace)]),
        static_cast<unsigned long long>(w[size_t(PipelineMissClass::kLoading)]),
        static_cast<unsigned long long>(w[size_t(PipelineMissClass::kBlockAll)]),
-       static_cast<unsigned long long>(w[size_t(PipelineMissClass::kScene)]), s.pipeline_wait_ms);
+       static_cast<unsigned long long>(w[size_t(PipelineMissClass::kScene)]), s.pipeline_wait_ms,
+       static_cast<unsigned long long>(s.must_draw_skips), queued);
 }
 
 GameRenderer::PipelineLibraryStats GameRenderer::PipelineLibraryCounts() const {

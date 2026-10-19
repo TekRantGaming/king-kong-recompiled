@@ -17,7 +17,8 @@ namespace nr {
 // How a caller asks for a pipeline (GameRenderer::GetPipeline).
 enum class PipelineDemand : uint8_t {
   kNow,       // the renderer's own passes: made at once on the calling thread when absent (a small fixed set)
-  kMustDraw,  // a game draw later draws depend on: queued first, and the draw waits for it
+  kMustDraw,  // a game draw later draws depend on: queued first; the draw waits for it within a cap per frame
+              // (task 267: Options::pipeline_must_wait_ms), then is skipped like a kMaySkip draw
   kMaySkip,   // a game scene draw: queued after other draws' jobs; null until a worker has made it
   kOptional,  // an extra pass (motion replay, lighting variant, memory blit): queued behind, never counted
   kSoon,      // an extra pass the scene shows (AO on the first-person hands): queued with the draws' jobs
@@ -96,6 +97,15 @@ bool PromoteDrawJob(Queue& jobs, uint64_t key, bool first) {
   jobs.erase(queued);
   QueueDrawJob(jobs, std::move(job), first);
   return true;
+}
+
+// Task 267: how long a draw later draws depend on (kMustDraw) may still wait for its pipeline, given what
+// this frame's such draws have waited already. cap_ms < 0: no limit (the pre-267 behaviour, and
+// block-all); 0: no wait. After the cap the draw is skipped like a scene draw (pop-in, not a freeze).
+inline double MustDrawWaitLeft(double cap_ms, double waited_this_frame_ms) {
+  if (cap_ms < 0) return -1.0;
+  const double left = cap_ms - waited_this_frame_ms;
+  return left > 0 ? left : 0.0;
 }
 
 }  // namespace nr

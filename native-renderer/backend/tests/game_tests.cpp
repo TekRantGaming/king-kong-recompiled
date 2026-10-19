@@ -3024,6 +3024,7 @@ TEST(PipelineSkip_DependentDrawsStillWait) {
     Fixture f;
     if (!f.Init()) return;
     f.game->options().async_pipelines = true;
+    f.game->options().pipeline_must_wait_ms = -1.0;  // no cap (task 267): a loaded PC may compile past 4 ms
     const uint32_t rt = f.BindMainSurface();
     auto p = f.MakeColorPipeline();
     Pixels px = DrawQuadrantFrame(f, rt, p);
@@ -3035,6 +3036,7 @@ TEST(PipelineSkip_DependentDrawsStillWait) {
     Fixture f;
     if (!f.Init()) return;
     f.game->options().async_pipelines = true;
+    f.game->options().pipeline_must_wait_ms = -1.0;  // no cap (task 267): a loaded PC may compile past 4 ms
     const uint32_t rt = f.BindMainSurface();
     f.SetDepthStencil(f.NewSurface(kSize, kSize, 200, 0));
     auto p = f.MakeColorPipeline();
