@@ -62,6 +62,11 @@ Layout logic: `kk/src/pause_menu_logic.h` (tested by `pause-menu-layout`).
 - After a chapter-select run ends (Score pages, then the game would load its menus), the port takes the player
   back to the launcher's chapter select. Story runs (Continue / New game) go on to the next chapter as the game
   does.
+- PS2 cutscenes (task 256, beta issue #3): the end of a chapter-select run plays the same between-chapter
+  movie story play shows at that chapter's end (ps2_movies_logic.h MovieRun), then the Score pages, then the
+  launcher. The game turns any other level request of a chapter-select run into level 3 inside uni_go
+  (0x8253DF84: G+0x566C = the request, G+8 = 3), after the port's hook has seen the request for the next
+  chapter's level. Never in the benchmark; Quit, Start again and Extras never show one.
 - Saves: every write or delete by the port is preceded by `BackupSaves`. The game deletes a save when it saves
   with a continue level of 0 (chapter-jump.md "Mistakes"): the port never lets that happen (it sets the
   continue point before any save the game makes after a jump, or blocks the save).

@@ -11,8 +11,17 @@
 
 namespace kk::movies {
 
-// A story boundary only. Boot, Continue, chapter practice, replay, death,
-// restarts, menu loads and arbitrary level jumps do not insert a movie.
+// Which runs may show a between-chapter movie (pass the result as StoryBoundary's `story`): story play,
+// and the end of a chapter-select run (owner, beta issue #3, 19 Oct): there the chapter's end asks for the
+// next chapter's level exactly as in story play (the game then turns it into its menu level for the Score
+// pages), so the same movie plays at the same moment before the player goes back to the main menu. Never
+// in the benchmark, which chains chapter-select starts.
+inline bool MovieRun(bool chapter_select_run, bool benchmark) {
+  return !chapter_select_run || !benchmark;
+}
+
+// A story boundary only (the next chapter in the chapter list). Boot, Continue, a chapter-select start,
+// replay, death, restarts, Quit, menu loads and arbitrary level jumps do not insert a movie.
 inline bool StoryBoundary(std::span<const int> levels, int from, int to,
                           bool story, bool starting, bool leaving) {
   if (!story || starting || leaving || from == to) return false;

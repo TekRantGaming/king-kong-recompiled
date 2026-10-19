@@ -43,6 +43,7 @@
 #include <thread>
 #include <vector>
 
+#include "benchmark.h"
 #include "glyphs.h"
 #include "launcher_text.h"
 #include "launcher_art.h"
@@ -422,7 +423,9 @@ bool BeforeLoad(const uint8_t* base, uint32_t g, bool starting, bool leaving) {
   const int from = int(Word(base,g+0x18)), to = int(Word(base,g+8));
   std::vector<int> levels;
   for (const auto& chapter : play::Chapters()) levels.push_back(chapter.level_key);
-  if (!StoryBoundary(levels, from, to, Word(base,g+0x5668)==0, starting, leaving)) return false;
+  // G+0x5668: a chapter-select run; its end shows the movie too (MovieRun).
+  if (!StoryBoundary(levels, from, to, MovieRun(Word(base,g+0x5668)!=0, benchmark::Active()), starting, leaving))
+    return false;
   const uint32_t catalog = Word(base,0x82CC9354);
   const auto world = WorldForLevel(catalog, to, [&](uint32_t at) { return Word(base, at); });
   const auto name = MovieName(world);
