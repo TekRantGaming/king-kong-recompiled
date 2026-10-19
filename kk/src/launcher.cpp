@@ -7519,7 +7519,18 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
     REXLOG_INFO("KK dev: input {}", t);
     // Preview states only touch the SDK-free fake selected at startup.
     if (t.rfind("social:", 0) == 0) {
-      coop::SocialFakeScenario(t.substr(7));
+      // Appended command files may contain trailing whitespace. Do not silently ignore a failed scene.
+      const size_t end = t.find_last_not_of(" \t\r\n");
+      const std::string scene = end == std::string::npos ? "" : t.substr(7, end >= 7 ? end - 6 : 0);
+      if (coop::SocialFakeScenario(scene)) {
+        social_.ResetPreview();
+        const auto model = coop::Social().Snapshot();
+        REXLOG_INFO("KK dev: Social scene {} applied: status {} lobby {} host {} members {} ready {}", scene,
+                    int(model.status), model.lobby != 0, model.lobby != 0 && model.owner == model.self,
+                    model.members.size(), model.can_start);
+      } else {
+        REXLOG_WARN("KK dev: Social scene failed (requires co-op and --kk_social_fake=1)");
+      }
       return;
     }
     if (t == "wait-modal") REXLOG_INFO("KK dev: pop-up '{}' buttons {}", modal_.title, modal_.buttons.size());

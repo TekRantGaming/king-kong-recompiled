@@ -9,6 +9,9 @@ class SocialPanel {
   ~SocialPanel();
   bool blocking() const { return state_.blocking(); }
   bool animating() const { return state_.blocking() && (!state_.open() || state_.slide() < 1); }
+#if defined(KK_DEV_TOOLS)
+  void ResetPreview();  // deterministic focus/scroll and notices after a developer scene change
+#endif
   void Update(bool enabled, coop::SocialPage page, Input& input, coop::ISocialService& service);
   void Draw(ImDrawList* dl, ImVec2 origin, ImVec2 size, const Metrics& metrics, Input& input,
             Glyphs& glyphs, const std::string& prompt_set, rex::ui::ImmediateDrawer* drawer,
