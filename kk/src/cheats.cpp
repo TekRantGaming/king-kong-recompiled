@@ -87,7 +87,35 @@ void Store32(uint8_t* base, uint32_t addr, uint32_t v) {
   std::memcpy(base + addr, &v, 4);
 }
 
-bool Chosen(const char* id) { return rex::cvar::GetFlagByName(std::string("kk_cheat_") + id) == "true"; }
+}  // namespace
+}  // namespace kk
+
+REXCVAR_DECLARE(bool, kk_cheat_healing);
+REXCVAR_DECLARE(bool, kk_cheat_one_hit);
+REXCVAR_DECLARE(bool, kk_cheat_ammo);
+REXCVAR_DECLARE(bool, kk_cheat_spears);
+REXCVAR_DECLARE(bool, kk_cheat_revolver);
+REXCVAR_DECLARE(bool, kk_cheat_machine_gun);
+REXCVAR_DECLARE(bool, kk_cheat_shotgun);
+REXCVAR_DECLARE(bool, kk_cheat_sniper);
+
+namespace kk {
+namespace {
+
+// kk_cheat_<id>. Task 288: read straight from the cvars (settings.cpp), as REXCVAR_GET(kk_cheats) is: it runs
+// every frame from the input poll (ChosenBits), and the by-name lookup built a string and took the cvar
+// registry's lock (shared with the launcher and pause menu UI) 8 times a frame. Unknown ids are false, as before.
+bool Chosen(std::string_view id) {
+  if (id == "healing") return REXCVAR_GET(kk_cheat_healing);
+  if (id == "one_hit") return REXCVAR_GET(kk_cheat_one_hit);
+  if (id == "ammo") return REXCVAR_GET(kk_cheat_ammo);
+  if (id == "spears") return REXCVAR_GET(kk_cheat_spears);
+  if (id == "revolver") return REXCVAR_GET(kk_cheat_revolver);
+  if (id == "machine_gun") return REXCVAR_GET(kk_cheat_machine_gun);
+  if (id == "shotgun") return REXCVAR_GET(kk_cheat_shotgun);
+  if (id == "sniper") return REXCVAR_GET(kk_cheat_sniper);
+  return false;
+}
 
 // The level key last loaded (G+8): set by the game when a level load is asked for, so it is already the new
 // level when that level's loadout arrives. 0 before the game is set up.
