@@ -1,6 +1,7 @@
 // C41 source handoff. Claude builds/runs this SDK/game-free executable.
 #include "coop_story.h"
 #include "coop_session.h"
+#include "coop_runtime.h"
 #include <array>
 #include <cstdio>
 #include <cstdlib>
@@ -261,6 +262,13 @@ void LenientConvergence() {
   hints={}; Check(!hints.Pending(),"new world discards old hint evidence");
 }
 void PersistentLagAndSoftFix() {
+  EnemyLink stale;
+  stale.connected=false; stale.epoch=17; stale.session_state=SessionState::Connected;
+  Check(stale.SessionConnected(),"stale enemy snapshot during native stall is not a story disconnect");
+  stale.session_state=SessionState::Lost;
+  Check(!stale.SessionConnected(),"actual lost transport still invalidates story continuity");
+  stale.session_state=SessionState::Ended;
+  Check(!stale.SessionConnected(),"ended session still requires story retirement");
   using Stage=story::Lag::Stage;
   story::Cursor authority{2,9},guest{2,1};
   story::Lag lag;

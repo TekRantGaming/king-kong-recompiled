@@ -198,7 +198,12 @@ bool Ensure(uint8_t* b) {
   if (!link.epoch) return false;
   World(v,link.epoch);
   if (SessionPrivateReload() && !failed) Refuse("private reload has no story snapshot");
-  if (!link.connected) { disconnected=true; if (!host) Refuse("connection interrupted; no script snapshot"); }
+  if (!link.connected && link.SessionConnected()) {
+    static unsigned logged=0;
+    if (logged++<4) REXLOG_INFO("KK co-op story: stale enemy snapshot, session connected; retaining continuity generation {} level {}",
+        generation,level);
+  }
+  if (!link.SessionConnected()) { disconnected=true; if (!host) Refuse("connection interrupted; no script snapshot"); }
   else if (disconnected) { recovery_pending=true; disconnected=false; }
   if (Now()>=next_census) Census(b);
   return true;

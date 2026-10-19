@@ -52,6 +52,10 @@ struct EnemyLink {
   uint64_t shots_sent = 0;
   std::optional<PlayerPose> partner;
   uint64_t epoch = 0;
+  // Enemy driving also needs a fresh worker view; story continuity only needs
+  // the actual session state. A native frame stall is not a transport loss.
+  SessionState session_state = SessionState::Idle;
+  bool SessionConnected() const { return session_state == SessionState::Connected; }
 };
 EnemyLink EnemyLinkSnapshot();
 bool EnemyConnectionReady();

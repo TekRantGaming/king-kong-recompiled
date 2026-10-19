@@ -556,7 +556,7 @@ EnemyLink EnemyLinkSnapshot() {
   const auto v = CurrentView();
   const auto flow=SessionFlowSnapshot();
   if (flow.active && (flow.phase!=FlowPhase::Playing || flow.policy!=ChapterPolicy::Together)) return {};
-  return {v.state == SessionState::Connected && Now()-v.updated <= .5, v.role, v.enemies, v.enemies_sent, v.shots_sent, v.partner, v.epoch};
+  return {v.state == SessionState::Connected && Now()-v.updated <= .5, v.role, v.enemies, v.enemies_sent, v.shots_sent, v.partner, v.epoch, v.state};
 }
 bool EnemyConnectionReady() {
   if (!REXCVAR_GET(kk_coop_enabled)) return false;
