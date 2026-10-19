@@ -188,7 +188,7 @@ void CheatSets() {
   Check(!overlay.Apply(CheatSet{0x200}) && overlay.Snapshot() == CheatSet{}, "invalid overlay cannot replace active host choices");
   overlay.Apply({});
   Check(!overlay.Snapshot() && SessionCheats(own, overlay.Snapshot()) == own, "disconnect restores own choices without a settings write");
-  Check(cheat_rules::Suppressed("machine_gun", 303) && !cheat_rules::Suppressed("healing", 303),
+  Check(kk::cheat_rules::Suppressed("machine_gun", 303) && !kk::cheat_rules::Suppressed("healing", 303),
       "host weapon setting still subject to unchanged chapter rules");
 
   Pair p;
