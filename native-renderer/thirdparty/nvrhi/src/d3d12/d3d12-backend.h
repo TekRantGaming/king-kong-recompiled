@@ -101,6 +101,7 @@
 #include "../common/state-tracking.h"
 #include "../common/dxgi-format.h"
 #include "../common/versioning.h"
+#include "d3d12-placed-ranges.h"
 
 #ifdef NVRHI_WITH_RTXMU
 #include <rtxmu/D3D12AccelStructManager.h>
@@ -165,6 +166,8 @@ namespace nvrhi::d3d12
         RefCountPtr<Buffer> timerQueryResolveBuffer;
 
         bool logBufferLifetime = false;
+        // KK task 300 (DeviceDesc::minUploadChunkSize): 0 = NVRHI's behaviour.
+        uint64_t minUploadChunkSize = 0;
         IMessageCallback* messageCallback = nullptr;
         void error(const std::string& message) const;
         void info(const std::string& message) const;
@@ -206,6 +209,27 @@ namespace nvrhi::d3d12
         [[nodiscard]] ID3D12DescriptorHeap* getShaderVisibleHeap() const override;
     };
 
+    // KK task 300: heaps that textures are placed in (DeviceDesc::placedTextureHeapSize). Thread safe:
+    // textures are made on the renderer's worker threads and released by garbage collection.
+    class PlacedTexturePool
+    {
+    public:
+        PlacedTexturePool(const Context& context, uint64_t heapSize) : m_Context(context), m_Ranges(heapSize) { }
+        // A range for a resource of this size and alignment and the heap it is in (not AddRef'd: the
+        // heap lives until the range is released). False: make the texture committed instead.
+        bool allocate(uint64_t size, uint64_t alignment, ID3D12Heap** heap, PlacedRanges::Allocation& out);
+        void release(const PlacedRanges::Allocation& allocation);
+        uint64_t maxResourceSize() const { return m_Ranges.blockSize() / 4; }
+
+    private:
+        const Context& m_Context;
+        std::mutex m_Mutex;
+        PlacedRanges m_Ranges;
+        std::vector<RefCountPtr<ID3D12Heap>> m_Heaps; // by block index
+        bool m_NotZeroed = true;
+        bool m_Failed = false;
+    };
+
     class DeviceResources
     {
     public:
@@ -224,7 +248,11 @@ namespace nvrhi::d3d12
         // KK native renderer: pipelines are made on several threads (see thirdparty/NOTES.md).
         std::recursive_mutex rootsigCacheMutex;
 
+        // KK task 300 (DeviceDesc::placedTextureHeapSize): null = every texture is committed.
+        std::unique_ptr<class PlacedTexturePool> placedTextures;
+
         explicit DeviceResources(const Context& context, const DeviceDesc& desc);
+        ~DeviceResources();
 
         uint8_t getFormatPlaneCount(DXGI_FORMAT format);
 
@@ -295,6 +323,8 @@ namespace nvrhi::d3d12
         uint8_t planeCount = 1;
         HANDLE sharedHandle = nullptr;
         HeapHandle heap;
+        // KK task 300: the range of a pooled placed texture (DeviceResources::placedTextures).
+        PlacedRanges::Allocation placedRange;
 
 
         Texture(const Context& context, DeviceResources& resources, TextureDesc desc, const D3D12_RESOURCE_DESC1& resourceDesc)

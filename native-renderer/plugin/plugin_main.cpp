@@ -55,6 +55,17 @@ REXCVAR_DEFINE_BOOL(native_validation, false, "Native renderer",
                     "Wrap the NVRHI device in NVRHI's validation layer (slow; for debugging)")
     .lifecycle(rex::cvar::Lifecycle::kInitOnly);
 
+// Task 300: D3D12 allocation cost, built off (today's behaviour). Proposed for Craig after a game check:
+// native_d3d12_placed_textures true, native_d3d12_upload_chunk_kib 4096. Vulkan ignores both.
+REXCVAR_DEFINE_BOOL(native_d3d12_placed_textures, false, "Native renderer",
+                    "D3D12: place sampled-only textures in pooled 64 MiB heaps instead of one committed resource "
+                    "each (task 300; about 10x less CPU per texture made or released; false = before task 300)")
+    .lifecycle(rex::cvar::Lifecycle::kInitOnly);
+REXCVAR_DEFINE_INT32(native_d3d12_upload_chunk_kib, 0, "Native renderer",
+                     "D3D12: smallest upload buffer chunk in KiB, made without OS zeroing (task 300; 0 = NVRHI's "
+                     "64 KiB, so every larger texture upload made a new upload buffer: before task 300)")
+    .range(0, 65536).lifecycle(rex::cvar::Lifecycle::kInitOnly);
+
 REXCVAR_DEFINE_BOOL(native_wvp_transpose, false, "Native renderer",
                     "Placeholder draws: read vertex shader constants c0..c3 as the columns of "
                     "the world-view-projection matrix instead of its rows")

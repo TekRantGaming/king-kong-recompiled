@@ -1,11 +1,13 @@
 // NVRHI on the SDK's D3D12Provider device and direct queue, and the hand-over
 // of a frame to the D3D12Presenter's guest output resource.
 
+#include <algorithm>
 #include <array>
 #include <chrono>
 #include <cstdint>
 #include <cstdio>
 #include <mutex>
+#include <string>
 #include <utility>
 #include <vector>
 
@@ -26,10 +28,14 @@
 
 REXCVAR_DECLARE(bool, native_validation);
 REXCVAR_DECLARE(int32_t, native_debug);
+REXCVAR_DECLARE(bool, native_d3d12_placed_textures);
+REXCVAR_DECLARE(int32_t, native_d3d12_upload_chunk_kib);
 
 namespace nr {
 
 namespace {
+
+constexpr uint64_t kPlacedTextureHeapBytes = 64ull << 20;
 
 class D3D12Host final : public HostDevice {
  public:
@@ -87,6 +93,16 @@ class D3D12Host final : public HostDevice {
     // most 2,048.
     desc.shaderResourceViewHeapSize = 65536;
     desc.samplerHeapSize = 2048;
+    // Task 300: a committed texture costs ~0.3 ms to make and ~0.13 ms to release on an RTX 4070 Ti
+    // against ~0.03 ms placed; a new upload buffer ~0.2-0.8 ms (thirdparty/NOTES.md).
+    if (REXCVAR_GET(native_d3d12_placed_textures)) desc.placedTextureHeapSize = kPlacedTextureHeapBytes;
+    desc.minUploadChunkSize = uint64_t(std::max(REXCVAR_GET(native_d3d12_upload_chunk_kib), 0)) << 10;
+    if (desc.placedTextureHeapSize || desc.minUploadChunkSize) {
+      REXLOG_INFO("rexgpu-native: D3D12 allocation: textures {}, upload chunks {}",
+                  desc.placedTextureHeapSize ? "placed in pooled 64 MiB heaps" : "committed",
+                  desc.minUploadChunkSize ? std::to_string(desc.minUploadChunkSize >> 10) + " KiB minimum, not zeroed"
+                                          : std::string("NVRHI's default"));
+    }
     device_ = nvrhi::d3d12::createDevice(desc);
     g_dev_gpu_stats_enabled.store((REXCVAR_GET(native_debug) & 32768) != 0, std::memory_order_relaxed);
     if (!device_) {
