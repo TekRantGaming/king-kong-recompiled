@@ -501,7 +501,19 @@ KK_HUD_LEAF(827C2518)
 KK_HUD_LEAF(828750F0)
 KK_HUD_LEAF(82863018)
 KK_HUD_LEAF(827CC200)
-KK_HUD_LEAF(82874C98)
+// sub_82874C98 also draws the game's fades (the black fade in at a level start, cutscene ends), so Hide HUD and
+// F10 keep it (DECISIONS 19 Oct; task 245: without it the untextured scene showed before its textures had
+// loaded). Its HUD draws land in the HUD pass, which ultrawide.cpp tags "hide" and the renderer leaves out
+// (textured and not full width). Photo mode, where that pass is not tagged, still leaves it out.
+REX_EXTERN(__imp__sub_82874C98);
+REX_HOOK_RAW(sub_82874C98) {
+  if (hide_screen_list && kk::freecam::PhotoActive()) {
+    NoteHudHidden();
+    ctx.r3.u64 = 1;
+    return;
+  }
+  __imp__sub_82874C98(ctx, base);
+}
 KK_HUD_LEAF(827CBC70)
 KK_HUD_LEAF(827C8C20)
 KK_HUD_LEAF(828745D0)
