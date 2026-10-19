@@ -5,6 +5,7 @@
 #include "coop_enemies.h"
 #include "coop_shots.h"
 #include "coop_combat.h"
+#include "coop_camera.h"
 
 #include <deque>
 #include <algorithm>
@@ -66,6 +67,10 @@ class CoopSession {
   std::vector<Message> TakeFlow();
   bool QueueCombat(const Message& message, double submitted);
   std::vector<ReceivedCombat> TakeCombat();
+  void PublishCamera(std::optional<CameraPose> camera) { local_camera_=std::move(camera); }
+  std::optional<CameraPose> HostCamera(double now) const {
+    return state_==SessionState::Connected && config_.role==Role::Guest ? cameras_.Sample(now) : std::nullopt;
+  }
  private:
   void Transition(SessionState state);
   bool Send(Message message, bool reliable);
@@ -101,6 +106,33 @@ class CoopSession {
   std::vector<Message> incoming_flow_;
   std::deque<ReceivedCombat> outgoing_combat_;
   std::vector<ReceivedCombat> incoming_combat_;
+  std::optional<CameraPose> local_camera_, sent_camera_cut_;
+  CameraBuffer cameras_;
+  double last_camera_=-1;
+  uint32_t camera_sequence_=0;
+  bool camera_seen_=false;
+};
+// One bounded copied-value slot in each direction. Workers alone access CoopSession.
+class CameraMailbox {
+ public:
+  void Publish(std::optional<CameraPose> p) {
+    std::lock_guard lock(mutex_); local_=p && ValidCameraPose(*p) ? p : std::nullopt;
+  }
+  std::optional<CameraPose> Sample(double now) const {
+    std::lock_guard lock(mutex_);
+    return now>=updated_ && now-updated_<=.25 ? remote_ : std::nullopt;
+  }
+  void Clear() { std::lock_guard lock(mutex_); local_.reset(); remote_.reset(); }
+  void Exchange(CoopSession& session,double now) {
+    std::lock_guard lock(mutex_);
+    if (session.State()!=SessionState::Connected) { local_.reset(); remote_.reset(); return; }
+    session.PublishCamera(local_ && now>=local_->time && now-local_->time<=.25 ? local_ : std::nullopt);
+    remote_=session.HostCamera(now); updated_=now;
+  }
+ private:
+  mutable std::mutex mutex_;
+  std::optional<CameraPose> local_,remote_;
+  double updated_=0;
 };
 // Same bounded value-only handoff for UDP and Steam. Epoch checked again by the
 // session before sending, so old work cannot leak into a replacement connection.

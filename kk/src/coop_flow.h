@@ -15,7 +15,7 @@ enum class ChapterPolicy { Together, SoloRegroup, Observer };
 struct ChapterRule { uint32_t level; ChapterPolicy policy; bool uncertain; };
 // C29 static-data recommendations: 22 together, 17 solo/regroup, 3 observer.
 // Confidence describes source/data evidence only. Every row remains uncertain
-// until runtime acceptance; observer currently provides a status screen.
+// until runtime acceptance; observer streams the host camera with a status fallback.
 inline constexpr std::array<ChapterRule, 42> kChapterRules{{
   {100,ChapterPolicy::SoloRegroup,true},   // 0: VERIFIED (data)
   {101,ChapterPolicy::Together,true},      // 1: LIKELY

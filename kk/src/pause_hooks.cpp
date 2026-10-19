@@ -57,6 +57,7 @@
 #include "photo_mode_logic.h"
 #include "play_internal.h"
 #include "coop_runtime.h"
+#include "coop_observer.h"
 #include "settings.h"
 #include "backend/picture_adjust.h"  // brightness and gamma on the kept frame
 
@@ -489,6 +490,9 @@ void FilterPad(uint32_t user, uint8_t* state) {
     const uint16_t shown = buttons & ~g_hidden_mask;
     state[4] = uint8_t(shown >> 8), state[5] = uint8_t(shown);
   }
+  // Menu input is already serviced above. Score/Save/Options also keep their
+  // ordinary input; only the underlying observer gameplay pad is restricted.
+  if (!g_game_page) kk::coop::observer::FilterPad(user,state);
 }
 
 bool LeftByQuit() { return g_left_by_quit; }

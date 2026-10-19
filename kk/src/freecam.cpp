@@ -1,4 +1,5 @@
 #include "freecam.h"
+#include "coop_observer.h"
 #include "debug_overlay.h"
 #include "freecam_math.h"
 #include "photo_mode.h"
@@ -557,7 +558,7 @@ KK_HUD_LEAF(827C40E8)
 REX_EXTERN(__imp__sub_827C6660);
 REX_HOOK_RAW(sub_827C6660) {
   // First-person weapon pass: hidden by F10 (screenshots) and the free camera, not by kk_hide_hud.
-  if ((hide_screen_list && kk::freecam::HideHud()) || kk::freecam::Active())
+  if ((hide_screen_list && kk::freecam::HideHud()) || kk::freecam::Active() || kk::coop::observer::HideWeapon())
     return;
   __imp__sub_827C6660(ctx, base);
 }

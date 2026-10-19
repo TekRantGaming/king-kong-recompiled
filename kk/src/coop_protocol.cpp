@@ -120,6 +120,13 @@ uint64_t SessionSaveHash(std::span<const uint8_t> bytes) {
   return hash;
 }
 bool IsFlowMessage(MessageType t) { return t >= MessageType::SessionStart && t <= MessageType::FlowAbort; }
+bool ValidCameraPose(const CameraPose& p) {
+  const double norm = double(p.qx)*p.qx + double(p.qy)*p.qy + double(p.qz)*p.qz + double(p.qw)*p.qw;
+  return p.generation && p.level && p.level <= 100000 && p.cut &&
+      std::isfinite(p.time) && p.time >= 0 && p.time < 1e12 &&
+      Point({p.x,p.y,p.z}) && std::isfinite(norm) && std::abs(norm-1) <= .002 &&
+      std::isfinite(p.fov) && p.fov > .01f && p.fov < 3.f;
+}
 bool ValidSessionStart(const SessionStart& s) {
   return s.chapter < 42 && s.level > 0 && s.level <= 100000 && s.start <= 10000 &&
       s.cheats <= 0x1ff && s.difficulty <= 1 &&
@@ -172,6 +179,14 @@ bool ValidPlayerStatus(const PlayerStatus& p) {
 bool Encode(const Message& m, std::vector<uint8_t>& out) {
   Writer payload;
   switch (m.type) {
+    case MessageType::CameraPose: case MessageType::CameraCut:
+      if (!ValidCameraPose(m.camera)) return false;
+      payload.U(m.camera.generation,4); payload.U(m.camera.level,4);
+      payload.U(m.camera.cut,4); payload.U(m.camera.skip,4);
+      payload.U(std::bit_cast<uint64_t>(m.camera.time),8);
+      for (float f : {m.camera.x,m.camera.y,m.camera.z,m.camera.qx,m.camera.qy,m.camera.qz,m.camera.qw,m.camera.fov})
+        payload.U(std::bit_cast<uint32_t>(f),4);
+      payload.U(unsigned(m.camera.scripted) | (unsigned(m.camera.paused)<<1),1); break;
     case MessageType::DamageEvent:
       if (!ValidDamageEvent(m.damage)) return false;
       WriteWorld(payload, m.damage.world); payload.U(m.damage.incarnation, 8); payload.U(m.damage.number, 4);
@@ -286,6 +301,17 @@ bool Decode(std::span<const uint8_t> bytes, Message& out) {
   m.sequence = uint32_t(r.U(4)); m.epoch = r.U(8);
   if (r.U(4) != bytes.size() - kHeaderBytes) return false;
   switch (m.type) {
+    case MessageType::CameraPose: case MessageType::CameraCut: {
+      auto& p=m.camera;
+      p.generation=uint32_t(r.U(4)); p.level=uint32_t(r.U(4));
+      p.cut=uint32_t(r.U(4)); p.skip=uint32_t(r.U(4)); p.time=std::bit_cast<double>(r.U(8));
+      for (float* f : {&p.x,&p.y,&p.z,&p.qx,&p.qy,&p.qz,&p.qw,&p.fov})
+        *f=std::bit_cast<float>(uint32_t(r.U(4)));
+      const auto flags=r.U(1); if (flags>3) return false;
+      p.scripted=(flags&1)!=0; p.paused=(flags&2)!=0;
+      if (!ValidCameraPose(p)) return false;
+      break;
+    }
     case MessageType::DamageEvent:
       m.damage.world = ReadWorld(r); m.damage.incarnation = r.U(8); m.damage.number = uint32_t(r.U(4));
       m.damage.enemy = {r.U(8), uint32_t(r.U(4)), EnemyFamily(r.U(2))};

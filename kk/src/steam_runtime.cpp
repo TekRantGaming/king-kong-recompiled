@@ -152,6 +152,7 @@ struct SteamRuntime::Impl
   std::optional<CheatSet> local_cheats;
   ShotMailbox shots;
   CombatMailbox combat;
+  CameraMailbox camera;
   FlowMailbox flow;
   const char* local_failure = "not-published";
 #if defined(KK_DEV_TOOLS)
@@ -313,6 +314,7 @@ struct SteamRuntime::Impl
     { std::lock_guard lock(mutex); session_view = {}; }
     shots.Clear();
     combat.Clear();
+    camera.Clear();
   }
   void RetireCalls() {
     if (create_call) abandoned.emplace(create_call, LobbyCreated_t::k_iCallback);
@@ -588,6 +590,7 @@ struct SteamRuntime::Impl
     session->Tick(now, pose, &enemy_frame, &cheats);
     shots.Exchange(*session);
     combat.Exchange(*session, now);
+    camera.Exchange(*session, now);
     flow.Exchange(*session, now);
     SteamSessionView view{session->SessionRole(), session->State(), session->Rejection(), session->Stats(), pose, session->Partner(now), now};
     view.local_failure = failure; view.poses = session->Poses();
@@ -728,6 +731,8 @@ void SteamRuntime::PublishCheats(CheatSet cheats) { std::lock_guard lock(impl_->
 void SteamRuntime::PublishInventory(const InventoryState& inventory) { impl_->shots.PublishInventory(inventory); }
 bool SteamRuntime::BeginFlow(SessionStart start, std::vector<uint8_t> save) { return impl_->flow.Begin(start, std::move(save)); }
 bool SteamRuntime::SubmitFlow(Message m) { return impl_->flow.Submit(std::move(m)); }
+void SteamRuntime::PublishCamera(std::optional<CameraPose> camera) { impl_->camera.Publish(std::move(camera)); }
+std::optional<CameraPose> SteamRuntime::HostCamera(double now) const { return impl_->camera.Sample(now); }
 FlowView SteamRuntime::FlowSnapshot() const { return impl_->flow.Snapshot(); }
 std::vector<ReceivedShot> SteamRuntime::TakeShots() { return impl_->shots.Take(); }
 bool SteamRuntime::SubmitCombat(Message m, double now) { return impl_->combat.Submit(std::move(m), now); }
