@@ -3,7 +3,7 @@
 Every release of the King Kong PC port, newest first. The launcher shows this on its About page, and a
 version's notes the first time you start it.
 
-## v2.0.0-beta.12 (unreleased)
+## v2.0.0-beta.12 (19 October 2026)
 
 **Beta 12**: fixes from the beta channel (**About** > **Change version**). Your saves and settings are kept. Windows only for this beta.
 
