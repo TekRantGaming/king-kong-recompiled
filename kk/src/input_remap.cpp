@@ -28,8 +28,35 @@
 #include "benchmark.h"
 #include "settings.h"
 #include "freecam.h"
+#if defined(KK_DEV_TOOLS)
+#include "coop_runtime.h"
+#endif
 
 namespace {
+
+#if defined(KK_DEV_TOOLS)
+// Log both sides of the filters, including background virtual-pad reads. One
+// line per RT edge or change in delivery, capped for the lifetime of the process.
+struct DevFirePadTrace {
+  uint32_t user;
+  const uint8_t* state;
+  uint8_t lt, rt;
+  const char* stage = "delivered";
+  ~DevFirePadTrace() {
+    static bool held[4]{};
+    static uint8_t delivered[4]{};
+    static unsigned lines = 0;
+    if (user >= 4) return;
+    const bool down = rt > 30;
+    const bool changed = down != held[user] || (down && state[7] != delivered[user]);
+    held[user] = down; delivered[user] = state[7];
+    if (!changed || lines >= 128 || kk::coop::EnemyLinkSnapshot().role != kk::coop::Role::Guest) return;
+    ++lines;
+    REXLOG_INFO("KK dev guest fire pad: edge={} user={} virtual-LT={} virtual-RT={} game-LT={} game-RT={} stage={} cap={}/128",
+        down ? "press" : "release", user, unsigned(lt), unsigned(rt), unsigned(state[6]), unsigned(state[7]), stage, lines);
+  }
+};
+#endif
 
 constexpr uint8_t kTriggerPressThreshold = 30;  // XINPUT_GAMEPAD_TRIGGER_THRESHOLD
 
@@ -180,12 +207,25 @@ REX_HOOK_RAW(sub_821074E8) {
     // its focus suppression. Do not move this behind the native success check:
     // background tests must also work without a physical controller connected.
     ctx.r3.u64 = 0;  // ERROR_SUCCESS: a pad is connected
+#if defined(KK_DEV_TOOLS)
+    DevFirePadTrace fire_trace{user, base + state_ptr, base[state_ptr+6], base[state_ptr+7]};
+#endif
     if (kk::g_dev_pad_filter) kk::g_dev_pad_filter(user, base + state_ptr);
     if (kk::DebugOverlayFilterPad(user, base + state_ptr)) {
+#if defined(KK_DEV_TOOLS)
+      fire_trace.stage = "overlay";
+#endif
       g_aim[user & 3] = {};
       return;
     }
+#if defined(KK_DEV_TOOLS)
+    const auto filtered_rt = base[state_ptr+7];
+#endif
     kk::play::FilterPad(user, base + state_ptr);
+#if defined(KK_DEV_TOOLS)
+    if (fire_trace.rt && !filtered_rt) fire_trace.stage = "dev-filter";
+    else if (filtered_rt && !base[state_ptr+7]) fire_trace.stage = "pause-cover";
+#endif
     return;
   }
   if (ctx.r3.u32 == 0 && state_ptr) {  // ERROR_SUCCESS

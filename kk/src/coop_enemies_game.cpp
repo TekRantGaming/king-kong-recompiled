@@ -352,8 +352,13 @@ struct State {
   ShotValidator shot_validator;
   ShotCounters shots;
   uint32_t next_shot = 0;
-  bool shooting = false;
+  bool shooting = false, shot_resolved = false;
   ShotIntent shot;
+#if defined(KK_DEV_TOOLS)
+  uint32_t shot_hit_object = 0;
+  bool shot_matched = false;
+  const char* shot_hit_reason = "no-hit";
+#endif
   double census_until = 0, next_numbers = 0, next_shot_log = 0;
   double error_sum = 0, error_max = 0;
   uint64_t error_count = 0;
@@ -366,7 +371,7 @@ struct State {
     authored.clear(); spawners.clear(); bindings.clear(); pending.clear(); records.clear(); driving.clear(); unmatched_logged.clear(); counts = {};
     death_applied.clear(); death_refused.clear();
     orphan_logged.clear(); unbound = 0;
-    aliases.clear(); retry.clear(); retry_diagnosed.clear(); shots = {}; shot_validator = {}; shooting = false; shot = {};
+    aliases.clear(); retry.clear(); retry_diagnosed.clear(); shots = {}; shot_validator = {}; shooting = shot_resolved = false; shot = {};
     census_until = next_numbers = next_log = next_shot_log = error_sum = error_max = 0; error_count = 0;
   }
 };
@@ -683,28 +688,60 @@ bool JackReady(const uint8_t* b) {
   return ReadJackPose([&](uint32_t a) { return Load32(b, a); }, [&](uint32_t a) { return Load16(b, a); },
       [&](uint32_t a) { return LoadF(b, a); }, Now()).pose.has_value();
 }
-bool BeginShot(const uint8_t* b) {
+// A null reason means observation began. Keep every refusal distinguishable in
+// dev diagnostics instead of treating an unobserved callback as a missed shot.
+const char* BeginShot(const uint8_t* b) {
   auto& s = Get();
-  if (!Connected() || s.link.role != Role::Guest || !Environment(b, s.world) || !JackReady(b)) return false;
+  if (!Connected()) return "disconnected";
+  if (s.link.role != Role::Guest) return "not-guest";
+  if (s.shooting) return "nested-callback";
+  if (!Environment(b, s.world) || !PoseAddress(s.game, 13652)) return "world-not-ready";
+  if (!JackReady(b)) return "jack-not-ready";
   const auto hero = Load32(b, 0x82CCBF7C), ai = Ptr(b, Ptr(b, hero, 24, 8), 4, 88);
   const auto vars = Ptr(b, ai, 64, 13652), matrix = Ptr(b, hero, 12, 64);
-  if (!vars || !matrix || Load32(b, 0x82CCBF6C) != hero || Load32(b, 0x82CCBF64) != ai) return false;
+  if (!vars || !matrix) return "jack-components";
+  if (Load32(b, 0x82CCBF6C) != hero || Load32(b, 0x82CCBF64) != ai) return "callback-not-jack";
   // H_callback_tir uses the same current weapon selector as cheats.cpp.
   const auto weapon = Load32(b, s.game+13128);
-  if (weapon < 1 || weapon > 4 || s.next_shot == UINT32_MAX) return false;
+  if (weapon < 1 || weapon > 4) return "no-gun";
+  if (s.next_shot == UINT32_MAX) return "sequence-exhausted";
   s.shot = {}; s.shot.world = s.identity; s.shot.number = ++s.next_shot;
   s.shot.weapon = uint8_t(weapon); s.shot.time = Now();
   s.shot.origin = Vector(b, matrix+48); s.shot.origin.z += 1.5f;
   const float x = -LoadF(b, matrix+16), y = -LoadF(b, matrix+20), length = std::hypot(x, y);
-  if (!std::isfinite(length) || length < .01f) return false;
-  s.shot.direction = {x/length, y/length, 0}; s.shooting = true; return true;
+  if (!std::isfinite(length) || length < .01f) return "invalid-facing";
+  s.shot_resolved = false;
+#if defined(KK_DEV_TOOLS)
+  s.shot_hit_object = 0; s.shot_matched = false; s.shot_hit_reason = "no-hit";
+#endif
+  s.shot.direction = {x/length, y/length, 0}; s.shooting = true; return nullptr;
 }
-void ShotRay(const uint8_t* b, uint32_t origin, uint32_t point) {
+#if defined(KK_DEV_TOOLS)
+void DevShotHit(const uint8_t* b, uint32_t actor) {
+  auto& s = Get(); s.shot_hit_object = actor; s.shot_matched = false;
+  s.shot_hit_reason = actor ? "unmatched-object" : "miss";
+  const auto it = s.bindings.find(actor);
+  if (it == s.bindings.end() || !ValidBinding(b, it->second)) return;
+  s.shot_matched = std::any_of(s.aliases.begin(), s.aliases.end(), [&](const auto& a) { return a.second == it->second.id; });
+  if (s.shot_matched) s.shot_hit_reason = "matched-no-damage-event";
+}
+#endif
+void ShotRay(const uint8_t* b, uint32_t origin, uint32_t point, uint32_t object, uint32_t caller) {
   auto& s = Get();
+  // Only the three gun ray resolutions inside H_callback_tir establish a shot.
+  // They run after native firing checks/ammo consumption, even on a miss (.47).
+  if (caller != 0x82696D10 && caller != 0x8269727C && caller != 0x826977E8) return;
   if (!s.shooting || !PoseAddress(origin, 12) || !PoseAddress(point, 12)) return;
   // Resolver's r3/r4 output vectors: muzzle/camera origin and actual impact.
   auto copy = s.shot; copy.origin = Vector(b, origin); copy.direction = Direction(copy.origin, Vector(b, point));
-  if (ValidShotIntent(copy)) { s.shot.origin = copy.origin; s.shot.direction = copy.direction; }
+  if (ValidShotIntent(copy)) {
+    s.shot.origin = copy.origin; s.shot.direction = copy.direction; s.shot_resolved = true;
+  }
+#if defined(KK_DEV_TOOLS)
+  if (PoseAddress(object)) DevShotHit(b, Load32(b, object));
+#else
+  (void)object;
+#endif
 }
 bool GuestShotEvent(PPCContext& ctx, uint8_t* b) {
   auto& s = Get();
@@ -712,6 +749,9 @@ bool GuestShotEvent(PPCContext& ctx, uint8_t* b) {
       ctx.r6.u32 != Load32(b, 0x82CCBF7C)) return false;
   const uint32_t lr = uint32_t(ctx.lr);
   if (lr != 0x82696E74 && lr != 0x82697494 && lr != 0x82697970 && lr != 0x82698C00) return false;
+#if defined(KK_DEV_TOOLS)
+  DevShotHit(b, ctx.r8.u32);
+#endif
   const auto it = s.bindings.find(ctx.r8.u32);
   if (it == s.bindings.end() || !ValidBinding(b, it->second)) return false;
   auto alias = std::find_if(s.aliases.begin(), s.aliases.end(), [&](const auto& a) { return a.second == it->second.id; });
@@ -724,17 +764,49 @@ bool GuestShotEvent(PPCContext& ctx, uint8_t* b) {
     auto copy = s.shot;
     if (copy.hits.empty()) copy.direction = Direction(copy.origin, hit.point);
     if (!duplicate) copy.hits.push_back(hit);
-    if (ValidShotIntent(copy)) s.shot = std::move(copy);
+    if (ValidShotIntent(copy)) {
+      s.shot = std::move(copy);
+#if defined(KK_DEV_TOOLS)
+      s.shot_hit_reason = duplicate ? "matched-duplicate" : "matched-hit-added";
+#endif
+    }
+#if defined(KK_DEV_TOOLS)
+    else s.shot_hit_reason = "matched-invalid-impact";
+#endif
   }
+#if defined(KK_DEV_TOOLS)
+  else s.shot_hit_reason = "matched-stack-or-hit-limit";
+#endif
   // Only the damage event is withheld. The normal callback keeps its muzzle,
   // sound, ammo, impact effects and animation paths. Invalid native handle.
   if (PoseAddress(ctx.r3.u32, 8)) { Store32(b, ctx.r3.u32, UINT32_MAX); Store32(b, ctx.r3.u32+4, 0); }
   return true;
 }
-void EndShot(bool fired) {
+const char* EndShot(const uint8_t* b, bool fired) {
   auto& s = Get(); s.shooting = false;
-  if (fired && ValidShotIntent(s.shot) && !SubmitShotIntent(s.shot)) s.shots.Reject(ShotReject::Queue);
+  if (!Connected() || !Environment(b, s.world)) return "world-changed";
+  // A confirmed native gun ray is also evidence of firing. Do not require an
+  // ammo delta to forward misses or a real shot whose ammo was replenished.
+  if (!fired && !s.shot_resolved) return "no-native-shot";
+  if (!ValidShotIntent(s.shot)) return "invalid-intent";
+  if (!SubmitShotIntent(s.shot)) { s.shots.Reject(ShotReject::Queue); return "queue-refused"; }
+  return nullptr;
 }
+#if defined(KK_DEV_TOOLS)
+void DevShotLog(const uint8_t* b, bool guest, bool observed, uint32_t weapon,
+    uint32_t before, uint32_t after, uint32_t caller, uint32_t result, const char* reason) {
+  static unsigned lines = 0;
+  if (!guest || lines >= 128) return;
+  ++lines;
+  const auto& s = Get();
+  REXLOG_INFO("KK dev guest fire callback: fn=82696A28 call={} t={:.3f} lr={:08X} weapon={} ammo={}/{} result={} observed={} ray={} hit-object={:08X} matched={} hits={} queued={} reason={} hit-reason={} hero={:08X} current={:08X} ai={:08X} cap=128",
+      lines, kk::DevSecondsSinceMenu(), caller, weapon, before, after, result, observed,
+      observed && s.shot_resolved, observed ? s.shot_hit_object : 0, observed && s.shot_matched,
+      observed ? s.shot.hits.size() : size_t(0), reason == nullptr,
+      reason ? reason : (s.shot.hits.empty() ? "queued-miss" : "queued-hit"), observed ? s.shot_hit_reason : "not-observed",
+      Load32(b, 0x82CCBF7C), Load32(b, 0x82CCBF6C), Load32(b, 0x82CCBF64));
+}
+#endif
 bool NativeShot(PPCContext& ctx, uint8_t* b, const ShotIntent& shot, const ShotHit& hit, const Binding& target) {
   auto& s = Get();
   if (s.link.role != Role::Host || !Connected() || !Environment(b, s.world) ||
@@ -946,14 +1018,24 @@ std::optional<ShotVector> EnemyAimTarget(const uint8_t* b, ShotVector origin) {
   auto& s = Get();
   if (!Connected() || s.link.role != Role::Guest || !Environment(b, s.world) || Now()-s.prepared_at > .5) return {};
   std::optional<ShotVector> best; float distance = 300;
+  EnemyId best_id{}; uint32_t best_actor = 0;
   for (const auto& [actor, record] : s.driving) {
     const auto it = s.bindings.find(actor);
-    if (it == s.bindings.end() || record.enemy.life <= 0 || !ValidBinding(b, it->second)) continue;
+    const auto alias = s.aliases.find(record.enemy.id);
+    if (it == s.bindings.end() || record.kind != EnemyEventKind::Spawned || record.enemy.life <= 0 ||
+        alias == s.aliases.end() || alias->second != it->second.id || !ValidBinding(b, it->second)) continue;
     const auto m = it->second.matrix;
     ShotVector point = Vector(b, m+48);
     point.z += it->second.id.family == EnemyFamily::Raptor ? 1.2f : .4f;
     const float d = ShotDistance(origin, point);
-    if (d > .1f && d < distance) { distance = d; best = point; }
+    if (d > .1f && d < distance) { distance = d; best = point; best_id = record.enemy.id; best_actor = actor; }
+  }
+  static double next_log = 0;
+  static unsigned lines = 0;
+  if (best && Now() >= next_log && lines < 128) {
+    next_log = Now()+1; ++lines;
+    REXLOG_INFO("KK dev: face enemy target id={:016X}/{}/{} actor={:08X} matched=true distance={:.3f} pos=({:.3f},{:.3f},{:.3f})",
+        best_id.source, best_id.sequence, uint16_t(best_id.family), best_actor, distance, best->x, best->y, best->z);
   }
   return best;
 }
@@ -1011,21 +1093,31 @@ REX_HOOK_RAW(sub_82715AC8) {
   if (observe && ctx.r3.u32) kk::coop::Spawned(base, spawner, source, ctx.r3.u32);
 }
 REX_HOOK_RAW(sub_82696A28) {
-  const bool observe = kk::coop::BeginShot(base);
-  const auto game = observe ? kk::hfr::Load32(base, 0x82CC97C0) : 0;
-  const auto weapon = observe ? kk::hfr::Load32(base, game+13128) : 0;
+  const char* reason = kk::coop::BeginShot(base);
+  const bool observe = reason == nullptr;
+  const auto game = kk::hfr::Load32(base, 0x82CC97C0);
+  const auto weapon = kk::coop::PoseAddress(game, 13652) ? kk::hfr::Load32(base, game+13128) : 0;
   constexpr uint32_t ammo[] = {13432, 13504, 13576, 13648};
-  const auto before = observe ? kk::hfr::Load32(base, game+ammo[weapon-1]) : 0;
+  const bool armed = weapon >= 1 && weapon <= 4;
+  const auto before = armed ? kk::hfr::Load32(base, game+ammo[weapon-1]) : 0;
+#if defined(KK_DEV_TOOLS)
+  const bool guest = kk::coop::EnemyLinkSnapshot().role == kk::coop::Role::Guest;
+  const auto caller = uint32_t(ctx.lr);
+#endif
   __imp__sub_82696A28(ctx, base);
+  const bool same = game == kk::hfr::Load32(base, 0x82CC97C0);
+  const auto after = same && armed ? kk::hfr::Load32(base, game+ammo[weapon-1]) : before;
   if (observe) {
-    const bool same = game == kk::hfr::Load32(base, 0x82CC97C0);
-    kk::coop::EndShot(same && kk::hfr::Load32(base, game+ammo[weapon-1]) < before);
+    reason = kk::coop::EndShot(base, same && after < before);
   }
+#if defined(KK_DEV_TOOLS)
+  kk::coop::DevShotLog(base, guest, observe, weapon, before, after, caller, ctx.r3.u32, reason);
+#endif
 }
 REX_HOOK_RAW(sub_8243A3C0) {
-  const auto origin = ctx.r3.u32, point = ctx.r4.u32;
+  const auto origin = ctx.r3.u32, point = ctx.r4.u32, object = ctx.r6.u32, caller = uint32_t(ctx.lr);
   __imp__sub_8243A3C0(ctx, base);
-  kk::coop::ShotRay(base, origin, point);
+  kk::coop::ShotRay(base, origin, point, object, caller);
 }
 REX_HOOK_RAW(sub_82634428) {
   if (!kk::coop::GuestShotEvent(ctx, base)) __imp__sub_82634428(ctx, base);

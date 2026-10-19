@@ -337,9 +337,28 @@ void ShotSessions() {
   Check(mailbox.Take().size() == 1 && mailbox.Take().empty(), "worker/game shot handoff drains once");
   host.End(1.13); mailbox.Exchange(host); Check(mailbox.Take().empty(), "disconnected mailbox cleared");
 }
+void MissThenHit() {
+  Transport a, b; a.peer = &b; b.peer = &a;
+  const Compatibility compatible{kProtocolVersion, "test", "build", "gameplay"};
+  CoopSession host({true, Role::Host, 123, compatible}, a), guest({true, Role::Guest, 0, compatible}, b);
+  for (int i = 0; i < 40; ++i) { host.Tick(i*.01); guest.Tick(i*.01); }
+  ShotValidator validator;
+  for (uint32_t number : {1u, 2u}) {
+    const double time = .4 + (number-1)*.2;
+    auto shot = Shot(number, time);
+    if (number == 1) shot.hits.clear();
+    Check(guest.QueueShot(shot), "miss and following hit both queue");
+    guest.Tick(time); host.Tick(time+.01);
+    const auto received = host.TakeShots();
+    Check(received.size() == 1 && guest.ShotsSent() == number, "miss counts as a sent intent, once");
+    Check(received[0].intent.hits.size() == number-1, "miss never invents a target; following hit retains it");
+    Check(validator.Validate(received[0], World(), 1, PlayerPose{time, 303}, time+.01) == ShotReject::None,
+        "miss consumes cadence and sequence without blocking the next real hit");
+  }
+}
 } // namespace
 int main() {
   IdentityAndMatching(); Wire(); LifecycleAndInterpolation(); SessionAuthority();
-  MatchingRetryAndTolerance(); ShotWireAndBounds(); ShotValidation(); ShotSessions();
+  MatchingRetryAndTolerance(); ShotWireAndBounds(); ShotValidation(); ShotSessions(); MissThenHit();
   std::puts("coop enemies tests passed");
 }
