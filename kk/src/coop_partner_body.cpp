@@ -733,7 +733,10 @@ std::optional<Vec> NativeRootVelocity(PPCContext& ctx, uint8_t* b, const Rig& r,
   };
   if (!LoadedAction(b,r,action,item)) return {};
   const auto items=Ptr(b,r.table,4*(action+4),20);
-  const auto descriptor=Ptr(b,items,20*item+4,8), header=Ptr(b,descriptor,0,20);
+  const auto descriptor=coop::puppet::AnimationItemDescriptor(items,item,
+      [&](uint32_t p) { return b[p]; },
+      [&](uint32_t p,uint32_t off,uint32_t size) { return Ptr(b,p,off,size); });
+  const auto header=Ptr(b,descriptor,0,20);
   if (!header) return unavailable("header");
   const auto count=Load16(b,header+4);
   const auto tracks=count<=512 ? Ptr(b,header,0,24*count) : 0;

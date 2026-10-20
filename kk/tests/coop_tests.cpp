@@ -489,6 +489,10 @@ void PuppetPolicies() {
       AnimationItemHeader(600,1,two_items,pointer)==1000,"loaded action variants resolve independently");
   Check(!AnimationItemHeader(600,2,two_items,pointer) &&
       !AnimationItemHeader(600,UINT32_MAX,two_items,pointer),"native item count bounds animation requests");
+  const auto descriptor=AnimationItemDescriptor(600,1,two_items,pointer);
+  animation_memory[1104]=descriptor;
+  Check(descriptor==624 && AnimationLayerHeader(1100,pointer)==900,
+      "scratch root layer points to the item pointer field, not the resource or track array");
   for (const auto address : {232u, 304u, 400u}) {
     const auto saved = animation_memory[address]; animation_memory[address] = 0;
     Check(!AnimationEventHeader(100, pointer), "missing animation metadata returns no event instead of reading null");
@@ -537,18 +541,18 @@ void PuppetPolicies() {
   Check(HumanAction(1,false,false,false)!=HumanAction(1,true,false,false) &&
       HumanAction(3,true,false,true)!=HumanAction(1,true,false,true), "native motion and weapon firing differ");
   Check(HumanAction(2,true,true,false)!=HumanAction(2,true,true,true),"crouched motion and fire use separate native actions");
-  Check(HumanAction(2,false,false,true)==164 && HumanAction(1,false,false,true)==14,
-      "native machine-gun shoot state differs from revolver");
+  Check(HumanAction(2,false,false,true)==165 && HumanAction(1,false,false,true)==11,
+      "native machine-gun aim state differs from revolver");
   const auto carl=[](uint16_t action)->std::optional<uint8_t> {
-    return action==14 ? std::optional<uint8_t>{2} : std::nullopt;
+    return action==11 ? std::optional<uint8_t>{2} : std::nullopt;
   };
   const auto fallback=FireAction(2,false,carl);
-  Check(fallback && fallback->action==14 && fallback->item==2,
-      "missing machine-gun bank uses loaded revolver recoil and its own variant");
-  Check(FireAction(2,true,carl)->action==14,"crouched missing weapon still has a firing visual");
-  Check(FireAction(2,false,[](uint16_t a)->std::optional<uint8_t> {
-    return a==13 ? std::optional<uint8_t>{0} : std::nullopt;
-  })->action==13,"aim is the final loaded fallback when all recoil clips are absent");
+  Check(fallback && fallback->action==11 && fallback->item==2,
+      "missing machine-gun bank uses loaded revolver aim and its own variant");
+  Check(FireAction(2,true,carl)->action==11,"crouched missing weapon still has an aim visual");
+  Check(!FireAction(2,false,[](uint16_t a)->std::optional<uint8_t> {
+    return a==14 || a==164 || a==162 || a==28 || a==38 ? std::optional<uint8_t>{0} : std::nullopt;
+  }),"hit reactions must never masquerade as gunfire");
   Check(!FireAction(2,false,[](uint16_t)->std::optional<uint8_t> { return {}; }),
       "empty action bank cannot manufacture an unloaded clip");
   const Gait directional[] = {{{10,0,3},0,false},{{42,1,2},1.570796327f,false},

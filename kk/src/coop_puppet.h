@@ -27,6 +27,11 @@ uint32_t AnimationItemHeader(uint32_t items, uint32_t item, Byte byte, Pointer p
   if (!items || item >= byte(items)) return 0;
   return pointer(pointer(items,20*item+4,8),0,20);
 }
+template<class Byte, class Pointer>
+uint32_t AnimationItemDescriptor(uint32_t items, uint32_t item, Byte byte, Pointer pointer) {
+  // The layer holds the address of the resource pointer, not its value.
+  return AnimationItemHeader(items,item,byte,pointer) ? items+20*item+4 : 0;
+}
 // Shared resources (AI model/action table) are intentionally absent. Every
 // mutable component of an engine-created body must belong to the new body.
 using MutableRig = std::array<uint32_t, 7>;  // actor, AI, vars, matrix, rig, anim, layer
@@ -71,19 +76,22 @@ inline std::optional<Action> ChooseAction(float speed, std::span<const Action> o
 // loaded rig's action/item resource, including on independent native copies.
 inline uint16_t HumanAction(uint8_t weapon, bool moving, bool crouched, bool firing) {
   if (crouched) {
-    if (firing && weapon) return weapon >= 3 ? 38 : 28;
+    if (firing && weapon) return weapon >= 3 ? 36 : 26;
     return moving ? (weapon >= 3 ? 37 : 27) : (weapon >= 3 ? 36 : 26);
   }
-  if (firing && weapon) return weapon >= 3 ? 162 : weapon==2 ? 164 : 14;
+  // 826A928C selects the stationary armed stance. 14/164/162 and 28/38
+  // belong to the vars+2976 hit-reaction branch, not to gunfire.
+  if (firing && weapon) return weapon >= 3 ? 150 : weapon==2 ? 165 : 11;
   return moving ? 10 : 0;
 }
-// Try the body's own weapon first, then another loaded gun's recoil, then aim.
+// Use the native armed stance on a confirmed shot, falling back to another
+// loaded gun's aim. Recoil events are separate from the base action selector.
 // Item resolution belongs to the rig; never reuse an item from another bank.
 template<class LoadedItem>
 std::optional<Action> FireAction(uint8_t weapon, bool crouched, LoadedItem loaded) {
   const uint16_t preferred = HumanAction(weapon ? weapon : 1,false,crouched,true);
   if (auto item=loaded(preferred)) return Action{preferred,*item,0};
-  for (const uint16_t action : {14,164,162,28,38,13,161,11,165,150,26,36})
+  for (const uint16_t action : {11,165,150,26,36})
     if (auto item=loaded(action)) return Action{action,*item,0};
   return {};
 }
