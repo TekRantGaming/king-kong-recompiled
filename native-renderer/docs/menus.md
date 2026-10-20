@@ -117,10 +117,20 @@ setup and on About; no reminder opens by itself. What's new never opens during t
 New in this update screen; it opens once on the main menu after Finish setup (new install) or after that screen's
 Continue (a player who updated), with the game files installed and the shaders prepared (`launcher_policy.h`).
 
-**First-time setup and New in this update (job J6, 17 Oct; spec `codex/state/setup-flow.md`).** The setup's pages
-(SetupStage numbers in `launcher.cpp`): 0 disc image, 1 install, 2 artwork, 4 shaders, 6 HD texture pack, 7 PS2
-cutscenes (where PS2 movies play), 8 to 11 the graphics pages (`launcher_setup_graphics.inc`), 12 button prompts,
-13 You're all set (`launcher_setup_end.inc`). There is no Original or Remastered step any more (stage 5 removed):
+**First-time setup and New in this update (job J6, 17 Oct; task 332, 20 Oct; spec `codex/state/setup-flow.md`).**
+The setup's pages in order (SetupStage numbers in `launcher.cpp`): 0 disc image, 1 install, 2 artwork (the game
+files), 4 shaders, 16 to 18 the **FULL Settings pages Display, Graphics and Controls** (`launcher_setup_pages.inc`:
+the same rows, built by the same code as Settings, `SettingsPageItems`, with the same right-hand description panel and
+Next / Back rows under them, so **the setup shows these Settings pages and any setting added to them appears there by
+itself**; no recommended-settings button, no pictures), 12 button prompts ("You can change these any time in Settings >
+Controls on the main menu."), 6 HD texture pack, 7 PS2 cutscenes (where PS2 movies play), 15 the Workshop (what it
+is), 13 You're all set (`launcher_setup_end.inc`), then the startup movies (below). Every page after the game files
+has **Skip all** at the top right (Y, R or a click): a pop-up "You can change all of these settings later from
+Settings on the main menu." [OK], then straight to the startup movies; the shaders go on in the background if they are
+still being prepared, and every setting not chosen keeps what it has. The graphics pages 8 to 11 with pictures
+(`launcher_setup_graphics.inc`) now only come up from the New in this update screen. During the setup, Graphics'
+"Texture packs in the Workshop" row is greyed (the Workshop opens from the main menu afterwards). There is no
+Original or Remastered step any more (stage 5 removed):
 a new install starts Remastered as the setup begins (`StartFullSetup` -> `ApplyRemastered`: the hardware
 recommendation's preset with that preset's global illumination, Strong GTAO, 60 FPS), the Original look is a switch
 on graphics page 4 and on the Graphics page, and "Use recommended for my PC" gives Remastered again. A player who had
@@ -390,6 +400,32 @@ moving light) runs live behind the launcher instead of the stills. Code: `kk/src
 - **Dev aids:** `KK_DEV_SCENE_TRACE=1` (levels, Start presses, movie flag), `KK_DEV_FRAME_LOG=1` (launcher frame
   intervals and the scene's sound gain every 5 s). Test kit: `kk/out/task330` (run330.ps1, steps*.txt,
   perf330.ps1, sheet.py).
+
+## The startup movies (task 332, Beta 13)
+
+Owner, 20 Oct (DECISIONS row B): the game's logo movies (`Video/Ubisoft.wmv`, `Universal.wmv`, `Wingnut.wmv` from the
+player's game files: the boot logos `intros.cpp` skips) and then the owner's TRG Studios movie (`trg-startup.mp4`,
+7.5 s, silent, in `kk/launcher-video/` like the loops) play full screen over the launcher. Code:
+`kk/src/startup_movies.*` (the loops' player once per file, `LoadingLoop` with `once`; a movie's sound decoded whole by
+the PS2 cutscenes' decoder and played through the launcher's own SDL audio stream, the picture following the sound),
+`startup_movies_logic.h` (rules, tested in `menu-scene`), `launcher.cpp` StartStartupMovies / DrawStartupMovies.
+
+- **After the setup** (Finish setup or Skip all) they ALWAYS play once. With `kk_skip_intros` on (the default) a
+  pop-up comes first: "The startup movies play this first time. From the next start, your choice to skip them is
+  used." [OK].
+- **Later**, a launcher opened from the desktop with the setup done plays them unless `kk_skip_intros` is on (Settings
+  > Gameplay > Startup logos; it skips the TRG movie too). Not on a launcher the game starts on its way back, nor one
+  restarted for a shader rebuild, nor when a setup or update screen comes first (that start shows the notice loop as
+  before).
+- **Then** the save notice loop always follows (task 331 rules: at least 3 s, then until the scene is ready, 20 s at
+  most). The live menu scene starts as the movies start (after the setup: once the pop-up is closed) and the first
+  movie waits for that start (it pauses the launcher about 1.5 s; 5 s at most), so the movies and the notice cover the
+  scene's start: no pictures when the scene can run. The launcher's music and the scene's sound are silent under the
+  movies; nothing else is drawn or answered over them but their pop-up; What's new waits for them.
+- A movie that cannot be played is left out and logged (Linux: the shipped FFmpeg build has no WMV decoder, so only
+  the TRG movie plays there). Log: `KK startup movies:` lines. Test kit: `kk/out/task332/run332.ps1` (player layout,
+  `-Fresh` for a new player, `-Reuse <run>` for the next start) with `stepsFull.txt`, `stepsSkip.txt`; dev steps
+  `wait-movies`, and `wait-home` waits for the movies too.
 
 ## The loading loops over the launcher (task 331, Beta 13)
 

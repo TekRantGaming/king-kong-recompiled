@@ -79,6 +79,7 @@ set(KINGKONG_SOURCES
     src/menu_hook.cpp
     src/menu_scene.cpp
     src/loading_loop.cpp
+    src/startup_movies.cpp
     src/glyphs.cpp
     src/crash_dump.cpp
     src/exit_evidence.cpp

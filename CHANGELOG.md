@@ -10,6 +10,11 @@ version's notes the first time you start it.
 ### What's new
 - **The main menu is the game's own start menu scene, live**: the Venture rolls on the stormy sea under Skull Island behind the launcher, moving, with the menu's own music and the sound of the sea (Settings > Audio > Menu music and its volume apply to it). It replaces the slideshow of pictures. The pictures still show during setup, on the first start after an update, while shaders are prepared, on low-end PCs such as the Steam Deck, and if the scene could not start last time.
 - **Loading screens for the main menu**: when you open the game, a screen explains when the game saves (when you choose Save game or quit from the pause menu) while the main menu gets ready. When you come back from the game, **Returning to the main menu** shows until the main menu is ready, with **Game saved at your last checkpoint.** after a story game you quit from the pause menu, and a tip about the game, a different one each time.
+- **A new first-time setup**: after the game files and the shaders, the full **Display**, **Graphics** and **Controls** settings pages, then button prompts, the HD texture pack, the PS2 cutscenes, what the **Workshop** is, and Join our Discord / Add to Steam. **Skip all** at the top of every page after the game files goes straight on, with every setting as it is; all of them can be changed later in Settings on the main menu. Players who update keep the one-time New in this update screen.
+- **Startup movies**: the Ubisoft, Universal and WingNut logo movies from your copy of the game, then a TRG Studios movie, play once after the setup, and then each time you open the game unless Settings > Gameplay > Startup logos is set to Skip (it skips the TRG Studios movie too). The loading screen follows them until the main menu is ready.
+
+### Fixed
+- **After the first-time setup, the old pictures showed before the live main menu.** The startup movies and the loading screen now cover the main menu while it gets ready.
 
 ## v2.0.0-beta.12 (19 October 2026)
 
