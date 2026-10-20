@@ -240,7 +240,8 @@ void SimulationIntegration() {
   auto b=CreateDirectUdp(j);
   CoopSession host(Config(Role::Host),*a),guest(Config(Role::Guest),*b);
   desync::Assembly assembly; desync::Guard guard;
-  uint32_t sweep=0; unsigned digests=0; double next=10;
+  uint32_t sweep=0; unsigned digests=0; double next=16;
+  bool burst_queued=false,burst_received=false;
   enemies::Frame frame; frame.world={101,1,1};
   EnemyState enemy{{777,0,EnemyFamily::Raptor},1,2,3,0,100};
   frame.records.push_back({enemy,EnemyEventKind::Spawned});
@@ -249,21 +250,35 @@ void SimulationIntegration() {
     host.Tick(now,PlayerPose{now,101,1,2,3,0,0},&frame);
     guest.Tick(now,PlayerPose{now,101,4,2,3,0,0});
     if (now>10) Check(host.State()==SessionState::Connected && guest.State()==SessionState::Connected,"150/30/3 never Lost");
+    if (now>=10 && !burst_queued && host.State()==SessionState::Connected) {
+      burst_queued=true; ++sweep;
+      for (uint16_t part=0;part<256;++part) {
+        Message m; m.type=MessageType::WorldDigest; m.epoch=host.Epoch();
+        auto& p=m.digest; p.generation=1; p.level=101; p.start=1; p.checkpoint=1; p.sweep=sweep;
+        p.captured=now;
+        p.part=part; p.parts=256; p.script_count=kStorySnapshotScripts;
+        for (size_t i=0;i<kDigestScriptsPerPage;++i) p.scripts.push_back({1+part*kDigestScriptsPerPage+i,99,1,0,1});
+        Check(host.QueueStory(m),"maximum world sweep retained under UDP backpressure");
+      }
+    }
     if (now>=next && host.State()==SessionState::Connected) {
       next=now+3; Message m; m.type=MessageType::WorldDigest; m.epoch=host.Epoch();
       m.digest.generation=1; m.digest.level=101; m.digest.start=1; m.digest.checkpoint=1;
       m.digest.sweep=++sweep; m.digest.enemy_count=1;
+      m.digest.captured=now;
       m.digest.enemies.push_back({enemy.id,EnemyOwner::Host,0,100,0});
       Check(host.QueueStory(m) && !guest.QueueStory(m),"digest direction enforced on real UDP");
     }
     for (const auto& m:guest.TakeStory()) if (auto complete=assembly.Push(m.digest,now)) {
+      Check(desync::FreshForPose(complete->header,guest.Partner(now)),"150/30/3 complete sweeps remain fresh against host poses");
+      if (complete->scripts.size()==kStorySnapshotScripts) burst_received=true;
       ++digests; const auto remote=guest.Enemies(now); desync::Evidence evidence;
       evidence.structural=remote.records.size()!=1;
       evidence.quiet=!remote.records.empty() && remote.records[0].enemy.life!=100;
       Check(guard.Observe(1,101,1,evidence,now)==desync::Tier::None,"150/30/3 no false recovery and enemies agree");
     }
   }
-  Check(digests>=30 && a->Stats().resent>0 && b->Stats().resent>0,"latency, loss, ACK and digest paths exercised");
+  Check(burst_received && digests>=30 && a->Stats().resent>0 && b->Stats().resent>0,"maximum census, latency, loss, ACK and digest paths exercised");
 }
 int main() {
   Codec(); Limits(); Bounds(); WRONG2(); Integration("127.0.0.1"); Integration("::1"); ReliabilityAndFlood();

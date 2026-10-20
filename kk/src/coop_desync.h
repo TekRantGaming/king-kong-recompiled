@@ -31,7 +31,7 @@ class Assembly {
     const auto& h=current_.header;
     if (p.sweep!=h.sweep || p.part!=next_ || now<began_ || now-began_>8 ||
         p.parts!=h.parts || p.generation!=h.generation || p.level!=h.level || p.checkpoint!=h.checkpoint ||
-        p.start!=h.start || p.completed!=h.completed || p.script_count!=h.script_count ||
+        p.start!=h.start || p.captured!=h.captured || p.completed!=h.completed || p.script_count!=h.script_count ||
         p.enemy_count!=h.enemy_count || p.extensions!=h.extensions) return {};
     current_.scripts.insert(current_.scripts.end(),p.scripts.begin(),p.scripts.end());
     current_.enemies.insert(current_.enemies.end(),p.enemies.begin(),p.enemies.end());
@@ -55,6 +55,12 @@ struct Evidence {
   uint64_t progress=0;
   bool Any() const { return quiet || lag || structural || wrong_level; }
 };
+// Both stamps originate on the host. A whole sweep delayed behind reliable
+// traffic cannot become fresh just because its final page arrived recently.
+inline bool FreshForPose(const WorldDigestPage& p,const std::optional<PlayerPose>& host) {
+  return host && host->level==p.level && std::isfinite(host->time) &&
+      host->time>=p.captured-1 && host->time-p.captured<=5;
+}
 // Arrival-clock hysteresis, never peer-clock arithmetic. Packet silence is not
 // drift. Native progress and gaps restart grace. One move and one reload per
 // host checkpoint, including a reload at the initial/same checkpoint.

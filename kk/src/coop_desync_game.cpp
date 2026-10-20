@@ -57,6 +57,7 @@ void Capture(uint8_t* base,const FlowView& v) {
   auto scripts=StoryWorldDigest(base); auto enemies=EnemyWorldDigest(base);
   if (scripts.size()>kStorySnapshotScripts || enemies.size()>kMaxEnemies || sweep==UINT32_MAX) return;
   WorldDigestPage header; header.generation=v.world.generation; header.level=v.world.level; header.start=v.world.start;
+  header.captured=Now();
   header.checkpoint=v.checkpoint; header.completed=v.completed; header.sweep=++sweep;
   header.script_count=uint16_t(scripts.size()); header.enemy_count=uint16_t(enemies.size());
   header.parts=uint16_t(std::max<size_t>({1,(scripts.size()+15)/16,(enemies.size()+11)/12}));
@@ -98,7 +99,8 @@ void WorldGuardFrame(uint8_t* base) {
   }
   if (!received || in_flight!=desync::Tier::None) return;
   auto state=std::move(*received); received.reset();
-  if (now<grace || now-received_at>1 || state.header.checkpoint!=v.checkpoint) { guard.Suspend(); return; }
+  if (now<grace || now-received_at>1 || state.header.checkpoint!=v.checkpoint ||
+      !desync::FreshForPose(state.header,link.partner)) { guard.Suspend(); pending=desync::Tier::None; return; }
   auto evidence=StoryCompareDigest(base,state,false);
   evidence.progress^=uint64_t(SessionNativeCheckpoint())*1099511628211ull;
 #if defined(KK_DEV_TOOLS)
@@ -106,6 +108,7 @@ void WorldGuardFrame(uint8_t* base) {
   if (forced==desync::Tier::Quiet) EnemyDevWorldDrift(base);
 #endif
   const auto enemy=EnemyCompareDigest(base,state,false);
+  evidence.progress^=enemy.progress;
   evidence.quiet|=enemy.quiet; evidence.structural|=enemy.structural;
   const auto game=hfr::Load32(base,0x82CC97C0);
   // This is the same validated game global used by the flow adapter.

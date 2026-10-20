@@ -26,7 +26,7 @@ void Codec() {
     }
     bytes.push_back(0); Check(!Decode(bytes,out),"trailing byte rejected");
   }
-  for (int bad=0;bad<10;++bad) {
+  for (int bad=0;bad<11;++bad) {
     Message m; m.type=MessageType::WorldDigest; m.digest=Page();
     switch (bad) {
       case 0:m.digest.scripts[0].record=kStoryRecords+1;break;
@@ -39,6 +39,7 @@ void Codec() {
       case 7:m.digest.scripts.pop_back();break;
       case 8:m.digest.enemy_count=513;break;
       case 9:m.digest.scripts[0].source=0;break;
+      case 10:m.digest.captured=std::numeric_limits<double>::quiet_NaN();break;
     }
     std::vector<uint8_t> bytes; Check(!Encode(m,bytes),"invalid digest bounded on send");
   }
@@ -57,6 +58,9 @@ void Assembly() {
   a.Push(Page(),1); Check(!a.Push(duplicate,2),"duplicate enemy identities rejected across pages");
 }
 void Hysteresis() {
+  auto page=Page(); page.captured=100000;
+  Check(desync::FreshForPose(page,PlayerPose{100000.3,101}),"host clocks compare without receiver clock offset");
+  Check(!desync::FreshForPose(page,PlayerPose{100006,101}) && !desync::FreshForPose(page,{}),"reliable backlog or missing pose cannot become fresh drift evidence");
   using desync::Tier; desync::Guard g; desync::Evidence lag; lag.lag=true; lag.progress=7;
   for (double t=1;t<=19;t+=3) Check(g.Observe(1,101,1,lag,t)==Tier::None,"normal lag grace");
   Check(g.Observe(1,101,1,lag,22)==Tier::Move,"persistent stationary lag moves automatically");

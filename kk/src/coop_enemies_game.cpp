@@ -1918,6 +1918,7 @@ std::vector<WorldEnemy> EnemyWorldDigest(const uint8_t* b) {
 }
 desync::Evidence EnemyCompareDigest(uint8_t* b,const desync::State& state,bool reconcile) {
   desync::Evidence result;
+  const auto missing=[&](EnemyId id) { result.structural=true; result.progress=Mix(Mix(result.progress,id.source),id.sequence); };
   auto& s=Get();
   if (!Connected() || s.link.role!=Role::Guest || !Environment(b,s.world)) return result;
   const auto rough=[](float a,float b) { return (a>0)!=(b>0) || std::abs(a-b)>5.f; };
@@ -1925,7 +1926,7 @@ desync::Evidence EnemyCompareDigest(uint8_t* b,const desync::State& state,bool r
     // Host digests never override guest-owned AI or an in-flight ownership change.
     if (h.owner!=EnemyOwner::Host) continue;
     const auto* binding=CanonicalBinding(b,h.id);
-    if (!binding) { if (h.life>0) result.structural=true; continue; }
+    if (!binding) { if (h.life>0) missing(h.id); continue; }
     const auto auth=s.authority.find(h.id);
     if (auth==s.authority.end() || auth->second.owner!=h.owner || auth->second.generation!=h.generation ||
         auth->second.Frozen()) continue;
@@ -1949,7 +1950,7 @@ desync::Evidence EnemyCompareDigest(uint8_t* b,const desync::State& state,bool r
     const auto id=Canonical(binding.id); const auto auth=s.authority.find(id);
     if (!id.source || host_ids.contains(id) || auth==s.authority.end() || auth->second.dead ||
         auth->second.owner!=EnemyOwner::Host || auth->second.Frozen() || !ValidBinding(b,binding)) continue;
-    if (LoadF(b,binding.vars+LifeOffset(binding.id.family))>0) result.structural=true;
+    if (LoadF(b,binding.vars+LifeOffset(binding.id.family))>0) missing(id);
   }
   return result;
 }
