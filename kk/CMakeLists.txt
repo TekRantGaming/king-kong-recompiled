@@ -90,6 +90,7 @@ set(KINGKONG_SOURCES
     src/content.cpp
     src/artbook_files.cpp
     src/artbook.cpp
+    src/pdf_pages.cpp
     src/workshop.cpp
     src/workshop_mods.cpp
     src/workshop_texpacks.cpp
@@ -177,6 +178,31 @@ if(TARGET kk_ffmpeg)
         add_custom_command(TARGET king_kong POST_BUILD
             COMMAND ${CMAKE_COMMAND} -E copy_if_different "${path}" $<TARGET_FILE_DIR:king_kong>/)
     endforeach()
+endif()
+# Task 333: the user manual's pages are drawn by PDFium (src/pdf_pages.h; BSD 3-Clause / Apache 2.0, the
+# bblanchon/pdfium-binaries build without JavaScript or XFA), loaded at run time from beside the program. Its
+# release folder for this platform (bin/pdfium.dll, lib/libpdfium.so): -DKK_PDFIUM_DIR=<folder>, the KK_PDFIUM_DIR
+# environment variable, or tools/pdfium/<win-x64|linux-x64> (a link to F:\KK-native-renderer\downloads\
+# pdfium-binaries-chromium-8076 on the build PC; never in git). Copied beside the program; packages must ship it.
+# Without it the program runs and Extras > User manual says the manual cannot be shown.
+if(WIN32)
+    set(_kk_pdfium_platform win-x64)
+    set(_kk_pdfium_lib bin/pdfium.dll)
+else()
+    set(_kk_pdfium_platform linux-x64)
+    set(_kk_pdfium_lib lib/libpdfium.so)
+endif()
+set(_kk_pdfium_default "$ENV{KK_PDFIUM_DIR}")
+if(NOT _kk_pdfium_default AND EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/../tools/pdfium/${_kk_pdfium_platform}/${_kk_pdfium_lib}")
+    set(_kk_pdfium_default "${CMAKE_CURRENT_SOURCE_DIR}/../tools/pdfium/${_kk_pdfium_platform}")
+endif()
+set(KK_PDFIUM_DIR "${_kk_pdfium_default}" CACHE PATH "PDFium release folder (bin/pdfium.dll or lib/libpdfium.so) for the user manual")
+if(KK_PDFIUM_DIR AND EXISTS "${KK_PDFIUM_DIR}/${_kk_pdfium_lib}")
+    message(STATUS "King Kong: ${KK_PDFIUM_DIR}/${_kk_pdfium_lib} goes beside the game (the user manual)")
+    add_custom_command(TARGET king_kong POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different "${KK_PDFIUM_DIR}/${_kk_pdfium_lib}" $<TARGET_FILE_DIR:king_kong>/)
+else()
+    message(WARNING "King Kong: no PDFium (set KK_PDFIUM_DIR): Extras > User manual cannot show the manual")
 endif()
 if(WIN32)
     target_link_libraries(king_kong PRIVATE windowscodecs ole32 pdh psapi runtimeobject shell32)

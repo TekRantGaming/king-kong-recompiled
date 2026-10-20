@@ -37,3 +37,5 @@ kkresources.list
 
 # Setup comparison close-ups (tools/setup_art.ps1): captured from the game, shipped in packages only
 setup-art/
+# PDFium for the user manual (task 333): a link to the downloaded release, shipped beside the program only
+/tools/pdfium/

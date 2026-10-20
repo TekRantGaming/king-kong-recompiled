@@ -22,3 +22,12 @@
     {"Zoom in", "Vergrößern", "Ampliar", "Zoomer", "Ingrandisci"},
     {"Save to PC", "Auf PC speichern", "Guardar en el PC", "Enregistrer sur le PC", "Salva sul PC"},
     {"View", "Ansehen", "Ver", "Voir", "Vedi"},
+    // Task 333: Extras > User manual (the artbook's page for the game's Xbox 360 manual).
+    {"User manual", "Handbuch", "Manual de usuario", "Manuel d'utilisation", "Manuale di istruzioni"},
+    {"Page {0}", "Seite {0}", "Página {0}", "Page {0}", "Pagina {0}"},
+    {"The manual cannot be shown", "Das Handbuch kann nicht angezeigt werden", "No se puede mostrar el manual", "Impossible d'afficher le manuel", "Impossibile mostrare il manuale"},
+    {"The manual is still downloading", "Das Handbuch wird noch heruntergeladen", "El manual aún se está descargando", "Le manuel est encore en téléchargement", "Il manuale è ancora in download"},
+    {"The manual is not downloaded yet", "Das Handbuch ist noch nicht heruntergeladen", "El manual aún no se ha descargado", "Le manuel n'est pas encore téléchargé", "Il manuale non è ancora stato scaricato"},
+    {"The PDF reader that comes with the game (pdfium) is missing or could not open the manual. Installing the game again brings it back.", "Der PDF Leser, der mit dem Spiel kommt (pdfium), fehlt oder konnte das Handbuch nicht öffnen. Wenn du das Spiel erneut installierst, ist er wieder da.", "Falta el lector de PDF que viene con el juego (pdfium) o no pudo abrir el manual. Si vuelves a instalar el juego, vuelve a estar.", "Le lecteur PDF fourni avec le jeu (pdfium) est absent ou n'a pas pu ouvrir le manuel. Réinstaller le jeu le remet en place.", "Il lettore PDF incluso nel gioco (pdfium) manca o non è riuscito ad aprire il manuale. Reinstallando il gioco torna al suo posto."},
+    {"The game's Xbox 360 manual, which the launcher downloads from oldgamesdownload.com ({0} MB).", "Das Handbuch des Spiels für die Xbox 360, das der Launcher von oldgamesdownload.com herunterlädt ({0} MB).", "El manual del juego para Xbox 360, que el launcher descarga de oldgamesdownload.com ({0} MB).", "Le manuel du jeu sur Xbox 360, que le launcher télécharge depuis oldgamesdownload.com ({0} Mo).", "Il manuale del gioco per Xbox 360, che il launcher scarica da oldgamesdownload.com ({0} MB)."},
+    {"Preparing the manual", "Handbuch wird vorbereitet", "Preparando el manual", "Préparation du manuel", "Preparazione del manuale"},

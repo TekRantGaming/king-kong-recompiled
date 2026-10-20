@@ -190,6 +190,11 @@ REX_HOOK_RAW(sub_821074E8) {
       return;
     }
     kk::play::FilterPad(user, base + state_ptr);
+    if (kk::play::OriginalMenuActive()) {  // task 333: Start on the title on the way to the original main menu
+      uint32_t result = ctx.r3.u32;
+      kk::play::OriginalMenuPad(user, base, base + state_ptr, result);
+      ctx.r3.u64 = result;
+    }
     return;
   }
   if (ctx.r3.u32 == 0 && state_ptr) {  // ERROR_SUCCESS
@@ -203,6 +208,11 @@ REX_HOOK_RAW(sub_821074E8) {
     kk::play::FilterPad(user, base + state_ptr);
   } else {
     g_aim[user & 3] = {};  // no pad: let go of a toggled aim
+  }
+  if (state_ptr && kk::play::OriginalMenuActive()) {  // task 333: Start on the title for the original main menu
+    uint32_t result = ctx.r3.u32;
+    kk::play::OriginalMenuPad(user, base, base + state_ptr, result);
+    ctx.r3.u64 = result;
   }
 }
 

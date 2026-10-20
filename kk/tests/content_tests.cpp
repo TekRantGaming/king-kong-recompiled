@@ -839,7 +839,17 @@ static void ModPackTests(const fs::path& work) {
   CHECK(ModPackFor(Kind::kComic) == &kModPacks[1] && !Quiet(Kind::kComic));
   // Task 209's numbers are kept (array indexes); new kinds only at the end.
   CHECK(int(Kind::kTexturePack) == 0 && int(Kind::kCutscenes) == 1 && int(Kind::kArtbook) == 2 &&
-        int(Kind::kUhd) == 3 && int(Kind::kImport) == 4 && int(Kind::kComic) == 5 && kKindCount == 8);
+        int(Kind::kUhd) == 3 && int(Kind::kImport) == 4 && int(Kind::kComic) == 5 && kKindCount == 9);
+  // Task 333 (owner, 20 Oct): the user manual, quiet like the artbook, from the owner's link with its SHA-256.
+  CHECK(int(Kind::kManual) == 8 && Quiet(Kind::kManual) && Quiet(Kind::kArtbook) && !IsModPack(Kind::kManual));
+  {
+    const Info& manual = InfoFor(Kind::kManual);
+    CHECK(std::string(manual.id) == "manual" && std::string(manual.folder) == "manual");
+    CHECK(std::string(manual.url) ==
+          "https://oldgamesdownload.com/wp-content/uploads/manuals/peter-jacksons-king-kong_xbox-360_manual_en_d1h.pdf");
+    CHECK(manual.zip_size == 1717617ull &&
+          std::string(manual.sha256) == "5d0ad72b1771487ed9a1fff991838448a6cf0d25de51d983fd3d4db63674bca4");
+  }
   // Task 255 (owner, 19 Oct): Kong's Tropical Holiday and Kong Cartoon, the owner's links and the sizes of their ZIPs.
   CHECK(int(Kind::kTropical) == 6 && int(Kind::kCartoon) == 7);
   CHECK(kModPacks[2].kind == Kind::kTropical && std::string(kModPacks[2].key) == "tropical" &&
@@ -949,6 +959,55 @@ static void ModPackTests(const fs::path& work) {
   }
 }
 
+// Task 333: the user manual downloads like the artbook (quietly, no settings) and is kept as content\manual\manual.pdf;
+// a file that is not the one recorded (SHA-256) fails and is deleted, and so does one that is not a PDF.
+static void ManualTests(const fs::path& work) {
+  const std::string pdf = "%PDF-1.4\n% a stand-in manual\n" + std::string(20000, 'm') + "\n%%EOF\n";
+  {
+    const fs::path user = work / "manual-ok";
+    auto fake = std::make_unique<FakeFetcher>();
+    fake->data = pdf;
+    fake->drop_at = pdf.size() / 2;
+    Service s;
+    s.OverrideUrl(Kind::kManual, "fake://manual", Sha(pdf));
+    s.Init(user, std::move(fake));
+    s.Download(Kind::kManual);
+    CHECK(WaitFor([&] { return s.Idle() && s.Get(Kind::kManual).stage == Stage::kInstalled; }));
+    const auto st = s.Get(Kind::kManual);
+    CHECK(st.installed && st.folder == InstallDir(user, Kind::kManual));
+    CHECK(ReadFile(InstallDir(user, Kind::kManual) / kManualFile) == pdf);
+    CHECK(!fs::exists(user / "content" / "downloads" / "manual.pdf") && !fs::exists(user / "content" / "downloads" / "manual.part"));
+    CHECK(!fs::exists(user / "content" / "manual.new") && s.TakeChanges().empty());  // no settings change
+    Service again;  // read back at the next start
+    again.Init(user, std::make_unique<FakeFetcher>());
+    CHECK(again.Get(Kind::kManual).installed);
+  }
+  {
+    const fs::path user = work / "manual-changed";
+    auto fake = std::make_unique<FakeFetcher>();
+    fake->data = pdf + "changed";
+    Service s;
+    s.OverrideUrl(Kind::kManual, "fake://manual", Sha(pdf));
+    s.Init(user, std::move(fake));
+    s.Download(Kind::kManual);
+    CHECK(WaitFor([&] { return s.Idle() && s.Get(Kind::kManual).stage == Stage::kFailed; }));
+    CHECK(s.Get(Kind::kManual).error == Error::kChecksum && !s.Get(Kind::kManual).installed);
+    CHECK(!fs::exists(InstallDir(user, Kind::kManual)) && !fs::exists(user / "content" / "downloads" / "manual.pdf"));
+  }
+  {
+    const fs::path user = work / "manual-not-pdf";
+    const std::string html = "<html>not found</html>";
+    auto fake = std::make_unique<FakeFetcher>();
+    fake->data = html;
+    Service s;
+    s.OverrideUrl(Kind::kManual, "fake://manual", Sha(html));
+    s.Init(user, std::move(fake));
+    s.Download(Kind::kManual);
+    CHECK(WaitFor([&] { return s.Idle() && s.Get(Kind::kManual).stage == Stage::kFailed; }));
+    CHECK(s.Get(Kind::kManual).error == Error::kBadPack && !fs::exists(InstallDir(user, Kind::kManual)));
+  }
+}
+
 int main(int argc, char** argv) {
   if (argc < 2) {
     std::cerr << "usage: kk-content-tests <work folder>\n";
@@ -964,6 +1023,7 @@ int main(int argc, char** argv) {
   PureTests();
   ServiceTests(work);
   ModPackTests(work);
+  ManualTests(work);
   if (const char* server = std::getenv("KK_CONTENT_TEST_SERVER"); server && *server) ServerTest(work, server);
   std::cout << checks << " content checks passed\n";
   return 0;

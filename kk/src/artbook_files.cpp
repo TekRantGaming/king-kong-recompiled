@@ -297,11 +297,13 @@ Saved SavePicture(const fs::path& picture, const fs::path& folder) {
   return r;
 }
 
-fs::path AutoFile(const fs::path& user_dir) { return user_dir / "content" / "downloads" / "artbook.auto"; }
+fs::path AutoFile(const fs::path& user_dir, const char* name) {
+  return user_dir / "content" / "downloads" / (std::string(name) + ".auto");
+}
 
-AutoState ReadAuto(const fs::path& user_dir) {
+AutoState ReadAuto(const fs::path& user_dir, const char* name) {
   AutoState a;
-  std::ifstream in(AutoFile(user_dir), std::ios::binary);
+  std::ifstream in(AutoFile(user_dir, name), std::ios::binary);
   for (std::string line; std::getline(in, line);) {
     if (!line.empty() && line.back() == '\r') line.pop_back();
     if (line == "wanted=1") a.wanted = true;
@@ -311,9 +313,9 @@ AutoState ReadAuto(const fs::path& user_dir) {
   return a;
 }
 
-bool WriteAuto(const fs::path& user_dir, const AutoState& a) {
+bool WriteAuto(const fs::path& user_dir, const AutoState& a, const char* name) {
   std::error_code ec;
-  const fs::path file = AutoFile(user_dir);
+  const fs::path file = AutoFile(user_dir, name);
   fs::create_directories(file.parent_path(), ec);
   fs::path tmp = file;
   tmp += ".tmp";
@@ -325,9 +327,9 @@ bool WriteAuto(const fs::path& user_dir, const AutoState& a) {
   return !ec;
 }
 
-void ClearAuto(const fs::path& user_dir) {
+void ClearAuto(const fs::path& user_dir, const char* name) {
   std::error_code ec;
-  fs::remove(AutoFile(user_dir), ec);
+  fs::remove(AutoFile(user_dir, name), ec);
 }
 
 }  // namespace kk::artbook

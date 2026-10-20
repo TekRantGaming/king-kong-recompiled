@@ -515,6 +515,13 @@ const Info& InfoFor(Kind kind) {
       {"cartoon-textures", "cartoon-textures", "https://bobandersonv115.cypher.usbx.me/filebrowser/api/public/dl/zMfx2F-j",
        "Kong-Cartoon-1.0.zip", 1473282349ull, 5323409958ull,
        "ef86ae0a0df017124d7013fa5ab968a5274bedbdc2b77451648aa40d99b4961c"},
+      // Task 333 (owner, 20 Oct): the game's Xbox 360 user manual from the owner's link, a PDF kept as it is. Its
+      // SHA-256 (of the file the link served on 20 Oct) is checked after every download: a changed file fails with
+      // kChecksum and is deleted, so it is noticed rather than shown.
+      {"manual", "manual",
+       "https://oldgamesdownload.com/wp-content/uploads/manuals/peter-jacksons-king-kong_xbox-360_manual_en_d1h.pdf",
+       "peter-jacksons-king-kong_xbox-360_manual_en_d1h.pdf", 1717617ull, 1717617ull,
+       "5d0ad72b1771487ed9a1fff991838448a6cf0d25de51d983fd3d4db63674bca4"},
   };
   return kInfo[int(kind)];
 }
@@ -570,7 +577,9 @@ struct Service::Impl {
 
   fs::path Downloads() const { return ContentRoot(user_dir) / "downloads"; }
   fs::path Part(Kind k) const { return Downloads() / (std::string(InfoFor(k).id) + ".part"); }
-  fs::path Zip(Kind k) const { return Downloads() / (std::string(InfoFor(k).id) + (k == Kind::kArtbook ? ".bin" : ".zip")); }
+  fs::path Zip(Kind k) const {
+    return Downloads() / (std::string(InfoFor(k).id) + (k == Kind::kArtbook ? ".bin" : k == Kind::kManual ? ".pdf" : ".zip"));
+  }
   fs::path Iso() const { return Downloads() / "artbook.iso"; }  // Kind::kArtbook while it installs
   fs::path StateFile(Kind k) const { return Downloads() / (std::string(InfoFor(k).id) + ".state"); }
   fs::path Root(Kind k) const { return InstallDir(user_dir, k); }
@@ -630,7 +639,8 @@ struct Service::Impl {
     const bool ok = !folder.empty() && Exists(folder) &&
                     (k != Kind::kTexturePack || Exists(folder / "pack.txt")) &&
                     (!IsModPack(k) || Exists(folder / "textures" / "pack.txt")) &&
-                    (k != Kind::kArtbook || artbook::Installed(folder));
+                    (k != Kind::kArtbook || artbook::Installed(folder)) &&
+                    (k != Kind::kManual || Exists(folder / kManualFile));
     if (!ok) return;
     slot.status.installed = true;
     slot.status.stage = Stage::kInstalled;
@@ -897,8 +907,66 @@ struct Service::Impl {
     return true;
   }
 
+  // Kind::kManual (task 333): the checked PDF copied as content\manual\manual.pdf (a staging folder swapped in, as
+  // the artbook's); the download is deleted after. Its pages are drawn when the manual is shown (pdf_pages.h).
+  bool InstallManual(const fs::path& pdf) {
+    const Kind k = Kind::kManual;
+    const fs::path root = Root(k);
+    fs::path staging = root, old = root;
+    staging += ".new";
+    old += ".old";
+    const uint64_t size = FileSize(pdf);
+    {
+      std::lock_guard lock(mutex);
+      SetStage(k, Stage::kUnpacking);
+      S(k).status.total = size;
+      S(k).progress = 0;
+    }
+    // A PDF starts with "%PDF-" (the SHA-256 has already been checked; this only guards the file kind).
+    char head[5] = {};
+    {
+      std::ifstream in(pdf, std::ios::binary);
+      in.read(head, 5);
+    }
+    if (std::string(head, 5) != "%PDF-") {
+      ClearDownload(k);
+      Fail(k, Error::kBadPack, "the manual is not a PDF file");
+      return false;
+    }
+    if (!CheckSpace(k, size + kSpaceMargin)) return false;
+    std::error_code ec;
+    if (!RemoveAll(staging) || !fs::create_directories(staging, ec) ||
+        !fs::copy_file(pdf, staging / kManualFile, fs::copy_options::overwrite_existing, ec) ||
+        FileSize(staging / kManualFile) != size) {
+      RemoveAll(staging);
+      Fail(k, Error::kWrite, "cannot write " + U8(staging));
+      return false;
+    }
+    S(k).progress = size;
+    if (Exists(root)) {
+      RemoveAll(old);
+      fs::rename(root, old, ec);
+    }
+    fs::rename(staging, root, ec);
+    if (ec) {
+      if (Exists(old) && !Exists(root)) fs::rename(old, root, ec);
+      RemoveAll(staging);
+      Fail(k, Error::kWrite, "cannot move the manual into " + U8(root));
+      return false;
+    }
+    RemoveAll(old);
+    WriteKeys(InstalledFile(k), {{"name", "Xbox 360 user manual"},
+                                 {"folder", U8(root)},
+                                 {"source", "download"},
+                                 {"applied", "1"}});
+    ReadInstalled(k, /*queue_changes=*/false);
+    Log(std::string(InfoFor(k).id) + ": installed " + U8(root / kManualFile));
+    return true;
+  }
+
   bool Install(Kind k, const fs::path& zip, bool download) {
     if (k == Kind::kArtbook) return InstallArtbook(zip);
+    if (k == Kind::kManual) return InstallManual(zip);
     if (IsModPack(k) || k == Kind::kImport)
       return InstallMod(k, zip, IsModPack(k) ? ImportTarget::kTexturePack : S(k).status.target, download);
     const Info& info = InfoFor(k);

@@ -48,6 +48,14 @@ constexpr Entry kEntries[] = {
      "El Taller se abre desde el menú principal cuando termine la configuración.",
      "L'Atelier s'ouvre depuis le menu principal une fois la configuration terminée.",
      "L'Officina si apre dal menu principale al termine della configurazione."},
+    // Task 333: Extras > Original main menu and User manual.
+    {"Original game", "Originalspiel", "Juego original", "Jeu d'origine", "Gioco originale"},
+    {"Original main menu", "Originales Hauptmenü", "Menú principal original", "Menu principal d'origine", "Menu principale originale"},
+    {"The game's Xbox 360 manual, page by page.", "Das Handbuch des Spiels für die Xbox 360, Seite für Seite.", "El manual del juego para Xbox 360, página a página.", "Le manuel du jeu sur Xbox 360, page par page.", "Il manuale del gioco per Xbox 360, pagina per pagina."},
+    {"The game's own main menu, as it was on the Xbox 360. You can start a game from it.", "Das eigene Hauptmenü des Spiels, wie es auf der Xbox 360 war. Du kannst darin ein Spiel starten.", "El menú principal propio del juego, tal como era en Xbox 360. Puedes empezar una partida desde él.", "Le menu principal du jeu, tel qu'il était sur Xbox 360. Vous pouvez y lancer une partie.", "Il menu principale del gioco, com'era su Xbox 360. Puoi avviare una partita da lì."},
+    {"To come back here, start a game from the original main menu, then pause and quit.", "Um hierher zurückzukehren, starte ein Spiel im originalen Hauptmenü, pausiere es dann und beende es.", "Para volver aquí, empieza una partida desde el menú principal original, luego pausa y sal.", "Pour revenir ici, lancez une partie depuis le menu principal d'origine, puis mettez en pause et quittez.", "Per tornare qui, avvia una partita dal menu principale originale, poi metti in pausa ed esci."},
+    {"Manual download failed", "Download des Handbuchs fehlgeschlagen", "Error al descargar el manual", "Échec du téléchargement du manuel", "Download del manuale non riuscito"},
+    {"The user manual could not be downloaded after several tries. You can try again now, or later in Play > Extras > User manual.", "Das Handbuch konnte nach mehreren Versuchen nicht heruntergeladen werden. Du kannst es jetzt erneut versuchen oder später unter Spielen > Extras > Handbuch.", "No se pudo descargar el manual de usuario tras varios intentos. Puedes volver a intentarlo ahora o más tarde en Jugar > Extras > Manual de usuario.", "Le manuel d'utilisation n'a pas pu être téléchargé après plusieurs tentatives. Vous pouvez réessayer maintenant, ou plus tard dans Jouer > Extras > Manuel d'utilisation.", "Non è stato possibile scaricare il manuale di istruzioni dopo diversi tentativi. Puoi riprovare ora, o più tardi in Gioca > Extra > Manuale di istruzioni."},
     // Task 331: the Returning to the main menu loop's lines (the save, the tips).
     {"Game saved at your last checkpoint.",
      "Spiel am letzten Checkpoint gespeichert.",
