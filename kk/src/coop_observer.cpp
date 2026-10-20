@@ -18,7 +18,7 @@ REX_EXTERN(__imp__sub_82401AA8);
 namespace kk::coop::observer {
 namespace {
 double Now() { return std::chrono::duration<double>(std::chrono::steady_clock::now().time_since_epoch()).count(); }
-std::atomic<bool> temporary{false}, observing{false}, screen{true}, failed{false};
+std::atomic<bool> temporary{false}, observing{false}, screen{true}, failed{false}, native_credits{false};
 std::atomic<const char*> status{"Observer: waiting for host camera."};
 uint32_t generation=0, normal_matrix=0, normal_actor=0, parked_actor=0, parked_matrix=0;
 uint32_t local_checkpoint=0;
@@ -51,7 +51,7 @@ bool Movie(const uint8_t* b) {
 }
 void Reset() {
   normal_matrix=normal_actor=parked_actor=parked_matrix=0; normal_time=0;
-  parked=false; host_previous.reset(); remote.reset(); cut=1; skip=consumed_skip=0;
+  parked=false; native_credits=false; host_previous.reset(); remote.reset(); cut=1; skip=consumed_skip=0;
   start_down=false; local_scripted=false; mismatch_since=skip_until=0; failed=false; observing=false; screen=true;
   began=Now(); last_camera=0; checkpoint_mismatch=0; status="Observer: waiting for host camera.";
   camera_timeout_since=host_capture_time=0; host_capture_reason="no scene view";
@@ -87,7 +87,8 @@ bool StatusScreen() { return screen.load(); }
 bool Active() { return observing.load(); }
 const char* Status() { return status.load(); }
 bool SuppressLook() { return REXCVAR_GET(kk_coop_enabled) && observing.load(); }
-bool HideWeapon() { return SuppressLook(); }
+// The native screen list also contains credits text, not just first-person UI.
+bool HideWeapon() { return SuppressLook() && !native_credits; }
 void Fallback(const char* why) {
   const bool was_timeout=camera_timeout_since!=0;
   camera_timeout_since=0;
@@ -102,7 +103,7 @@ void Fallback(const char* why) {
 void GameFrame(uint8_t* b) {
   const auto v=SessionFlowSnapshot();
   if (!REXCVAR_GET(kk_coop_enabled) || !v.active || v.phase!=FlowPhase::Playing || !play::SessionActive()) {
-    observing=false; temporary=false; together_scene={}; PublishHostCamera({}); return;
+    observing=false; temporary=false; native_credits=false; together_scene={}; PublishHostCamera({}); return;
   }
   // The flow generation resets local actor identities even on a same-level checkpoint reload.
   if (generation!=v.world.generation) {
@@ -133,6 +134,16 @@ void GameFrame(uint8_t* b) {
   }
   observing=wanted;
   if (!observing) { screen=false; return; }
+  // Credits are native UI over a backdrop, without a published scene camera.
+  // Both worlds loaded the same credits start through the shared barrier;
+  // no Jack/universe span is available here. Leave the presentation visible
+  // and keep following host session progress without actor parking.
+  if (v.policy==ChapterPolicy::Observer && v.world.level==7) {
+    if (!native_credits) REXLOG_INFO("KK co-op observer: native credits presentation enabled, generation {}",generation);
+    native_credits=true; failed=false; screen=false; remote.reset();
+    status="Credits. Following host progress.";
+    return;
+  }
   if (failed && HoldWorld()) return;
   if (!b || !World(b,v) || play::StartLevelLoading() || play::CoverScreen()) return;
   // Native movie playback is a separate presentation path. Its scene matrix
@@ -267,6 +278,7 @@ void FilterPad(uint32_t user,uint8_t* state) {
 }
 void LateWorld(PPCContext& ctx,uint8_t* b) {
   if (!observing || failed || !b || play::PauseMenuOpen() || play::StartLevelLoading() || play::CoverScreen()) return;
+  if (native_credits) return; // Credits have no Jack actor or parking path.
   // Downed and cinematic viewers keep their native actor/physics intact.
   if (temporary || together_scene.Active()) return;
   // Let the native chapter-start drop settle before fixing an on-foot origin.
