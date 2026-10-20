@@ -8681,6 +8681,16 @@ std::string ApplyRendererChoice() {
   return startup::ApplyChoice(rex::cvar::GetFlagByName("gpu_plugin"));
 }
 
+void AskUpscalersBeforeWindow() {
+  if (!HasTemporalSetting() || !UsingNativeRenderer()) return;
+  const auto start = std::chrono::steady_clock::now();
+  if (nr::kk::QueryUpscalers().state != 1) return;  // kept by the renderer (or none here): no device made
+  nr::kk::WaitForUpscalers();
+  nr::kk::QueryUpscalers();  // takes the answer, which the renderer then keeps in the settings
+  REXLOG_INFO("KK: upscalers asked before the launcher's window opened ({:.0f} ms)",
+              std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - start).count());
+}
+
 void ShowLauncher(rex::ui::ImGuiDrawer* drawer, rex::ui::ImmediateDrawer* immediate, LauncherPaths paths,
                   LauncherCallbacks callbacks) {
   // Task 285: one SDL audio reference for this process's life, taken here on the main thread. Without it

@@ -397,6 +397,10 @@ class KingKongApp : public rex::ReXApp {
       kk::startup::Begin(config.gpu_plugin, !*show_launcher_);
     }
     REXLOG_INFO("KK: renderer {} (kk_renderer {})", config.gpu_plugin, rex::cvar::GetFlagByName("kk_renderer"));
+    // Task 335: the launcher's upscaler question (a Direct3D 12 device) before SetupPresentation makes this
+    // process's device, swapchain and window; NVIDIA's driver crashed when both were made at once.
+    if (!config.graphics && show_launcher_ && *show_launcher_ && config.gpu_plugin == "native")
+      kk::AskUpscalersBeforeWindow();
     // Task 286: always ours. The SDK's SetupPresentation sets its plain SDLAudioSystem before OnPreSetup, so
     // the old "if (!config.audio_factory)" never chose this one (no audio thread scheduling since e360f6f,
     // and none of task 285's slow audio-open lines).
