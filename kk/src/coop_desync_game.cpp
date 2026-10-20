@@ -28,19 +28,27 @@ EnemyWorld recovery_world;
 std::atomic<uint64_t> summary_epoch{0},quiet_count{0},move_count{0},reload_count{0};
 uint64_t samples=0;
 #if defined(KK_DEV_TOOLS)
-bool forced_done=false;
+unsigned forced_done=0;
 bool forced_injected=false;
 double fixture_started=0;
 desync::Tier Fixture(double now) {
   const char* value=std::getenv("KK_DEV_DESYNC");
-  if (!value || forced_done) return desync::Tier::None;
-  const std::string_view v(value); const auto colon=v.find(':');
-  if (colon==v.npos) return desync::Tier::None;
-  const double delay=std::strtod(value+colon+1,nullptr);
-  if (!std::isfinite(delay) || delay<1 || now-fixture_started<delay) return desync::Tier::None;
-  if (v.substr(0,colon)=="quiet") return desync::Tier::Quiet;
-  if (v.substr(0,colon)=="move") return desync::Tier::Move;
-  if (v.substr(0,colon)=="reload") return desync::Tier::Reload;
+  if (!value) return desync::Tier::None;
+  // Optional comma-separated sequence exercises all tiers in one private run.
+  const std::string_view script(value); if (script.size()>256) return desync::Tier::None;
+  for (size_t start=0;start<script.size();) {
+    const auto end=script.find(',',start);
+    const auto v=script.substr(start,end==script.npos ? script.size()-start : end-start);
+    const auto colon=v.find(':'); if (colon==v.npos) return desync::Tier::None;
+    const auto name=v.substr(0,colon);
+    const auto tier=name=="quiet" ? desync::Tier::Quiet : name=="move" ? desync::Tier::Move :
+        name=="reload" ? desync::Tier::Reload : desync::Tier::None;
+    const double delay=std::strtod(value+start+colon+1,nullptr);
+    if (tier==desync::Tier::None || !std::isfinite(delay) || delay<1) return desync::Tier::None;
+    if (!(forced_done & (1u<<unsigned(tier))) && now-fixture_started>=delay) return tier;
+    if (end==script.npos) break;
+    start=end+1;
+  }
   return desync::Tier::None;
 }
 #endif
@@ -49,7 +57,7 @@ void Scope(const FlowView& v,uint64_t current,double now) {
     WorldGuardSummary(); epoch=current; summary_epoch=current;
     quiet_count=move_count=reload_count=0; samples=0; generation=level=0;
 #if defined(KK_DEV_TOOLS)
-    forced_done=forced_injected=false; fixture_started=now;
+    forced_done=0; forced_injected=false; fixture_started=now;
 #endif
   }
   if (generation==v.world.generation && level==v.world.level) return;
@@ -160,7 +168,7 @@ void WorldGuardCompleted(desync::Tier tier) {
   REXLOG_INFO("KK co-op desync: completed={} generation={} level={} quiet={} moves={} guest-reloads={}; host continues",
       desync::Name(tier),generation,level,quiet_count.load(),move_count.load(),reload_count.load());
 #if defined(KK_DEV_TOOLS)
-  if (Fixture(Now())==tier) forced_done=true;
+  if (Fixture(Now())==tier) forced_done|=1u<<unsigned(tier);
 #endif
 }
 void WorldGuardLoaded() { assembly={}; received.reset(); guard.Suspend(); pending=desync::Tier::None; grace=Now()+20; }
