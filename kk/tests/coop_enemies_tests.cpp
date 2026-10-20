@@ -80,6 +80,63 @@ void IdentityAndMatching() {
       LifeOffset(EnemyFamily::Scorpion) == 5444 && SecondaryLifeOffset(EnemyFamily::Scorpion) == 5792 &&
       LifeBytes(EnemyFamily::Scorpion) == 5796 && LifeOffset(EnemyFamily::None) == 0, "per-family health layout");
 }
+void ExpandedFamilies() {
+  for (uint16_t raw=uint16_t(EnemyFamily::Bat); raw<=uint16_t(EnemyFamily::Prey); ++raw) {
+    auto e=Enemy(); e.id.family=EnemyFamily(raw);
+    Message decoded;
+    Check(Decode(Packet(Snapshot(e)),decoded) && decoded.enemies.enemies[0].id==e.id,
+        "expanded native family keeps its exact identity across snapshots");
+    Message shot; shot.type=MessageType::ShotIntent;
+    shot.shot={World(),1,1,1000,{0,0,0},{1,0,0},{{e.id,{1,0,0},0}}};
+    Check(Decode(Packet(shot),decoded) && decoded.shot.hits[0].id==e.id,
+        "expanded family hit survives shot codec");
+    Channel channel;
+    channel.Receive(Snapshot(e),1000);
+    e.life=0;
+    auto death=Event(e,EnemyEventKind::Died); death.sequence=11;
+    channel.Receive(death,1000.1);
+    e.life=50; channel.Receive(Snapshot(e,1000.2,12),1000.2);
+    const auto frame=channel.Sample(1000.3);
+    Check(frame.records.size()==1 && frame.records[0].enemy.life==0,
+        "expanded family death wins over a delayed live snapshot");
+  }
+  auto invalid=Enemy(); invalid.id.family=EnemyFamily(uint16_t(EnemyFamily::Prey)+1);
+  Check(!ValidEnemy(invalid),"unrecognized families still refuse");
+  Check(StateLife(EnemyFamily::SwampCrawlerSmall) && StateLife(EnemyFamily::Pny) &&
+      !LifeOffset(EnemyFamily::SwampCrawlerSmall) && !LifeOffset(EnemyFamily::Pny),
+      "state-driven creatures must not write a guessed health cell");
+  Check(ReplicatedLife(EnemyFamily::VRex,0,0)==1 && NativeLife(EnemyFamily::VRex,1)==0,
+      "V-Rex zero health stays alive while awaiting its native finisher");
+  Check(!std::isfinite(ReplicatedLife(EnemyFamily::VRex,0,std::numeric_limits<float>::quiet_NaN())),
+      "invalid native boss health cannot become a valid live snapshot");
+  Check(ReplicatedLife(EnemyFamily::VRex,TerminalState(EnemyFamily::VRex),0)==0 &&
+      NativeLife(EnemyFamily::VRex,0)==0 && NativeLife(EnemyFamily::VRex,ReplicatedLife(EnemyFamily::VRex,0,12.5f))==12.5f,
+      "V-Rex native MORT and live health round trip remain distinct");
+  Check(ReplicatedLife(EnemyFamily::SwampCrawlerSmall,TerminalState(EnemyFamily::SwampCrawlerSmall),0)==0 &&
+      ReplicatedLife(EnemyFamily::Pny,0,0)==1 && ReplicatedLife(EnemyFamily::Crab,0,0)==0,
+      "state-driven life does not change scalar-family zero-health semantics");
+  Check(TerminalState(EnemyFamily::SwampCrawlerSmall)==NativeDeath(EnemyFamily::SwampCrawlerSmall).function &&
+      TerminalState(EnemyFamily::Pny)==NativeDeath(EnemyFamily::Pny).function && NativeDeath(EnemyFamily::Pny).track==1,
+      "state-driven death adapters use the recovered track and terminal function");
+  std::map<uint32_t,uint32_t> memory;
+  constexpr uint32_t handle=0x40001000, descriptor=0x82C8EEF0+3*16, record=0x40002000+2*116;
+  memory[handle]=0x03000002; memory[handle+4]=77;
+  memory[descriptor]=0x40002000; memory[descriptor+8]=3;
+  memory[record+112]=77;
+  auto address=[](uint32_t p,uint32_t bytes) { return p>=0x40000000 && uint64_t(p)+bytes<=0xA0000000; };
+  auto word=[&](uint32_t p) { Check(address(p,4),"health resolver never reads outside local memory"); return memory[p]; };
+  Check(StimulusLifeCell(handle,word,address)==record+48,
+      "V-Rex health resolves payload 1.y through its live native pool handle");
+  memory[record+112]=78;
+  Check(!StimulusLifeCell(handle,word,address),"reused native health slot refuses a stale generation");
+  memory[record+112]=77; memory[descriptor+8]=2;
+  Check(!StimulusLifeCell(handle,word,address),"native health pool index must be strictly below count");
+  memory[descriptor+8]=3; memory[descriptor]=0xFFFFFFF0;
+  Check(!StimulusLifeCell(handle,word,address),"health pool address overflow refuses before reading");
+  memory[handle]=0x80000000;
+  Check(!StimulusLifeCell(handle,word,address) && !StimulusLifeCell(0,word,address),
+      "native health pool and handle bounds refuse");
+}
 void Wire() {
   Message out;
   for (bool event : {false, true}) {
@@ -720,7 +777,7 @@ void OwnershipSessions() {
 } // namespace
 int main() {
   ScorpionDamagePools();
-  IdentityAndMatching(); Wire(); LifecycleAndInterpolation(); SessionAuthority();
+  IdentityAndMatching(); ExpandedFamilies(); Wire(); LifecycleAndInterpolation(); SessionAuthority();
   MatchingRetryAndTolerance(); GuestInventory(); ShotWireAndBounds(); ShotValidation(); ShotSessions(); MissThenHit();
   WanShooterHistory();
   OwnershipDecision(); OwnershipWire(); OwnershipSequencing(); OwnershipStreams(); OwnershipSessions();

@@ -84,20 +84,32 @@ EnemyFamily Tracks(const uint8_t* b, uint32_t ai, uint32_t& state, bool& spawner
   const auto first = Load16(b, ai+80), last = Load16(b, ai+82);
   if (first > last || last > 4096 || last-first >= 64 || !PoseAddress(ai, (last+12)*4)) return EnemyFamily::None;
   EnemyFamily family = EnemyFamily::None;
+  uint32_t track_one = 0;
   for (uint32_t t = first; t <= last; ++t) {
     const auto block = Ptr(b, ai, (t+6)*4, 24);
     if (!block) continue;
     const auto fn = Load32(b, block+20);
-    if (initializing && (fn == 0x825B9020 || fn == 0x82516820 || fn == 0x826055F0 || fn == 0x8264DA70)) *initializing = true;
+    if (initializing && Initializer(fn)) *initializing = true;
     spawner |= fn == 0x826EB8C0 || fn == 0x826E1EE8 || fn == 0x826F8BC8;
     const auto f = Family(fn);
     if (f != EnemyFamily::None) {
       if (family != EnemyFamily::None && family != f) return EnemyFamily::None;
       family = f;
     }
+    if (t == 1) track_one = fn;
     if (t == first+2) state = fn;
   }
+  if (family == EnemyFamily::Pny) state = track_one;
   return family;
+}
+uint32_t LifeCell(const uint8_t* b, const Binding& binding) {
+  const auto offset = LifeOffset(binding.id.family);
+  if (!offset) return 0;
+  if (binding.id.family == EnemyFamily::VRex)
+    return StimulusLifeCell(binding.vars+offset,
+        [&](uint32_t p) { return Load32(b,p); },
+        [&](uint32_t p, uint32_t bytes) { return PoseAddress(p,bytes); });
+  return PoseAddress(binding.vars,offset+4) ? binding.vars+offset : 0;
 }
 bool Read(const uint8_t* b, uint32_t actor, Binding& bind, EnemyState& e) {
   if (!PoseAddress(actor, 32) || actor == Load32(b, 0x82CCBF7C) || (Load32(b, actor)&0x00400001)) return false;
@@ -105,18 +117,22 @@ bool Read(const uint8_t* b, uint32_t actor, Binding& bind, EnemyState& e) {
   bind.ai = Ptr(b, Ptr(b, actor, 24, 8), 4, 88);
   bool spawner = false, initializing = false;
   const auto family = Tracks(b, bind.ai, e.state, spawner, &initializing);
-  const auto life = LifeOffset(family);
-  if (!life || initializing) return false;
+  if (family == EnemyFamily::None || initializing) return false;
   bind.vars = Ptr(b, bind.ai, 64, LifeBytes(family)); bind.matrix = Ptr(b, actor, 12, 64);
   if (!bind.vars || !bind.matrix) return false;
   const auto hero = Load32(b, 0x82CCBF7C);
   const auto hero_ai = Ptr(b, Ptr(b, hero, 24, 8), 4, 88);
   if (bind.ai == hero_ai || bind.vars == Ptr(b, hero_ai, 64, 4) || bind.matrix == Ptr(b, hero, 12, 64)) return false;
-  e.id.family = family;
+  bind.id.family = e.id.family = family;
   e.x = LoadF(b, bind.matrix+48); e.y = LoadF(b, bind.matrix+52); e.z = LoadF(b, bind.matrix+56);
   const float fx = -LoadF(b, bind.matrix+16), fy = -LoadF(b, bind.matrix+20);
   if (!std::isfinite(fx) || !std::isfinite(fy) || std::hypot(fx, fy) < .001f) return false;
-  e.facing = std::atan2(fy, fx); e.life = LoadF(b, bind.vars+life);
+  e.facing = std::atan2(fy, fx);
+  if (StateLife(family)) e.life = ReplicatedLife(family,e.state,0);
+  else {
+    const auto cell = LifeCell(b,bind); if (!cell) return false;
+    e.life = ReplicatedLife(family,e.state,LoadF(b,cell));
+  }
   if (const auto secondary = SecondaryLifeOffset(family)) {
     e.secondary_life = LoadF(b, bind.vars+secondary);
     // Either native pool can exhaust the actor. Keep the existing terminal
@@ -144,6 +160,16 @@ const char* DevFamilyName(EnemyFamily family) {
     case EnemyFamily::Worm: return "worm";
     case EnemyFamily::Scorpion: return "scorpion";
     case EnemyFamily::Crab: return "crab";
+    case EnemyFamily::Bat: return "bat";
+    case EnemyFamily::Centipede: return "centipede";
+    case EnemyFamily::Native: return "native";
+    case EnemyFamily::Marine: return "marine";
+    case EnemyFamily::VRex: return "v-rex";
+    case EnemyFamily::SwampCrawler: return "swamp-crawler";
+    case EnemyFamily::SwampCrawlerSmall: return "small-swamp-crawler";
+    case EnemyFamily::Spider: return "spider";
+    case EnemyFamily::Pny: return "pny";
+    case EnemyFamily::Prey: return "prey";
     default: return "none";
   }
 }
@@ -675,7 +701,7 @@ struct Scratch {
   }
 };
 void WriteLife(uint8_t* b, const Binding& binding, const EnemyState& e) {
-  StoreF(b, binding.vars+LifeOffset(binding.id.family), e.life);
+  if (const auto cell = LifeCell(b,binding)) StoreF(b,cell,NativeLife(binding.id.family,e.life));
   if (const auto offset = SecondaryLifeOffset(binding.id.family)) StoreF(b, binding.vars+offset, e.secondary_life);
 }
 bool ControllerSafe(const uint8_t* b, uint32_t actor) {
@@ -689,14 +715,12 @@ bool ControllerSafe(const uint8_t* b, uint32_t actor) {
 void DeathTransition(PPCContext& ctx, uint8_t* b, const Binding& binding) {
   auto& s = Get();
   if (binding.id.family == EnemyFamily::Raptor || s.death_applied.contains(binding.id)) return;
-  // Normal Worm PAF -> MORT (.74:19839) and Scorpion PAF -> MORT (.44:22945)
-  // use the engine track setter. Never invoke a function address from the wire.
-  const uint32_t slot = binding.id.family == EnemyFamily::Worm ? 0x82CC9318 :
-      binding.id.family == EnemyFamily::Crab ? 0x82CC8A4C : 0x82CC8C5C;
-  const uint32_t expected = binding.id.family == EnemyFamily::Worm ? 0x82534858 :
-      binding.id.family == EnemyFamily::Crab ? 0x82666240 : 0x82619FD8;
-  const auto block = Ptr(b, slot, 0, 24);
-  if (!block || Load32(b, block+20) != expected || !Scratch::CanUse(ctx)) {
+  // Resolve only a recovered local death block and verify its compiled
+  // function. Families without one retain their native zero-life dispatch.
+  const auto death = NativeDeath(binding.id.family);
+  if (!death.slot) return;
+  const auto block = Ptr(b, death.slot, 0, 24);
+  if (!block || Load32(b, block+20) != death.function || !Scratch::CanUse(ctx)) {
     if (s.death_refused.insert(binding.id).second)
       REXLOG_INFO("ENEMIES death transition refused family={} reason=unverified-loaded-death-block life-zero-only=true", uint16_t(binding.id.family));
     return;
@@ -709,7 +733,7 @@ void DeathTransition(PPCContext& ctx, uint8_t* b, const Binding& binding) {
   for (unsigned i = 0; i < 4; ++i) saved[i] = Load32(b, globals[i]);
   Store32(b, globals[0], binding.ai); Store32(b, globals[1], binding.ai);
   Store32(b, globals[2], binding.actor); Store32(b, globals[3], binding.actor);
-  ctx.r3.u64 = 2; ctx.r4.u64 = block;
+  ctx.r3.u64 = death.track; ctx.r4.u64 = block;
   __imp__sub_826FA3B0(ctx, b);
   for (unsigned i = 0; i < 4; ++i) Store32(b, globals[i], saved[i]);
   s.death_applied.insert(binding.id);
@@ -828,7 +852,8 @@ void Replicas(PPCContext& ctx, uint8_t* b, bool drive) {
     if (!dead && (!ControllerSafe(b, binding->actor) || !Scratch::CanUse(ctx))) continue;
     // Only the nonowner receives raw life. Corpses run native death dispatches.
     auto sample = r.enemy; if (dead) sample.life = 0;
-    const float before = LoadF(b, binding->vars+LifeOffset(binding->id.family));
+    Binding previous_binding; EnemyState previous;
+    const float before = Read(b,binding->actor,previous_binding,previous) ? previous.life : sample.life;
     ShotResultLog(sample, before, true);
     WriteLife(b, *binding, sample);
     if (dead) { DeathTransition(ctx, b, *binding); continue; }
@@ -1628,8 +1653,14 @@ const char* EndShot(const uint8_t* b, bool fired) {
   return nullptr;
 }
 #if defined(KK_DEV_TOOLS)
-void DevShotLog(const uint8_t* b, bool guest, bool observed, uint32_t weapon,
+void DevShotLog(const uint8_t* b, bool guest, bool host_jack, bool observed, uint32_t weapon,
     uint32_t before, uint32_t after, uint32_t caller, uint32_t result, const char* reason) {
+  static unsigned host_lines = 0;
+  if (host_jack && host_lines < 128) {
+    ++host_lines;
+    REXLOG_INFO("KK dev host fire callback: fn=82696A28 call={} t={:.3f} lr={:08X} weapon={} ammo={}/{} result={} cap=128",
+        host_lines, kk::DevSecondsSinceMenu(), caller, weapon, before, after, result);
+  }
   static unsigned lines = 0;
   if (!guest || lines >= 128) return;
   ++lines;
@@ -2259,6 +2290,9 @@ REX_HOOK_RAW(sub_82696A28) {
   const auto before = armed ? kk::hfr::Load32(base, game+ammo[weapon-1]) : 0;
 #if defined(KK_DEV_TOOLS)
   const bool guest = kk::coop::EnemyLinkSnapshot().role == kk::coop::Role::Guest;
+  const auto hero = kk::hfr::Load32(base, 0x82CCBF7C);
+  const bool host_jack = !guest && kk::coop::EnemyConnectionReady() && kk::coop::PoseAddress(hero,32) &&
+      kk::hfr::Load32(base,0x82CCBF6C) == hero;
   const auto caller = uint32_t(ctx.lr);
 #endif
   __imp__sub_82696A28(ctx, base);
@@ -2271,7 +2305,7 @@ REX_HOOK_RAW(sub_82696A28) {
       ((same && after < before) || (observe && kk::coop::Get().shot_resolved)))
     kk::coop::ShotSendLog(reason ? reason : (kk::coop::Get().shot.hits.empty() ? "queued-miss" : "queued-hit"), reason == nullptr);
 #if defined(KK_DEV_TOOLS)
-  kk::coop::DevShotLog(base, guest, observe, weapon, before, after, caller, ctx.r3.u32, reason);
+  kk::coop::DevShotLog(base, guest, host_jack, observe, weapon, before, after, caller, ctx.r3.u32, reason);
 #endif
 }
 REX_HOOK_RAW(sub_8243A3C0) {

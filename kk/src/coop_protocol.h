@@ -11,7 +11,7 @@
 
 namespace kk::coop {
 constexpr uint32_t kMagic = 0x4B4B4331;  // KKC1, network byte order throughout
-constexpr uint16_t kProtocolVersion = 15; // C68 adds host-authoritative crab replication.
+constexpr uint16_t kProtocolVersion = 16; // C68b expands native shared enemy families.
 constexpr size_t kMaxDisplayNameBytes = 32;
 // Valid UTF-8, no controls or invisible direction/line formatting, bounded at a codepoint.
 // Empty or wholly invalid input becomes "Partner". Never log the input or result.
@@ -116,7 +116,13 @@ struct CameraPose {
   bool paused = false;
 };
 bool ValidCameraPose(const CameraPose& camera);
-enum class EnemyFamily : uint16_t { None, Raptor, Worm, Scorpion, Crab };
+enum class EnemyFamily : uint16_t {
+  None, Raptor, Worm, Scorpion, Crab, Bat, Centipede, Native, Marine, VRex,
+  SwampCrawler, SwampCrawlerSmall, Spider, Pny, Prey
+};
+inline bool ValidEnemyFamily(EnemyFamily family) {
+  return family >= EnemyFamily::Raptor && family <= EnemyFamily::Prey;
+}
 enum class EnemyOwner : uint8_t { Host, Guest };
 // source is a signature of family + authored spawn point, or spawner + template.
 // sequence is zero for authored actors, successful creation number for waves.

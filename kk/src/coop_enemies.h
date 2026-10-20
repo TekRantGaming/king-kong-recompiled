@@ -14,8 +14,53 @@ inline EnemyFamily Family(uint32_t fn) {
     case 0x825088A0: case 0x82516820: case 0x82516508: return EnemyFamily::Worm;
     case 0x825F2380: case 0x826055F0: case 0x825FE790: return EnemyFamily::Scorpion;
     case 0x82623058: case 0x8264DA70: case 0x82641928: return EnemyFamily::Crab;
+    case 0x82626AD8: case 0x82664B10: case 0x82663550: return EnemyFamily::Bat;
+    case 0x8258F3B0: case 0x825D2AC0: return EnemyFamily::Centipede;
+    case 0x82606700: case 0x8260EB68: return EnemyFamily::Native;
+    case 0x824DD4C0: case 0x824B3AD8: return EnemyFamily::Marine;
+    case 0x824635B8: case 0x82490B50: case 0x82476D38: return EnemyFamily::VRex;
+    case 0x8241E660: case 0x8242E0F8: case 0x824290E0: return EnemyFamily::SwampCrawler;
+    case 0x825E5280: case 0x82609BC0: case 0x82608790: return EnemyFamily::SwampCrawlerSmall;
+    case 0x82617130: case 0x82613BC8: return EnemyFamily::Spider;
+    case 0x82498C40: case 0x82449C08: return EnemyFamily::Pny;
+    case 0x8243C568: case 0x82446318: return EnemyFamily::Prey;
     default: return EnemyFamily::None;
   }
+}
+inline bool Initializer(uint32_t fn) {
+  switch (fn) {
+    case 0x825B9020: case 0x82516820: case 0x826055F0: case 0x8264DA70:
+    case 0x82664B10: case 0x8258F3B0: case 0x82606700: case 0x824DD4C0:
+    case 0x82490B50: case 0x8242E0F8: case 0x82609BC0: case 0x82617130:
+    case 0x82498C40: case 0x8243C568: return true;
+    default: return false;
+  }
+}
+// These two families consume native hits and enter explicit death tracks,
+// without an audited scalar health cell. Reflect that lifecycle, not a guessed
+// variable offset. No replicated life write is made into either variable block.
+inline bool StateLife(EnemyFamily f) {
+  return f == EnemyFamily::SwampCrawlerSmall || f == EnemyFamily::Pny;
+}
+inline uint32_t TerminalState(EnemyFamily f) {
+  switch (f) {
+    case EnemyFamily::VRex: return 0x8248FEC0;
+    case EnemyFamily::SwampCrawlerSmall: return 0x82614328;
+    case EnemyFamily::Pny: return 0x82493268;
+    default: return 0;
+  }
+}
+// KT health zero can still await a native finisher (82476D38, states 28/29).
+// Reserve life==0 for the observed MORT track. A +1 representation retains
+// the actual zero-health value on replicas without announcing an early death.
+inline float ReplicatedLife(EnemyFamily f, uint32_t state, float native) {
+  if (StateLife(f)) return state == TerminalState(f) ? 0.f : 1.f;
+  if (f == EnemyFamily::VRex)
+    return !std::isfinite(native) ? native : state == TerminalState(f) ? 0.f : std::max(0.f,native)+1.f;
+  return native;
+}
+inline float NativeLife(EnemyFamily f, float replicated) {
+  return f == EnemyFamily::VRex ? std::max(0.f,replicated-1.f) : replicated;
 }
 inline uint32_t LifeOffset(EnemyFamily f) {
   switch (f) {
@@ -27,11 +72,52 @@ inline uint32_t LifeOffset(EnemyFamily f) {
     // CR_TRACK_Init copies V+756 to V+760; CR_exec_CHECK_Paf subtracts
     // native type-4 firearm damage at 8263FFB4 and tests zero for death.
     case EnemyFamily::Crab: return 760;
+    case EnemyFamily::Bat: return 56;          // 826627D0 -> 824E3238 firearm pool; V+64 is separate.
+    case EnemyFamily::Centipede: return 6296;  // PNJ_Scolo_exec_check_paf 8258E6E0.
+    case EnemyFamily::Native: return 4376;     // Na_Exec_CheckPaf 825F2698.
+    case EnemyFamily::Marine: return 6128;     // MM_Exec_CHECK_Paf 824B33F0.
+    case EnemyFamily::VRex: return 2176;       // Native health stimulus HANDLE, not float.
+    case EnemyFamily::SwampCrawler: return 32; // SC_ETAT_paf 82440948.
+    case EnemyFamily::Spider: return 1616;     // Init copies authored V+1612 here.
+    case EnemyFamily::Prey: return 8;          // PNJ_EatMe_check_paf 8242D248.
     default: return 0;
   }
 }
 inline uint32_t SecondaryLifeOffset(EnemyFamily f) { return f == EnemyFamily::Scorpion ? 5792 : 0; }
-inline uint32_t LifeBytes(EnemyFamily f) { return std::max(LifeOffset(f), SecondaryLifeOffset(f))+4; }
+inline uint32_t LifeBytes(EnemyFamily f) {
+  return std::max(LifeOffset(f), SecondaryLifeOffset(f))+(f == EnemyFamily::VRex ? 8 : 4);
+}
+// 8271E860/82504EB0 resolve the native handle through a bounded pool and
+// compare its generation. V-Rex health is payload vector 1.y, record+48.
+// Only local memory uses this helper; neither a handle nor a cell is on wire.
+template<class Word, class Address>
+uint32_t StimulusLifeCell(uint32_t handle, Word word, Address address) {
+  if (!address(handle,8)) return 0;
+  const auto id = word(handle), pool = id >> 24, index = id & 0xFFFFFF;
+  if (pool >= 128) return 0;
+  const uint32_t descriptor = 0x82C8EEF0+16*pool;
+  if (!address(descriptor,12) || index >= word(descriptor+8)) return 0;
+  const uint64_t record = uint64_t(word(descriptor))+uint64_t(index)*116;
+  if (record > UINT32_MAX || !address(uint32_t(record),116) ||
+      word(uint32_t(record)+112) != word(handle+4)) return 0;
+  return uint32_t(record)+48;
+}
+struct DeathBlock { uint32_t slot = 0, function = 0, track = 2; };
+inline DeathBlock NativeDeath(EnemyFamily f) {
+  switch (f) {
+    case EnemyFamily::Worm: return {0x82CC9318,0x82534858};
+    case EnemyFamily::Scorpion: return {0x82CC8C5C,0x82619FD8};
+    case EnemyFamily::Crab: return {0x82CC8A4C,0x82666240};
+    case EnemyFamily::Bat: return {0x82CC89C0,0x82659E98};
+    case EnemyFamily::Centipede: return {0x82CC9038,0x825E3A88};
+    case EnemyFamily::Native: return {0x82CC8D10,0x82600CC8};
+    case EnemyFamily::VRex: return {0x82CC98D4,0x8248FEC0};
+    case EnemyFamily::SwampCrawler: return {0x82CC9BA0,0x82440B20};
+    case EnemyFamily::SwampCrawlerSmall: return {0x82CC8C1C,0x82614328};
+    case EnemyFamily::Pny: return {0x82CC99CC,0x82493268,1};
+    default: return {};
+  }
+}
 // FNV-1a over explicit numeric values, independent of host endianness and heap layout.
 inline uint64_t Mix(uint64_t h, uint64_t v) {
   for (unsigned i = 0; i < 8; ++i) { h ^= uint8_t(v >> (i*8)); h *= 1099511628211ull; }

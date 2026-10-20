@@ -163,7 +163,7 @@ bool ValidShotReceipt(const ShotReceipt& r) {
   return ValidEnemyWorld(r.world) && r.number && r.reason < ShotReject::Count;
 }
 bool ValidEnemy(const EnemyState& e) {
-  return e.id.source && e.id.family >= EnemyFamily::Raptor && e.id.family <= EnemyFamily::Crab &&
+  return e.id.source && ValidEnemyFamily(e.id.family) &&
       std::isfinite(e.x) && std::isfinite(e.y) && std::isfinite(e.z) && std::isfinite(e.facing) &&
       std::isfinite(e.life) && std::abs(e.x) < 1000000 && std::abs(e.y) < 1000000 &&
       std::abs(e.z) < 1000000 && std::abs(e.facing) <= 3.1416f && std::abs(e.life) < 1000000 &&
@@ -189,7 +189,7 @@ bool ValidShotIntent(const ShotIntent& s) {
   if (length < .99f || length > 1.01f) return false;
   for (size_t i = 0; i < s.hits.size(); ++i) {
     const auto& hit = s.hits[i];
-    if (!hit.id.source || hit.id.family < EnemyFamily::Raptor || hit.id.family > EnemyFamily::Crab || !Point(hit.point)) return false;
+    if (!hit.id.source || !ValidEnemyFamily(hit.id.family) || !Point(hit.point)) return false;
     for (size_t j = 0; j < i; ++j) if (s.hits[j].id == hit.id) return false;
   }
   return true;
