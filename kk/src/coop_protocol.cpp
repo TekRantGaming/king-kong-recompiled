@@ -52,6 +52,7 @@ void WriteEnemy(Writer& w, const EnemyState& e) {
   w.U(e.state, 4); w.U(e.action, 2); w.U(e.item, 1);
   for (float v : {e.spawn_x, e.spawn_y, e.spawn_z}) w.U(std::bit_cast<uint32_t>(v), 4);
   w.U(uint8_t(e.owner), 1); w.U(e.generation, 4);
+  w.U(std::bit_cast<uint32_t>(e.secondary_life), 4);
 }
 EnemyState ReadEnemy(Reader& r) {
   EnemyState e;
@@ -64,6 +65,7 @@ EnemyState ReadEnemy(Reader& r) {
   e.spawn_y = std::bit_cast<float>(uint32_t(r.U(4)));
   e.spawn_z = std::bit_cast<float>(uint32_t(r.U(4)));
   e.owner = EnemyOwner(r.U(1)); e.generation = uint32_t(r.U(4));
+  e.secondary_life = std::bit_cast<float>(uint32_t(r.U(4)));
   return e;
 }
 bool Point(ShotVector p) {
@@ -155,7 +157,9 @@ bool ValidEnemy(const EnemyState& e) {
       std::isfinite(e.x) && std::isfinite(e.y) && std::isfinite(e.z) && std::isfinite(e.facing) &&
       std::isfinite(e.life) && std::abs(e.x) < 1000000 && std::abs(e.y) < 1000000 &&
       std::abs(e.z) < 1000000 && std::abs(e.facing) <= 3.1416f && std::abs(e.life) < 1000000 &&
-      Point({e.spawn_x, e.spawn_y, e.spawn_z}) && e.owner <= EnemyOwner::Guest;
+      Point({e.spawn_x, e.spawn_y, e.spawn_z}) && e.owner <= EnemyOwner::Guest &&
+      std::isfinite(e.secondary_life) && e.secondary_life >= 0 && e.secondary_life < 1000000 &&
+      (e.id.family == EnemyFamily::Scorpion || e.secondary_life == 0);
 }
 bool ValidOwnershipChange(const OwnershipChange& c) {
   if (!ValidEnemyWorld(c.world) || !ValidEnemy(c.enemy) || c.owner > EnemyOwner::Guest ||
@@ -454,7 +458,7 @@ bool Decode(std::span<const uint8_t> bytes, Message& out) {
       m.enemies.world = ReadWorld(r); m.enemies.time = std::bit_cast<double>(r.U(8));
       const size_t count = size_t(r.U(2));
       if (!ValidEnemyWorld(m.enemies.world) || !std::isfinite(m.enemies.time) || m.enemies.time < 0 ||
-          m.enemies.time >= 1e12 || count > kMaxEnemyBatch || count * 58 != bytes.size() - r.at) return false;
+          m.enemies.time >= 1e12 || count > kMaxEnemyBatch || count * kEnemyStateBytes != bytes.size() - r.at) return false;
       for (size_t i = 0; i < count; ++i) {
         auto e = ReadEnemy(r); if (!ValidEnemy(e)) return false;
         for (const auto& prior : m.enemies.enemies) if (prior.id == e.id) return false;

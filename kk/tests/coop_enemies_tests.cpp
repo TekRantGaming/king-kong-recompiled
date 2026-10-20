@@ -50,7 +50,8 @@ void IdentityAndMatching() {
   for (auto fn : {0x826718B8u, 0x8268D8E8u, 0x8268BF48u, 0x826F9980u, 0u})
     Check(Family(fn) == EnemyFamily::None, "hero, allies, KAnn, unknown excluded");
   Check(LifeOffset(EnemyFamily::Raptor) == 20 && LifeOffset(EnemyFamily::Worm) == 5392 &&
-      LifeOffset(EnemyFamily::Scorpion) == 5792 && LifeOffset(EnemyFamily::None) == 0, "per-family health layout");
+      LifeOffset(EnemyFamily::Scorpion) == 5444 && SecondaryLifeOffset(EnemyFamily::Scorpion) == 5792 &&
+      LifeBytes(EnemyFamily::Scorpion) == 5796 && LifeOffset(EnemyFamily::None) == 0, "per-family health layout");
 }
 void Wire() {
   Message out;
@@ -67,7 +68,7 @@ void Wire() {
   auto batch = Snapshot(Enemy()); batch.enemies.enemies.clear();
   for (size_t i = 0; i < kMaxEnemyBatch; ++i) batch.enemies.enemies.push_back(Enemy(i+1));
   auto bytes = Packet(batch);
-  Check(bytes.size() == kHeaderBytes+22+58*kMaxEnemyBatch && bytes.size() <= kMaxPacketBytes && Decode(bytes, out), "maximum batch within datagram cap");
+  Check(bytes.size() == kHeaderBytes+22+kEnemyStateBytes*kMaxEnemyBatch && bytes.size() <= kMaxPacketBytes && Decode(bytes, out), "maximum batch within datagram cap");
   batch.enemies.enemies.push_back(Enemy(999)); Check(!Encode(batch, bytes), "oversized local batch rejected");
   batch = Snapshot(Enemy()); batch.enemies.enemies.push_back(Enemy()); Check(!Encode(batch, bytes), "duplicate encode refused");
   batch = Snapshot(Enemy()); bytes = Packet(batch);
@@ -149,6 +150,29 @@ void LifecycleAndInterpolation() {
   receiver.Receive(Snapshot(Enemy(), 1, 5), 21);
   Check(receiver.Sample(21).records[0].enemy.life == 0, "delayed first snapshot cannot resurrect a reliable death");
   receiver.Clear(); Check(receiver.Sample(0).records.empty(), "disconnect reset drops all remote memory");
+}
+void ScorpionDamagePools() {
+  auto a = Enemy(); a.id.family = EnemyFamily::Scorpion; a.life = 30; a.secondary_life = 5;
+  auto b = a; b.life = 24; b.secondary_life = 3;
+  Message decoded;
+  Check(Decode(Packet(Snapshot(b)), decoded) && Near(decoded.enemies.enemies[0].life, 24) &&
+      Near(decoded.enemies.enemies[0].secondary_life, 3), "scorpion snapshots carry both native damage pools");
+  Channel receiver;
+  receiver.Receive(Snapshot(a), 1); receiver.Receive(Snapshot(b, 1000.2, 11), 1.2);
+  const auto sampled = receiver.Sample(1.2).records[0].enemy;
+  Check(Near(sampled.life, 24) && Near(sampled.secondary_life, 3), "interpolation never restores an older damage pool");
+  auto bad = b; bad.secondary_life = std::numeric_limits<float>::quiet_NaN();
+  Check(!ValidEnemy(bad), "nonfinite secondary health refused");
+  bad = Enemy(); bad.secondary_life = 5;
+  Check(!ValidEnemy(bad), "secondary health is scorpion-only");
+  Authority owner, guest; owner.last = guest.last = a; owner.matched = true;
+  Check(owner.Observe(b), "owner observes scorpion firearm and secondary damage");
+  const auto prepare = owner.Begin(World(), EnemyOwner::Guest, b); Check(prepare.has_value(), "scorpion handover starts");
+  const auto ready = guest.Prepare(*prepare, a); Check(ready.has_value(), "replica accepts damaged owner sample");
+  const auto commit = owner.Ready(*ready);
+  Check(commit && Near(commit->enemy.life, 24) && Near(commit->enemy.secondary_life, 3), "handover preserves both damaged pools");
+  Message wire; wire.type = MessageType::OwnershipChange; wire.epoch = 1; wire.ownership = *commit;
+  Check(Decode(Packet(wire), decoded) && Near(decoded.ownership.enemy.secondary_life, 3), "handover wire retains secondary health");
 }
 struct Transport final : ICoopTransport {
   Transport* peer = nullptr;
@@ -469,7 +493,7 @@ void OwnershipWire() {
                    phase == OwnershipPhase::Matched ? EnemyOwner::Host : EnemyOwner::Guest, Enemy()};
     if (phase == OwnershipPhase::Commit) { m.ownership.enemy.owner = EnemyOwner::Guest; m.ownership.enemy.generation = 1; }
     auto bytes = Packet(m); Message out;
-    Check(bytes.size() == 100 && Decode(bytes, out) && Packet(out) == bytes, "ownership phase round trip with final state");
+    Check(bytes.size() == 104 && Decode(bytes, out) && Packet(out) == bytes, "ownership phase round trip with final state");
     for (size_t n = 0; n < bytes.size(); ++n) {
       Message sentinel; sentinel.sequence = 77;
       Check(!Decode(std::span(bytes.data(), n), sentinel) && sentinel.sequence == 77, "ownership truncations preserve output");
@@ -609,6 +633,7 @@ void OwnershipSessions() {
 }
 } // namespace
 int main() {
+  ScorpionDamagePools();
   IdentityAndMatching(); Wire(); LifecycleAndInterpolation(); SessionAuthority();
   MatchingRetryAndTolerance(); GuestInventory(); ShotWireAndBounds(); ShotValidation(); ShotSessions(); MissThenHit();
   OwnershipDecision(); OwnershipWire(); OwnershipSequencing(); OwnershipStreams(); OwnershipSessions();

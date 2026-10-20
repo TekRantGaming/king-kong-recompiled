@@ -203,7 +203,7 @@ void EveryProtocolMessage() {
   };
   const MessageType unreliable[] = {MessageType::Ping, MessageType::Pong, MessageType::PlayerPose,
       MessageType::EnemySnapshot, MessageType::CameraPose};
-  static_assert(kProtocolVersion == 12 && std::size(reliable)+std::size(unreliable) == 30);
+  static_assert(kProtocolVersion == 13 && std::size(reliable)+std::size(unreliable) == 30);
   Backend a,b; a.self=1; b.self=2; a.remote=&b; b.remote=&a;
   SteamMessagesTransport at(a,2),bt(b,1);
   unsigned seen[31]{};
@@ -225,7 +225,7 @@ void EveryProtocolMessage() {
         Check(!bt.Receive(out) && bt.Stats().malformed==malformed+1,
             "every non-heartbeat rejects incoming traffic on the wrong channel");
       }
-      if (type==MessageType::EnemySnapshot) Check(packet.size()==974,"full enemy batch fits unreliable message limit");
+      if (type==MessageType::EnemySnapshot) Check(packet.size()==976,"full enemy batch fits unreliable message limit");
       if (type==MessageType::SaveChunk) Check(packet.size()==798,"768-byte save chunk includes bounded framing");
       if (type==MessageType::ShotIntent) Check(packet.size()==554,"maximum shotgun hits fit packet cap");
     }

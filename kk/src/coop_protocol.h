@@ -11,7 +11,7 @@
 
 namespace kk::coop {
 constexpr uint32_t kMagic = 0x4B4B4331;  // KKC1, network byte order throughout
-constexpr uint16_t kProtocolVersion = 12; // C48 unified story synchronization and Steam message paths.
+constexpr uint16_t kProtocolVersion = 13; // C54 preserves both native scorpion damage pools.
 constexpr size_t kMaxDisplayNameBytes = 32;
 // Valid UTF-8, no controls or invisible direction/line formatting, bounded at a codepoint.
 // Empty or wholly invalid input becomes "Partner". Never log the input or result.
@@ -133,6 +133,7 @@ struct EnemyState {
   float spawn_x = 0, spawn_y = 0, spawn_z = 0; // Immutable identity evidence, never latest XYZ.
   EnemyOwner owner = EnemyOwner::Host;
   uint32_t generation = 0; // Authority generation, independent of actor/spawn sequence.
+  float secondary_life = 0; // Scorpion type-2048 pool; firearm life is at V+5444.
 };
 // Prepare freezes both copies; Ready returns the old owner's final pose. Only
 // the host's Commit changes authority. Matched confirms a usable guest binding.
@@ -145,7 +146,7 @@ struct OwnershipChange {
   EnemyState enemy; // last state, tagged with the OLD owner/generation until Commit
 };
 bool ValidOwnershipChange(const OwnershipChange& change);
-constexpr size_t kMaxEnemyBatch = 16, kMaxEnemies = 512;
+constexpr size_t kEnemyStateBytes = 62, kMaxEnemyBatch = 15, kMaxEnemies = 512;
 
 struct ShotVector { float x = 0, y = 0, z = 0; };
 enum class PlayerCondition : uint8_t { Alive = 1, Hurt, Dead };
@@ -216,7 +217,7 @@ struct Message {
   uint64_t epoch = 0;
   Compatibility hello;
   std::string display_name = "Partner";  // Hello only, separate from compatibility/lobby metadata.
-  // Optional Direct IP Hello extension. Empty keeps the Steam protocol-12 wire unchanged.
+  // Optional Direct IP Hello extension. Empty keeps the base Steam Hello payload unchanged.
   std::string join_code;
   RejectReason reason = RejectReason::None;
   uint64_t clock_ms = 0;

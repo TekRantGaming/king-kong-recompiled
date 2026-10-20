@@ -20,10 +20,14 @@ inline uint32_t LifeOffset(EnemyFamily f) {
   switch (f) {
     case EnemyFamily::Raptor: return 20;
     case EnemyFamily::Worm: return 5392;
-    case EnemyFamily::Scorpion: return 5792;
+    // 82614DC0 -> 824FEBF8 consumes firearm hits here. V+5792 is a
+    // separate type-2048 pool, so it cannot diagnose firearm damage.
+    case EnemyFamily::Scorpion: return 5444;
     default: return 0;
   }
 }
+inline uint32_t SecondaryLifeOffset(EnemyFamily f) { return f == EnemyFamily::Scorpion ? 5792 : 0; }
+inline uint32_t LifeBytes(EnemyFamily f) { return std::max(LifeOffset(f), SecondaryLifeOffset(f))+4; }
 // FNV-1a over explicit numeric values, independent of host endianness and heap layout.
 inline uint64_t Mix(uint64_t h, uint64_t v) {
   for (unsigned i = 0; i < 8; ++i) { h ^= uint8_t(v >> (i*8)); h *= 1099511628211ull; }
@@ -227,6 +231,7 @@ class Channel {
         }
         // Discrete life/action/state always use newest authoritative sample.
         record.enemy.life = r.record.enemy.life; record.enemy.action = r.record.enemy.action;
+        record.enemy.secondary_life = r.record.enemy.secondary_life;
         record.enemy.item = r.record.enemy.item; record.enemy.state = r.record.enemy.state;
       }
       out.records.push_back(record);

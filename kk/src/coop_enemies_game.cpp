@@ -46,6 +46,7 @@ REX_EXTERN(__imp__sub_8245A7B8);
 REX_EXTERN(__imp__sub_8246DC58);
 REX_EXTERN(__imp__sub_82428020);
 REX_EXTERN(__imp__sub_82464680);
+REX_EXTERN(__imp__sub_82614DC0);
 #endif
 #if defined(KK_DEV_TOOLS)
 REX_EXTERN(__imp__sub_8250EE50);
@@ -106,7 +107,7 @@ bool Read(const uint8_t* b, uint32_t actor, Binding& bind, EnemyState& e) {
   const auto family = Tracks(b, bind.ai, e.state, spawner, &initializing);
   const auto life = LifeOffset(family);
   if (!life || initializing) return false;
-  bind.vars = Ptr(b, bind.ai, 64, life+4); bind.matrix = Ptr(b, actor, 12, 64);
+  bind.vars = Ptr(b, bind.ai, 64, LifeBytes(family)); bind.matrix = Ptr(b, actor, 12, 64);
   if (!bind.vars || !bind.matrix) return false;
   const auto hero = Load32(b, 0x82CCBF7C);
   const auto hero_ai = Ptr(b, Ptr(b, hero, 24, 8), 4, 88);
@@ -116,6 +117,12 @@ bool Read(const uint8_t* b, uint32_t actor, Binding& bind, EnemyState& e) {
   const float fx = -LoadF(b, bind.matrix+16), fy = -LoadF(b, bind.matrix+20);
   if (!std::isfinite(fx) || !std::isfinite(fy) || std::hypot(fx, fy) < .001f) return false;
   e.facing = std::atan2(fy, fx); e.life = LoadF(b, bind.vars+life);
+  if (const auto secondary = SecondaryLifeOffset(family)) {
+    e.secondary_life = LoadF(b, bind.vars+secondary);
+    // Either native pool can exhaust the actor. Keep the existing terminal
+    // lifecycle contract while retaining both values for live handovers.
+    if (e.secondary_life <= 0) e.life = 0;
+  }
   e.action = 0xFFFF; // No animation component must not force action zero on a matched rig.
   const auto anim = Ptr(b, Ptr(b, actor, 20, 4), 0, 164);
   if (anim) { e.action = Load16(b, anim+156); e.item = b[anim+160]; }
@@ -586,7 +593,7 @@ void Scan(const uint8_t* b) {
     if (present.contains(binding.id)) { ++binding_it; continue; }
     const bool same = registered.contains(actor) &&
         Ptr(b, Ptr(b, actor, 24, 8), 4, 88) == binding.ai &&
-        Ptr(b, binding.ai, 64, LifeOffset(binding.id.family)+4) == binding.vars &&
+        Ptr(b, binding.ai, 64, LifeBytes(binding.id.family)) == binding.vars &&
         Ptr(b, actor, 12, 64) == binding.matrix;
     if (!same) {
       if (auto it = s.records.find(binding.id); it != s.records.end()) it->second.kind = EnemyEventKind::Removed;
@@ -605,7 +612,7 @@ bool RetainedDamageSource(const uint8_t* b, const Binding& source) {
   bool initializing = false, spawner = false; uint32_t state = 0;
   return Member(b, Get().world, source.actor, true) && PoseAddress(source.actor, 32) &&
       !(Load32(b, source.actor)&1) && Ptr(b, Ptr(b, source.actor, 24, 8), 4, 88) == source.ai &&
-      Ptr(b, source.ai, 64, LifeOffset(source.id.family)+4) == source.vars &&
+      Ptr(b, source.ai, 64, LifeBytes(source.id.family)) == source.vars &&
       Ptr(b, source.actor, 12, 64) == source.matrix &&
       Tracks(b, source.ai, state, spawner, &initializing) == source.id.family && !initializing;
 }
@@ -622,6 +629,10 @@ struct Scratch {
     const auto p = start+12288+offset; StoreF(base, p, x); StoreF(base, p+4, y); StoreF(base, p+8, z); return p;
   }
 };
+void WriteLife(uint8_t* b, const Binding& binding, const EnemyState& e) {
+  StoreF(b, binding.vars+LifeOffset(binding.id.family), e.life);
+  if (const auto offset = SecondaryLifeOffset(binding.id.family)) StoreF(b, binding.vars+offset, e.secondary_life);
+}
 bool ControllerSafe(const uint8_t* b, uint32_t actor) {
   const auto ext = Ptr(b, actor, 24, 8); if (!ext) return false;
   auto p = Load32(b, ext); if (!p) return true;
@@ -769,7 +780,8 @@ void Replicas(PPCContext& ctx, uint8_t* b, bool drive) {
     const bool dead = r.kind != EnemyEventKind::Spawned || r.enemy.life <= 0;
     if (!dead && (!ControllerSafe(b, binding->actor) || !Scratch::CanUse(ctx))) continue;
     // Only the nonowner receives raw life. Corpses run native death dispatches.
-    StoreF(b, binding->vars+LifeOffset(binding->id.family), dead ? 0 : r.enemy.life);
+    auto sample = r.enemy; if (dead) sample.life = 0;
+    WriteLife(b, *binding, sample);
     if (dead) { DeathTransition(ctx, b, *binding); continue; }
     if (!drive || Drive(ctx, b, *binding, r.enemy)) {
       s.driving[binding->actor] = r;
@@ -781,9 +793,9 @@ void Replicas(PPCContext& ctx, uint8_t* b, bool drive) {
           const float error = std::hypot(host.x-local.x, host.y-local.y, host.z-local.z);
           s.error_sum += error; s.error_max = std::max(s.error_max, double(error)); ++s.error_count;
 #if defined(KK_DEV_TOOLS)
-          REXLOG_INFO("ENEMIES replica role={} id={:016X}/{}/{} owner=({:.3f},{:.3f},{:.3f}) local=({:.3f},{:.3f},{:.3f}) err={:.4f} life={:.2f}/{:.2f} action={}/{}",
+          REXLOG_INFO("ENEMIES replica role={} id={:016X}/{}/{} owner=({:.3f},{:.3f},{:.3f}) local=({:.3f},{:.3f},{:.3f}) err={:.4f} life={:.2f}/{:.2f} action={}/{} secondary={:.2f}/{:.2f}",
               s.link.role == Role::Host ? "host" : "guest", r.enemy.id.source, r.enemy.id.sequence, uint16_t(r.enemy.id.family), host.x, host.y, host.z,
-              local.x, local.y, local.z, error, host.life, local.life, host.action, local.action);
+              local.x, local.y, local.z, error, host.life, local.life, host.action, local.action, host.secondary_life, local.secondary_life);
 #endif
         }
       }
@@ -819,7 +831,7 @@ bool OwnedSample(const uint8_t* b, const Binding& binding, EnemyState& e) {
 }
 bool SeedAuthority(PPCContext& ctx, uint8_t* b, const Binding& binding, const EnemyState& e) {
   if (e.life > 0 && !Drive(ctx, b, binding, e)) return false;
-  StoreF(b, binding.vars+LifeOffset(binding.id.family), e.life);
+  WriteLife(b, binding, e);
   if (e.life <= 0) DeathTransition(ctx, b, binding);
   return true;
 }
@@ -920,14 +932,14 @@ void HoldReplicas(PPCContext& ctx, uint8_t* b, bool drive) {
     const auto* binding = CanonicalBinding(b, id); if (!binding) continue;
     const auto& state = a.Frozen() ? a.pending->enemy : a.last;
     if (state.life <= 0) {
-      StoreF(b, binding->vars+LifeOffset(binding->id.family), 0);
+      WriteLife(b, *binding, state);
       DeathTransition(ctx, b, *binding); continue;
     }
     // Keep known replicas held even after live snapshots expire. Native AI
     // resumes only on a Commit, or when the connection/load guard releases it.
     if (a.Frozen() || !s.driving.contains(binding->actor)) {
       if (drive && !Drive(ctx, b, *binding, state)) continue;
-      StoreF(b, binding->vars+LifeOffset(binding->id.family), state.life);
+      WriteLife(b, *binding, state);
       s.driving[binding->actor] = {state, EnemyEventKind::Spawned, state};
     }
   }
@@ -1728,10 +1740,10 @@ void AfterAi(PPCContext& ctx, uint8_t* b, uint32_t w) {
     if (Now() >= s.next_numbers) {
       s.next_numbers = Now()+1;
       for (const auto& [id, r] : s.records) if (r.kind != EnemyEventKind::Removed)
-        REXLOG_INFO("ENEMIES local role={} id={:016X}/{}/{} pos=({:.3f},{:.3f},{:.3f}) life={:.2f} action={} owner={} generation={}",
+        REXLOG_INFO("ENEMIES local role={} id={:016X}/{}/{} pos=({:.3f},{:.3f},{:.3f}) life={:.2f} action={} owner={} generation={} secondary={:.2f}",
             s.link.role == Role::Host ? "host" : "guest", id.source, id.sequence, uint16_t(id.family),
             r.enemy.x, r.enemy.y, r.enemy.z, r.enemy.life, r.enemy.action,
-            r.enemy.owner == EnemyOwner::Host ? "host" : "guest", r.enemy.generation);
+            r.enemy.owner == EnemyOwner::Host ? "host" : "guest", r.enemy.generation, r.enemy.secondary_life);
     }
 #endif
   }
@@ -1762,7 +1774,7 @@ bool Hold(PPCContext& ctx, uint8_t* b) {
   const auto binding = s.bindings.find(actor);
   if (binding == s.bindings.end() || binding->second.ai != ai || !Connected() ||
       !Environment(b, s.world) || !ValidBinding(b, binding->second)) return false;
-  StoreF(b, binding->second.vars+LifeOffset(binding->second.id.family), it->second.enemy.life);
+  WriteLife(b, binding->second, it->second.enemy);
   ctx.r3.u64 = 0; return true;
 }
 void Spawned(const uint8_t* b, uint32_t spawner, uint32_t source, uint32_t actor) {
@@ -2040,6 +2052,23 @@ REX_HOOK_RAW(sub_82548BC0) {
   __imp__sub_82548BC0(ctx, base);
 }
 #if defined(KK_DEV_TOOLS)
+REX_HOOK_RAW(sub_82614DC0) {
+  const auto ai = kk::hfr::Load32(base, 0x82CCBF64);
+  const auto actor = kk::hfr::Load32(base, 0x82CCBF6C);
+  const auto vars = kk::coop::Ptr(base, ai, 64, 6380);
+  const bool observe = vars && kk::coop::Connected() && kk::coop::Get().bindings.contains(actor);
+  const float before = observe ? kk::hfr::LoadF(base, vars+5444) : -1;
+  const float secondary = observe ? kk::hfr::LoadF(base, vars+5792) : -1;
+  __imp__sub_82614DC0(ctx, base);
+  if (observe && kk::coop::Ptr(base, ai, 64, 6380) == vars) {
+    const float after = kk::hfr::LoadF(base, vars+5444), remaining = kk::hfr::LoadF(base, vars+5792);
+    static unsigned lines = 0;
+    if ((before != after || secondary != remaining) && lines++ < 128)
+      REXLOG_INFO("ENEMIES scorpion consume actor={:08X} firearm={:.2f}->{:.2f} body={:.2f}->{:.2f} flags={:08X} result={} owner={}",
+          actor, before, after, secondary, remaining, kk::hfr::Load32(base, vars+5400), ctx.r3.u32,
+          kk::coop::Get().link.role == kk::coop::Role::Host ? "host" : "guest");
+  }
+}
 REX_HOOK_RAW(sub_82569A70) {
   kk::coop::DevRaptorVision(ctx, base);
 }

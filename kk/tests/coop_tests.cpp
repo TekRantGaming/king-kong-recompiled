@@ -81,7 +81,7 @@ struct Pair {
   }
 };
 void Protocol() {
-  static_assert(kProtocolVersion == 12);
+  static_assert(kProtocolVersion == 13);
   constexpr std::array types{MessageType::Hello, MessageType::HelloAck, MessageType::Reject,
       MessageType::Ping, MessageType::Pong, MessageType::PlayerPose, MessageType::Bye,
       MessageType::EnemySnapshot, MessageType::EnemyEvent, MessageType::ShotIntent,
@@ -94,7 +94,7 @@ void Protocol() {
       MessageType::CameraPose, MessageType::CameraCut, MessageType::StoryEvent, MessageType::TriggerRequest};
   for (size_t i = 0; i < types.size(); ++i) {
     const auto type = types[i];
-    Check(uint16_t(type) == i+1, "protocol 12 message IDs have no collisions or gaps");
+    Check(uint16_t(type) == i+1, "protocol 13 message IDs have no collisions or gaps");
     Check(IsFlowMessage(type) == ((i >= 12 && i <= 20) || i == 24 || i == 25), "flow includes life events and excludes combat and cameras");
     Message input;
     input.type = type; input.sequence = 0x12345678; input.epoch = 0x0123456789ABCDEFull;
@@ -119,8 +119,8 @@ void Protocol() {
     input.story={9,101,1,123,456,1,kStoryRecords,StoryPhase::Armed};
     const auto bytes = Packet(input);
     Check(bytes[0] == 'K' && bytes[1] == 'K' && bytes[2] == 'C' && bytes[3] == '1', "wire magic");
-    Check(bytes[4] == 0 && bytes[5] == 12 && bytes[6] == 0 && bytes[7] == i+1,
-        "protocol 12 and message ID in wire header");
+    Check(bytes[4] == 0 && bytes[5] == 13 && bytes[6] == 0 && bytes[7] == i+1,
+        "protocol 13 and message ID in wire header");
     Check(bytes[8] == 0x12 && bytes[11] == 0x78 && bytes[12] == 1 && bytes[19] == 0xEF,
         "header byte order independent of host endianness");
     Message output;
