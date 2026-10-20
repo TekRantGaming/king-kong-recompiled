@@ -675,7 +675,7 @@ struct SteamRuntime::Impl
     // Steam self-send was unsupported in the C47 run. Keep the real DLL probe
     // for diagnostics; a failed round trip requires testing with two accounts.
     transport = std::make_unique<SteamMessagesTransport>(*this, model.self);
-    for (unsigned i=1;i<=unsigned(MessageType::TriggerRequest);++i) {
+    for (unsigned i=1;i<=unsigned(MessageType::ShotReceipt);++i) {
       const auto type=MessageType(i);
       const bool reliable=type!=MessageType::Ping && type!=MessageType::Pong &&
           type!=MessageType::PlayerPose && type!=MessageType::EnemySnapshot && type!=MessageType::CameraPose;
@@ -706,7 +706,7 @@ struct SteamRuntime::Impl
       test_log("Steam loopback: OK type="+std::to_string(i)+" channel="+
                std::to_string(reliable ? 0 : 1)+" bytes="+std::to_string(expected.size()));
     }
-    test_log("Steam loopback: all 30 types OK; two-account lobby and relay testing still required");
+    test_log("Steam loopback: all 31 types OK; two-account lobby and relay testing still required");
     return 0;
   }
 #endif
@@ -833,6 +833,8 @@ std::optional<CameraPose> SteamRuntime::HostCamera(double now) const { return im
 CameraDiagnostics SteamRuntime::CameraInfo() const { return impl_->camera.Info(); }
 FlowView SteamRuntime::FlowSnapshot() const { return impl_->flow.Snapshot(); }
 std::vector<ReceivedShot> SteamRuntime::TakeShots() { return impl_->shots.Take(); }
+bool SteamRuntime::SubmitShotReceipt(const ShotReceipt& receipt) { return impl_->shots.SubmitReceipt(receipt); }
+std::vector<ShotReceipt> SteamRuntime::TakeShotReceipts() { return impl_->shots.TakeReceipts(); }
 bool SteamRuntime::SubmitCombat(Message m, double now) { return impl_->combat.Submit(std::move(m), now); }
 std::vector<ReceivedCombat> SteamRuntime::TakeCombat() { return impl_->combat.Take(); }
 void SteamRuntime::ClearCombat() { impl_->combat.Clear(); }

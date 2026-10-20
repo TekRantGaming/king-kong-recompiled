@@ -29,12 +29,39 @@ SessionConfig Config(Role role,std::string code="TEST23") {
   return config;
 }
 uint16_t next_port=31780;
-std::unique_ptr<DirectUdpTransport> Host(std::string address="127.0.0.1") {
+std::unique_ptr<DirectUdpTransport> Host(std::string address="127.0.0.1", UdpSimulation simulation={}) {
   for (int i=0;i<100;++i) {
-    auto host=CreateDirectUdp({true,address,next_port++,"TEST23"});
+    auto host=CreateDirectUdp({true,address,next_port++,"TEST23",simulation});
     if (host->State()==TransportState::Ready) return host;
   }
   Check(false,"bind loopback host"); return {};
+}
+void WanShots() {
+  auto a=Host("127.0.0.1",{250,80,5,68});
+  auto b=CreateDirectUdp({false,"127.0.0.1",a->LocalPort(),"TEST23",{250,80,5,69}});
+  CoopSession host(Config(Role::Host),*a),guest(Config(Role::Guest),*b);
+  double now=100;
+  for(int i=0;i<1000;++i,now+=.01) {host.Tick(now);guest.Tick(now);}
+  Check(host.State()==SessionState::Connected && guest.State()==SessionState::Connected,"WAN handshake with delay jitter and loss");
+  unsigned received=0,confirmed=0; ShotValidator validator;
+  for(int i=0;i<1000;++i,now+=.01) {
+    PlayerPose peer{now,101};
+    if(i<200 && i%20==0) {
+      ShotIntent shot{{101,1,1},uint32_t(i/20+1),1,now,{0,0,1},{1,0,0},{}};
+      InventoryState inventory{shot.world,now,1}; inventory.ammo[0]=50;
+      Check(guest.QueueShot({shot,inventory}),"queue actual WAN shot");
+    }
+    host.Tick(now);guest.Tick(now,peer);
+    for(const auto& shot:host.TakeShots()) {
+      Check(shot.peer && validator.Validate(shot,{101,1,1},shot.peer,now)==ShotReject::None,
+          "WAN shot and ordered pre-fire inventory accepted once at owner"); ++received;
+      Check(host.QueueShotReceipt({shot.intent.world,shot.intent.number,ShotReject::None,false}),"host queues WAN verdict");
+    }
+    for(const auto& receipt:guest.TakeShotReceipts()) {
+      Check(receipt.number==++confirmed && receipt.reason==ShotReject::None,"guest receives ordered host verdict despite WAN loss");
+    }
+  }
+  Check(received==10 && confirmed==10 && (a->Stats().resent || b->Stats().resent),"all WAN reliable shots and host verdicts delivered once despite real datagram loss");
 }
 void Codec() {
   Message hello; hello.hello=Compatible(); std::vector<uint8_t> legacy,bytes;
@@ -233,6 +260,6 @@ void ReliabilityAndFlood() {
 }
 }
 int main() {
-  Codec(); Limits(); Bounds(); WRONG2(); Integration("127.0.0.1"); Integration("::1"); ReliabilityAndFlood();
+  Codec(); Limits(); Bounds(); WRONG2(); Integration("127.0.0.1"); Integration("::1"); ReliabilityAndFlood(); WanShots();
   std::puts("Direct UDP codec, code, rate, IPv4/IPv6, readiness, save/load, poses and single-peer checks passed");
 }

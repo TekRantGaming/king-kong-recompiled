@@ -11,7 +11,7 @@
 
 namespace kk::coop {
 constexpr uint32_t kMagic = 0x4B4B4331;  // KKC1, network byte order throughout
-constexpr uint16_t kProtocolVersion = 14; // C61 six-character codes and revision-scoped Direct IP lobby choices.
+constexpr uint16_t kProtocolVersion = 15; // C68 adds host-authoritative crab replication.
 constexpr size_t kMaxDisplayNameBytes = 32;
 // Valid UTF-8, no controls or invisible direction/line formatting, bounded at a codepoint.
 // Empty or wholly invalid input becomes "Partner". Never log the input or result.
@@ -24,7 +24,7 @@ enum class MessageType : uint16_t {
   Checkpoint = 18, ChapterFinished = 19, ReloadRequest = 20, FlowAbort = 21,
   DamageEvent = 22, PlayerStatus = 23, OwnershipChange = 24,
   PlayerDowned = 25, PlayerRevived = 26, CameraPose = 27, CameraCut = 28,
-  StoryEvent = 29, TriggerRequest = 30
+  StoryEvent = 29, TriggerRequest = 30, ShotReceipt = 31
 };
 
 // Values only. source is an immutable authored-position/script signature, never
@@ -116,7 +116,7 @@ struct CameraPose {
   bool paused = false;
 };
 bool ValidCameraPose(const CameraPose& camera);
-enum class EnemyFamily : uint16_t { None, Raptor, Worm, Scorpion };
+enum class EnemyFamily : uint16_t { None, Raptor, Worm, Scorpion, Crab };
 enum class EnemyOwner : uint8_t { Host, Guest };
 // source is a signature of family + authored spawn point, or spawner + template.
 // sequence is zero for authored actors, successful creation number for waves.
@@ -181,6 +181,15 @@ inline bool IsCombatMessage(MessageType t) {
   return t == MessageType::DamageEvent || t == MessageType::PlayerStatus;
 }
 struct ShotHit { EnemyId id; ShotVector point; uint32_t generation = 0; };
+enum class ShotReject : uint8_t { None, Bounds, World, Sequence, Stale, Weapon, Rate, Origin, Target, Distance, Aim, Engine, Queue, Late, Count };
+// Diagnostics only. queued means a native event was built, not a confirmed kill.
+struct ShotReceipt {
+  EnemyWorld world;
+  uint32_t number = 0;
+  ShotReject reason = ShotReject::None;
+  bool queued = false;
+};
+bool ValidShotReceipt(const ShotReceipt& receipt);
 struct InventoryState {
   EnemyWorld world;
   double time = 0;
@@ -234,6 +243,7 @@ struct Message {
   EnemySnapshot enemies;
   EnemyEvent enemy_event;
   ShotIntent shot;
+  ShotReceipt shot_receipt;
   DamageEvent damage;
   PlayerStatus player_status;
   OwnershipChange ownership;

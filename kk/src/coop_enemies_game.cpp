@@ -88,7 +88,7 @@ EnemyFamily Tracks(const uint8_t* b, uint32_t ai, uint32_t& state, bool& spawner
     const auto block = Ptr(b, ai, (t+6)*4, 24);
     if (!block) continue;
     const auto fn = Load32(b, block+20);
-    if (initializing && (fn == 0x825B9020 || fn == 0x82516820 || fn == 0x826055F0)) *initializing = true;
+    if (initializing && (fn == 0x825B9020 || fn == 0x82516820 || fn == 0x826055F0 || fn == 0x8264DA70)) *initializing = true;
     spawner |= fn == 0x826EB8C0 || fn == 0x826E1EE8 || fn == 0x826F8BC8;
     const auto f = Family(fn);
     if (f != EnemyFamily::None) {
@@ -143,6 +143,7 @@ const char* DevFamilyName(EnemyFamily family) {
     case EnemyFamily::Raptor: return "raptor";
     case EnemyFamily::Worm: return "worm";
     case EnemyFamily::Scorpion: return "scorpion";
+    case EnemyFamily::Crab: return "crab";
     default: return "none";
   }
 }
@@ -355,13 +356,14 @@ struct Authored {
   float x, y, z; bool ambiguous = false;
 };
 struct Pending { EnemyId id; uint32_t ai, matrix; float x, y, z; };
-struct Spawner { uint64_t key; uint32_t ai, vars, sequence = 0; std::map<uint32_t, uint64_t> sources; };
+struct Spawner { uint64_t key; uint32_t ai, vars, sequence = 0; };
 #if defined(KK_DEV_TOOLS)
 struct DevRaptorLog {
   double select_next = 0, vision_next = 0, filter_next = 0, register_next = 0, ray_next = 0, gate_next = 0;
   unsigned select_count = 0, vision_count = 0, filter_count = 0, register_count = 0, ray_count = 0, gate_count = 0;
 };
 #endif
+void ShotSummary(const char* boundary, bool end = true);
 struct State {
   uint32_t world = 0, game = 0;
   std::map<std::pair<uint32_t, uint32_t>, uint32_t> visits;
@@ -388,7 +390,15 @@ struct State {
   std::map<EnemyId, MatchRetry> retry;
   std::set<EnemyId> retry_diagnosed;
   ShotValidator shot_validator;
+  ShotTargetHistory shot_targets;
   ShotCounters shots;
+  uint64_t shot_submitted = 0, shot_accepted = 0, shot_blocked = 0;
+  uint64_t shot_confirmed_deaths = 0;
+  std::map<std::string, uint64_t> shot_send_reasons;
+  bool shot_audit_active = false;
+  double next_send_log = 0;
+  double next_result_log = 0;
+  double next_audit_log = 0;
   uint32_t next_shot = 0;
   uint64_t combat_epoch = 0, incarnation = 0;
   uint32_t next_damage = 0, next_status = 0;
@@ -418,12 +428,15 @@ struct State {
   Counters counts;
   double next_log = 0, prepared_at = 0;
   void ResetWorld() {
+    ShotSummary("world-end");
     world = game = 0; capture = prepared = false; identity = {};
     load_refused_logged = false;
     authored.clear(); spawners.clear(); bindings.clear(); pending.clear(); records.clear(); driving.clear(); unmatched_logged.clear(); counts = {};
     death_applied.clear(); death_refused.clear();
     orphan_logged.clear(); unbound = 0;
-    aliases.clear(); retry.clear(); retry_diagnosed.clear(); shots = {}; shot_validator = {}; shooting = shot_resolved = false; shot = {};
+    aliases.clear(); retry.clear(); retry_diagnosed.clear(); shots = {}; shot_validator = {}; shot_targets = {}; shooting = shot_resolved = false; shot = {};
+    shot_submitted = shot_accepted = shot_blocked = shot_confirmed_deaths = 0;
+    shot_send_reasons.clear(); shot_audit_active = false; next_send_log = next_result_log = next_audit_log = 0;
     authority.clear(); ownership_out.clear(); committed.clear(); ownership_in.clear(); ownership_epoch = 0; next_ownership = 0;
     matched_at.clear();
     private_reseed.clear();
@@ -438,6 +451,40 @@ struct State {
   }
 };
 State& Get() { static State s; return s; }
+void ShotSummary(const char* boundary, bool end) {
+  auto& s = Get();
+  if (!s.shot_audit_active) return;
+  REXLOG_INFO("COOP SHOTS summary boundary={} role={} world={}/{}/{} submitted={} accepted={} native-queued={} blocked-local={} rejected={} late={} confirmed-deaths={}",
+      boundary, s.link.role == Role::Host ? "host" : "guest", s.identity.level, s.identity.start, s.identity.serial,
+      s.shot_submitted, s.shot_accepted, s.shots.applied, s.shot_blocked, s.shots.rejected, s.shots.late, s.shot_confirmed_deaths);
+  for (const auto& [reason, total] : s.shot_send_reasons)
+    REXLOG_INFO("COOP SHOTS send-reason={} total={}", reason, total);
+  for (size_t i = 1; i < size_t(ShotReject::Count); ++i) if (s.shots.reasons[i])
+    REXLOG_INFO("COOP SHOTS reject-reason={} total={}", ShotRejectName(ShotReject(i)), s.shots.reasons[i]);
+  if (end) s.shot_audit_active = false;
+}
+void ShotSendLog(const char* reason, bool submitted = false) {
+  auto& s = Get(); s.shot_audit_active = true;
+  ++s.shot_send_reasons[reason];
+  if (submitted) ++s.shot_submitted;
+  const double now = Now();
+  if (now < s.next_send_log) return;
+  s.next_send_log = now+1;
+  REXLOG_INFO("COOP SHOTS send role={} number={} weapon={} hits={} queued={} reason={} matched={} tracked={} remote-world={}/{}/{}",
+      s.link.role == Role::Host ? "host" : "guest", s.shot.number, s.shot.weapon, s.shot.hits.size(), submitted,
+      reason, s.aliases.size(), s.bindings.size(), s.link.remote.world.level, s.link.remote.world.start, s.link.remote.world.serial);
+}
+void ShotResultLog(const EnemyState& enemy, float before, bool replica) {
+  auto& s = Get();
+  if (before <= 0 || enemy.life == before) return;
+  if (enemy.life <= 0) ++s.shot_confirmed_deaths;
+  s.shot_audit_active = true;
+  if (Now() < s.next_result_log && enemy.life > 0) return;
+  s.next_result_log = Now()+1;
+  REXLOG_INFO("COOP SHOTS result role={} source={} id={:016X}/{}/{} generation={} life={:.2f}->{:.2f} confirmed-death={}",
+      replica ? "guest" : "host", replica ? "host-snapshot" : "native", enemy.id.source, enemy.id.sequence,
+      uint16_t(enemy.id.family), enemy.generation, before, enemy.life, enemy.life <= 0);
+}
 EnemyOwner Side() { return Get().link.role == Role::Host ? EnemyOwner::Host : EnemyOwner::Guest; }
 EnemyId Canonical(EnemyId local) {
   const auto& s = Get();
@@ -504,12 +551,8 @@ void Capture(const uint8_t* b, uint32_t w, bool initial = true) {
 #endif
     const auto vars = Ptr(b, ai, 64, 1780);
     if (!spawner || !vars) continue;
-    Spawner sp{key, ai, vars, 0, {}};
+    Spawner sp{key, ai, vars, 0};
     if (const auto old=private_spawner_sequences.find(key); old!=private_spawner_sequences.end()) sp.sequence=old->second;
-    for (const auto off : {1592u, 1776u}) {
-      const auto source = Ptr(b, vars, off, 32);
-      if (source) sp.sources[source] = Mix(key, off); // authored template selector, not source pointer
-    }
     s.spawners[actor] = std::move(sp);
   }
   // Co-located same-family actors or hash collisions are ambiguous. Refuse all
@@ -580,6 +623,8 @@ void Scan(const uint8_t* b) {
       e.owner = a->owner; e.generation = a->generation;
       if (a->dead) e.life = 0;
     }
+    if (s.link.role == Role::Host && it != s.records.end()) ShotResultLog(e, it->second.enemy.life, false);
+    if (s.link.role == Role::Host) s.shot_targets.Observe(e, Now());
     s.records[e.id] = {e, e.life <= 0 ? EnemyEventKind::Died : EnemyEventKind::Spawned};
   }
   // Leaving the scheduled AI table can mean sleep/deactivation, not destruction.
@@ -646,8 +691,10 @@ void DeathTransition(PPCContext& ctx, uint8_t* b, const Binding& binding) {
   if (binding.id.family == EnemyFamily::Raptor || s.death_applied.contains(binding.id)) return;
   // Normal Worm PAF -> MORT (.74:19839) and Scorpion PAF -> MORT (.44:22945)
   // use the engine track setter. Never invoke a function address from the wire.
-  const uint32_t slot = binding.id.family == EnemyFamily::Worm ? 0x82CC9318 : 0x82CC8C5C;
-  const uint32_t expected = binding.id.family == EnemyFamily::Worm ? 0x82534858 : 0x82619FD8;
+  const uint32_t slot = binding.id.family == EnemyFamily::Worm ? 0x82CC9318 :
+      binding.id.family == EnemyFamily::Crab ? 0x82CC8A4C : 0x82CC8C5C;
+  const uint32_t expected = binding.id.family == EnemyFamily::Worm ? 0x82534858 :
+      binding.id.family == EnemyFamily::Crab ? 0x82666240 : 0x82619FD8;
   const auto block = Ptr(b, slot, 0, 24);
   if (!block || Load32(b, block+20) != expected || !Scratch::CanUse(ctx)) {
     if (s.death_refused.insert(binding.id).second)
@@ -781,6 +828,8 @@ void Replicas(PPCContext& ctx, uint8_t* b, bool drive) {
     if (!dead && (!ControllerSafe(b, binding->actor) || !Scratch::CanUse(ctx))) continue;
     // Only the nonowner receives raw life. Corpses run native death dispatches.
     auto sample = r.enemy; if (dead) sample.life = 0;
+    const float before = LoadF(b, binding->vars+LifeOffset(binding->id.family));
+    ShotResultLog(sample, before, true);
     WriteLife(b, *binding, sample);
     if (dead) { DeathTransition(ctx, b, *binding); continue; }
     if (!drive || Drive(ctx, b, *binding, r.enemy)) {
@@ -901,20 +950,10 @@ void OwnershipBeforeAi(PPCContext& ctx, uint8_t* b) {
     const auto* binding = CanonicalBinding(b, id); if (!binding) continue;
     EnemyState local;
     if (a.Runs(Side()) && OwnedSample(b, *binding, local)) a.Observe(local);
-    if (s.link.role != Role::Host || !s.link.partner || !a.matched) continue;
-    const auto jack = ReadJackPose([&](uint32_t p) { return Load32(b, p); },
-        [&](uint32_t p) { return Load16(b, p); }, [&](uint32_t p) { return LoadF(b, p); }, now);
-    if (!jack.pose) continue;
-    const float host = ShotDistance({a.last.x, a.last.y, a.last.z}, {jack.pose->x, jack.pose->y, jack.pose->z});
-    const float guest = ShotDistance({a.last.x, a.last.y, a.last.z}, {s.link.partner->x, s.link.partner->y, s.link.partner->z});
-    const bool eligible = !a.Frozen() && !a.dead && a.last.life > 0 &&
-        s.link.partner->level == s.identity.level && now-s.matched_at[id] < 1.5 &&
-        EnemyPartnerCombatReady();
-    if (const auto target = a.proximity.Decide(a.owner, host, guest, now, eligible)) {
-      if (auto prepare = a.Begin(s.identity, *target, a.last)) {
-        s.ownership_out[id] = *prepare; SendOwnership(*prepare);
-      }
-    }
+    // C68: retain host authority. Guest-owned native damage allowed a local
+    // death before the host confirmed it, and moved hit consumption off host.
+    // Keep the transaction receiver for private-world restoration, but do not
+    // initiate proximity transfers in this protocol/build.
   }
   if (now < s.next_ownership) return;
   s.next_ownership = now+.5;
@@ -1465,6 +1504,7 @@ void ObserveHumanConsumption(PPCContext& ctx, uint8_t* b) {
 const char* BeginShot(const uint8_t* b) {
   auto& s = Get();
   if (!Connected()) return "disconnected";
+  if (s.link.role != Role::Guest) return "host-local";
   if (s.shooting) return "nested-callback";
   if (!Environment(b, s.world) || !PoseAddress(s.game, 13652)) return "world-not-ready";
   if (!JackReady(b)) return "jack-not-ready";
@@ -1518,19 +1558,34 @@ void ShotRay(const uint8_t* b, uint32_t origin, uint32_t point, uint32_t object,
 }
 bool ForwardShotEvent(PPCContext& ctx, uint8_t* b) {
   auto& s = Get();
-  if (!s.shooting || !Connected() || !Environment(b, s.world) ||
+  const auto link = EnemyLinkSnapshot();
+  // Preserve host authority during transient loss too. A stale worker snapshot
+  // can withhold forwarding, but must not turn the guest into a damage owner.
+  if (!REXCVAR_GET(kk_coop_enabled) || link.role != Role::Guest ||
+      (link.session_state != SessionState::Connected && link.session_state != SessionState::Lost) || !Environment(b, s.world) ||
       ctx.r6.u32 != Load32(b, 0x82CCBF7C)) return false;
   const uint32_t lr = uint32_t(ctx.lr);
   if (lr != 0x82696E74 && lr != 0x82697494 && lr != 0x82697970 && lr != 0x82698C00) return false;
 #if defined(KK_DEV_TOOLS)
   DevShotHit(b, ctx.r8.u32);
 #endif
+  // A supported but unmatched enemy must never die privately. Suppress its
+  // native hit even when identity discovery or shot capture is not ready.
+  const auto target_ai = Ptr(b, Ptr(b, ctx.r8.u32, 24, 8), 4, 88);
+  bool spawner = false; uint32_t state = 0;
+  if (Tracks(b, target_ai, state, spawner) == EnemyFamily::None) return false;
+  auto block = [&] (const char* reason) {
+    ++s.shot_blocked; ShotSendLog(reason);
+    if (PoseAddress(ctx.r3.u32, 8)) { Store32(b, ctx.r3.u32, UINT32_MAX); Store32(b, ctx.r3.u32+4, 0); }
+    return true;
+  };
+  if (!s.shooting) return block("capture-not-ready");
   const auto it = s.bindings.find(ctx.r8.u32);
-  if (it == s.bindings.end() || !ValidBinding(b, it->second)) return false;
+  if (it == s.bindings.end() || !ValidBinding(b, it->second)) return block("unbound-target");
   auto alias = std::find_if(s.aliases.begin(), s.aliases.end(), [&](const auto& a) { return a.second == it->second.id; });
-  if (alias == s.aliases.end()) return false;
+  if (alias == s.aliases.end()) return block("unmatched-target");
   const auto* authority = AuthorityFor(it->second.id);
-  if (!authority || authority->Runs(Side())) return false; // Native local-owner damage stays local.
+  if (!authority || authority->owner != EnemyOwner::Host || authority->Frozen()) return block("authority-not-ready");
   // Builder's caller stack+96 is the resolved impact, +80 its normal/vector.
   // See .47:26501-26539 and .39:23618-23652. No damage/bone value goes on wire.
   if (PoseAddress(ctx.r1.u32, 108) && s.shot.hits.size() < (s.shot.weapon == 3 ? kMaxShotHits : 1)) {
@@ -1555,6 +1610,7 @@ bool ForwardShotEvent(PPCContext& ctx, uint8_t* b) {
   // Only the damage event is withheld. The normal callback keeps its muzzle,
   // sound, ammo, impact effects and animation paths. Invalid native handle.
   if (PoseAddress(ctx.r3.u32, 8)) { Store32(b, ctx.r3.u32, UINT32_MAX); Store32(b, ctx.r3.u32+4, 0); }
+  ++s.shot_blocked;
   return true;
 }
 const char* EndShot(const uint8_t* b, bool fired) {
@@ -1626,9 +1682,22 @@ bool NativeShot(PPCContext& ctx, uint8_t* b, const ShotIntent& shot, const ShotH
 }
 void OwnerShots(PPCContext& ctx, uint8_t* b) {
   auto& s = Get();
+  for (const auto& receipt:TakeShotReceipts()) {
+    if (s.link.role!=Role::Guest || receipt.world!=s.identity || receipt.number>s.next_shot) continue;
+    s.shot_audit_active=true;
+    if (receipt.reason==ShotReject::None) ++s.shot_accepted;
+    else s.shots.Reject(receipt.reason);
+    if (receipt.queued) ++s.shots.applied;
+    if (Now()>=s.next_shot_log) {
+      s.next_shot_log=Now()+1;
+      REXLOG_INFO("COOP SHOTS host-receipt role=guest number={} accepted={} native-queued={} reason={}",
+          receipt.number,receipt.reason==ShotReject::None,receipt.queued,ShotRejectName(receipt.reason));
+    }
+  }
   for (const auto& received : TakeShotIntents()) {
     const auto& shot = received.intent;
-    auto reason = s.shot_validator.Validate(received, s.identity, s.link.partner, Now());
+    auto reason = s.shot_validator.Validate(received, s.identity, received.peer ? received.peer : s.link.partner, Now());
+    s.shot_audit_active = true;
     std::vector<std::pair<Binding, ShotHit>> targets;
     bool late = false;
     if (reason == ShotReject::None) for (const auto& hit : shot.hits) {
@@ -1652,7 +1721,7 @@ void OwnerShots(PPCContext& ctx, uint8_t* b) {
       }
       e.id = hit.id; e.owner = a->second.owner; e.generation = a->second.generation;
       if (a->second.dead) e.life = 0;
-      reason = ValidateShotHit(shot, hit, e);
+      reason = s.shot_targets.Validate(shot, hit, e, Now());
       if (reason == ShotReject::Late) { late = true; reason = ShotReject::None; continue; }
       if (reason != ShotReject::None) break;
       targets.push_back({*binding, hit});
@@ -1665,13 +1734,19 @@ void OwnerShots(PPCContext& ctx, uint8_t* b) {
     if (applied) ++s.shots.applied; // queued normal native event; life outcome comes from Scan.
     if (reason != ShotReject::None) s.shots.Reject(reason);
     else if (late) s.shots.Reject(ShotReject::Late);
-#if defined(KK_DEV_TOOLS)
     if (Now() >= s.next_shot_log) {
       s.next_shot_log = Now()+1;
-      REXLOG_INFO("ENEMIES shot number={} weapon={} hits={} applied={} late={} reject={}",
-          shot.number, shot.weapon, shot.hits.size(), applied, late, ShotRejectName(reason));
+      const auto peer = received.peer ? received.peer : s.link.partner;
+      const ShotHit first = shot.hits.empty() ? ShotHit{} : shot.hits.front();
+      REXLOG_INFO("COOP SHOTS receive role=host number={} weapon={} hits={} applied={} late={} reject={} queue-age={:.3f} pose-dt={:.3f} origin-error={:.3f} inventory={} matched={} world={}/{}/{} target={:016X}/{}/{} generation={}",
+          shot.number, shot.weapon, shot.hits.size(), applied, late, ShotRejectName(reason), Now()-received.received,
+          peer ? shot.time-peer->time : -999., peer ? ShotDistance(shot.origin,{peer->x,peer->y,peer->z}) : -1.f,
+          received.inventory.has_value(), s.aliases.size(), shot.world.level, shot.world.start, shot.world.serial,
+          first.id.source, first.id.sequence, uint16_t(first.id.family), first.generation);
     }
-#endif
+    if (reason == ShotReject::None && (!late || applied)) ++s.shot_accepted;
+    if (!SubmitShotReceipt({shot.world,shot.number,late && !applied && reason==ShotReject::None ? ShotReject::Late : reason,applied}))
+      ++s.shot_send_reasons["receipt-queue-refused"];
   }
 }
 void BeforeAi(PPCContext& ctx, uint8_t* b, uint32_t w) {
@@ -1695,6 +1770,12 @@ void BeforeAi(PPCContext& ctx, uint8_t* b, uint32_t w) {
   }
   if (!Environment(b, w)) return;
   if (s.ownership_epoch != s.link.epoch) {
+    // A replacement session may have a different peer and clock origin even
+    // without a native reload. Never carry that peer's replay/ammo validator.
+    ShotSummary("session-end");
+    s.shots={}; s.shot_validator={}; s.shot_targets={};
+    s.shot_submitted=s.shot_accepted=s.shot_blocked=s.shot_confirmed_deaths=0;
+    s.shot_send_reasons.clear(); s.next_send_log=s.next_result_log=s.next_audit_log=s.next_shot_log=0;
     s.authority.clear(); s.ownership_out.clear(); s.committed.clear(); s.ownership_in.clear(); s.matched_at.clear();
     s.private_reseed.clear();
     s.ownership_epoch = s.link.epoch; s.next_ownership = 0;
@@ -1750,6 +1831,10 @@ void AfterAi(PPCContext& ctx, uint8_t* b, uint32_t w) {
   PublishPlayerStatus(b);
   s.counts.sent = s.link.sent; SetEnemyCounters(s.counts);
   SetShotCounters(s.shots);
+  if (Now() >= s.next_audit_log) {
+    s.next_audit_log = Now()+10;
+    ShotSummary("periodic", false);
+  }
 #if defined(KK_DEV_TOOLS)
   if (Now() >= s.next_log) {
     s.next_log = Now()+5;
@@ -1779,16 +1864,18 @@ bool Hold(PPCContext& ctx, uint8_t* b) {
 }
 void Spawned(const uint8_t* b, uint32_t spawner, uint32_t source, uint32_t actor) {
   auto& s = Get();
-  if (!s.prepared || !Connected() || !PoseAddress(actor, 32)) return;
+  // Record successful native creations before the peer's load barrier opens
+  // too. Connection timing must not change a spawner's immutable sequence.
+  if (!REXCVAR_GET(kk_coop_enabled) || !Environment(b,s.world) || !PoseAddress(actor, 32)) return;
   auto it = s.spawners.find(spawner); if (it == s.spawners.end()) return;
   auto& sp = it->second;
   if (Ptr(b, Ptr(b, spawner, 24, 8), 4, 88) != sp.ai || Ptr(b, sp.ai, 64, 1780) != sp.vars) return;
-  const auto template_it = sp.sources.find(source);
-  if (template_it == sp.sources.end() || sp.sequence == UINT32_MAX) return;
+  const auto template_key=SpawnerTemplateKey(sp.key,source,Ptr(b,sp.vars,1592,32),Ptr(b,sp.vars,1776,32));
+  if (!template_key || sp.sequence == UINT32_MAX) return;
   ++sp.sequence;
   bool is_spawner = false; uint32_t state = 0;
   const auto family = Tracks(b, Ptr(b, Ptr(b, source, 24, 8), 4, 88), state, is_spawner);
-  const auto id = SpawnId(sp.key, template_it->second, sp.sequence, family);
+  const auto id = SpawnId(sp.key, template_key, sp.sequence, family);
   const auto ai = Ptr(b, Ptr(b, actor, 24, 8), 4, 88), matrix = Ptr(b, actor, 12, 64);
   if (!id.source || !ai || !matrix || s.records.size()+s.pending.size() >= kMaxEnemies || s.records.contains(id)) return;
   // A pooled pointer is a new generation. Preserve a tombstone for its previous ID.
@@ -1888,7 +1975,7 @@ void EnemyGameFrame() {
   if (!Connected()) {
     // Release immediately on loss, but retain this load's identity so recovery
     // can revalidate it. The synchronous load boundary owns pointer teardown.
-    auto& s = Get(); s.prepared = false; s.driving.clear(); SetEnemyCounters({});
+    auto& s = Get(); ShotSummary("session-inactive"); s.prepared = false; s.driving.clear(); SetEnemyCounters({});
     s.pending_damage.clear(); s.sent_status.reset(); s.partner_status_time = -1;
     if (s.link.role == Role::Guest) {
       s.combat_epoch = s.incarnation = 0; s.damage_replay = {};
@@ -2130,7 +2217,7 @@ REX_HOOK_RAW(sub_8271CCB8) {
   __imp__sub_8271CCB8(ctx, base);
 }
 REX_HOOK_RAW(sub_82715AC8) {
-  const bool observe = uint32_t(ctx.lr) == 0x826F9240 && kk::coop::Connected();
+  const bool observe = uint32_t(ctx.lr) == 0x826F9240 && REXCVAR_GET(kk_coop_enabled);
   const auto source = ctx.r3.u32;
   const auto spawner = observe ? kk::hfr::Load32(base, 0x82CCBF6C) : 0;
   __imp__sub_82715AC8(ctx, base);
@@ -2154,6 +2241,9 @@ REX_HOOK_RAW(sub_82696A28) {
   if (observe) {
     reason = kk::coop::EndShot(base, same && after < before);
   }
+  if (kk::coop::Get().link.role == kk::coop::Role::Guest &&
+      ((same && after < before) || (observe && kk::coop::Get().shot_resolved)))
+    kk::coop::ShotSendLog(reason ? reason : (kk::coop::Get().shot.hits.empty() ? "queued-miss" : "queued-hit"), reason == nullptr);
 #if defined(KK_DEV_TOOLS)
   kk::coop::DevShotLog(base, guest, observe, weapon, before, after, caller, ctx.r3.u32, reason);
 #endif

@@ -30,6 +30,7 @@ inline Message SteamProbeMessage(MessageType type) {
   m.life={m.flow,11,2,1};
   m.camera.generation=1; m.camera.level=101; m.camera.cut=1; m.camera.time=1;
   m.story={1,101,1,123,456,1,kStoryRecords,StoryPhase::Armed};
+  m.shot_receipt={world,1,ShotReject::Origin,false};
   return m;
 }
 }  // namespace kk::coop

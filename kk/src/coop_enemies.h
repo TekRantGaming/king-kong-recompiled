@@ -13,6 +13,7 @@ inline EnemyFamily Family(uint32_t fn) {
     case 0x8254BCB0: case 0x825B9020: case 0x82572E40: return EnemyFamily::Raptor;
     case 0x825088A0: case 0x82516820: case 0x82516508: return EnemyFamily::Worm;
     case 0x825F2380: case 0x826055F0: case 0x825FE790: return EnemyFamily::Scorpion;
+    case 0x82623058: case 0x8264DA70: case 0x82641928: return EnemyFamily::Crab;
     default: return EnemyFamily::None;
   }
 }
@@ -23,6 +24,9 @@ inline uint32_t LifeOffset(EnemyFamily f) {
     // 82614DC0 -> 824FEBF8 consumes firearm hits here. V+5792 is a
     // separate type-2048 pool, so it cannot diagnose firearm damage.
     case EnemyFamily::Scorpion: return 5444;
+    // CR_TRACK_Init copies V+756 to V+760; CR_exec_CHECK_Paf subtracts
+    // native type-4 firearm damage at 8263FFB4 and tests zero for death.
+    case EnemyFamily::Crab: return 760;
     default: return 0;
   }
 }
@@ -45,6 +49,14 @@ inline EnemyId SpawnId(uint64_t spawner, uint64_t source, uint32_t sequence, Ene
   if (!spawner || !source || !sequence || family == EnemyFamily::None) return {};
   const uint64_t h = Mix(Mix(14695981039346656037ull, spawner), source);
   return {h ? h : 1, sequence, family};
+}
+// Resolve the live template at creation time, after native initialization.
+// Only its authored numeric slot contributes to identity, never its pointer.
+inline uint64_t SpawnerTemplateKey(uint64_t spawner, uint32_t source, uint32_t primary, uint32_t secondary) {
+  if (!spawner || !source) return 0;
+  if (source==primary) return Mix(spawner,1592);
+  if (source==secondary) return Mix(spawner,1776);
+  return 0;
 }
 struct Binding {
   EnemyId id;

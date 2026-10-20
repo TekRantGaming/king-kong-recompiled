@@ -36,6 +36,13 @@ void IdentityAndMatching() {
   auto one = SpawnId(key, 1592, 1, EnemyFamily::Raptor), two = SpawnId(key, 1592, 2, EnemyFamily::Raptor);
   Check(one != two && one != SpawnId(key, 1776, 1, EnemyFamily::Raptor), "wave generation and template selector");
   Check(!SpawnId(0, 1, 1, EnemyFamily::Raptor).source && !SpawnId(1, 1, 0, EnemyFamily::Raptor).source, "missing spawn provenance refuses");
+  Check(!SpawnerTemplateKey(key,0x40001000,0,0),"unresolved pre-init template cannot fabricate provenance");
+  Check(SpawnerTemplateKey(key,0x40001000,0x40001000,0x40002000)==
+      SpawnerTemplateKey(key,0x50003000,0x50003000,0x50004000),
+      "late-resolved templates on different heaps retain the same numeric slot identity");
+  Check(SpawnerTemplateKey(key,0x40002000,0x40001000,0x40002000)!=
+      SpawnerTemplateKey(key,0x40001000,0x40001000,0x40002000),"distinct live template selectors remain distinct");
+  Check(!SpawnerTemplateKey(key,0x40003000,0x40001000,0x40002000),"replaced or unknown template is refused");
   EnemyId authored{key, 0, EnemyFamily::Raptor};
   // Two machines have different heap values and table order but the same authored IDs.
   std::vector<Binding> host{{authored, 10, 20, 30, 40}, {one, 50, 60, 70, 80}};
@@ -47,6 +54,14 @@ void IdentityAndMatching() {
   guest[1].vars = 0; Check(!Match(authored, guest), "incomplete local identity refuses");
   Check(Family(0x8254BCB0) == EnemyFamily::Raptor && Family(0x82516508) == EnemyFamily::Worm &&
       Family(0x825FE790) == EnemyFamily::Scorpion, "explicit creature families");
+  Check(Family(0x82623058) == EnemyFamily::Crab && Family(0x8264DA70) == EnemyFamily::Crab &&
+      Family(0x82641928) == EnemyFamily::Crab && LifeOffset(EnemyFamily::Crab) == 760,
+      "chapter two crab tag/init/reflex and native firearm life are supported");
+  auto crab = Enemy(); crab.id.family = EnemyFamily::Crab;
+  Message decoded;
+  Check(Decode(Packet(Snapshot(crab)), decoded) && decoded.enemies.enemies[0].id.family == EnemyFamily::Crab,
+      "crab identity crosses snapshots");
+  Check(Decode(Packet(Event(crab, EnemyEventKind::Died)), decoded), "crab confirmed death crosses reliable events");
   for (auto fn : {0x826718B8u, 0x8268D8E8u, 0x8268BF48u, 0x826F9980u, 0u})
     Check(Family(fn) == EnemyFamily::None, "hero, allies, KAnn, unknown excluded");
   Check(LifeOffset(EnemyFamily::Raptor) == 20 && LifeOffset(EnemyFamily::Worm) == 5392 &&
@@ -339,6 +354,15 @@ void GuestInventory() {
   authority.End(.46); Check(authority.TakeShots().empty(), "session end drops remote shot inventory copies");
 }
 void ShotWireAndBounds() {
+  Message receipt; receipt.type=MessageType::ShotReceipt; receipt.shot_receipt={World(),1,ShotReject::Engine,false};
+  auto receipt_bytes=Packet(receipt); Message receipt_out;
+  Check(receipt_bytes.size()==kHeaderBytes+18 && Decode(receipt_bytes,receipt_out),"bounded host verdict wire");
+  for(size_t n=0;n<receipt_bytes.size();++n)
+    Check(!Decode(std::span(receipt_bytes).first(n),receipt_out),"every host verdict truncation rejected");
+  auto invalid_receipt=receipt_bytes; invalid_receipt.back()=2;
+  Check(!Decode(invalid_receipt,receipt_out),"host verdict queued flag is boolean");
+  invalid_receipt=receipt_bytes; invalid_receipt[invalid_receipt.size()-2]=uint8_t(ShotReject::Count);
+  Check(!Decode(invalid_receipt,receipt_out),"host verdict unknown reason refused");
   Message m; m.type = MessageType::ShotIntent; m.shot = Shot();
   for (bool miss : {true, false}) {
     m.shot = Shot(); if (miss) m.shot.hits.clear();
@@ -401,7 +425,11 @@ void ShotValidation() {
   v = {}; auto burst = in;
   Check(v.Validate(burst, World(), peer, 1) == ShotReject::None, "burst one");
   burst.intent = Shot(2, 100.2); Check(v.Validate(burst, World(), peer, 1) == ShotReject::None, "burst two allows batching");
-  burst.intent = Shot(3, 100.4); Check(v.Validate(burst, World(), peer, 1) == ShotReject::Rate, "arrival rate blocks forged clock acceleration");
+  burst.intent = Shot(3, 100.4); Check(v.Validate(burst, World(), peer, 1) == ShotReject::None, "WAN batching accepts third legal shot");
+  for (unsigned i=4;i<=6;++i) { burst.intent=Shot(i,100+.2*(i-1)); burst.inventory=Inventory(burst.intent.time);
+    peer.time=burst.intent.time; Check(v.Validate(burst,World(),peer,1)==ShotReject::None,"bounded WAN burst"); }
+  burst.intent=Shot(7,101.2); burst.inventory=Inventory(101.2); peer.time=101.2;
+  Check(v.Validate(burst,World(),peer,1)==ShotReject::Rate,"arrival rate still bounds forged sender clock");
   auto target = Enemy(); target.x = 10; target.y = target.z = 0;
   Check(ValidateShotHit(in.intent, in.intent.hits[0], target) == ShotReject::None, "live nearby claimed hit accepted");
   target.life = 0; Check(ValidateShotHit(in.intent, in.intent.hits[0], target) == ShotReject::Late, "confirmed dead target counted late");
@@ -416,6 +444,34 @@ void ShotValidation() {
   Check(ValidateShotHit(s, s.hits[0], target) == ShotReject::Aim, "backward hit rejected");
   s = Shot(); s.hits[0].point.x = target.x = 301;
   Check(ValidateShotHit(s, s.hits[0], target) == ShotReject::Distance, "weapon range rejected");
+}
+void WanShooterHistory() {
+  PoseBuffer poses;
+  poses.Push(PlayerPose{1000,303,0,0,0},10);
+  poses.Push(PlayerPose{1000.25,303,8,0,0},10.25);
+  poses.Push(PlayerPose{1000.5,303,16,0,0},10.5);
+  auto shot=Shot(1,1000); const auto history=poses.At(shot.time,303);
+  ShotValidator validator;
+  Check(history && validator.Validate({shot,10.5,Inventory(1000),history},World(),history,10.51)==ShotReject::None,
+      "delayed shot validates at historical shooter origin across independent PC clocks");
+  validator={};
+  Check(validator.Validate({shot,10.5,Inventory(1000)},World(),poses.Sample(10.5),10.51)==ShotReject::Origin,
+      "old latest-pose path reproduces moving shooter WAN origin rejection");
+  Check(!poses.At(998,303) && !poses.At(1000,101),"historical shooter lookup refuses old or wrong-level poses");
+  auto crab=Enemy(); crab.id.family=EnemyFamily::Crab; crab.x=10; crab.y=crab.z=0;
+  shot.hits[0].id=crab.id;
+  Check(ValidateShotHit(shot,shot.hits[0],crab)==ShotReject::None,"host validates crab shot hit");
+  ShotTargetHistory targets; targets.Observe(crab,10);
+  crab.x=25;
+  Check(ValidateShotHit(shot,shot.hits[0],crab)==ShotReject::Distance &&
+      targets.Validate(shot,shot.hits[0],crab,10.6)==ShotReject::None,
+      "moving enemy validates at recent host snapshot without widening impact radius");
+  Check(targets.Validate(shot,shot.hits[0],crab,10.8)==ShotReject::Distance,
+      "old enemy history cannot authorize a hit");
+  crab.generation=1;
+  Check(targets.Validate(shot,shot.hits[0],crab,10.6)==ShotReject::Target,"history cannot cross authority generation");
+  crab.generation=0; crab.life=0;
+  Check(targets.Validate(shot,shot.hits[0],crab,10.6)==ShotReject::Late,"history retains confirmed native death");
 }
 void ShotSessions() {
   Transport a, b; a.peer = &b; b.peer = &a;
@@ -436,6 +492,15 @@ void ShotSessions() {
   ShotValidator validator; PlayerPose peer{.4, 303};
   Check(first[0].inventory && first[0].inventory->ammo[0] == 80, "reliable pre-fire inventory precedes intent");
   Check(validator.Validate(first[0], World(), peer, .42) == ShotReject::None, "received shot reaches authority validator");
+  Check(host.QueueShotReceipt({World(),1,ShotReject::Origin,false}) &&
+      !guest.QueueShotReceipt({World(),1,ShotReject::None,true}),"only host can publish shot verdicts");
+  host.Tick(.425); guest.Tick(.426);
+  auto receipts=guest.TakeShotReceipts();
+  Check(receipts.size()==1 && receipts[0].number==1 && receipts[0].reason==ShotReject::Origin &&
+      !receipts[0].queued && guest.TakeShotReceipts().empty(),"guest receives host reject reason once");
+  Message receipt; receipt.type=MessageType::ShotReceipt; receipt.epoch=123; receipt.shot_receipt={World(),2,ShotReject::None,true};
+  a.queue.push_back(Packet(receipt)); host.Tick(.427);
+  Check(host.TakeShotReceipts().empty(),"guest cannot forge host shot confirmations");
   Message replay; replay.type = MessageType::ShotIntent; replay.epoch = 123; replay.shot = Shot(1, .4);
   a.queue.push_back(Packet(replay)); host.Tick(.43);
   auto duplicate = host.TakeShots();
@@ -645,6 +710,7 @@ int main() {
   ScorpionDamagePools();
   IdentityAndMatching(); Wire(); LifecycleAndInterpolation(); SessionAuthority();
   MatchingRetryAndTolerance(); GuestInventory(); ShotWireAndBounds(); ShotValidation(); ShotSessions(); MissThenHit();
+  WanShooterHistory();
   OwnershipDecision(); OwnershipWire(); OwnershipSequencing(); OwnershipStreams(); OwnershipSessions();
   std::puts("coop enemies tests passed");
 }

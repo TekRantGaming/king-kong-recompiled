@@ -109,6 +109,9 @@ class Service {
   ~Service() { Stop(); }
   void Start(SessionConfig config, DirectUdpOptions options, bool direct = false) {
     if (running_.exchange(true)) return;
+#if defined(KK_DEV_TOOLS)
+    ConfigureDevUdpSimulation(options);
+#endif
     stop_ = false;
     direct_ = direct; local_ready_ = remote_ready_ = starting_ = code_rejected_ = open_failed_ = false;
     choice_ = {};
@@ -287,6 +290,8 @@ class Service {
   void PublishCheats(CheatSet cheats) { std::lock_guard lock(mutex_); local_cheats_ = cheats; }
   void PublishInventory(const InventoryState& inventory) { shots_.PublishInventory(inventory); }
   std::vector<ReceivedShot> TakeShots() { return shots_.Take(); }
+  bool SubmitReceipt(const ShotReceipt& receipt) { return shots_.SubmitReceipt(receipt); }
+  std::vector<ShotReceipt> TakeReceipts() { return shots_.TakeReceipts(); }
   bool SubmitCombat(Message m, double now) { return combat_.Submit(std::move(m), now); }
   std::vector<ReceivedCombat> TakeCombat() { return combat_.Take(); }
   void ClearCombat() { combat_.Clear(); }
@@ -756,6 +761,14 @@ std::vector<ReceivedShot> TakeShotIntents() {
   return steam ? steam->TakeShots() : std::vector<ReceivedShot>{};
 }
 void SetShotCounters(ShotCounters counts) { std::lock_guard lock(enemy_status_mutex); shot_status = counts; }
+bool SubmitShotReceipt(const ShotReceipt& receipt) {
+  if (service.Running()) return service.SubmitReceipt(receipt);
+  return steam && steam->SubmitShotReceipt(receipt);
+}
+std::vector<ShotReceipt> TakeShotReceipts() {
+  if (service.Running()) return service.TakeReceipts();
+  return steam ? steam->TakeShotReceipts() : std::vector<ShotReceipt>{};
+}
 bool SubmitCombat(Message message, double now) {
   if (!EnemyConnectionReady()) return false;
   if (service.Running()) return service.SubmitCombat(std::move(message), now);
