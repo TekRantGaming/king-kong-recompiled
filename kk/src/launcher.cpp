@@ -1374,14 +1374,6 @@ class SettingsPages {
       items.push_back(
           std::move(Disable(it, !GetBool("kk_camera_shake"), "Switch Camera shake on to set its strength.")));
     }
-    // Task 330 (owner, 20 Oct): the game's own start menu scene, live, behind the launcher (menu_scene.h).
-    if (!in_game_) {
-      items.push_back(Section("Main menu"));
-      items.push_back(CvarChoice("Main menu background",
-                                 "Behind the main menu: the game's own start menu scene (the Venture on a stormy sea) "
-                                 "running live, or still pictures.",
-                                 "kk_menu_background", {{"Live scene", "live"}, {"Pictures", "pictures"}}));
-    }
     return items;
   }
 
@@ -3287,9 +3279,7 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
     home_mix_ = ui::Approach(home_mix_ * 100.0f, home ? 100.0f : 0.0f, 9.0f) / 100.0f;
     slide_clock_ += std::min(ImGui::GetIO().DeltaTime, 0.1f);
     const ImVec2 p1(o_.x + w_, o_.y + h_);
-    // Task 330: the game's start menu scene, live, instead of the stills once it is up (menu_scene.h). Switching
-    // Main menu background to Pictures shows the stills again at once.
-    if (menu_scene::Active()) menu_scene::SetHidden(!menu_scene::WantsLive(Get("kk_menu_background")));
+    // Task 330: the game's start menu scene, live, instead of the stills once it is up (menu_scene.h).
     scene_mix_ = menu_scene::StepMix(scene_mix_, menu_scene::Active() && menu_scene::Ready() && !PlainSetup(),
                                      ImGui::GetIO().DeltaTime);
     const float still = 1.0f - scene_mix_;  // the stills' share
@@ -6263,11 +6253,8 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
     if (cb_.quit) cb_.quit();
   }
 
-  // Task 330: the live menu scene's own sound replaces the launcher's music while the scene runs and is wanted
-  // (Main menu background switched to Pictures: the launcher's music again, the scene silent).
-  bool SceneSoundPlays() const {
-    return menu_scene::Active() && menu_scene::WantsLive(Get("kk_menu_background"));
-  }
+  // Task 330: the live menu scene's own sound replaces the launcher's music while the scene runs.
+  bool SceneSoundPlays() const { return menu_scene::Active(); }
   // Its volume: the launcher's music volume, faded over about a second and a half as the music is.
   void FadeSceneSound(float target, float dt) {
     if (!menu_scene::Active()) return;

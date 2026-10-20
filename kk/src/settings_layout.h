@@ -40,7 +40,6 @@ inline constexpr Row kDisplayRows[] = {
     {"HDR output", "Open Windows HDR Calibration"},
     {"Camera", "Field of view"},     {"Camera", "Motion blur"},
     {"Camera", "Camera shake"},      {"Camera", "Camera shake strength"},
-    {"Main menu", "Main menu background"},  // task 330, launcher only
 };
 
 inline constexpr Row kGraphicsRows[] = {

@@ -16,25 +16,18 @@ static int failures = 0;
   } while (0)
 
 int main() {
-  // The setting.
-  CHECK(WantsLive("live"));
-  CHECK(!WantsLive("pictures"));
-  CHECK(WantsLive(""));  // an unknown value keeps the default
-
-  // The decision: live only when nothing needs the stills; the first reason wins.
+  // The decision (no setting, owner 20 Oct): live unless the scene cannot or should not run; the first reason wins.
   StartFacts f;
   CHECK(Decide(f) == Reason::kLive);
-  { StartFacts g = f; g.setting = "pictures"; CHECK(Decide(g) == Reason::kSetting); }
   { StartFacts g = f; g.files_ok = false; CHECK(Decide(g) == Reason::kNoFiles); }
   { StartFacts g = f; g.native_renderer = false; CHECK(Decide(g) == Reason::kNotNative); }
   { StartFacts g = f; g.shaders_prepared = false; CHECK(Decide(g) == Reason::kShadersNotPrepared); }
   { StartFacts g = f; g.shader_job = true; CHECK(Decide(g) == Reason::kShaderJob); }
   { StartFacts g = f; g.setup = true; CHECK(Decide(g) == Reason::kSetup); }
   { StartFacts g = f; g.low_end = true; CHECK(Decide(g) == Reason::kLowEnd); }
-  { StartFacts g = f; g.on_battery = true; CHECK(Decide(g) == Reason::kOnBattery); }
   { StartFacts g = f; g.off_this_session = true; CHECK(Decide(g) == Reason::kOffThisSession); }
   { StartFacts g = f; g.failed_this_version = true; CHECK(Decide(g) == Reason::kFailedBefore); }
-  { StartFacts g = f; g.setting = "pictures"; g.shaders_prepared = false; CHECK(Decide(g) == Reason::kSetting); }
+  { StartFacts g = f; g.files_ok = false; g.shaders_prepared = false; CHECK(Decide(g) == Reason::kNoFiles); }
   for (int r = 0; r <= int(Reason::kFailedBefore); ++r) CHECK(ReasonText(Reason(r))[0] != '?');
 
   // The failure marker: only this version's "starting" or "failed" keeps the stills.

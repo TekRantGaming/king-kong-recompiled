@@ -3,6 +3,11 @@
 Every release of the King Kong PC port, newest first. The launcher shows this on its About page, and a
 version's notes the first time you start it.
 
+## Test build: live main menu (unreleased)
+
+### What's new
+- **The main menu is the game's own start menu scene, live**: the Venture rolls on the stormy sea under Skull Island behind the launcher, moving, with the menu's own music and the sound of the sea (Settings > Audio > Menu music and its volume apply to it). It replaces the slideshow of pictures. The pictures still show during setup, on the first start after an update, while shaders are prepared, on low-end PCs such as the Steam Deck, and if the scene could not start last time.
+
 ## v2.0.0-beta.12 (19 October 2026)
 
 **Beta 12**: fixes from the beta channel (**About** > **Change version**). Your saves and settings are kept. Windows only for this beta.

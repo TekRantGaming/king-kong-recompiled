@@ -12,9 +12,10 @@
 // draws over the game's frame without its stills once the scene has been up for a moment (Ready). Play always starts the game as a new process (the
 // launcher's restart_and_play), so the game's own path is unchanged.
 //
-// The stills stay (WantsLive / Decide, menu_scene_logic.h): Settings > Display "Main menu background",
-// the setup and update screens, shaders not prepared, a shader job, the low-end tier, a PC on battery, and a
-// launcher whose scene did not come up last time in this version (the marker file).
+// The launcher always looks this way (owner, 20 Oct: no setting). The stills stay only where the scene cannot or
+// should not run (Decide, menu_scene_logic.h): the setup and update screens, shaders not prepared, a shader job,
+// the low-end tier (Steam Deck), and a launcher whose scene did not come up last time in this version (the
+// marker file).
 #pragma once
 
 #include <cstdint>
@@ -34,8 +35,6 @@ bool Active();
 bool Ready();
 // The launcher process closes normally: the marker is cleared if the scene never got that far.
 void NoteClosing();
-// Hidden on purpose (the setting switched to pictures while it runs; a shader rebuild): Ready() is false.
-void SetHidden(bool hidden);
 
 // Game thread, the universe's uni_go (play_session.cpp): where its variables are (the running AI instance's
 // +0x40 is the universe's only while its own script runs).

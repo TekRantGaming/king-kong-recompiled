@@ -372,9 +372,9 @@ moving light) runs live behind the launcher instead of the stills. Code: `kk/src
   scene drops to 10 FPS and its sound fades while the new process starts (handoff about 3 s, as before).
 - **Sound** (owner, 20 Oct): the scene's own audio (its music plus the sea) plays at Menu music on/off and
   volume; the launcher's copy of the music stays silent. With the stills the launcher's music is as before.
-- **Stills instead:** Settings > Display > Main menu background = Pictures (at once while it runs; Live from the
-  next launcher start), setup / New in this update / shaders not prepared / a shader job, `kk_hardware_tier`
-  low (Steam Deck), Windows on battery, and after a launcher that did not get the scene up (marker
+- **No setting** (owner, 20 Oct): the live scene is how the launcher looks. **Stills only** where it cannot or
+  should not run: setup / New in this update / the first start after an update / shaders not prepared / a
+  shader job, `kk_hardware_tier` low (Steam Deck), and after a launcher that did not get the scene up (marker
   `<user data>\menu-scene.txt`: "starting <version>" until the scene shows; found at the next start it becomes
   "failed <version>": stills for the rest of that version).
 - **Rebuild shaders** while it runs: the scene's renderer holds the shader pack open (no rename on Windows), so

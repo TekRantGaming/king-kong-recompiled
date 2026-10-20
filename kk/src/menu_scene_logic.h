@@ -9,46 +9,37 @@
 
 namespace kk::menu_scene {
 
-// kk_menu_background: "live" (the game's own menu scene behind the launcher) or "pictures" (the stills).
-inline bool WantsLive(std::string_view setting) { return setting != "pictures"; }
-
 // What the launcher knows as it opens.
 struct StartFacts {
-  std::string setting = "live";  // kk_menu_background
   bool files_ok = true;          // the game files are installed
   bool native_renderer = true;   // the game runs on the native renderer (its shaders are prepared once)
   bool shaders_prepared = true;  // this version's one shader preparation has run (shader_prepared.h)
   bool shader_job = false;       // a shader job is running or about to (setup, update, Rebuild)
   bool setup = false;            // the first-run setup or the New in this update screen is up
   bool low_end = false;          // kk_hardware_tier "low" (a Steam Deck, a GPU under 4 GB, ...)
-  bool on_battery = false;       // a laptop or handheld running on its battery (Windows; elsewhere false)
   bool off_this_session = false; // --kk_menu_scene_off (a launcher restarted for a Rebuild)
   bool failed_this_version = false;  // the scene did not come up last time in this version
 };
 
 enum class Reason {
   kLive,
-  kSetting,
   kNoFiles,
   kNotNative,
   kShadersNotPrepared,
   kShaderJob,
   kSetup,
   kLowEnd,
-  kOnBattery,
   kOffThisSession,
   kFailedBefore,
 };
 
 inline Reason Decide(const StartFacts& f) {
-  if (!WantsLive(f.setting)) return Reason::kSetting;
   if (!f.files_ok) return Reason::kNoFiles;
   if (!f.native_renderer) return Reason::kNotNative;
   if (!f.shaders_prepared) return Reason::kShadersNotPrepared;
   if (f.shader_job) return Reason::kShaderJob;
   if (f.setup) return Reason::kSetup;
   if (f.low_end) return Reason::kLowEnd;
-  if (f.on_battery) return Reason::kOnBattery;
   if (f.off_this_session) return Reason::kOffThisSession;
   if (f.failed_this_version) return Reason::kFailedBefore;
   return Reason::kLive;
@@ -57,14 +48,12 @@ inline Reason Decide(const StartFacts& f) {
 inline const char* ReasonText(Reason r) {
   switch (r) {
     case Reason::kLive: return "live";
-    case Reason::kSetting: return "pictures chosen in Settings";
     case Reason::kNoFiles: return "no game files";
     case Reason::kNotNative: return "not the native renderer";
     case Reason::kShadersNotPrepared: return "shaders not prepared for this version";
     case Reason::kShaderJob: return "a shader job runs";
     case Reason::kSetup: return "setup or the New in this update screen";
     case Reason::kLowEnd: return "low-end hardware tier";
-    case Reason::kOnBattery: return "running on battery";
     case Reason::kOffThisSession: return "off for this launcher (restarted for a shader rebuild)";
     case Reason::kFailedBefore: return "the scene did not come up last time in this version";
   }

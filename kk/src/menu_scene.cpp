@@ -21,20 +21,7 @@
 
 #include <SDL3/SDL.h>
 
-#if defined(_WIN32)
-#ifndef WIN32_LEAN_AND_MEAN
-#define WIN32_LEAN_AND_MEAN
-#endif
-#ifndef NOMINMAX
-#define NOMINMAX
-#endif
-#include <windows.h>
-#endif
 
-REXCVAR_DEFINE_STRING(kk_menu_background, "live", "KK",
-                      "Main menu background: live (the game's own start menu scene runs behind the launcher) or "
-                      "pictures (stills)")
-    .allowed({"live", "pictures"});
 REXCVAR_DEFINE_BOOL(kk_menu_scene_off, false, "KK",
                     "Internal: no live menu scene in this launcher (passed on the command line by a launcher that "
                     "restarts itself for a shader rebuild). Never saved.");
@@ -46,7 +33,6 @@ std::atomic<uint32_t> g_universe{0};  // the universe's variables G, as uni_go l
 
 std::atomic<bool> g_active{false};
 std::atomic<bool> g_ready{false};
-std::atomic<bool> g_hidden{false};
 std::atomic<bool> g_shown_once{false};
 std::mutex g_mutex;
 std::filesystem::path g_marker;
@@ -86,12 +72,7 @@ void NoteShown() {
 }  // namespace
 
 Reason DecideAtLauncherStart(StartFacts facts, const std::filesystem::path& user_dir) {
-  facts.setting = REXCVAR_GET(kk_menu_background);
   facts.off_this_session = facts.off_this_session || REXCVAR_GET(kk_menu_scene_off);
-#if defined(_WIN32)
-  // A laptop or handheld on its battery keeps the stills (the scene costs about as much as play).
-  if (SYSTEM_POWER_STATUS power{}; GetSystemPowerStatus(&power) && power.ACLineStatus == 0) facts.on_battery = true;
-#endif
   const auto marker = MarkerPath(user_dir);
   std::error_code ec;
   if (!user_dir.empty() && std::filesystem::exists(marker, ec)) {
@@ -110,7 +91,7 @@ Reason DecideAtLauncherStart(StartFacts facts, const std::filesystem::path& user
     }
   }
   const Reason r = Decide(facts);
-  REXLOG_INFO("KK menu scene: {} (kk_menu_background {})", ReasonText(r), facts.setting);
+  REXLOG_INFO("KK menu scene: {}", ReasonText(r));
   return r;
 }
 
@@ -125,11 +106,7 @@ void Begin(const std::filesystem::path& user_dir) {
 }
 
 bool Active() { return g_active.load(std::memory_order_relaxed); }
-bool Ready() { return g_ready.load(std::memory_order_relaxed) && !g_hidden.load(std::memory_order_relaxed); }
-void SetHidden(bool hidden) {
-  if (g_hidden.exchange(hidden) != hidden)
-    REXLOG_INFO("KK menu scene: {}", hidden ? "hidden (the stills again)" : "shown again");
-}
+bool Ready() { return g_ready.load(std::memory_order_relaxed); }
 
 namespace {
 std::atomic<bool> g_throttled{false};
