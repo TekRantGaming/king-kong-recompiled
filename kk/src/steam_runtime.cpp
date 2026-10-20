@@ -157,6 +157,7 @@ struct SteamRuntime::Impl
   CombatMailbox combat;
   OwnershipMailbox ownership;
   StoryMailbox story;
+  ObjectMailbox objects;
   CameraMailbox camera;
   FlowMailbox flow;
   const char* local_failure = "not-published";
@@ -334,6 +335,7 @@ struct SteamRuntime::Impl
     combat.Clear();
     ownership.Clear();
     story.Clear();
+    objects.Clear();
     camera.Clear();
   }
   void RetireCalls() {
@@ -641,6 +643,7 @@ struct SteamRuntime::Impl
     combat.Exchange(*session, now);
     ownership.Exchange(*session);
     story.Exchange(*session);
+    objects.Exchange(*session);
     camera.Exchange(*session, now);
     flow.Exchange(*session, now);
     SteamSessionView view{session->SessionRole(), session->State(), session->Rejection(), session->Stats(), pose, session->Partner(now), now};
@@ -675,7 +678,7 @@ struct SteamRuntime::Impl
     // Steam self-send was unsupported in the C47 run. Keep the real DLL probe
     // for diagnostics; a failed round trip requires testing with two accounts.
     transport = std::make_unique<SteamMessagesTransport>(*this, model.self);
-    for (unsigned i=1;i<=unsigned(MessageType::TriggerRequest);++i) {
+    for (unsigned i=1;i<=unsigned(MessageType::ObjectRequest);++i) {
       const auto type=MessageType(i);
       const bool reliable=type!=MessageType::Ping && type!=MessageType::Pong &&
           type!=MessageType::PlayerPose && type!=MessageType::EnemySnapshot && type!=MessageType::CameraPose;
@@ -839,6 +842,8 @@ void SteamRuntime::ClearCombat() { impl_->combat.Clear(); }
 bool SteamRuntime::SubmitOwnership(Message m) { return impl_->ownership.Submit(std::move(m)); }
 std::vector<Message> SteamRuntime::TakeOwnership() { return impl_->ownership.Take(); }
 void SteamRuntime::ClearOwnership() { impl_->ownership.Clear(); }
+bool SteamRuntime::SubmitObjects(Message m) { return impl_->objects.Submit(std::move(m)); }
+std::vector<Message> SteamRuntime::TakeObjects() { return impl_->objects.Take(); }
 bool SteamRuntime::SubmitStory(Message m) { return impl_->story.Submit(std::move(m)); }
 std::vector<Message> SteamRuntime::TakeStory() { return impl_->story.Take(); }
 void SteamRuntime::Shutdown() { impl_->Shutdown(); }

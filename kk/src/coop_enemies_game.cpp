@@ -1,5 +1,6 @@
 // Per-enemy authority. Native memory is accessed on the game thread only.
 #include "coop_enemies_game.h"
+#include "coop_objects_game.h"
 #include "coop_enemies.h"
 #include "coop_ownership.h"
 #include "coop_runtime.h"
@@ -2104,25 +2105,30 @@ REX_HOOK_RAW(sub_82464680) {
 REX_HOOK_RAW(sub_8254A8F8) {
   kk::coop::DevRaptorSelection(ctx, base);
 }
+#endif
 REX_HOOK_RAW(sub_8261DE68) {
+  kk::coop::ObjectsObserveHit(ctx,base);
+#if defined(KK_DEV_TOOLS)
   if (REXCVAR_GET(kk_coop_enabled) && kk::coop::EnemyConnectionReady()) {
     static unsigned count = 0;
     if (count++ < 256) REXLOG_INFO("BITE melee-builder lr={:08X} source={:08X} victim={:08X} flags={:08X} magnitude={}",
         uint32_t(ctx.lr), ctx.r6.u32, ctx.r8.u32, ctx.r5.u32, ctx.r9.u32);
   }
+#endif
   __imp__sub_8261DE68(ctx, base);
 }
-#endif
 REX_HOOK_RAW(sub_8271D498) {
   const uint32_t world = ctx.r3.u32;
 #if defined(KK_DEV_TOOLS)
   kk::DevSampleTick(&ctx, base, world);
 #endif
   kk::PartnerBodyBeforeAi(ctx, base, world);
+  kk::coop::ObjectsBeforeAi(ctx,base,world);
   kk::coop::BeforeAi(ctx, base, world);
   __imp__sub_8271D498(ctx, base);
   kk::PartnerBodyAfterAi(ctx, base, world);
   kk::coop::AfterAi(ctx, base, world);
+  kk::coop::ObjectsAfterAi(ctx,base,world);
 }
 REX_HOOK_RAW(sub_8271CCB8) {
   if (kk::coop::Hold(ctx, base)) return;
@@ -2164,5 +2170,6 @@ REX_HOOK_RAW(sub_8243A3C0) {
   kk::coop::ShotRay(base, origin, point, object, caller);
 }
 REX_HOOK_RAW(sub_82634428) {
+  kk::coop::ObjectsObserveHit(ctx,base);
   if (!kk::coop::ForwardShotEvent(ctx, base)) __imp__sub_82634428(ctx, base);
 }

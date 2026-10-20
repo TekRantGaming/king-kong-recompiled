@@ -71,6 +71,8 @@ class CoopSession {
   std::vector<ReceivedCombat> TakeCombat();
   bool QueueOwnership(const Message& message);
   std::vector<Message> TakeOwnership();
+  bool QueueObjects(const Message& message);
+  std::vector<Message> TakeObjects();
   bool QueueStory(const Message& message);
   std::vector<Message> TakeStory();
   void PublishCamera(std::optional<CameraPose> camera) { local_camera_=std::move(camera); }
@@ -115,6 +117,8 @@ class CoopSession {
   std::vector<ReceivedCombat> incoming_combat_;
   std::deque<Message> outgoing_ownership_;
   std::vector<Message> incoming_ownership_;
+  std::deque<Message> outgoing_objects_;
+  std::vector<Message> incoming_objects_;
   std::deque<Message> outgoing_story_;
   std::vector<Message> incoming_story_;
   std::optional<CameraPose> local_camera_, sent_camera_cut_;
@@ -162,6 +166,61 @@ class StoryMailbox {
   std::mutex mutex_;
   std::deque<Message> outgoing_;
   std::vector<Message> incoming_;
+};
+inline bool ObjectSender(MessageType type,Role role) {
+  return (type==MessageType::ObjectState && role==Role::Host) ||
+      (type==MessageType::ObjectRequest && role==Role::Guest);
+}
+class ObjectMailbox {
+ public:
+  bool Submit(Message m) {
+    if (!IsObjectMessage(m.type) || !m.epoch || !ValidObjectState(m.object)) return false;
+    std::vector<uint8_t> bytes; if (!Encode(m,bytes)) return false;
+    std::lock_guard lock(mutex_);
+    if (outgoing_.size()>=kObjectQueue) return false;
+    outgoing_.push_back(std::move(m)); return true;
+  }
+  std::vector<Message> Take() {
+    std::lock_guard lock(mutex_); auto out=std::move(incoming_); incoming_.clear(); return out;
+  }
+  void Clear() { std::lock_guard lock(mutex_); outgoing_.clear(); incoming_.clear(); incoming_generation_=0; incoming_epoch_=0; }
+  void Exchange(CoopSession& session) {
+    if (session.State()!=SessionState::Connected) { Clear(); return; }
+    std::lock_guard lock(mutex_);
+    if (incoming_epoch_!=session.Epoch() || incoming_role_!=session.SessionRole()) {
+      incoming_.clear(); incoming_generation_=0; incoming_epoch_=session.Epoch(); incoming_role_=session.SessionRole();
+    }
+    while (!outgoing_.empty()) {
+      const auto& m=outgoing_.front();
+      if (m.epoch!=session.Epoch() || !ObjectSender(m.type,session.SessionRole())) { outgoing_.pop_front(); continue; }
+      if (!session.QueueObjects(m)) break;
+      outgoing_.pop_front();
+    }
+    for (auto& m : session.TakeObjects()) {
+      if (m.type==MessageType::ObjectState) {
+        // Absolute states may arrive while native loading holds the game
+        // thread. Keep the latest state per object, rather than disconnecting
+        // a slow loader after repeated two-second snapshots fill a FIFO.
+        if (m.object.generation<incoming_generation_) continue;
+        if (m.object.generation>incoming_generation_) { incoming_.clear(); incoming_generation_=m.object.generation; }
+        const auto same=std::find_if(incoming_.begin(),incoming_.end(),[&](const auto& old) {
+          return old.object.source==m.object.source && old.object.kind==m.object.kind && old.object.level==m.object.level;
+        });
+        if (same!=incoming_.end()) { if (same->object.number<m.object.number) *same=std::move(m); continue; }
+      }
+      if (incoming_.size()>=(m.type==MessageType::ObjectState ? kObjectCensus : kObjectQueue)) {
+        session.End(0); incoming_.clear(); outgoing_.clear(); break;
+      }
+      incoming_.push_back(std::move(m));
+    }
+  }
+ private:
+  std::mutex mutex_;
+  std::deque<Message> outgoing_;
+  std::vector<Message> incoming_;
+  uint32_t incoming_generation_=0;
+  uint64_t incoming_epoch_=0;
+  Role incoming_role_=Role::Host;
 };
 class OwnershipMailbox {
  public:

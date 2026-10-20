@@ -124,6 +124,17 @@ uint64_t SessionSaveHash(std::span<const uint8_t> bytes) {
   return hash;
 }
 bool IsFlowMessage(MessageType t) { return (t >= MessageType::SessionStart && t <= MessageType::FlowAbort) || IsLifeMessage(t); }
+bool ValidObjectState(const ObjectState& s) {
+  if (!s.generation || !s.level || s.level>100000 || !s.number || !s.source ||
+      !std::isfinite(s.position) || !std::isfinite(s.seconds)) return false;
+  if (s.kind==ObjectKind::Breakable) return s.value<=100000 && s.position==0 && s.seconds==0;
+  return s.kind==ObjectKind::Door && s.value<=511 && s.position>=0 && s.position<=1 &&
+      s.seconds>=0 && s.seconds<=3600;
+}
+bool ValidObjectRequest(const ObjectState& s) {
+  return ValidObjectState(s) && s.position==0 && s.seconds==0 &&
+      (s.kind==ObjectKind::Breakable ? s.value==1 || s.value==100 : s.value<8);
+}
 bool ValidStoryEvent(const StoryEvent& e) {
   if (e.phase>=StoryPhase::SnapshotRequest && e.phase<=StoryPhase::SnapshotEnd) {
     if (!e.generation || !e.level || e.level>100000 || !e.number || !e.source || !e.script ||
@@ -211,6 +222,11 @@ bool ValidPlayerStatus(const PlayerStatus& p) {
 bool Encode(const Message& m, std::vector<uint8_t>& out) {
   Writer payload;
   switch (m.type) {
+    case MessageType::ObjectState: case MessageType::ObjectRequest:
+      if (!ValidObjectState(m.object) || (m.type==MessageType::ObjectRequest && !ValidObjectRequest(m.object))) return false;
+      payload.U(m.object.generation,4); payload.U(m.object.level,4); payload.U(m.object.number,4);
+      payload.U(m.object.source,8); payload.U(uint8_t(m.object.kind),1); payload.U(m.object.value,4);
+      payload.U(std::bit_cast<uint32_t>(m.object.position),4); payload.U(std::bit_cast<uint32_t>(m.object.seconds),4); break;
     case MessageType::StoryEvent: case MessageType::TriggerRequest:
       if (!ValidStoryEvent(m.story) || (m.type == MessageType::TriggerRequest && !ValidStoryRequest(m.story.phase)) ||
           (m.type == MessageType::StoryEvent && m.story.phase==StoryPhase::SnapshotRequest)) return false;
@@ -356,6 +372,12 @@ bool Decode(std::span<const uint8_t> bytes, Message& out) {
   m.sequence = uint32_t(r.U(4)); m.epoch = r.U(8);
   if (r.U(4) != bytes.size() - kHeaderBytes) return false;
   switch (m.type) {
+    case MessageType::ObjectState: case MessageType::ObjectRequest:
+      m.object.generation=uint32_t(r.U(4)); m.object.level=uint32_t(r.U(4)); m.object.number=uint32_t(r.U(4));
+      m.object.source=r.U(8); m.object.kind=ObjectKind(r.U(1)); m.object.value=uint32_t(r.U(4));
+      m.object.position=std::bit_cast<float>(uint32_t(r.U(4))); m.object.seconds=std::bit_cast<float>(uint32_t(r.U(4)));
+      if (!ValidObjectState(m.object) || (m.type==MessageType::ObjectRequest && !ValidObjectRequest(m.object))) return false;
+      break;
     case MessageType::StoryEvent: case MessageType::TriggerRequest:
       m.story.generation=uint32_t(r.U(4)); m.story.level=uint32_t(r.U(4)); m.story.number=uint32_t(r.U(4));
       m.story.source=r.U(8); m.story.script=r.U(8);

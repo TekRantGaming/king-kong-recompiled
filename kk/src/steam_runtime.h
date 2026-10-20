@@ -56,6 +56,8 @@ class SteamRuntime final : public ISocialService {
   bool SubmitOwnership(Message message);
   std::vector<Message> TakeOwnership();
   void ClearOwnership();
+  bool SubmitObjects(Message message);
+  std::vector<Message> TakeObjects();
   bool SubmitStory(Message message);
   std::vector<Message> TakeStory();
   void PublishCamera(std::optional<CameraPose> camera);

@@ -69,6 +69,7 @@ void CoopSession::Transition(SessionState s) {
     outgoing_combat_.clear(); incoming_combat_.clear();
     outgoing_ownership_.clear(); incoming_ownership_.clear();
     outgoing_story_.clear(); incoming_story_.clear();
+    outgoing_objects_.clear(); incoming_objects_.clear();
     // Keep host settings during a temporary loss. End/leave restores own choices.
     if (s != SessionState::Lost) host_cheats_.reset();
     if (s == SessionState::Ended) { outgoing_flow_.clear(); incoming_flow_.clear(); }
@@ -124,6 +125,10 @@ void CoopSession::Receive(const Message& m, double now) {
         return;
       }
       switch (m.type) {
+        case MessageType::ObjectState: case MessageType::ObjectRequest:
+          if (state_!=SessionState::Connected || ObjectSender(m.type,config_.role)) return;
+          if (incoming_objects_.size()>=kObjectQueue) { End(now); return; }
+          incoming_objects_.push_back(m); break;
         case MessageType::StoryEvent: case MessageType::TriggerRequest:
           if (state_!=SessionState::Connected || StorySender(m.type,config_.role)) return;
           if (incoming_story_.size()>=kStoryQueue) { End(now); return; }
@@ -265,6 +270,10 @@ void CoopSession::Tick(double now, const std::optional<PlayerPose>& local, const
     }
     outgoing_ownership_.pop_front();
   }
+  if (state_==SessionState::Connected) for (unsigned n=0; n<32 && !outgoing_objects_.empty(); ++n) {
+    if (!Send(outgoing_objects_.front(),true)) break;
+    outgoing_objects_.pop_front();
+  }
   if (state_==SessionState::Connected) for (unsigned n=0; n<32 && !outgoing_story_.empty(); ++n) {
     if (!Send(outgoing_story_.front(),true)) break;
     outgoing_story_.pop_front();
@@ -343,6 +352,15 @@ bool CoopSession::QueueFlow(const Message& m) {
   if (state_ != SessionState::Connected || !IsFlowMessage(m.type) || outgoing_flow_.size() >= 64) return false;
   std::vector<uint8_t> bytes; if (!Encode(m, bytes)) return false;
   outgoing_flow_.push_back(m); return true;
+}
+bool CoopSession::QueueObjects(const Message& m) {
+  if (state_!=SessionState::Connected || !IsObjectMessage(m.type) || m.epoch!=epoch_ ||
+      !ObjectSender(m.type,config_.role) || outgoing_objects_.size()>=kObjectQueue) return false;
+  std::vector<uint8_t> bytes; if (!Encode(m,bytes)) return false;
+  outgoing_objects_.push_back(m); return true;
+}
+std::vector<Message> CoopSession::TakeObjects() {
+  auto out=std::move(incoming_objects_); incoming_objects_.clear(); return out;
 }
 bool CoopSession::QueueStory(const Message& m) {
   if (state_!=SessionState::Connected || !IsStoryMessage(m.type) || m.epoch!=epoch_ ||

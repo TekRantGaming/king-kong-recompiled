@@ -1,6 +1,7 @@
 // Safe door/activation scripts replay exactly. Other scripts run natively on
 // both peers; host events are convergence hints, never arbitrary native calls.
 #include "coop_story_game.h"
+#include "coop_objects_game.h"
 #include "coop_story.h"
 #include "coop_runtime.h"
 #include "coop_pose.h"
@@ -663,6 +664,7 @@ void StoryPartnerMoved() {
   needs_move=false;
 }
 void StoryLoaded(uint8_t* b) {
+  ObjectsLoaded(b);
   const auto v=SessionFlowSnapshot();
   if (!v.active || v.policy!=ChapterPolicy::Together || !v.world.generation || !v.world.level) return;
   const auto session_epoch=StorySessionEpoch();

@@ -163,6 +163,7 @@ class Service {
         combat_.Exchange(session, now);
         ownership_.Exchange(session);
         story_.Exchange(session);
+        objects_.Exchange(session);
         camera_.Exchange(session, now);
         flow_.Exchange(session, now);
         const bool flow_active=flow_.Snapshot().active;
@@ -211,6 +212,7 @@ class Service {
     combat_.Clear();
     ownership_.Clear();
     story_.Clear();
+    objects_.Clear();
     camera_.Clear();
     flow_.Disconnect();
   }
@@ -293,6 +295,8 @@ class Service {
   bool SubmitOwnership(Message m) { return ownership_.Submit(std::move(m)); }
   std::vector<Message> TakeOwnership() { return ownership_.Take(); }
   void ClearOwnership() { ownership_.Clear(); }
+  bool SubmitObjects(Message m) { return objects_.Submit(std::move(m)); }
+  std::vector<Message> TakeObjects() { return objects_.Take(); }
   bool SubmitStory(Message m) { return story_.Submit(std::move(m)); }
   std::vector<Message> TakeStory() { return story_.Take(); }
   void PublishCamera(std::optional<CameraPose> camera) { camera_.Publish(std::move(camera)); }
@@ -326,6 +330,7 @@ class Service {
   CombatMailbox combat_;
   OwnershipMailbox ownership_;
   StoryMailbox story_;
+  ObjectMailbox objects_;
   CameraMailbox camera_;
   std::optional<CheatSet> local_cheats_;
   FlowMailbox flow_;
@@ -781,6 +786,15 @@ std::vector<Message> TakeOwnership() {
 void ClearOwnership() {
   if (service.Running()) { service.ClearOwnership(); return; }
   if (steam) steam->ClearOwnership();
+}
+bool SubmitObjects(Message message) {
+  if (!EnemyConnectionReady()) return false;
+  if (service.Running()) return service.SubmitObjects(std::move(message));
+  return steam && steam->SubmitObjects(std::move(message));
+}
+std::vector<Message> TakeObjects() {
+  if (service.Running()) return service.TakeObjects();
+  return steam ? steam->TakeObjects() : std::vector<Message>{};
 }
 bool SubmitStory(Message message) {
   if (!EnemyConnectionReady()) return false;

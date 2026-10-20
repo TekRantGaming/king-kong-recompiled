@@ -80,6 +80,8 @@ void ClearCombat();
 bool SubmitOwnership(Message message);
 std::vector<Message> TakeOwnership();
 void ClearOwnership();
+bool SubmitObjects(Message message);
+std::vector<Message> TakeObjects();
 bool SubmitStory(Message message);
 // Unlike EnemyLinkSnapshot, valid while the shared load barrier is still closed.
 uint64_t StorySessionEpoch();

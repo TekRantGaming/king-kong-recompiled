@@ -11,7 +11,7 @@
 
 namespace kk::coop {
 constexpr uint32_t kMagic = 0x4B4B4331;  // KKC1, network byte order throughout
-constexpr uint16_t kProtocolVersion = 14; // C61 six-character codes and revision-scoped Direct IP lobby choices.
+constexpr uint16_t kProtocolVersion = 15; // C71 authoritative world-object outcomes and requests.
 constexpr size_t kMaxDisplayNameBytes = 32;
 // Valid UTF-8, no controls or invisible direction/line formatting, bounded at a codepoint.
 // Empty or wholly invalid input becomes "Partner". Never log the input or result.
@@ -24,8 +24,31 @@ enum class MessageType : uint16_t {
   Checkpoint = 18, ChapterFinished = 19, ReloadRequest = 20, FlowAbort = 21,
   DamageEvent = 22, PlayerStatus = 23, OwnershipChange = 24,
   PlayerDowned = 25, PlayerRevived = 26, CameraPose = 27, CameraCut = 28,
-  StoryEvent = 29, TriggerRequest = 30
+  StoryEvent = 29, TriggerRequest = 30, ObjectState = 31, ObjectRequest = 32
 };
+
+enum class ObjectKind : uint8_t { Breakable=1, Door=2 };
+constexpr uint32_t kDoorScheduled=0x100;
+constexpr size_t kObjectQueue=256,kObjectCensus=2048;
+// source hashes immutable authored position and native family. Scope is
+// epoch + shared load generation/level, including private guest reloads.
+// Breakable: value=cumulative native damage. Door: value=lever mask plus
+// kDoorScheduled while its native loop/wait/init track still exists,
+// position=native opening fraction, seconds=opening time. Requests use value
+// for native strike class (1/100) or lever slot; floats must be zero.
+struct ObjectState {
+  uint32_t generation=0, level=0, number=0;
+  uint64_t source=0;
+  ObjectKind kind=ObjectKind::Breakable;
+  uint32_t value=0;
+  float position=0, seconds=0;
+  auto operator<=>(const ObjectState&) const = default;
+};
+bool ValidObjectState(const ObjectState& object);
+bool ValidObjectRequest(const ObjectState& object);
+inline bool IsObjectMessage(MessageType t) {
+  return t==MessageType::ObjectState || t==MessageType::ObjectRequest;
+}
 
 // Values only. source is an immutable authored-position/script signature, never
 // an actor address. number orders ALL scripts within one shared load generation.
@@ -244,6 +267,7 @@ struct Message {
   FlowEvent flow;
   PlayerLife life;
   StoryEvent story;
+  ObjectState object;
 };
 // Encoders also reject invalid input. Decoding leaves out untouched on failure.
 bool Encode(const Message& message, std::vector<uint8_t>& out);
