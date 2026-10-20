@@ -101,6 +101,64 @@ int main() {
     fake = {{c.vendor, c.model, c.vram * GiB}, c.cores, c.ram * GiB, 1920, 1080, 144, c.deck};
     Check(HardwareTierIndex(fake) == c.tier, c.model);
   }
+  // Task 338: exaggerated UMA reservations and core counts isolate name/ID
+  // rules from the low-memory/core fallbacks. Dedicated Arc cards stay distinct.
+  const Case first_setup_cases[] = {
+    {GpuVendor::kAmd, "AMD Radeon(TM) Graphics", 16, 8, 32, false, 0},
+    {GpuVendor::kAmd, "AMD RADEON GRAPHICS", 16, 8, 32, false, 0},
+    {GpuVendor::kAmd, "AMD Radeon 780M Graphics", 16, 8, 32, false, 0},
+    {GpuVendor::kAmd, "AMD Radeon 890M Graphics", 16, 12, 32, false, 0},
+    {GpuVendor::kAmd, "AMD Radeon 760M", 16, 8, 32, false, 0},
+    {GpuVendor::kAmd, "AMD Radeon 860M", 16, 8, 32, false, 0},
+    {GpuVendor::kAmd, "AMD Radeon 880M", 16, 8, 32, false, 0},
+    {GpuVendor::kAmd, "AMD Ryzen Z1 Extreme", 16, 8, 32, false, 0},
+    {GpuVendor::kAmd, "AMD Ryzen Z2 Extreme", 16, 8, 32, false, 0},
+    {GpuVendor::kIntel, "Intel(R) Arc(TM) Graphics", 16, 16, 32, false, 0},
+    {GpuVendor::kIntel, "Intel Arc 140V GPU", 16, 8, 32, false, 0},
+    {GpuVendor::kIntel, "Intel Arc 130V GPU", 16, 8, 32, false, 0},
+    {GpuVendor::kIntel, "Intel Arc 140T GPU", 16, 16, 32, false, 0},
+    {GpuVendor::kIntel, "Intel Arc 8-Core iGPU", 16, 16, 32, false, 0},
+    {GpuVendor::kIntel, "Intel Arc 7-Core iGPU", 16, 16, 32, false, 0},
+    {GpuVendor::kIntel, "Intel Arc integrated GPU", 16, 16, 32, false, 0},
+    {GpuVendor::kNvidia, "NVIDIA GeForce RTX 4050 Laptop GPU", 8, 12, 32, false, 0},
+    {GpuVendor::kNvidia, "NVIDIA GeForce RTX 3050 Laptop GPU", 8, 12, 32, false, 0},
+    {GpuVendor::kNvidia, "NVIDIA GeForce RTX 2050 Laptop GPU", 8, 12, 32, false, 0},
+    {GpuVendor::kNvidia, "RTX 4050 Notebook", 8, 12, 32, false, 0},
+    {GpuVendor::kNvidia, "RTX 2050 Mobile", 8, 12, 32, false, 0},
+    {GpuVendor::kAmd, "AMD Custom GPU 0405", 16, 8, 32, true, 0},
+    {GpuVendor::kAmd, "AMD Custom GPU 0932", 16, 8, 32, true, 0},
+    {GpuVendor::kNvidia, "RTX 3060", 6, 8, 32, false, 0},
+    {GpuVendor::kNvidia, "RTX 3060", 12, 6, 32, false, 0},
+    {GpuVendor::kNvidia, "RTX 4070 Ti", 12, 8, 32, false, 2},
+    {GpuVendor::kIntel, "Intel Arc A770", 16, 8, 32, false, 2},
+    {GpuVendor::kIntel, "Intel Arc B580", 12, 8, 32, false, 2},
+    {GpuVendor::kIntel, "Intel Arc A750", 8, 8, 32, false, 1},
+    {GpuVendor::kAmd, "AMD Radeon RX 7900 XTX", 24, 8, 32, false, 2},
+    {GpuVendor::kAmd, "AMD Radeon RX 6600", 8, 8, 32, false, 1},
+    {GpuVendor::kUnknown, "Unknown", 0, 0, 0, false, 0},
+  };
+  for (const auto& c : first_setup_cases) {
+    fake = {{c.vendor, c.model, c.vram * GiB}, c.cores, c.ram * GiB, 1920, 1080, 144, c.deck};
+    Check(FirstSetupHardwareTierIndex(fake) == c.tier, c.model);
+  }
+  for (uint32_t id : {0x7D51, 0x7DD1, 0x7D41, 0x7D67, 0xB640, 0x7D40, 0x7D45,
+                     0x7D55, 0x7D60, 0x7DD5, 0x6420, 0x64A0, 0x64B0}) {
+    fake = {{GpuVendor::kIntel, "Generic display adapter", 16 * GiB, "", 0x8086, id}, 16, 32 * GiB};
+    Check(FirstSetupHardwareTierIndex(fake) == 0, "integrated Intel PCI ID");
+    fake.gpu.vendor = GpuVendor::kNvidia;
+    fake.gpu.vendor_id = 0x10DE;
+    Check(FirstSetupHardwareTierIndex(fake) == 1, "PCI ID must match its vendor");
+  }
+  fake = {{GpuVendor::kIntel, "Intel Arc A770", 16 * GiB, "", 0x8086, 0x56A0}, 8, 32 * GiB};
+  Check(FirstSetupHardwareTierIndex(fake) == 2, "dedicated Intel ID retains high");
+  fake = {{GpuVendor::kNvidia, "RTX 4070 Ti", 6 * GiB + 1}, 7, 32 * GiB};
+  Check(FirstSetupHardwareTierIndex(fake) == 1, "just above both low thresholds");
+  fake.gpu.dedicated_memory = 6 * GiB;
+  Check(FirstSetupHardwareTierIndex(fake) == 0, "6 GiB inclusive");
+  fake.gpu.dedicated_memory = 12 * GiB;
+  fake.physical_cores = 6;
+  Check(FirstSetupHardwareTierIndex(fake) == 0, "6 cores inclusive");
+  Check(HardwareTierIndex(fake) == 2, "later explicit recommendation policy unchanged");
   for (const auto& tier : kHardwareTiers) {
     Check(std::string(RecommendedRenderQuality(tier, 3840, 2160)) ==
           (std::string(tier.id) == "high" ? "quality" : "performance"), "4K policy");
@@ -126,6 +184,25 @@ int main() {
       std::chrono::steady_clock::now().time_since_epoch().count()));
   std::filesystem::create_directories(dir);
   const auto config = dir / "king_kong.toml";
+  // Only a missing config receives the new policy. The setup's second pass
+  // reuses the selected tier, and later launches retain it even on another GPU.
+  const auto first_config = dir / "first-setup.toml";
+  fake = {{GpuVendor::kNvidia, "NVIDIA GeForce RTX 4050 Laptop GPU", 8 * GiB}, 12, 32 * GiB};
+  ApplyPortDefaults();
+  InitializeHardwareRecommendation(first_config, 1920, 1080);
+  Equals("kk_hardware_tier", "low");
+  Equals("native_upscaler_quality", "performance");
+  Equals("native_gi", "low");
+  ApplyHardwareRecommendation(false, 1920, 1080); // setup must not redetect with the old policy
+  Equals("kk_hardware_tier", "low");
+  Check(SaveSettings(first_config), "save first-setup low tier");
+  fake = {{GpuVendor::kNvidia, "RTX 4070 Ti", 12 * GiB}, 8, 32 * GiB};
+  rex::cvar::ResetAllToDefaults();
+  rex::cvar::LoadConfig(first_config);
+  InitializeHardwareRecommendation(first_config, 1920, 1080);
+  Equals("kk_hardware_tier", "low");
+  Equals("native_upscaler_quality", "performance");
+  rex::cvar::ResetAllToDefaults();
   ApplyPortDefaults();
   Equals("native_gi", "medium");
   fake = {{GpuVendor::kNvidia, "RTX 4070 Ti", 12 * GiB}, 8, 32 * GiB, 3840, 2160, 120, false};

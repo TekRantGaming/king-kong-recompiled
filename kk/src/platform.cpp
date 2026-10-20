@@ -92,6 +92,8 @@ GpuInfo DetectGpu() {
     WideCharToMultiByte(CP_UTF8, 0, d.Description, -1, name, sizeof(name) - 1, nullptr, nullptr);
     info.name = name;
     info.dedicated_memory = uint64_t(d.DedicatedVideoMemory);
+    info.vendor_id = d.VendorId;
+    info.device_id = d.DeviceId;
     LARGE_INTEGER umd{};
     if (SUCCEEDED(adapter->CheckInterfaceSupport(__uuidof(IDXGIDevice), &umd))) {
       char version[64];

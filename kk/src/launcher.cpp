@@ -530,10 +530,12 @@ bool UsingNativeRenderer() { return Get("gpu_plugin") == "native"; }
 // this graphics card (with that preset's global illumination), the native renderer's GTAO at Strong and 60 FPS.
 // What every new install starts with (StartFullSetup, job J6) and what "Use recommended for my PC" on graphics
 // page 4 gives. Keeps the native renderer. native-renderer/docs/beta.md.
-void ApplyRemastered() {
+void ApplyRemastered(bool first_setup = false) {
   SetOriginalLook(false);
   const auto output = PrimaryScreenSize();
-  ApplyHardwareRecommendation(true, output.first, output.second);
+  // First setup keeps the tier already chosen before the launcher opened.
+  // Later explicit Remastered actions continue to detect as before.
+  ApplyHardwareRecommendation(!first_setup, output.first, output.second);
   SetInt("ao_mode", 1);
   SetInt("ao_strength", 3);  // Strong: GTAO's default since Beta 3 (the owner's choice)
   SetInt("native_ao_normal_smoothing", 2);  // High (owner 17 Oct): smooths the faceted AO on low-poly models
@@ -4805,7 +4807,7 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
   // 'waiting' or a version) keeps the settings they chose. The setup also stands in for the New screen.
   void StartFullSetup(bool save = true) {
     if (Get("kk_setup_version").empty()) {
-      ApplyRemastered();
+      ApplyRemastered(true);
       REXLOG_INFO("KK: setup: new install: Remastered defaults (kk_frame_rate={} ao_strength={} native_gi={} tier {})",
                   Get("kk_frame_rate"), Get("ao_strength"), FindFlag("native_gi") ? Get("native_gi") : std::string("-"),
                   Get("kk_hardware_tier"));

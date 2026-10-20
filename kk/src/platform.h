@@ -34,6 +34,7 @@ struct GpuInfo {
   std::string name;
   uint64_t dedicated_memory = 0;  // bytes of its own video memory (0: unknown, or integrated)
   std::string driver;             // Windows: the display driver's version ("32.0.15.6094"); empty when unknown
+  uint32_t vendor_id = 0, device_id = 0;  // DXGI PCI IDs; 0 when unavailable
 };
 GpuInfo DetectGpu();
 
