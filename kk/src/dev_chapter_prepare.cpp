@@ -19,6 +19,10 @@ namespace {
 std::atomic<bool> stopped{false};
 std::once_flag once;
 std::thread sampler;
+// Also cover normal C++ teardown if the application did not call movies::Shutdown.
+struct StopAtExit {
+  ~StopAtExit() { DevStopPreparationTrace(); }
+} stop_at_exit;
 
 void* Export(const char* name) {
 #if defined(_WIN32)
