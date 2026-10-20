@@ -63,6 +63,11 @@ struct Shared {
   std::deque<Result> results;
   bool stop = false;
   std::shared_ptr<const pdf::Document> doc;  // the user manual: its pages are drawn instead of decoded
+  // The manual's PDF is opened on the worker too (loading PDFium and the file took about 0.4 s on the UI thread).
+  std::filesystem::path open_file;           // to open (cleared when taken)
+  bool open_done = false;
+  std::vector<pdf::PageSize> open_sizes;
+  std::string open_why;
 };
 
 void RunWorker(std::shared_ptr<Shared> sh) {
@@ -71,8 +76,22 @@ void RunWorker(std::shared_ptr<Shared> sh) {
     std::shared_ptr<const pdf::Document> doc;
     {
       std::unique_lock lock(sh->mutex);
-      sh->cv.wait(lock, [&] { return sh->stop || !sh->jobs.empty(); });
+      sh->cv.wait(lock, [&] { return sh->stop || !sh->jobs.empty() || !sh->open_file.empty(); });
       if (sh->stop) return;
+      if (!sh->open_file.empty()) {
+        const std::filesystem::path file = std::exchange(sh->open_file, {});
+        lock.unlock();
+        std::string why;
+        std::shared_ptr<const pdf::Document> opened = pdf::Document::Open(file, why);
+        std::vector<pdf::PageSize> sizes;
+        for (int i = 0; opened && i < opened->PageCount(); ++i) sizes.push_back(opened->Size(i));
+        lock.lock();
+        sh->doc = std::move(opened);
+        sh->open_sizes = std::move(sizes);
+        sh->open_why = why;
+        sh->open_done = true;
+        continue;
+      }
       job = std::move(sh->jobs.front());
       sh->jobs.pop_front();
       doc = sh->doc;
@@ -172,11 +191,14 @@ struct Artbook::Impl {
     }
   }
 
-  void Queue(int index, bool full) {
+  void StartWorker() {
     if (!started) {
       started = true;
       worker = std::thread(RunWorker, shared);
     }
+  }
+  void Queue(int index, bool full) {
+    StartWorker();
     Texture& t = full ? paintings[size_t(index)].full : paintings[size_t(index)].thumb;
     if (t.state != Load::kNone) return;
     t.state = Load::kPending;
@@ -208,18 +230,37 @@ struct Artbook::Impl {
     REXLOG_INFO("KK artbook: {} paintings, readme {} characters, in {}", paintings.size(), readme.size(), U8(folder));
   }
 
-  // Task 333: the manual's pages from its PDF (opened here, a few milliseconds; drawn on the worker).
+  // Task 333: the manual's pages from its PDF, opened and drawn on the worker (TakeOpened).
+  bool opening = false;
+  std::chrono::steady_clock::time_point open_since;
   void LoadManual() {
-    const auto t0 = std::chrono::steady_clock::now();
+    opening = true;
+    open_since = std::chrono::steady_clock::now();
+    {
+      std::lock_guard lock(shared->mutex);
+      shared->open_file = folder / content::kManualFile;
+    }
+    StartWorker();
+    shared->cv.notify_one();
+  }
+  void TakeOpened() {
+    if (!opening) return;
+    std::vector<pdf::PageSize> sizes;
     std::string why;
-    std::shared_ptr<const pdf::Document> doc = pdf::Document::Open(folder / content::kManualFile, why);
-    if (!doc) {
-      open_error = why;
-      REXLOG_WARN("KK manual: cannot show {}: {}", U8(folder / content::kManualFile), why);
+    {
+      std::lock_guard lock(shared->mutex);
+      if (!shared->open_done) return;
+      sizes = std::move(shared->open_sizes);
+      why = shared->open_why;
+    }
+    opening = false;
+    if (sizes.empty()) {
+      open_error = why.empty() ? std::string("no pages") : why;
+      REXLOG_WARN("KK manual: cannot show {}: {}", U8(folder / content::kManualFile), open_error);
       return;
     }
-    for (int i = 0; i < doc->PageCount(); ++i) {
-      const pdf::PageSize size = doc->Size(i);
+    for (int i = 0; i < int(sizes.size()); ++i) {
+      const pdf::PageSize size = sizes[size_t(i)];
       const float scale = std::min(kManualFull / size.width, kManualFull / size.height);
       Painting p;
       p.title = F("Page {0}", {std::to_string(i + 1)});
@@ -227,14 +268,10 @@ struct Artbook::Impl {
       p.height = std::max(1, int(std::lround(size.height * scale)));
       paintings.push_back(std::move(p));
     }
-    {
-      std::lock_guard lock(shared->mutex);
-      shared->doc = std::move(doc);
-    }
     for (int i = 0; i < int(paintings.size()); ++i) Queue(i, false);
     focus = std::clamp(focus, 0, std::max(0, int(paintings.size()) - 1));
-    REXLOG_INFO("KK manual: {} pages in {} (opened in {} ms)", paintings.size(), U8(folder),
-                std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - t0).count());
+    REXLOG_INFO("KK manual: {} pages in {} (opened on the worker in {} ms)", paintings.size(), U8(folder),
+                std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - open_since).count());
   }
 
   void TakeResults() {
@@ -682,7 +719,14 @@ struct Artbook::Impl {
     auto& service = content::Service::Get();
     const content::Status st = service.Ready() ? service.Get(Kind()) : content::Status{};
     if (!loaded && st.installed) LoadPaintings();
+    TakeOpened();
     TakeResults();
+    if (opening) {  // the manual's PDF is being opened (a fraction of a second)
+      const ui::Fonts f = ui::GetFonts();
+      DrawCaption(dl, f, p0.x, p1.x, p0.y + 6 * m.s, m.s, text::Upper(T("User manual")));
+      dl->AddText(f.text, 15 * m.s, ImVec2(p0.x, p0.y + 40 * m.s), color::kTextDim, T("Loading"));
+      return;
+    }
     if (!loaded || paintings.empty()) {
       view = -1;
       DrawMissing(dl, p0, p1, m, in, active, st);
@@ -696,7 +740,7 @@ struct Artbook::Impl {
     if (!loaded || paintings.empty()) {
       auto& service = content::Service::Get();
       const content::Status st = service.Ready() ? service.Get(Kind()) : content::Status{};
-      if (st.Busy() || (manual && loaded && !open_error.empty())) return {{Action::kBack, "Back"}};
+      if (st.Busy() || opening || (manual && loaded && !open_error.empty())) return {{Action::kBack, "Back"}};
       return {{Action::kAccept, "Download now"}, {Action::kBack, "Back"}};
     }
     if (view >= 0) {

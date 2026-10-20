@@ -449,3 +449,13 @@ OriginalMenuPad), `input_remap.cpp`, `launcher.cpp` (ExtrasItems, AskOriginalMen
   JavaScript or XFA; THIRD-PARTY-NOTICES), up to 3072 pixels a side (about 0.1 s a page). Without PDFium the page
   says the manual cannot be shown. Dev steps `manual:<page|auto|state|open:N|next|prev|zoom:X|back|download|
   original-menu>`, `wait-manual`.
+- **Tested (kk-dev-vulkan, player layout, runs `F:\KK-native-renderer\runs\task333-*`, 20 Oct):** Continue -> new
+  process with `--kk_skip_launcher=true --kk_start=original-menu`; logos skipped, Start pressed on the title, the
+  save page (Accessing content, profile list, Load Successful), the main page (Play, Options, Extras), Options (Audio,
+  Video, Controls, Additional languages) and back, Play -> level 100 (story); our pause menu -> Return to main menu ->
+  the game's own save -> "the save job ... wrote slot 1" -> launcher (`--kk_launcher_open=play
+  --kk_launcher_saved=true`, Returning loop with the saved line). **The original profile page's Delete does not
+  delete:** its save job comes with continue level 0 and the port's guard (sub_82722620) writes the save back with
+  its own continue point (100 -1), so the profile stays (the file stays valid; only its header time changes).
+  Saves are deleted in the launcher's Load game (backed up first). Not tested: Create new (the game's keyboard),
+  Extras (greyed on the fixture profile), Chapter select from it, Quit game to the desktop, Linux.

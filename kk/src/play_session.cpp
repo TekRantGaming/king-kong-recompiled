@@ -1227,11 +1227,12 @@ REX_HOOK_RAW(sub_8253DB80) {
       if (!BackupSaves(g_user_dir, "before the original main menu"))
         REXLOG_ERROR("KK play: the saves could not be backed up before the original main menu");
     }
-    // Play started from it: a level other than the title, the start menu and the bonus galleries / credits (those
-    // come back to its Extras page, as they did). From now on the session is the launcher's.
+    // Play started from it: a level the start menu (level 3, the current one) asks for, other than the title and
+    // the bonus galleries / credits (those come back to its Extras page, as they did). The boot's own levels (1, 2)
+    // come before the start menu. From now on the session is the launcher's.
     const uint32_t wanted = Load32(base, g + 8);
-    if (Load32(base, g + 4) != 0 && wanted != 0 && wanted != kTitleLevel && wanted != kStartMenuLevel &&
-        !OriginalMenuBonusLevel(int32_t(wanted))) {
+    if (Load32(base, g + 4) != 0 && Load32(base, g + 0x18) == kStartMenuLevel && wanted != 0 &&
+        wanted != kTitleLevel && wanted != kStartMenuLevel && !OriginalMenuBonusLevel(int32_t(wanted))) {
       g_session = true;
       g_chapter_session = Load32(base, g + 0x5668) != 0;
       g_story_session = !g_chapter_session && Load32(base, g + 0x5674) == 0;
