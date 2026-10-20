@@ -365,6 +365,10 @@ void PrivateSnapshots() {
   story::Progress progress; progress.run=a.run; progress.started=a.run; progress.record=3;
   Check(!progress.Reached(a),"cursor snapshot does not claim local callbacks already ran");
   progress.record=4; Check(progress.Reached(a),"native or safe replay progress reaches the captured cursor");
+  Check(story::CanReplaySnapshotPrefix(true,2,a) && story::CanReplaySnapshotPrefix(false,0,a),
+      "safe restore can advance an active prefix or start a fresh local program");
+  Check(!story::CanReplaySnapshotPrefix(true,5,a) && !story::CanReplaySnapshotPrefix(false,4,a) &&
+      !story::CanReplaySnapshotPrefix(false,9,a),"restore cannot rewind a native cursor or restart an already advanced program");
 }
 struct Transport final : ICoopTransport {
   Transport* peer=nullptr;

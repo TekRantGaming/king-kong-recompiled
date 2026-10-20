@@ -419,7 +419,7 @@ void RestoreSnapshot(uint8_t* b) {
     s.hints.Remember(e);
     // Only the existing all-safe Jack/door/activation chain can be replayed.
     // Mixed actions, NPC messages, inventory, combat and cinematics stay native.
-    if (!s.exact || !SafeRequest(b,s) || (looping && index>e.record)) continue;
+    if (!s.exact || !SafeRequest(b,s) || !story::CanReplaySnapshotPrefix(looping,index,e)) continue;
     const auto add=[&](StoryPhase phase,uint32_t record) {
       auto replay=e; replay.number=0; replay.phase=phase; replay.record=record; s.restore.push_back(replay);
     };
