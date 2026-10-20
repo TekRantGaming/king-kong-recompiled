@@ -42,6 +42,8 @@ REXCVAR_DEFINE_STRING(kk_coop_policy_override, "", "KK/Debug", "Chapter policies
     .debug_only().lifecycle(rex::cvar::Lifecycle::kInitOnly);
 REXCVAR_DEFINE_STRING(kk_coop_dev, "", "KK/Debug", "Local co-op test link: host:<port> or join:<port>")
     .debug_only().lifecycle(rex::cvar::Lifecycle::kInitOnly);
+REXCVAR_DEFINE_BOOL(kk_coop_debug_overlay, false, "KK/Debug", "Show detailed co-op diagnostics during gameplay")
+    .debug_only();
 REXCVAR_DEFINE_BOOL(kk_steam_selftest, false, "KK/Debug", "Test Steam services and exit without starting a game")
     .debug_only().lifecycle(rex::cvar::Lifecycle::kInitOnly);
 REXCVAR_DEFINE_BOOL(kk_steam_loopback_test, false, "KK/Debug", "Probe Steam self-send for every co-op message and exit")
@@ -420,50 +422,56 @@ class PartnerOverlay final : public rex::ui::ImGuiDialog {
     if (Now() - v.updated > .5 && v.state != SessionState::Ended) return;
 #if defined(KK_DEV_TOOLS)
     char text[256];
-    std::snprintf(text, sizeof(text), "Co-op %s: %s | %.0f ms | loss %.1f%% | invalid %llu | %s",
-        v.role == Role::Host ? "host" : "guest", StateName(v.state), v.stats.ping_ms, v.stats.loss * 100,
-        static_cast<unsigned long long>(v.stats.malformed), RejectName(v.rejection));
     auto* dl = ImGui::GetForegroundDrawList();
-    dl->AddText(ImVec2(24, 64), IM_COL32(255, 230, 170, 255), text);
-    const float status_distance = v.local && v.partner && v.local->level == v.partner->level ?
-        PartnerDistance(*v.local, *v.partner) : -1;
-    std::snprintf(text, sizeof(text), "Pose: %s (%s) | sent %llu recv %llu | level %s | distance %.1f",
-        v.local ? "yes" : "no", v.local_failure,
-        static_cast<unsigned long long>(v.poses.sent), static_cast<unsigned long long>(v.poses.received),
-        v.poses.remote_level ? std::to_string(*v.poses.remote_level).c_str() : "none", status_distance);
-    dl->AddText(ImVec2(24, 88), IM_COL32(255, 230, 170, 255), text);
-    enemies::Counters counts;
-    { std::lock_guard lock(enemy_status_mutex); counts = enemy_status; }
-    std::snprintf(text, sizeof(text), "Enemies: owned-by-me %u | owned-by-partner %u | matched %u | unmatched %u | driven %u",
-        counts.owned_me, counts.owned_partner, counts.matched, counts.unmatched, counts.driven);
-    dl->AddText(ImVec2(24, 112), IM_COL32(255, 230, 170, 255), text);
-    ShotCounters shots;
-    { std::lock_guard lock(enemy_status_mutex); shots = shot_status; }
-    std::snprintf(text, sizeof(text), "Shots: sent %llu | applied %llu | late %llu | rejected %llu (%s)",
-        static_cast<unsigned long long>(v.shots_sent), static_cast<unsigned long long>(shots.applied),
-        static_cast<unsigned long long>(shots.late),
-        static_cast<unsigned long long>(shots.rejected), ShotRejectName(shots.last));
-    dl->AddText(ImVec2(24, 136), IM_COL32(255, 230, 170, 255), text);
+    // Some native openings animate Jack through his normal camera, so they
+    // cannot be identified from scripted camera packets. Keep diagnostics opt-in.
+    if (REXCVAR_GET(kk_coop_debug_overlay)) {
+      std::snprintf(text, sizeof(text), "Co-op %s: %s | %.0f ms | loss %.1f%% | invalid %llu | %s",
+          v.role == Role::Host ? "host" : "guest", StateName(v.state), v.stats.ping_ms, v.stats.loss * 100,
+          static_cast<unsigned long long>(v.stats.malformed), RejectName(v.rejection));
+      dl->AddText(ImVec2(24, 64), IM_COL32(255, 230, 170, 255), text);
+      const float status_distance = v.local && v.partner && v.local->level == v.partner->level ?
+          PartnerDistance(*v.local, *v.partner) : -1;
+      std::snprintf(text, sizeof(text), "Pose: %s (%s) | sent %llu recv %llu | level %s | distance %.1f",
+          v.local ? "yes" : "no", v.local_failure,
+          static_cast<unsigned long long>(v.poses.sent), static_cast<unsigned long long>(v.poses.received),
+          v.poses.remote_level ? std::to_string(*v.poses.remote_level).c_str() : "none", status_distance);
+      dl->AddText(ImVec2(24, 88), IM_COL32(255, 230, 170, 255), text);
+      enemies::Counters counts;
+      { std::lock_guard lock(enemy_status_mutex); counts = enemy_status; }
+      std::snprintf(text, sizeof(text), "Enemies: owned-by-me %u | owned-by-partner %u | matched %u | unmatched %u | driven %u",
+          counts.owned_me, counts.owned_partner, counts.matched, counts.unmatched, counts.driven);
+      dl->AddText(ImVec2(24, 112), IM_COL32(255, 230, 170, 255), text);
+      ShotCounters shots;
+      { std::lock_guard lock(enemy_status_mutex); shots = shot_status; }
+      std::snprintf(text, sizeof(text), "Shots: sent %llu | applied %llu | late %llu | rejected %llu (%s)",
+          static_cast<unsigned long long>(v.shots_sent), static_cast<unsigned long long>(shots.applied),
+          static_cast<unsigned long long>(shots.late),
+          static_cast<unsigned long long>(shots.rejected), ShotRejectName(shots.last));
+      dl->AddText(ImVec2(24, 136), IM_COL32(255, 230, 170, 255), text);
+    }
 #else
     auto* dl = ImGui::GetForegroundDrawList();
 #endif
     if (v.state != SessionState::Connected || !v.local || !v.partner || v.local->level != v.partner->level ||
         freecam::Active()) return;
 #if defined(KK_DEV_TOOLS)
-    const float dx = v.partner->x - v.local->x, dy = v.partner->y - v.local->y;
-    const float partner_distance = PartnerDistance(*v.local, *v.partner);
-    const float angle = std::remainder(std::atan2(dy, dx) - v.local->facing, 6.28318530718f);
-    const char* directions[] = {"ahead", "ahead-left", "left", "behind-left", "behind", "behind-right", "right", "ahead-right"};
-    const int sector = (int(std::lround(angle / .7853981634f)) + 8) % 8;
-    if (PartnerHere(partner_distance)) std::snprintf(text, sizeof(text), "Partner: here");
-    else std::snprintf(text, sizeof(text), "Partner: %.0f m, %s (Jack facing)", partner_distance, directions[sector]);
-    if (partner_body_driven.load()) {
-      const size_t used = std::char_traits<char>::length(text);
-      std::snprintf(text + used, sizeof(text) - used, " (body)");
+    if (REXCVAR_GET(kk_coop_debug_overlay)) {
+      const float dx = v.partner->x - v.local->x, dy = v.partner->y - v.local->y;
+      const float partner_distance = PartnerDistance(*v.local, *v.partner);
+      const float angle = std::remainder(std::atan2(dy, dx) - v.local->facing, 6.28318530718f);
+      const char* directions[] = {"ahead", "ahead-left", "left", "behind-left", "behind", "behind-right", "right", "ahead-right"};
+      const int sector = (int(std::lround(angle / .7853981634f)) + 8) % 8;
+      if (PartnerHere(partner_distance)) std::snprintf(text, sizeof(text), "Partner: here");
+      else std::snprintf(text, sizeof(text), "Partner: %.0f m, %s (Jack facing)", partner_distance, directions[sector]);
+      if (partner_body_driven.load()) {
+        const size_t used = std::char_traits<char>::length(text);
+        std::snprintf(text + used, sizeof(text) - used, " (body)");
+      }
+      dl->AddText(ImVec2(24, 160), IM_COL32(180, 255, 210, 255), text);
+      std::snprintf(text,sizeof(text),"Tag camera: %s",nametag::Status());
+      dl->AddText(ImVec2(24, 184), IM_COL32(180, 255, 210, 255), text);
     }
-    dl->AddText(ImVec2(24, 160), IM_COL32(180, 255, 210, 255), text);
-    std::snprintf(text,sizeof(text),"Tag camera: %s",nametag::Status());
-    dl->AddText(ImVec2(24, 184), IM_COL32(180, 255, 210, 255), text);
 #endif
     const auto camera = nametag::Snapshot();
     if (!camera || Now()-camera->time > .15 || camera->level != v.local->level) return;
