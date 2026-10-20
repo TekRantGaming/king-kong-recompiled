@@ -64,8 +64,18 @@ void FocusAndActions() {
   Check(std::string_view(SocialStatusKey(dormant))=="Choose Steam or Direct IP","dormant status does not pretend to connect");
   const auto connect=Find(dormant_rows,SocialRowKind::ConnectSteam);
   Check(SocialRowCommand(connect,dormant)->action==SocialAction::Open,"explicit Steam opt-in command");
-  Check(Find(dormant_rows,SocialRowKind::DirectChooseHost).enabled &&
-        Find(dormant_rows,SocialRowKind::DirectChooseJoin).enabled,"both IP roles available before Steam init");
+  const auto ip_rows=SocialRows(dormant,0,true);
+  Check(Find(ip_rows,SocialRowKind::DirectChooseHost).enabled &&
+        Find(ip_rows,SocialRowKind::DirectChooseJoin).enabled,"both IP roles available before Steam init");
+  Check(dormant_rows[0].label=="Play with a Steam friend" && dormant_rows[1].label=="Play by IP",
+      "two clear paths are at the top");
+  Check(!Find(dormant_rows,SocialRowKind::Create).enabled,"hosting waits for explicit Steam connection");
+  Check(std::none_of(dormant_rows.begin(),dormant_rows.end(),[](const auto& r) {
+    return r.key.kind==SocialRowKind::DirectHost || r.key.kind==SocialRowKind::DirectChooseHost;
+  }),"Steam path cannot look like IP hosting");
+  Check(std::none_of(ip_rows.begin(),ip_rows.end(),[](const auto& r) {
+    return r.key.kind==SocialRowKind::Create || r.key.kind==SocialRowKind::ConnectSteam;
+  }),"IP path has no Steam hosting or connect rows");
   dormant.pending_invites={{1234,0}}; dormant_rows=SocialRows(dormant);
   Check(SocialRowCommand(Find(dormant_rows,SocialRowKind::Accept,1234),dormant)->action==SocialAction::Accept,
         "cold Steam invite can explicitly connect and accept");
@@ -80,9 +90,10 @@ void FocusAndActions() {
   Check(Find(rows, SocialRowKind::Create).enabled, "idle may create lobby");
   std::vector<SocialRowKind> order;
   for (const auto& r : rows) if (r.focusable()) order.push_back(r.key.kind);
-  Check(order.size() == 11 && order[0] == SocialRowKind::Accept && order[1] == SocialRowKind::Decline &&
-        order[2] == SocialRowKind::Create && order[3] == SocialRowKind::Friend, "focus order follows invites, lobby, friends");
-  Check(SocialFocus(rows, {}) == 1, "first focus skips section header");
+  Check(order[0]==SocialRowKind::PlaySteam && order[1]==SocialRowKind::PlayIP && order[2]==SocialRowKind::Create &&
+      order[3]==SocialRowKind::Accept && order[4]==SocialRowKind::Decline,"paths and Steam hosting precede invitations");
+  Check(Find(rows,SocialRowKind::Create).label=="Host a Steam game","Steam host action is explicit");
+  Check(SocialFocus(rows, {}) == 0, "first focus selects the Steam path");
   const SocialRowKey friend_key{SocialRowKind::Friend, 2};
   m.friends.front().name = "Duplicate"; m.friends.back().name = "Duplicate";
   std::reverse(m.friends.begin(), m.friends.end());
@@ -97,10 +108,14 @@ void FocusAndActions() {
   m = fake->Snapshot(); rows = SocialRows(m);
   Check(SocialFocus(rows, invite.key, 1) >= 0, "removed invite focus falls back inside drawer");
   Check(std::none_of(rows.begin(), rows.end(), [](const auto& r) { return r.key.kind == SocialRowKind::Start; }), "guest cannot Start");
-  Check(std::string_view(SocialStatusKey(m)) == "Waiting for host", "guest waits for host");
+  Check(std::string_view(SocialStatusKey(m)) == "Connected. Waiting for the host to start", "guest waits for host");
   Check(!SocialRowCommand(invite, m), "removed/stale invite cannot act");
   Check(fake->Scenario("host"), "host preview");
   m = fake->Snapshot(); rows = SocialRows(m);
+  Check(std::string_view(SocialStatusKey(m))=="Lobby open. Invite a friend.","new host knows to invite first");
+  Check(SocialFocus(rows,SocialRowKey{SocialRowKind::OverlayInvite,0})<SocialFocus(rows,SocialRowKey{SocialRowKind::ChapterSelect,0}),
+      "Steam invitations precede chapter selection");
+  Check(Find(rows,SocialRowKind::OverlayInvite).label=="Open Steam invite","overlay action has a clear label");
   Check(!Find(rows, SocialRowKind::Start).enabled, "one member cannot Start");
   const auto& empty_invites = Find(rows, SocialRowKind::Text, 2);
   Check(empty_invites.label == "No invites" && !empty_invites.focusable() &&
@@ -138,7 +153,7 @@ void FocusAndActions() {
   }
   fake->Scenario("needed");
   Check(std::string_view(SocialStatusKey(fake->Snapshot())) == "Steam is unavailable. You can connect by IP.", "missing client points to Direct IP");
-  Check(Find(SocialRows(fake->Snapshot()), SocialRowKind::DirectChooseHost).enabled, "missing Steam leaves Direct IP available");
+  Check(Find(SocialRows(fake->Snapshot(),0,true), SocialRowKind::DirectChooseHost).enabled, "missing Steam leaves Direct IP available");
   fake->Scenario("unavailable");
   Check(std::string_view(SocialStatusKey(fake->Snapshot())) == "Steam is unavailable. You can connect by IP.", "SDK-missing state points to Direct IP");
   fake->Scenario("mismatch");
@@ -166,8 +181,8 @@ void PreviewScenes() {
     Check(m.members.size() == (name == "host" ? 1u : joined ? 2u : 0u), "scene has correct member count");
     Check(m.can_start == (name == "ready"), "only ready scene permits Start");
     Check(m.start_requested == (name == "starting"), "starting scene performs fake Start");
-    Check(std::any_of(rows.begin(), rows.end(), [](const auto& r) { return r.key.kind == SocialRowKind::Create; })
-          == (!joined && name!="needed" && name!="unavailable"), "Create lobby requires Steam and no existing lobby");
+    Check(std::any_of(rows.begin(), rows.end(), [](const auto& r) { return r.key.kind == SocialRowKind::Create && r.enabled; })
+          == (!joined && name!="needed" && name!="unavailable" && name!="busy"), "Host a Steam game requires connected idle Steam and no existing lobby");
     if (joined) {
       Check(m.status == (name == "starting" ? SocialStatus::Starting : SocialStatus::Lobby), "actual joined scene status");
       Check(m.pending_invites.empty(), "lobby capture is not obscured by stale incoming invites");
@@ -200,10 +215,10 @@ void PreviewScenes() {
 }
 void DirectRows() {
   SocialModel m; m.status=SocialStatus::Unavailable;
-  auto rows=SocialRows(m);
+  auto rows=SocialRows(m,0,true);
   Check(Find(rows,SocialRowKind::DirectChooseHost).enabled && Find(rows,SocialRowKind::DirectChooseJoin).enabled,"Direct IP role choice works without Steam");
-  Check(Find(SocialRows(m,1),SocialRowKind::DirectHost).enabled && Find(SocialRows(m,2),SocialRowKind::DirectJoin).enabled,"Direct IP confirmations work without Steam");
-  Check(Find(rows,SocialRowKind::AddSteam).enabled,"recommendation links to existing Add to Steam");
+  Check(Find(SocialRows(m,1,true),SocialRowKind::DirectHost).enabled && Find(SocialRows(m,2,true),SocialRowKind::DirectJoin).enabled,"Direct IP confirmations work without Steam");
+  Check(Find(SocialRows(m),SocialRowKind::AddSteam).enabled,"Steam path links to existing Add to Steam");
   m.status=SocialStatus::Lobby; m.direct=true; m.self=m.owner=1; m.lobby=99;
   m.members={{1,"Host",false},{2,"Guest",false}};
   Check(!Find(SocialRows(m),SocialRowKind::Ready).enabled && !Find(SocialRows(m),SocialRowKind::Start).enabled,

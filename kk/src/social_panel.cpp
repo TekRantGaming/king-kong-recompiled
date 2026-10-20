@@ -45,6 +45,7 @@ void SocialPanel::ResetPreview() {
   seen_lobby_ = 0;
   seen_members_ = 0;
   chapter_screen_=false; editor_=0;
+  ip_path_=false; direct_mode_=0; invited_friend_=0;
 }
 #endif
 void SocialPanel::Update(bool enabled, SocialPage page, Input& in, ISocialService& service) {
@@ -64,10 +65,17 @@ void SocialPanel::Update(bool enabled, SocialPage page, Input& in, ISocialServic
   if (was && !state_.blocking()) in.ConsumeAll();
 }
 void SocialPanel::Activate(const SocialRow& row, ISocialService& service) {
-  const auto rows=SocialRows(service.Snapshot(),direct_mode_);
+  const auto rows=SocialRows(service.Snapshot(),direct_mode_,ip_path_);
   const auto current=std::find_if(rows.begin(),rows.end(),[&](const auto& r) { return r.key==row.key; });
   if (current==rows.end() || !current->enabled) { Cue(Sound::kDeny); return; }
   const auto kind=row.key.kind;
+  if (kind==SocialRowKind::PlaySteam || kind==SocialRowKind::PlayIP) {
+    ip_path_=kind==SocialRowKind::PlayIP;
+    focus_=SocialRowKey{ip_path_ ? SocialRowKind::DirectChooseHost :
+        service.Snapshot().status==SocialStatus::Dormant ? SocialRowKind::ConnectSteam : SocialRowKind::Create,0};
+    notice_.clear(); notice_until_=0;
+    return;
+  }
   if (kind==SocialRowKind::DirectChooseHost || kind==SocialRowKind::DirectChooseJoin) {
     if (kind==SocialRowKind::DirectChooseJoin && direct_mode_!=2) direct_code_.clear();
     if (kind==SocialRowKind::DirectChooseHost && !ValidJoinCode(direct_code_)) direct_code_=NewJoinCode();
@@ -98,7 +106,7 @@ void SocialPanel::Activate(const SocialRow& row, ISocialService& service) {
   if (!command) { Cue(Sound::kDeny); return; }
   if (command->action == SocialAction::Start) notice_ = RequestSessionStart() ? "Starting co-op..." : "Choose Continue or a chapter before starting co-op";
   else if (!service.Act(*command)) notice_ = "Could not complete Social action";
-  else if (command->action == SocialAction::Invite) notice_ = "Inviting...";
+  else if (command->action == SocialAction::Invite) { invited_friend_=command->id; notice_ = "Inviting..."; }
   else notice_.clear();
   notice_until_ = ImGui::GetTime() + 4.0;
 }
@@ -127,12 +135,12 @@ void SocialPanel::Draw(ImDrawList* dl, ImVec2 o, ImVec2 size, const Metrics& m, 
   dl->AddText(fonts.display, 30 * s, ImVec2(left, o.y + 22 * s), color::kText,
               Ellipsize(fonts.display, 30 * s, T("Social"), available).c_str());
   const SocialModel model = service.Snapshot();
-  const std::string recommendation=T("For the easiest way to play with friends, add King Kong to Steam and invite them from here.");
+  const bool ip_path=model.lobby ? model.direct : ip_path_;
+  const std::string recommendation=T(ip_path ? "Host: forward the UDP port on your router. Share your public IP and join code with your partner." :
+      "Host a Steam game to invite a friend. Guests accept an invite here, or use Steam's Join game while King Kong is running.");
   const float note_height=fonts.text->CalcTextSizeA(14*s,1e6f,available,recommendation.c_str()).y;
   dl->AddText(fonts.text,14*s,ImVec2(left,o.y+88*s),color::kTextDim,recommendation.c_str(),nullptr,available);
-  if (active && !editing() && ImGui::IsMouseClicked(0) && ImGui::IsMouseHoveringRect(ImVec2(left,o.y+88*s),ImVec2(left+available,o.y+88*s+note_height)) && add_steam_) {
-    state_.Update(true,SocialPage::Page,false,true,0); add_steam_();
-  }
+  if (model.lobby!=seen_lobby_ || !model.lobby) invited_friend_=0;
   if (model.lobby && model.lobby == seen_lobby_ && seen_members_ == 2 && model.members.size() < 2) {
     notice_ = "Your partner left";
     notice_until_ = ImGui::GetTime() + 4.0;
@@ -145,8 +153,15 @@ void SocialPanel::Draw(ImDrawList* dl, ImVec2 o, ImVec2 size, const Metrics& m, 
   else if (std::string_view(SocialStatusKey(model)) == "Versions don't match: {0}")
     status = F("Versions don't match: {0}", {T(model.last_error)});
   else status = T(SocialStatusKey(model));
+  if (ip_path && !model.lobby && model.last_error.empty() &&
+      (model.status==SocialStatus::Dormant || model.status==SocialStatus::Idle || model.status==SocialStatus::Unavailable))
+    status=T("Choose Host or Join by IP.");
   if (model.lobby && model.last_error.empty() && model.status==SocialStatus::Lobby) {
-    if (model.members.size()<2) status=T("Waiting for your partner to join");
+    if (model.members.size()<2) {
+      auto invited=std::find_if(model.friends.begin(),model.friends.end(),[&](const auto& f) { return f.id==invited_friend_; });
+      status=model.direct ? T("Waiting for your partner to join") : invited!=model.friends.end() ?
+          F("Waiting for {0} to join",{invited->name}) : T("Lobby open. Invite a friend.");
+    }
     else if (model.self!=model.owner) status=T("Connected. Waiting for the host to start");
     else status=T(model.choice.valid() ? (model.can_start ? "Both ready. Select Start" : "Connected. Both players must choose Ready") : "Connected. Choose a chapter");
   }
@@ -154,7 +169,7 @@ void SocialPanel::Draw(ImDrawList* dl, ImVec2 o, ImVec2 size, const Metrics& m, 
               model.status == SocialStatus::Idle && model.last_error.empty() && notice_until_ <= ImGui::GetTime()
                   ? color::kTextDim : color::kWarn,
               Ellipsize(fonts.text, 14 * s, status, available).c_str());
-  auto rows = SocialRows(model,direct_mode_);
+  auto rows = SocialRows(model,direct_mode_,ip_path_);
   list_.focus = SocialFocus(rows, focus_, list_.focus);
   list_.focus_label.clear();  // retain opaque row identity, never a friend's display name
   std::vector<Item> items;
@@ -167,6 +182,13 @@ void SocialPanel::Draw(ImDrawList* dl, ImVec2 o, ImVec2 size, const Metrics& m, 
                 kind == SocialRowKind::Member ? ItemType::kInfo : ItemType::kAction;
     const bool person = kind == SocialRowKind::Member || kind == SocialRowKind::Friend;
     item.label = row.label;
+    if (kind==SocialRowKind::PlaySteam || kind==SocialRowKind::PlayIP) {
+      item.tall=true;
+      item.subtitle=kind==SocialRowKind::PlaySteam ? "Steam invites and friends" : "Direct IP address and join code";
+    }
+    if (kind==SocialRowKind::Create) {
+      item.tall=true; item.subtitle="Creates a friends-only Steam lobby";
+    }
     if (kind==SocialRowKind::Text && !row.detail.empty()) {
       item.type=ItemType::kInfo; item.tall=true;
       item.subtitle=row.key.id==13 ? std::string(T(row.detail)) : row.detail; item.literal_subtitle=true;
@@ -189,7 +211,8 @@ void SocialPanel::Draw(ImDrawList* dl, ImVec2 o, ImVec2 size, const Metrics& m, 
     item.disabled = !row.enabled && item.type == ItemType::kAction;
     item.focus_subtitle_color = color::kOnFocus;
     item.value_max_width = std::max(1.0f, available * 0.28f);
-    if (item.type==ItemType::kAction && kind!=SocialRowKind::Friend) {
+    if (item.type==ItemType::kAction && kind!=SocialRowKind::Friend &&
+        kind!=SocialRowKind::PlaySteam && kind!=SocialRowKind::PlayIP) {
       item.value_text="Select"; item.value_action=Action::kAccept;
     }
     if (kind == SocialRowKind::Friend) {
@@ -223,11 +246,7 @@ void SocialPanel::Draw(ImDrawList* dl, ImVec2 o, ImVec2 size, const Metrics& m, 
   if (interactive && (in.Pressed(Action::kNextTab) || in.Pressed(Action::kPrevTab))) {
     in.Inject(in.Pressed(Action::kPrevTab) ? Action::kUp : Action::kDown, in.device());
   }
-  const std::string nat=T("Host: forward the UDP port on your router. Share your public IP and join code with your partner.");
-  const float nat_y=o.y+96*s+note_height;
-  const float nat_height=fonts.text->CalcTextSizeA(13*s,1e6f,available,nat.c_str()).y;
-  dl->AddText(fonts.text,13*s,ImVec2(left,nat_y),color::kTextDim,nat.c_str(),nullptr,available);
-  const float top = nat_y + nat_height + 12*s;
+  const float top = o.y + 100*s + note_height;
   const auto before_focus=focus_;
   DrawList(dl, items, list_, ImVec2(left, top), ImVec2(x + width - 24 * s, end.y - 106 * s), m, in,
            interactive, &glyphs, set);
@@ -402,7 +421,15 @@ void SocialPanel::DrawEditor(ImDrawList* dl,ImVec2 o,ImVec2 size,const Metrics& 
 }
 #if defined(KK_DEV_TOOLS)
 bool SocialPanel::DirectInput(std::string_view command,ISocialService& service) {
-  if (command=="host" || command=="join" || command.starts_with("edit-")) direct_mode_=command=="host" ? 1 : 2;
+  if (command=="steam-connect" || command=="steam-host") {
+    ip_path_=false;
+    const auto kind=command=="steam-connect" ? SocialRowKind::ConnectSteam : SocialRowKind::Create;
+    const auto rows=SocialRows(service.Snapshot(),direct_mode_,ip_path_);
+    auto row=std::find_if(rows.begin(),rows.end(),[&](const auto& r) { return r.key.kind==kind && r.enabled; });
+    if (row==rows.end()) return false;
+    focus_=row->key; Activate(*row,service); return true;
+  }
+  if (command=="host" || command=="join" || command.starts_with("edit-")) { ip_path_=true; direct_mode_=command=="host" ? 1 : 2; }
   if (command.starts_with("address:")) { direct_address_=command.substr(8,64); return true; }
   if (command.starts_with("port:")) { direct_port_=command.substr(5,5); return true; }
   if (command.starts_with("code:")) { direct_code_=NormalizeJoinCode(command.substr(5,6)); return true; }
@@ -415,7 +442,7 @@ bool SocialPanel::DirectInput(std::string_view command,ISocialService& service) 
       command=="ready" ? SocialRowKind::Ready : command=="edit-address" ? SocialRowKind::DirectAddress :
       command=="edit-port" ? SocialRowKind::DirectPort : command=="edit-code" ? SocialRowKind::DirectCode :
       command=="leave" ? SocialRowKind::Leave : SocialRowKind::Start;
-  const auto rows=SocialRows(service.Snapshot(),direct_mode_);
+  const auto rows=SocialRows(service.Snapshot(),direct_mode_,ip_path_);
   const auto row=std::find_if(rows.begin(),rows.end(),[&](const auto& r) { return r.key.kind==kind; });
   if (row==rows.end() || !row->enabled) return false;
   focus_=row->key; Activate(*row,service); return true;

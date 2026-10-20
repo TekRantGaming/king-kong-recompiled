@@ -3,6 +3,8 @@
 #include "coop_runtime.h"
 #include "art.h"
 #include "platform.h"
+#include "launcher_text.h"
+#include <rex/cvar.h>
 #include <rex/ui/immediate_drawer.h>
 #include <rex/ui/keybinds.h>
 #include <SDL3/SDL.h>
@@ -95,10 +97,11 @@ int main() {
       SDL_SetJoystickVirtualAxis(joystick,SDL_GAMEPAD_AXIS_RIGHT_TRIGGER,-32768); frame(); frame();
       Check(panel.blocking(),"real SDL RT opens Social");
       Check(service.calls==0,"RT opens a dormant drawer without requesting Steam or installing its input hooks");
-      Check(panel.focused_row() && panel.focused_row()->kind==SocialRowKind::ConnectSteam,"Steam connection is an explicit row");
+      Check(panel.focused_row() && panel.focused_row()->kind==SocialRowKind::PlaySteam,"Steam path is the first row");
       SDL_SetJoystickVirtualAxis(joystick,SDL_GAMEPAD_AXIS_LEFTY,32767); frame();
       SDL_SetJoystickVirtualAxis(joystick,SDL_GAMEPAD_AXIS_LEFTY,0); frame();
-      Check(panel.focused_row() && panel.focused_row()->kind==SocialRowKind::AddSteam,"left stick moves Social focus through the ordinary launcher input");
+      Check(panel.focused_row() && panel.focused_row()->kind==SocialRowKind::PlayIP,"left stick moves to the IP path");
+      button(SDL_GAMEPAD_BUTTON_SOUTH);
       focus(SocialRowKind::DirectChooseJoin); button(SDL_GAMEPAD_BUTTON_SOUTH);
       focus(SocialRowKind::DirectAddress); button(SDL_GAMEPAD_BUTTON_SOUTH); Check(panel.editing(),"A opens IP keyboard");
       button(SDL_GAMEPAD_BUTTON_EAST); Check(!panel.editing() && panel.blocking(),"B cancels editor without closing Social");
@@ -179,6 +182,25 @@ int main() {
       Check(service.calls==0,"reopening dormant Social still leaves Steam alone");
       focus(SocialRowKind::ConnectSteam); button(SDL_GAMEPAD_BUTTON_SOUTH);
       Check(service.calls==1 && service.last.action==SocialAction::Open,"only explicit Connect to Steam requests initialization");
+      service.model.status=SocialStatus::Idle; frame();
+      focus(SocialRowKind::Create); button(SDL_GAMEPAD_BUTTON_SOUTH);
+      Check(service.calls==2 && service.last.action==SocialAction::CreateLobby,"Host a Steam game creates the lobby through the service");
+      service.model.status=SocialStatus::Creating; frame(); button(SDL_GAMEPAD_BUTTON_SOUTH);
+      Check(service.calls==2,"pending lobby cannot create a duplicate");
+      service.model.status=SocialStatus::Lobby; service.model.lobby=56; service.model.self=service.model.owner=1;
+      service.model.members={{1,"Host",false}}; service.model.overlay_available=true; frame();
+      focus(SocialRowKind::OverlayInvite); button(SDL_GAMEPAD_BUTTON_SOUTH);
+      Check(service.last.action==SocialAction::OverlayInvite,"pad opens Steam invite after hosting");
+      for (int language : {1,3,4,5,6}) {
+        rex::cvar::SetFlagByName("user_language",std::to_string(language)); frame();
+        for (const char* label : {"Play with a Steam friend","Play by IP","Host a Steam game","Open Steam invite",
+            "Lobby open. Invite a friend.","Waiting for {0} to join","4. Choose a chapter",
+            "5. Both players choose Ready","6. The host starts the game"})
+          Check(language==1 || std::string(text::T(label))!=label,"new Steam rows have translations in every supported language");
+        focus(SocialRowKind::OverlayInvite); button(SDL_GAMEPAD_BUTTON_SOUTH);
+        Check(service.last.action==SocialAction::OverlayInvite,"translated overlay row stays reachable by pad");
+      }
+      rex::cvar::SetFlagByName("user_language","1");
     }
     SDL_CloseJoystick(joystick); SDL_DetachVirtualJoystick(id); SDL_QuitSubSystem(SDL_INIT_GAMEPAD);
     ImGui::DestroyContext(); std::cout<<"Social SDL pad: RT, rows, keyboard, join, chapters, Ready, Start, Leave and B passed\n";

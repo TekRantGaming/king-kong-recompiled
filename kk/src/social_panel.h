@@ -44,6 +44,8 @@ class SocialPanel {
   bool editor_just_opened_ = false;
   bool editor_sync_ = false;
   int direct_mode_ = 0;
+  bool ip_path_ = false;
+  coop::SocialId invited_friend_ = 0;
   bool editor_lowercase_ = false, editor_symbols_ = false;
   bool chapter_screen_ = false;
   ListState chapter_list_;

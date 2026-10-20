@@ -225,6 +225,7 @@ struct SteamRuntime::Impl
   SteamAPICall_t create_call = 0, join_call = 0;
   std::map<SteamAPICall_t, int> abandoned;
   double operation_deadline = 0, next_friends = 0, next_lobby = 0, next_invite = 0;
+  int logged_friend_count = -1;
   std::string ready_token;
   std::unique_ptr<SteamMessagesTransport> transport;
   std::unique_ptr<CoopSession> session;
@@ -277,6 +278,10 @@ struct SteamRuntime::Impl
     // Refresh at most every five seconds; no per-frame avatar allocation or rich-presence request.
     std::vector<SocialFriend> list;
     const int count = std::clamp(api.SteamAPI_ISteamFriends_GetFriendCount(friends, k_EFriendFlagImmediate), 0, int(kMaxFriends));
+    if (count!=logged_friend_count) {
+      REXLOG_INFO("KK co-op Steam: Social friend rows={}",count);
+      logged_friend_count=count;
+    }
     for (int i = 0; i < count; ++i) {
       SocialFriend f; f.id = api.SteamAPI_ISteamFriends_GetFriendByIndex(friends, i, k_EFriendFlagImmediate);
       f.name = Text(api.SteamAPI_ISteamFriends_GetFriendPersonaName(friends, f.id));
@@ -424,17 +429,25 @@ struct SteamRuntime::Impl
     ok = SetData("kkrc_choice", "0") && ok;
     api.SteamAPI_ISteamMatchmaking_SetLobbyMemberData(matchmaking, model.lobby, kReadyKey, "0");
     if (!ok) { Leave("Could not publish lobby compatibility"); if (self_test) stop = true; return; }
+    if (!self_test && !api.SteamAPI_ISteamMatchmaking_SetLobbyJoinable(matchmaking, model.lobby, true)) { Leave("Could not open lobby"); return; }
+    const auto connect = "+connect_lobby " + std::to_string(model.lobby);
+    const bool presence_set=api.SteamAPI_ISteamFriends_SetRichPresence(friends,kPresenceKey,kProductValue) &&
+        api.SteamAPI_ISteamFriends_SetRichPresence(friends,"connect",connect.c_str());
+    const bool presence_ok=presence_set && Text(api.SteamAPI_ISteamFriends_GetFriendRichPresence(friends,model.self,"connect"))==connect;
+    REXLOG_INFO("KK co-op Steam: lobby created friends-only={} connect rich presence set={} readback={}",!self_test,presence_set,presence_ok);
     if (self_test) {
       const bool same = ReadKeys(model.lobby) == keys && Data(model.lobby, "kkrc_epoch") == std::to_string(epoch) &&
           Data(model.lobby, "kkrc_generation") == "1" && Data(model.lobby, "kkrc_phase") == "waiting";
       test_log("Steam self-test: lobby created hash=" + ShortSocialHash(model.lobby));
       test_log(same ? "Steam self-test: lobby keys OK" : "Steam self-test: lobby keys failed");
-      test_result = same ? 0 : 1; Leave(); stop = true; return;
+      test_log(presence_ok ? "Steam self-test: connect rich presence OK" : "Steam self-test: connect rich presence failed");
+      test_result = same && presence_ok ? 0 : 1; Leave();
+      const bool cleared=Text(api.SteamAPI_ISteamFriends_GetFriendRichPresence(friends,model.self,"connect")).empty();
+      test_log(cleared ? "Steam self-test: connect cleared on Leave OK" : "Steam self-test: connect clear failed");
+      if (!cleared) test_result=1;
+      stop = true; return;
     }
-    if (!api.SteamAPI_ISteamMatchmaking_SetLobbyJoinable(matchmaking, model.lobby, true)) { Leave("Could not open lobby"); return; }
-    api.SteamAPI_ISteamFriends_SetRichPresence(friends, kPresenceKey, kProductValue);
-    const auto connect = "+connect_lobby " + std::to_string(model.lobby);
-    api.SteamAPI_ISteamFriends_SetRichPresence(friends, "connect", connect.c_str());
+    if (!presence_ok) { Leave("Could not enable Steam invites"); return; }
     Status(SocialStatus::Lobby, "Lobby open"); RefreshLobby();
   }
   void Joined(const LobbyEnter_t& c, bool failed) {
