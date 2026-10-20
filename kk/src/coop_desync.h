@@ -31,7 +31,7 @@ class Assembly {
     const auto& h=current_.header;
     if (p.sweep!=h.sweep || p.part!=next_ || now<began_ || now-began_>8 ||
         p.parts!=h.parts || p.generation!=h.generation || p.level!=h.level || p.checkpoint!=h.checkpoint ||
-        p.start!=h.start || p.captured!=h.captured || p.completed!=h.completed || p.script_count!=h.script_count ||
+        p.start!=h.start || p.captured!=h.captured || p.enemy_world!=h.enemy_world || p.completed!=h.completed || p.script_count!=h.script_count ||
         p.enemy_count!=h.enemy_count || p.extensions!=h.extensions) return {};
     current_.scripts.insert(current_.scripts.end(),p.scripts.begin(),p.scripts.end());
     current_.enemies.insert(current_.enemies.end(),p.enemies.begin(),p.enemies.end());

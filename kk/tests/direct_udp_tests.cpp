@@ -242,6 +242,7 @@ void SimulationIntegration() {
   desync::Assembly assembly; desync::Guard guard;
   uint32_t sweep=0; unsigned digests=0; double next=16;
   bool burst_queued=false,burst_received=false;
+  std::deque<Message> burst;
   enemies::Frame frame; frame.world={101,1,1};
   EnemyState enemy{{777,0,EnemyFamily::Raptor},1,2,3,0,100};
   frame.records.push_back({enemy,EnemyEventKind::Spawned});
@@ -256,16 +257,19 @@ void SimulationIntegration() {
         Message m; m.type=MessageType::WorldDigest; m.epoch=host.Epoch();
         auto& p=m.digest; p.generation=1; p.level=101; p.start=1; p.checkpoint=1; p.sweep=sweep;
         p.captured=now;
+        p.enemy_world={101,1,1};
         p.part=part; p.parts=256; p.script_count=kStorySnapshotScripts;
         for (size_t i=0;i<kDigestScriptsPerPage;++i) p.scripts.push_back({1+part*kDigestScriptsPerPage+i,99,1,0,1});
-        Check(host.QueueStory(m),"maximum world sweep retained under UDP backpressure");
+        burst.push_back(std::move(m));
       }
     }
+    while (!burst.empty() && host.QueueStory(burst.front())) burst.pop_front();
     if (now>=next && host.State()==SessionState::Connected) {
       next=now+3; Message m; m.type=MessageType::WorldDigest; m.epoch=host.Epoch();
       m.digest.generation=1; m.digest.level=101; m.digest.start=1; m.digest.checkpoint=1;
       m.digest.sweep=++sweep; m.digest.enemy_count=1;
       m.digest.captured=now;
+      m.digest.enemy_world={101,1,1};
       m.digest.enemies.push_back({enemy.id,EnemyOwner::Host,0,100,0});
       Check(host.QueueStory(m) && !guest.QueueStory(m),"digest direction enforced on real UDP");
     }

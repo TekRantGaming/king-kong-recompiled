@@ -118,6 +118,7 @@ void Protocol() {
     input.camera.generation=9; input.camera.level=101; input.camera.cut=1;
     input.story={9,101,1,123,456,1,kStoryRecords,StoryPhase::Armed};
     input.digest.generation=9; input.digest.level=101; input.digest.sweep=1;
+    input.digest.enemy_world={101,0,1};
     const auto bytes = Packet(input);
     Check(bytes[0] == 'K' && bytes[1] == 'K' && bytes[2] == 'C' && bytes[3] == '1', "wire magic");
     Check(bytes[4] == 0 && bytes[5] == 15 && bytes[6] == 0 && bytes[7] == i+1,

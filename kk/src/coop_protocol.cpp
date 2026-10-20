@@ -213,6 +213,7 @@ bool ValidWorldDigest(const WorldDigestPage& p) {
   if (!p.generation || !p.level || p.level>100000 || p.start>10000 || p.checkpoint>10000 || !p.sweep ||
       !p.parts || p.parts>256 || p.part>=p.parts || p.script_count>kStorySnapshotScripts || p.enemy_count>kMaxEnemies ||
       p.extensions || !std::isfinite(p.captured) || p.captured<0 || p.captured>=1e12 ||
+      !ValidEnemyWorld(p.enemy_world) || p.enemy_world.level!=p.level || p.enemy_world.start!=p.start ||
       p.scripts.size()>kDigestScriptsPerPage || p.enemies.size()>kDigestEnemiesPerPage ||
       p.scripts.size()>p.script_count || p.enemies.size()>p.enemy_count ||
       p.parts!=std::max<size_t>({1,(size_t(p.script_count)+15)/16,(size_t(p.enemy_count)+11)/12})) return false;
@@ -234,6 +235,7 @@ bool Encode(const Message& m, std::vector<uint8_t>& out) {
       const auto& p=m.digest; if (!ValidWorldDigest(p)) return false;
       for (uint32_t v:{p.generation,p.level,p.start,p.checkpoint,p.sweep}) payload.U(v,4);
       payload.U(std::bit_cast<uint64_t>(p.captured),8);
+      WriteWorld(payload,p.enemy_world);
       payload.U(p.completed,8);
       for (uint16_t v:{p.part,p.parts,p.script_count,p.enemy_count}) payload.U(v,2);
       payload.U(p.extensions,4); payload.U(p.scripts.size(),1); payload.U(p.enemies.size(),1);
@@ -395,7 +397,8 @@ bool Decode(std::span<const uint8_t> bytes, Message& out) {
     case MessageType::WorldDigest: {
       auto& p=m.digest;
       p.generation=uint32_t(r.U(4)); p.level=uint32_t(r.U(4)); p.start=uint32_t(r.U(4));
-      p.checkpoint=uint32_t(r.U(4)); p.sweep=uint32_t(r.U(4)); p.captured=std::bit_cast<double>(r.U(8)); p.completed=r.U(8);
+      p.checkpoint=uint32_t(r.U(4)); p.sweep=uint32_t(r.U(4)); p.captured=std::bit_cast<double>(r.U(8));
+      p.enemy_world=ReadWorld(r); p.completed=r.U(8);
       p.part=uint16_t(r.U(2)); p.parts=uint16_t(r.U(2)); p.script_count=uint16_t(r.U(2)); p.enemy_count=uint16_t(r.U(2));
       p.extensions=uint32_t(r.U(4)); const size_t scripts=r.U(1),enemies=r.U(1);
       if (scripts>kDigestScriptsPerPage || enemies>kDigestEnemiesPerPage) return false;

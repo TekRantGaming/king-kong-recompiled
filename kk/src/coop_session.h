@@ -131,6 +131,18 @@ inline bool StorySender(MessageType type, Role role) {
   return ((type==MessageType::StoryEvent || type==MessageType::WorldDigest) && role==Role::Host) ||
       (type==MessageType::TriggerRequest && role==Role::Guest);
 }
+// A periodic digest is replaceable evidence, unlike a numbered story action.
+// A paused/loading game may drop a whole sweep, but must retain real actions
+// and must not end a healthy session because optional observations filled it.
+inline bool RetainStoryMessage(std::vector<Message>& queue,const Message& message) {
+  if (queue.size()>=kStoryQueue) {
+    if (message.type==MessageType::WorldDigest) return true;
+    const auto observation=std::find_if(queue.begin(),queue.end(),[](const auto& m) { return m.type==MessageType::WorldDigest; });
+    if (observation==queue.end()) return false;
+    queue.erase(observation);
+  }
+  queue.push_back(message); return true;
+}
 class StoryMailbox {
  public:
   bool Submit(Message m) {
@@ -138,6 +150,7 @@ class StoryMailbox {
         (m.type==MessageType::WorldDigest ? !ValidWorldDigest(m.digest) : !ValidStoryEvent(m.story)) ||
         (m.type==MessageType::TriggerRequest && !ValidStoryRequest(m.story.phase))) return false;
     std::lock_guard lock(mutex_);
+    if (m.type==MessageType::WorldDigest && outgoing_.size()>=kStoryQueue/4) return false;
     if (outgoing_.size()>=kStoryQueue) return false;
     outgoing_.push_back(std::move(m)); return true;
   }
@@ -155,8 +168,7 @@ class StoryMailbox {
       outgoing_.pop_front();
     }
     for (auto& m : session.TakeStory()) {
-      if (incoming_.size()>=kStoryQueue) { session.End(0); incoming_.clear(); outgoing_.clear(); break; }
-      incoming_.push_back(std::move(m));
+      if (!RetainStoryMessage(incoming_,m)) { session.End(0); incoming_.clear(); outgoing_.clear(); break; }
     }
   }
  private:

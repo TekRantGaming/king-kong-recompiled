@@ -332,7 +332,7 @@ bool SessionBeforeGo(PPCContext& ctx,uint8_t* base,uint32_t g) {
     const auto link=EnemyLinkSnapshot();
     if (catchup_phase==CatchupPhase::Requested) {
       const auto condition=LocalPlayerCondition(base);
-      if ((condition && *condition==PlayerCondition::Dead) || v.checkpoint<catchup.WorldCheckpoint() ||
+      if ((condition && *condition==PlayerCondition::Dead) || (!catchup_from_guard && v.checkpoint<catchup.WorldCheckpoint()) ||
           (!catchup_from_offer && !catchup_from_guard && v.checkpoint==catchup.WorldCheckpoint())) {
         CancelCatchup(); return false; // The normal death route wins this race.
       }

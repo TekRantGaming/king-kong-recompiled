@@ -237,6 +237,7 @@ constexpr size_t kDigestScriptsPerPage=16,kDigestEnemiesPerPage=12;
 struct WorldDigestPage {
   uint32_t generation=0,level=0,start=0,checkpoint=0,sweep=0;
   double captured=0; // host steady clock, compared only with the host's pose clock
+  EnemyWorld enemy_world; // native visit identity, retained across private reloads
   uint64_t completed=0;
   uint16_t part=0,parts=1,script_count=0,enemy_count=0;
   uint32_t extensions=0;

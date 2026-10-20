@@ -10,6 +10,7 @@ void Check(bool ok,const char* why) { if (!ok) { std::fprintf(stderr,"FAIL: %s\n
 WorldDigestPage Page(uint16_t part=0) {
   WorldDigestPage p; p.generation=1; p.level=101; p.start=1; p.checkpoint=2; p.sweep=1;
   p.parts=2; p.part=part; p.script_count=17; p.enemy_count=13;
+  p.enemy_world={101,1,1};
   const size_t ns=part ? 1:16,ne=part ? 1:12;
   for (size_t i=0;i<ns;++i) p.scripts.push_back({1+i+part*16,99,2,3,5});
   for (size_t i=0;i<ne;++i) p.enemies.push_back({{1+i+part*12,0,EnemyFamily::Raptor},EnemyOwner::Host,0,100,0});
@@ -26,7 +27,7 @@ void Codec() {
     }
     bytes.push_back(0); Check(!Decode(bytes,out),"trailing byte rejected");
   }
-  for (int bad=0;bad<11;++bad) {
+  for (int bad=0;bad<12;++bad) {
     Message m; m.type=MessageType::WorldDigest; m.digest=Page();
     switch (bad) {
       case 0:m.digest.scripts[0].record=kStoryRecords+1;break;
@@ -40,6 +41,7 @@ void Codec() {
       case 8:m.digest.enemy_count=513;break;
       case 9:m.digest.scripts[0].source=0;break;
       case 10:m.digest.captured=std::numeric_limits<double>::quiet_NaN();break;
+      case 11:m.digest.enemy_world.serial=0;break;
     }
     std::vector<uint8_t> bytes; Check(!Encode(m,bytes),"invalid digest bounded on send");
   }
@@ -86,12 +88,20 @@ void Hysteresis() {
   Check(g.Observe(1,101,1,wrong,22)==Tier::Reload,"large drift bypasses pointless teleport");
   CheckpointCatchup catchup; catchup.Reset(1,1);
   Check(!catchup.Begin() && catchup.Begin(false,true) && !catchup.Begin(false,true),"same initial checkpoint reload allowed once only for guard");
+  catchup.Reset(1,3); catchup.Observe(1,1,1);
+  Check(!catchup.Begin() && catchup.Begin(false,true) && !catchup.Begin(false,true),"proven large drift may return an ahead guest to the authoritative older host checkpoint once");
 }
 void Mailbox() {
   StoryMailbox box; Message m; m.type=MessageType::WorldDigest; m.epoch=17; m.digest=Page();
   Check(box.Submit(m),"digest shares bounded value-only story mailbox");
   Check(StorySender(m.type,Role::Host) && !StorySender(m.type,Role::Guest),"only host can send digest");
   m.digest.extensions=1; Check(!box.Submit(m),"bad extension rejected before queue");
+  m.digest.extensions=0;
+  std::vector<Message> paused(kStoryQueue,m);
+  Check(RetainStoryMessage(paused,m) && paused.size()==kStoryQueue,"paused receiver discards optional digest overflow without disconnect");
+  Message action; action.type=MessageType::StoryEvent;
+  for (size_t i=0;i<kStoryQueue;++i) Check(RetainStoryMessage(paused,action),"real story actions displace optional observations during a load");
+  Check(!RetainStoryMessage(paused,action),"real action overflow still fails closed");
 }
 }
 int main() { Codec(); Assembly(); Hysteresis(); Mailbox(); std::puts("World digest codec, complete census, recovery tiers and loop guards passed"); }
