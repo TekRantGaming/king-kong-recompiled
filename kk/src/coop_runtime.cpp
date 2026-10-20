@@ -529,6 +529,7 @@ void Configure(const std::filesystem::path& user_data) {
   SteamRuntimeOptions options;
   options.cheats = kk::OwnCheats();
   options.enabled = REXCVAR_GET(kk_coop_enabled);
+  REXLOG_INFO("KK co-op: enabled={} (Social {})", options.enabled, options.enabled ? "available" : "disabled");
   options.executable_folder = rex::filesystem::GetExecutableFolder();
   options.startup_lobby = CaptureStartupLobby();
   options.request_ui_paint = [] { RequestUiPaint(); };

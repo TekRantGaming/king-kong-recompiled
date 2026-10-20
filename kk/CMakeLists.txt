@@ -158,6 +158,8 @@ else()
 endif()
 list(APPEND KINGKONG_SOURCES ${KK_PS2_DECODER})
 
+option(KK_COOP_DEFAULT_ON "Enable co-op by default unless settings or command line override it" OFF)
+
 # Developer-only test aids (never in release builds): -DKK_DEV_TOOLS=ON.
 option(KK_DEV_TOOLS "Build developer test aids such as KK_DEV_AUTOSKIP" OFF)
 if(KK_DEV_TOOLS)
@@ -262,6 +264,9 @@ endif()
 if(KK_DEV_TOOLS)
     target_compile_definitions(king_kong PRIVATE KK_DEV_TOOLS=1)
 endif()
+# Only settings.cpp needs the default; other sources use the resolved cvar.
+set_property(SOURCE src/settings.cpp APPEND PROPERTY COMPILE_DEFINITIONS
+    KK_COOP_DEFAULT_ON=$<BOOL:${KK_COOP_DEFAULT_ON}>)
 
 # Developer-only call profiler (preset kk-prof, never in release builds): every
 # recompiled game function counts its calls (src/dev_prof.cpp).

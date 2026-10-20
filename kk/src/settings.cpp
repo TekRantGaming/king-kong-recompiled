@@ -22,7 +22,12 @@
 #include "graphics_presets.h"
 #include "ultrawide_logic.h"
 
-REXCVAR_DEFINE_BOOL(kk_coop_enabled, false, "KK", "Enable the optional co-op session (off by default)")
+// Standalone settings test targets also compile this file without the game definition.
+#ifndef KK_COOP_DEFAULT_ON
+#define KK_COOP_DEFAULT_ON 0
+#endif
+
+REXCVAR_DEFINE_BOOL(kk_coop_enabled, KK_COOP_DEFAULT_ON != 0, "KK", "Enable the optional co-op session")
     .lifecycle(rex::cvar::Lifecycle::kRequiresRestart);
 REXCVAR_DEFINE_BOOL(kk_launcher, true, "KK",
                     "Show the launcher before starting the game (hold Shift at start to force it)");
