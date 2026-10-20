@@ -296,6 +296,11 @@ inline constexpr Help kHelp[] = {
      "A wider view shows more of the scene, so the game draws a little more.", {}},
     {"Camera shake", C::kNone, C::kUnset, A::kAtOnce, nullptr, {}},
     {"Camera shake strength", C::kNone, C::kUnset, A::kAtOnce, nullptr, {}},
+    {"Main menu background", C::kMedium, C::kLow, A::kNextStart,
+     "The live scene is the game itself running behind the menus at your graphics settings, so the graphics card "
+     "works about as hard as in play.",
+     {{"Live scene", "The Venture rolls on the waves under Skull Island, as in the original game's menu."},
+      {"Pictures", "Still pictures from the game, one after another. Almost no work for the graphics card."}}},
     {"Startup logos", C::kNone, C::kUnset, A::kAuto, nullptr,
      {{"Play", "The logo movies play before the title screen."}, {"Skip", "Straight to the title screen."}}},
 

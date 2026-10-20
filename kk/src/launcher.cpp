@@ -15,6 +15,7 @@
 #include "launcher_sounds.h"
 #include "launcher_text.h"
 #include "launcher_ui.h"
+#include "menu_scene.h"
 #include "notify_logic.h"
 #include "system_notify.h"
 #include "ps2_movies.h"
@@ -1372,6 +1373,14 @@ class SettingsPages {
                            [](float v) { return std::to_string(int(std::lround(v))) + "%"; });
       items.push_back(
           std::move(Disable(it, !GetBool("kk_camera_shake"), "Switch Camera shake on to set its strength.")));
+    }
+    // Task 330 (owner, 20 Oct): the game's own start menu scene, live, behind the launcher (menu_scene.h).
+    if (!in_game_) {
+      items.push_back(Section("Main menu"));
+      items.push_back(CvarChoice("Main menu background",
+                                 "Behind the main menu: the game's own start menu scene (the Venture on a stormy sea) "
+                                 "running live, or still pictures.",
+                                 "kk_menu_background", {{"Live scene", "live"}, {"Pictures", "pictures"}}));
     }
     return items;
   }
@@ -2764,6 +2773,13 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
       OpenPlayMenu();
       OpenPlayView(PlayView::kExtras);
     }
+    // Task 330: a launcher restarted for a shader rebuild (the live menu scene held the shader pack open).
+    if (files_ok_ && open_on == "rebuild" && NativeShaderPack::Wanted() && !native_pack_.Busy()) {
+      native_pack_.Start(CacheDir(), paths_.game_dir, true);
+      rebuild_shaders_screen_ = true;
+      REXLOG_INFO("KK: rebuilding the native renderer's shaders (asked for, launcher restarted for it)");
+    }
+    MaybeStartScene();
     saved_changes_ = seen_changes_ = g_changes;
     StartHeartbeat();
   }
@@ -2797,10 +2813,13 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
       using clock = std::chrono::steady_clock;
       const bool idle = ImGui::GetTime() - last_activity_ > 1.0;
 #if defined(_WIN32)
-      const auto frame = idle ? std::chrono::microseconds(33333) : std::chrono::microseconds(0);
+      auto frame = idle ? std::chrono::microseconds(33333) : std::chrono::microseconds(0);
 #else
-      const auto frame = std::chrono::microseconds(idle ? 33333 : 16667);
+      auto frame = std::chrono::microseconds(idle ? 33333 : 16667);
 #endif
+      // Task 330: with the live menu scene the game's frames set the pace (its frame rate cap); a wait here
+      // would hold its presentation.
+      if (menu_scene::Active()) frame = std::chrono::microseconds(0);
       if (frame.count() > 0) {
         if (next_frame_ > clock::now()) std::this_thread::sleep_until(next_frame_);
         next_frame_ = std::max(next_frame_, clock::now() - frame) + frame;
@@ -2810,6 +2829,24 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
     }
 #if defined(KK_DEV_TOOLS)
     const auto draw_start = std::chrono::steady_clock::now();
+    // Task 330: KK_DEV_FRAME_LOG=1 logs the launcher's frame intervals every 5 s (live menu scene or stills).
+    if (static const bool frame_log = std::getenv("KK_DEV_FRAME_LOG") != nullptr; frame_log) {
+      static std::vector<float> gaps;
+      static auto last = draw_start, since = draw_start;
+      gaps.push_back(std::chrono::duration<float, std::milli>(draw_start - last).count());
+      last = draw_start;
+      if (draw_start - since > std::chrono::seconds(5)) {
+        std::sort(gaps.begin(), gaps.end());
+        float sum = 0;
+        for (float g : gaps) sum += g;
+        REXLOG_INFO("KK dev frames: {} in {:.1f} s, mean {:.2f} ms, median {:.2f}, p95 {:.2f}, max {:.2f} (scene {} ready {})",
+                    gaps.size(), std::chrono::duration<float>(draw_start - since).count(), sum / gaps.size(),
+                    gaps[gaps.size() / 2], gaps[gaps.size() * 95 / 100], gaps.back(), menu_scene::Active(),
+                    menu_scene::Ready());
+        gaps.clear();
+        since = draw_start;
+      }
+    }
 #endif
     // Testing aid: KK_AUTOPLAY=1 presses Play after a couple of seconds (120 frames); KK_AUTOPLAY=40
     // after 40 s (60 frames a second), to keep the launcher open as a player might.
@@ -2839,7 +2876,9 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
     ImGui::SetNextWindowSize(vp->Size);
     ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(0, 0));
     ImGui::PushStyleVar(ImGuiStyleVar_WindowBorderSize, 0.0f);
-    ImGui::PushStyleColor(ImGuiCol_WindowBg, ImGui::ColorConvertU32ToFloat4(color::kBase));
+    // Task 330: over the game's own frame (the live menu scene) the window has no background of its own.
+    ImGui::PushStyleColor(ImGuiCol_WindowBg,
+                          ImGui::ColorConvertU32ToFloat4(menu_scene::Active() ? IM_COL32(0, 0, 0, 0) : color::kBase));
     ImGui::Begin("##kk_launcher", nullptr,
                  ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoSavedSettings |
                      ImGuiWindowFlags_NoBringToFrontOnFocus | ImGuiWindowFlags_NoScrollWithMouse |
@@ -3235,7 +3274,15 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
     home_mix_ = ui::Approach(home_mix_ * 100.0f, home ? 100.0f : 0.0f, 9.0f) / 100.0f;
     slide_clock_ += std::min(ImGui::GetIO().DeltaTime, 0.1f);
     const ImVec2 p1(o_.x + w_, o_.y + h_);
-    if (!slides_.empty() && !PlainSetup()) {
+    // Task 330: the game's start menu scene, live, instead of the stills once it is up (menu_scene.h). Switching
+    // Main menu background to Pictures shows the stills again at once.
+    if (menu_scene::Active()) menu_scene::SetHidden(!menu_scene::WantsLive(Get("kk_menu_background")));
+    scene_mix_ = menu_scene::StepMix(scene_mix_, menu_scene::Active() && menu_scene::Ready() && !PlainSetup(),
+                                     ImGui::GetIO().DeltaTime);
+    const float still = 1.0f - scene_mix_;  // the stills' share
+    if (still <= 0.0f) {
+      // The scene only: nothing to draw under the darkening below.
+    } else if (!slides_.empty() && !PlainSetup()) {
       const int n = int(slides_.size());
       const int cur = int(slide_clock_ / kSlideTime) % n, next = (cur + 1) % n;
       const float into = float(std::fmod(slide_clock_, double(kSlideTime)));
@@ -3260,7 +3307,7 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
         const float fu = cu + (0.62f - cu) * (1 - 1 / zoom), fv = cv + ((i % 2 ? 0.42f : 0.55f) - cv) * (1 - 1 / zoom);
         const float hu = (u1 - u0) * 0.5f / zoom, hv = (v1 - v0) * 0.5f / zoom;
         dl->AddImage(ui::Tex(soft ? sl.soft : sl.sharp), o_, p1, ImVec2(fu - hu, fv - hv), ImVec2(fu + hu, fv + hv),
-                     ui::WithAlpha(IM_COL32_WHITE, alpha));
+                     ui::WithAlpha(IM_COL32_WHITE, alpha * still));
       };
       const float age_next = into - (kSlideTime - kFadeTime);
       draw(cur, into + kFadeTime, true, 1.0f);
@@ -3271,12 +3318,14 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
       }
     } else {
       // Nothing yet (before the install): night sky with the moon's glow.
-      dl->AddRectFilledMultiColor(o_, p1, IM_COL32(22, 28, 36, 255), IM_COL32(26, 33, 42, 255),
-                                  color::kBase, color::kBase);
+      dl->AddRectFilledMultiColor(o_, p1, ui::WithAlpha(IM_COL32(22, 28, 36, 255), still),
+                                  ui::WithAlpha(IM_COL32(26, 33, 42, 255), still), ui::WithAlpha(color::kBase, still),
+                                  ui::WithAlpha(color::kBase, still));
       if (!glow_) glow_ = MakeTexture(Glow());
       const ImVec2 moon(o_.x + w_ * 0.76f, o_.y + h_ * 0.28f);
       const float r = h_ * 0.62f;
-      dl->AddImage(ui::Tex(glow_), ImVec2(moon.x - r, moon.y - r), ImVec2(moon.x + r, moon.y + r));
+      dl->AddImage(ui::Tex(glow_), ImVec2(moon.x - r, moon.y - r), ImVec2(moon.x + r, moon.y + r),
+                   ImVec2(0, 0), ImVec2(1, 1), ui::WithAlpha(IM_COL32_WHITE, still));
     }
     auto lerp = [](float a, float b, float t) { return a + (b - a) * t; };
     const float hm = home_mix_;
@@ -5395,6 +5444,18 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
               1,
               [this](int i) {
                 if (i != 0 || native_pack_.Busy()) return;
+                if (menu_scene::Active() && cb_.restart_launcher) {
+                  // Task 330: the live menu scene's renderer holds the shader pack open: the launcher starts
+                  // again without the scene for this time and rebuilds there (--kk_launcher_open=rebuild).
+                  REXLOG_INFO("KK: rebuilding the shaders: the launcher starts again without the menu scene");
+                  SaveIfChanged();
+                  input_.Release();
+                  StopHeartbeat();
+                  leaving_ = true;
+                  modal_.open = false;
+                  cb_.restart_launcher(L"--kk_launcher_open=rebuild --kk_menu_scene_off=true");
+                  return;
+                }
                 native_pack_.Start(CacheDir(), paths_.game_dir, true);
                 rebuild_shaders_screen_ = true;
                 REXLOG_INFO("KK: rebuilding the native renderer's shaders (asked for)");
@@ -6189,6 +6250,19 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
     if (cb_.quit) cb_.quit();
   }
 
+  // Task 330: the game's start menu scene behind the launcher, when nothing needs the stills (menu_scene_logic.h).
+  void MaybeStartScene() {
+    menu_scene::StartFacts f;
+    f.files_ok = files_ok_;
+    f.native_renderer = NativeShaderPack::Wanted();
+    f.shaders_prepared = ShadersPreparedForThisVersion();
+    f.shader_job = native_pack_.Busy() || update_shaders_ || setup_shaders_ || rebuild_shaders_screen_;
+    f.setup = InSetup() || update_new_;
+    f.low_end = Get("kk_hardware_tier") == "low";
+    if (menu_scene::DecideAtLauncherStart(f, paths_.user_dir) != menu_scene::Reason::kLive || !cb_.start_scene) return;
+    cb_.start_scene();
+  }
+
   void StartGame() {
     if (played_) return;
     if (!ContentReadyForPlay()) return;
@@ -6235,6 +6309,8 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
         continue;
       needs_restart = true;
     }
+    // Task 330: the live menu scene is the game already running in this process: the game starts as a new one.
+    if (menu_scene::Active()) needs_restart = true;
     FlushProfileOptions();
     auto action = benchmark_pending_ ? cb_.benchmark : needs_restart ? cb_.restart_and_play : cb_.play;
     // The pause menu for the game about to start (the app makes it too when the launcher is skipped).
@@ -7766,6 +7842,7 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
   std::unique_ptr<rex::ui::ImmediateTexture> discord_icon_, steam_icon_;
   std::vector<float> home_offset_;
   float home_mix_ = 1.0f;
+  float scene_mix_ = 0.0f;  // task 330: the live menu scene over the stills (0 .. 1)
   float tab_x_ = -1, tab_w_ = 0;
 
   std::vector<std::string> restart_baseline_;

@@ -77,6 +77,7 @@ set(KINGKONG_SOURCES
     src/mods.cpp
     src/changelog.cpp
     src/menu_hook.cpp
+    src/menu_scene.cpp
     src/glyphs.cpp
     src/crash_dump.cpp
     src/exit_evidence.cpp
@@ -377,6 +378,11 @@ if(KK_DEV_TOOLS)
     target_include_directories(kk-cheat-rules-tests PRIVATE src)
     target_compile_features(kk-cheat-rules-tests PRIVATE cxx_std_20)
     add_test(NAME cheat-rules COMMAND kk-cheat-rules-tests)
+    # Task 330: the live main menu scene (when it runs, the failure marker, Start on the title, readiness).
+    add_executable(kk-menu-scene-tests tests/menu_scene_tests.cpp)
+    target_include_directories(kk-menu-scene-tests PRIVATE src)
+    target_compile_features(kk-menu-scene-tests PRIVATE cxx_std_20)
+    add_test(NAME menu-scene COMMAND kk-menu-scene-tests)
     # Task 219: HDR follows Windows (the default decision, the calibration profile's brightness, automatic
     # levels; prints what this PC's screen reports) and the setup's comparison pictures made from the game files.
     add_executable(kk-hdr-tests tests/hdr_tests.cpp src/hdr_display.cpp)

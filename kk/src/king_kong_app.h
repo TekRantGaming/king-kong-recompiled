@@ -55,6 +55,7 @@ void InstallFpeGuard();  // fpe_guard.cpp
 #include "online.h"
 #include "shader_pack.h"
 #include "launcher.h"
+#include "menu_scene.h"
 #include "mods.h"
 #include "overlay.h"
 #include "ui_paint.h"
@@ -249,6 +250,8 @@ class KingKongApp : public rex::ReXApp {
       nr::kk::StopLauncherPrewarm();  // its device goes before this process does
       // Task 233: no pipeline compile of this process beside the game's (one driver shader cache).
       kk::play::QuiescePipelines();
+      // Task 330: the live menu scene's renderer has written pipelines too: on disk before the game reads them.
+      if (kk::menu_scene::Active()) kk::play::FlushRendererFiles();
       // The start request chosen on the Play menu goes with it (kk::play::SetStartRequest).
       const std::wstring start = kk::play::StartRequestArg();
       kk::startup::CleanExit();
@@ -258,6 +261,8 @@ class KingKongApp : public rex::ReXApp {
     };
     cb.quit = [this] {
       nr::kk::StopLauncherPrewarm();
+      // Task 330: with the live menu scene the window's close ends the process (hard exit): save first.
+      if (kk::menu_scene::Active() && !config_path_.empty()) kk::SaveSettings(config_path_);
 #if defined(__linux__)
       // The hard exit below skips the launcher's own save a moment after a change.
       if (!config_path_.empty()) kk::SaveSettings(config_path_);
@@ -290,6 +295,24 @@ class KingKongApp : public rex::ReXApp {
     cb.output_size = [this] { return OutputSize(); };
     cb.display_modes = [this](int monitor) { return kk::ListDisplayModes(monitor, window()); };
     cb.desktop_mode = [this](int monitor) { return kk::DesktopDisplayMode(monitor, window()); };
+    // Task 330: the game's start menu scene behind the launcher (menu_scene.h): the game starts in this process
+    // as Play does, with the launcher staying up; Play then always starts the game as a new process.
+    cb.start_scene = [this, resume, defaults] {
+      app_context().CallInUIThreadDeferred([this, resume, defaults] {
+        nr::kk::StopLauncherPrewarm();  // the scene's renderer makes what it draws
+        { const auto out = OutputSize(); kk::ApplyRenderPreset(out.first, out.second); }
+        kk::ApplyVideoMode();  // before the GPU starts: it sizes its frame from the mode (settings.cpp)
+        kk::menu_scene::Begin(defaults.user_data_root);
+        resume(defaults);
+      });
+    };
+    // A launcher that starts again (task 330: a shader rebuild while the scene runs, which holds the pack open).
+    cb.restart_launcher = [this](const std::wstring& args) {
+      nr::kk::StopLauncherPrewarm();
+      kk::play::FlushRendererFiles();
+      if (!config_path_.empty()) kk::SaveSettings(config_path_);
+      if (kk::play::RelaunchWith(args)) kk::handoff::QuitWhenChildShown([this] { CloseLauncherProcess(); });
+    };
     cb.post_to_ui = [this](std::function<void()> f) { app_context().CallInUIThreadDeferred(std::move(f)); };
     cb.recover_presentation = [this] { RecoverPresentation(nullptr); };
     cb.window_state = [this] {
@@ -315,6 +338,16 @@ class KingKongApp : public rex::ReXApp {
   void CloseLauncherProcess() {
     REXLOG_INFO("KK: the launcher closes");
     kk::exit_evidence::NoteCleanExit("launcher closed");
+    kk::menu_scene::NoteClosing();
+    // Task 330: a launcher with the live menu scene has the game running: closed as the game's window is
+    // (the SDK's QuitFromUIThread is for a process without a running game).
+    if (kk::menu_scene::Active()) {
+      app_context().CallInUIThreadDeferred([this] {
+        if (window()) window()->RequestClose();
+        else app_context().QuitFromUIThread();
+      });
+      return;
+    }
 #if defined(__linux__)
     // On Linux the SDK's normal quit (QuitFromUIThread, then the subsystems' teardown) never returned
     // after the launcher: the process stayed asleep in a futex wait with its relaunched game as a
@@ -369,7 +402,7 @@ class KingKongApp : public rex::ReXApp {
     kk::ApplyRuntimeOverrides();
     kk::benchmark::InstallPresentObserver();
     UseOneControllerSlot();
-    kk::mouse_look::Install(window());
+    if (!kk::menu_scene::Active()) kk::mouse_look::Install(window());  // task 330: the launcher keeps the mouse
     // HDR follows Windows for the screen the game's window is on (hdr_display.h).
     kk::hdr::SetWindowProvider([this]() -> void* { return window() ? window()->GetNativeWindowHandle() : nullptr; });
     kk::hdr::Apply("game window");
@@ -379,7 +412,7 @@ class KingKongApp : public rex::ReXApp {
     if (!user_data_root_.empty())
       kk::art::WriteAchievementCache(achievements().ListAchievements(),
                                       kk::art::AchievementCachePath(user_data_root_));
-    ScheduleTitleCapture();
+    if (!kk::menu_scene::Active()) ScheduleTitleCapture();
     kk::play::SetFrameGrabber([this](int& width, int& height, std::vector<uint8_t>& rgba) {
       rex::ui::RawImage image;
       auto* gfx = runtime() ? runtime()->graphics_system() : nullptr;
@@ -410,7 +443,7 @@ class KingKongApp : public rex::ReXApp {
     });
     kk::StartButtonPrompts(runtime()->memory());
     kk::hfr::Setup(runtime()->memory());
-    ScheduleWelcomeAchievement();
+    if (!kk::menu_scene::Active()) ScheduleWelcomeAchievement();  // in the game's own process
 
     // Debug aid: set KK_DUMP_IMAGE=<file> to write the decrypted guest image
     // (0x82000000-0x823A0000) for offline analysis.

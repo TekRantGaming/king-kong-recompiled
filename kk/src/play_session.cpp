@@ -23,6 +23,7 @@
 #include "ui_paint.h"
 
 #include "play_session.h"
+#include "menu_scene.h"
 #include "handoff.h"
 
 #include <algorithm>
@@ -476,7 +477,9 @@ bool DeleteSave(const std::filesystem::path& user_dir, int slot) {
 void SetStartRequest(const StartRequest& request) {
   std::lock_guard lock(g_mutex);
   g_request = request;
-  g_starting = request.kind != StartKind::kNone;
+  // Task 330: a launcher with the live menu scene runs the game too; the request is for the new process its Play
+  // starts (restart_and_play), never carried out by the scene.
+  g_starting = request.kind != StartKind::kNone && !kk::menu_scene::Active();
 #if defined(KK_DEV_TOOLS)
   if (request.kind == StartKind::kExtra && std::getenv("KK_DEV_LAUNCHER_INPUT")) {
     // A scripted controller activation is for this session, never repeated after returning to Extras;
@@ -558,7 +561,7 @@ void LoadStartRequestFromSettings() {
 }
 
 bool RelaunchWith(const std::wstring& extra) {
-  static constexpr const wchar_t* kDropped[] = {L"--kk_skip_launcher", L"--kk_start", L"--kk_launcher_open",
+  static constexpr const wchar_t* kDropped[] = {L"--kk_skip_launcher", L"--kk_start", L"--kk_launcher_open", L"--kk_menu_scene_off",
                                                L"--kk_startup_child", L"--kk_benchmark", L"--kk_benchmark_record",
                                                L"--kk_benchmark_route", L"--kk_benchmark_passes",
                                                L"--kk_benchmark_settle", L"--kk_benchmark_from"};
@@ -1153,6 +1156,7 @@ REX_HOOK_RAW(sub_8253DB80) {
   using namespace kk::play;
   const uint32_t ai = Load32(base, kAiPtr);
   const uint32_t g = ai ? Load32(base, ai + 0x40) : 0;
+  if (g && kk::menu_scene::Active()) kk::menu_scene::NoteUniverse(g);  // task 330: the live menu scene
   if (g) {
     if (const int chapter = kk::benchmark::NextChapter(); chapter >= 0) {
       g_level_loaded = false;

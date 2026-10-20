@@ -6,10 +6,12 @@
 #include <memory>
 #include <thread>
 
+#include <rex/audio/sdl/sdl_audio_driver.h>
 #include <rex/audio/sdl/sdl_audio_system.h>
 #include <rex/cvar.h>
 #include <rex/logging.h>
 #include "backend/thread_scheduling.h"
+#include "menu_scene.h"
 
 namespace kk {
 
@@ -48,10 +50,22 @@ class ScheduledAudioSystem : public rex::audio::sdl::SDLAudioSystem {
 #endif
     const rex::X_STATUS status = SDLAudioSystem::CreateDriver(index, semaphore, out_driver);
     done->store(true);
+    // Task 330: the live menu scene behind the launcher is silent (the launcher plays the same menu music).
+    if (kk::menu_scene::Active() && out_driver && *out_driver) {
+      SDL_AudioStream* stream = DriverStream::Of(static_cast<rex::audio::sdl::SDLAudioDriver*>(*out_driver));
+      const bool muted = stream && SDL_SetAudioStreamGain(stream, 0.0f);
+      REXLOG_INFO("KK menu scene: the game's sound {}", muted ? "is muted" : "could not be muted");
+    }
     const double ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - start).count();
     if (ms >= 2000.0) REXLOG_WARN("KK audio: opening the audio device took {:.1f} s", ms / 1000.0);
     return status;
   }
+
+ private:
+  // SDLAudioDriver's stream is protected; a class derived from it may name it (never made).
+  struct DriverStream : rex::audio::sdl::SDLAudioDriver {
+    static SDL_AudioStream* Of(rex::audio::sdl::SDLAudioDriver* d) { return d->*(&DriverStream::sdl_stream_); }
+  };
 
  protected:
   void Initialize() override {

@@ -28,6 +28,7 @@
 #include "benchmark.h"
 #include "settings.h"
 #include "freecam.h"
+#include "menu_scene.h"
 
 namespace {
 
@@ -154,6 +155,12 @@ REX_HOOK_RAW(sub_821074E8) {
   const uint32_t user = ctx.r3.u32;
   const uint32_t state_ptr = ctx.r4.u32;
   __imp__sub_821074E8(ctx, base);
+  // The live menu scene behind the launcher (task 330): no controller reaches the game, only the port's Start
+  // on the title.
+  if (kk::menu_scene::Active() && state_ptr) {
+    ctx.r3.u64 = kk::menu_scene::GuestPad(user, base, base + state_ptr);
+    return;
+  }
   struct RecordRead {
     uint32_t user; const uint8_t* state; PPCContext& ctx; const uint8_t* base;
     ~RecordRead() { kk::benchmark::PadRead(user, state, ctx.r3.u32, base); }

@@ -427,8 +427,11 @@ void SettingsLayoutChecks() {
                                  "Camera shake strength"}) &&
               section(L::kDisplay, "Field of view") == "Camera" && section(L::kDisplay, "Motion blur") == "Camera" &&
               section(L::kDisplay, "Camera shake strength") == "Camera" &&
-              L::IndexOf(L::kDisplay, "Camera shake strength") + 1 == int(L::RowsOf(L::kDisplay).size),
-          "Display ends with Camera: field of view, motion blur, camera shake and its strength");
+              // Task 330: then the launcher's own Main menu background (Main menu, the last section).
+              L::IndexOf(L::kDisplay, "Camera shake strength") + 1 == L::IndexOf(L::kDisplay, "Main menu background") &&
+              section(L::kDisplay, "Main menu background") == "Main menu" &&
+              L::IndexOf(L::kDisplay, "Main menu background") + 1 == int(L::RowsOf(L::kDisplay).size),
+          "Display ends with Camera (field of view, motion blur, camera shake and its strength), then Main menu");
     Check(section(L::kDisplay, "Frame rate") == "Frame rate", "the frame rate cap stays in Display");
     Check(in_order(L::kGameplay, {"Pop-up style", "Performance metrics", "Startup logos"}) &&
               section(L::kGameplay, "Performance metrics") == "Overlay",
