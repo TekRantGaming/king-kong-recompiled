@@ -124,7 +124,7 @@ void CoopSession::Receive(const Message& m, double now) {
         return;
       }
       switch (m.type) {
-        case MessageType::StoryEvent: case MessageType::TriggerRequest:
+        case MessageType::StoryEvent: case MessageType::TriggerRequest: case MessageType::WorldDigest:
           if (state_!=SessionState::Connected || StorySender(m.type,config_.role)) return;
           if (incoming_story_.size()>=kStoryQueue) { End(now); return; }
           incoming_story_.push_back(m); break;

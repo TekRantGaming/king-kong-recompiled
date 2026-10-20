@@ -1,4 +1,5 @@
 #include "coop_direct_udp.h"
+#include "coop_desync.h"
 #include "coop_session.h"
 #include "coop_flow.h"
 #include <array>
@@ -66,7 +67,7 @@ void Bounds() {
   Message hello; hello.hello=Compatible(); hello.join_code="TEST23";
   std::vector<uint8_t> bytes; Check(Encode(hello,bytes),"bounded packet fixture");
   for (int i=0;i<64;++i) Check(host->Send(bytes,true),"bounded reliable queue accepts window");
-  Check(!host->Send(bytes,true) && host->State()==TransportState::Failed,"reliable overflow fails instead of losing ordered data");
+  Check(!host->Send(bytes,true) && host->State()==TransportState::Ready,"full reliable window backpressures without losing data or disconnecting");
   host->Close(); Check(host->State()==TransportState::Closed && !host->Send(bytes,false),"closed transport inert");
   Check(CreateDirectUdp({true,"127.0.0.1",0,"TEST23"})->State()==TransportState::Failed,"zero port rejected");
   Check(CreateDirectUdp({true,"127.0.0.1",31779,"short"})->State()==TransportState::Failed,"short code rejected before binding");
@@ -232,7 +233,40 @@ void ReliabilityAndFlood() {
   Check(count==40,"all reliable samples delivered");
 }
 }
+void SimulationIntegration() {
+  DirectUdpOptions h{true,"127.0.0.1",next_port++,"TEST23"}; h.simulation={150,30,3};
+  auto a=CreateDirectUdp(h);
+  DirectUdpOptions j{false,"127.0.0.1",a->LocalPort(),"TEST23"}; j.simulation={150,30,3};
+  auto b=CreateDirectUdp(j);
+  CoopSession host(Config(Role::Host),*a),guest(Config(Role::Guest),*b);
+  desync::Assembly assembly; desync::Guard guard;
+  uint32_t sweep=0; unsigned digests=0; double next=10;
+  enemies::Frame frame; frame.world={101,1,1};
+  EnemyState enemy{{777,0,EnemyFamily::Raptor},1,2,3,0,100};
+  frame.records.push_back({enemy,EnemyEventKind::Spawned});
+  for (double now=1;now<121;now+=.01) {
+    frame.time=now;
+    host.Tick(now,PlayerPose{now,101,1,2,3,0,0},&frame);
+    guest.Tick(now,PlayerPose{now,101,4,2,3,0,0});
+    if (now>10) Check(host.State()==SessionState::Connected && guest.State()==SessionState::Connected,"150/30/3 never Lost");
+    if (now>=next && host.State()==SessionState::Connected) {
+      next=now+3; Message m; m.type=MessageType::WorldDigest; m.epoch=host.Epoch();
+      m.digest.generation=1; m.digest.level=101; m.digest.start=1; m.digest.checkpoint=1;
+      m.digest.sweep=++sweep; m.digest.enemy_count=1;
+      m.digest.enemies.push_back({enemy.id,EnemyOwner::Host,0,100,0});
+      Check(host.QueueStory(m) && !guest.QueueStory(m),"digest direction enforced on real UDP");
+    }
+    for (const auto& m:guest.TakeStory()) if (auto complete=assembly.Push(m.digest,now)) {
+      ++digests; const auto remote=guest.Enemies(now); desync::Evidence evidence;
+      evidence.structural=remote.records.size()!=1;
+      evidence.quiet=!remote.records.empty() && remote.records[0].enemy.life!=100;
+      Check(guard.Observe(1,101,1,evidence,now)==desync::Tier::None,"150/30/3 no false recovery and enemies agree");
+    }
+  }
+  Check(digests>=30 && a->Stats().resent>0 && b->Stats().resent>0,"latency, loss, ACK and digest paths exercised");
+}
 int main() {
   Codec(); Limits(); Bounds(); WRONG2(); Integration("127.0.0.1"); Integration("::1"); ReliabilityAndFlood();
+  SimulationIntegration();
   std::puts("Direct UDP codec, code, rate, IPv4/IPv6, readiness, save/load, poses and single-peer checks passed");
 }

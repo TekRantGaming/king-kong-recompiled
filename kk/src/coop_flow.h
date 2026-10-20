@@ -150,8 +150,8 @@ class CheckpointCatchup {
     return !attempted_ && offered_until_>=0 && host_>=world_ && script_behind && safe && std::isfinite(now) &&
         now>=offered_until_-6 && now<=offered_until_;
   }
-  bool Begin(bool checkpoint_offer=false) {
-    if (!Available() && !(checkpoint_offer && !attempted_ && offered_until_>=0 && host_==world_)) return false;
+  bool Begin(bool checkpoint_offer=false,bool desync_recovery=false) {
+    if (!Available() && !(!attempted_ && host_==world_ && (desync_recovery || (checkpoint_offer && offered_until_>=0)))) return false;
     attempted_=true; return true;
   }
   uint32_t Target() const { return host_; }

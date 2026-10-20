@@ -26,6 +26,7 @@ set(KINGKONG_SOURCES
     src/coop_session.cpp
     src/coop_flow_game.cpp
     src/coop_story_game.cpp
+    src/coop_desync_game.cpp
     src/coop_runtime.cpp
     src/coop_partner_body.cpp
     src/coop_nametag.cpp
@@ -331,6 +332,7 @@ if(KK_DEV_TOOLS)
     add_test(NAME coop-net-core COMMAND kk-coop-tests)
     add_executable(kk-direct-tests tests/direct_udp_tests.cpp src/coop_direct_udp.cpp src/coop_protocol.cpp src/coop_session.cpp src/steam_lobby.cpp)
     target_include_directories(kk-direct-tests PRIVATE src)
+    target_compile_definitions(kk-direct-tests PRIVATE KK_DEV_TOOLS=1)
     target_link_libraries(kk-direct-tests PRIVATE Threads::Threads)
     if(WIN32)
         target_link_libraries(kk-direct-tests PRIVATE ws2_32)
@@ -346,6 +348,9 @@ if(KK_DEV_TOOLS)
     add_executable(kk-story-tests tests/coop_story_tests.cpp src/coop_protocol.cpp src/coop_session.cpp)
     target_include_directories(kk-story-tests PRIVATE src)
     add_test(NAME coop-story-sync COMMAND kk-story-tests)
+    add_executable(kk-desync-tests tests/coop_desync_tests.cpp src/coop_protocol.cpp src/coop_session.cpp)
+    target_include_directories(kk-desync-tests PRIVATE src)
+    add_test(NAME coop-desync-guard COMMAND kk-desync-tests)
     add_executable(kk-enemies-tests tests/coop_enemies_tests.cpp src/coop_protocol.cpp src/coop_session.cpp)
     target_include_directories(kk-enemies-tests PRIVATE src)
     add_test(NAME coop-enemies COMMAND kk-enemies-tests)

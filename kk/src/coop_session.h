@@ -128,13 +128,14 @@ inline bool OwnershipSender(OwnershipPhase phase, Role role) {
   return (phase == OwnershipPhase::Prepare || phase == OwnershipPhase::Commit) == (role == Role::Host);
 }
 inline bool StorySender(MessageType type, Role role) {
-  return (type==MessageType::StoryEvent && role==Role::Host) ||
+  return ((type==MessageType::StoryEvent || type==MessageType::WorldDigest) && role==Role::Host) ||
       (type==MessageType::TriggerRequest && role==Role::Guest);
 }
 class StoryMailbox {
  public:
   bool Submit(Message m) {
-    if (!IsStoryMessage(m.type) || !m.epoch || !ValidStoryEvent(m.story) ||
+    if (!IsStoryMessage(m.type) || !m.epoch ||
+        (m.type==MessageType::WorldDigest ? !ValidWorldDigest(m.digest) : !ValidStoryEvent(m.story)) ||
         (m.type==MessageType::TriggerRequest && !ValidStoryRequest(m.story.phase))) return false;
     std::lock_guard lock(mutex_);
     if (outgoing_.size()>=kStoryQueue) return false;

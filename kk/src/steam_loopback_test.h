@@ -30,6 +30,10 @@ inline Message SteamProbeMessage(MessageType type) {
   m.life={m.flow,11,2,1};
   m.camera.generation=1; m.camera.level=101; m.camera.cut=1; m.camera.time=1;
   m.story={1,101,1,123,456,1,kStoryRecords,StoryPhase::Armed};
+  m.digest.generation=1; m.digest.level=101; m.digest.sweep=1;
+  m.digest.script_count=kDigestScriptsPerPage; m.digest.enemy_count=kDigestEnemiesPerPage;
+  for (size_t i=0;i<kDigestScriptsPerPage;++i) m.digest.scripts.push_back({123+i,456,1,3,5});
+  for (size_t i=0;i<kDigestEnemiesPerPage;++i) m.digest.enemies.push_back({{123+i,0,EnemyFamily::Raptor},EnemyOwner::Host,0,50,0});
   return m;
 }
 }  // namespace kk::coop
