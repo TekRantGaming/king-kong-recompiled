@@ -411,7 +411,8 @@ the PS2 cutscenes' decoder and played through the launcher's own SDL audio strea
 `startup_movies_logic.h` (rules, tested in `menu-scene`), `launcher.cpp` StartStartupMovies / DrawStartupMovies.
 
 - **After the setup** (Finish setup or Skip all) they ALWAYS play once. With `kk_skip_intros` on (the default) a
-  pop-up comes first: "The startup movies play this first time. From the next start, your choice to skip them is
+  pop-up comes first, over the launcher's plain dark background before any movie is loaded (owner, after testing;
+  the movies and the scene start after its OK): "The startup movies play this first time. From the next start, your choice to skip them is
   used." [OK].
 - **Later**, a launcher opened from the desktop with the setup done plays them unless `kk_skip_intros` is on (Settings
   > Gameplay > Startup logos; it skips the TRG movie too). Not on a launcher the game starts on its way back, nor one
@@ -422,6 +423,11 @@ the PS2 cutscenes' decoder and played through the launcher's own SDL audio strea
   movie waits for that start (it pauses the launcher about 1.5 s; 5 s at most), so the movies and the notice cover the
   scene's start: no pictures when the scene can run. The launcher's music and the scene's sound are silent under the
   movies; nothing else is drawn or answered over them but their pop-up; What's new waits for them.
+- **Sound** (follow-up, owner heard crackling): the WMA logo soundtracks come out of Media Foundation's resampler
+  a frame or two off their timestamps on almost every packet (Ubisoft 114 of 129, Universal 294 of 297); the Windows
+  decoder used to pad or cut each by the timestamp, a click every packet. Now, as the FFmpeg decoder, only a real gap
+  or overlap over 10 ms is kept (`AudioStats`, logged per movie; `kk-ps2-movie-decode-tests <clip>` prints them and
+  KK_PS2_TEST_RAW=<file> writes the sound out).
 - A movie that cannot be played is left out and logged (Linux: the shipped FFmpeg build has no WMV decoder, so only
   the TRG movie plays there). Log: `KK startup movies:` lines. Test kit: `kk/out/task332/run332.ps1` (player layout,
   `-Fresh` for a new player, `-Reuse <run>` for the next start) with `stepsFull.txt`, `stepsSkip.txt`; dev steps

@@ -3029,17 +3029,27 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
       // Task 330 (owner, 20 Oct): with the live menu scene its own sound plays (the same music, with the sea),
       // at this volume (FadeSceneSound); the launcher's copy of the music then stays silent.
       // Task 332: silent under the startup movies (they have their own sound).
-      music_->Update(SceneSoundPlays() || movies_ ? 0.0f : v * v, io.DeltaTime);  // a gentler curve than linear
+      music_->Update(SceneSoundPlays() || MoviesPending() ? 0.0f : v * v, io.DeltaTime);  // a gentler curve than linear
     }
     if (menu_scene::Active()) {
       const bool on = GetBool("kk_launcher_music") && !native_pack_.Working();
       const float v = on ? GetInt("kk_launcher_music_volume", 50) / 100.0f : 0.0f;
-      FadeSceneSound(SceneSoundPlays() && !movies_ ? v * v : 0.0f, io.DeltaTime);
+      FadeSceneSound(SceneSoundPlays() && !MoviesPending() ? v * v : 0.0f, io.DeltaTime);
     }
     if (files_ok_ && GetBool("kk_launcher_sounds") && !ui_sounds_)
       ui_sounds_ = std::make_unique<LauncherSounds>(paths_.game_dir);
 
     // Task 332: the startup movies over the whole window first (only their pop-up is drawn and answered over them).
+    if (movies_asking_) {  // task 332 follow-up: the movies' pop-up alone, on the plain dark background
+      dl->AddRectFilled(o_, ImVec2(o_.x + w_, o_.y + h_), color::kBase);
+      ui::DrawModal(dl, modal_, o_, ImVec2(o_.x + w_, o_.y + h_), m_, input_);
+      const Action clicked = ui::DrawPrompts(dl, glyphs_, PromptSet(), Prompts(), o_.x + w_ - Margin(),
+                                             o_.y + h_ - 42 * S(), m_, true);
+      if (clicked != Action::kCount) pending_click_ = clicked;
+      ImGui::End();
+      NoteActivity(io);
+      return;
+    }
     if (DrawStartupMovies(dl, io.DeltaTime)) {
       if (modal_.open) {  // the pop-up and its button prompts (no status line over the movie)
         ui::DrawModal(dl, modal_, o_, ImVec2(o_.x + w_, o_.y + h_), m_, input_);
@@ -3099,7 +3109,7 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
                      (ShaderScreen() ? 100000 : 0) + (leaving_ ? 1000000 : 0);
     active = active || view != last_view_ || (toast_ && toast_->NeedsContinuousPaint()) || native_pack_.Working() ||
              installing_ || art_progress_.busy || (update_ && update_->busy) || status_focus_ != last_status_focus_ ||
-             movies_ != nullptr;  // task 332: the movies at their own frame rate
+             MoviesPending();  // task 332: the movies at their own frame rate
     last_view_ = view;
     last_status_focus_ = status_focus_;
     if (active) last_activity_ = ImGui::GetTime();
@@ -6441,18 +6451,24 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
 
   // After Finish setup or Skip all: the movies always play this once; with kk_skip_intros on, a pop-up first says
   // so. The live menu scene starts behind them (if it can run now; else TickSceneStart starts it later).
+  // Owner (after testing Beta 13): the pop-up comes BEFORE any movie is loaded, over the launcher's plain dark
+  // background; the movies (and the scene behind them) start only after its OK.
   void StartMoviesAfterSetup() {
     const bool skip = GetBool("kk_skip_intros");
-    StartStartupMovies("after the setup");
     if (startup_movies::AskFirst(true, skip)) {
+      movies_asking_ = true;
       OpenModal("Startup movies",
                 T(std::string("The startup movies play this first time. From the next start, your choice to skip them is used.")),
                 {"OK"}, -1, [this](int) {
                   REXLOG_INFO("KK startup movies: the first time pop-up closed");
+                  movies_asking_ = false;
+                  StartStartupMovies("after the setup");
                   if (!menu_scene::Active()) MaybeStartScene(false);
                 });
-    } else if (!menu_scene::Active()) {
-      MaybeStartScene(false);
+      REXLOG_INFO("KK startup movies: the first time pop-up, before any movie");
+    } else {
+      StartStartupMovies("after the setup");
+      if (!menu_scene::Active()) MaybeStartScene(false);
     }
   }
 
@@ -6604,7 +6620,7 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
   // starts now (checked about once a second; the runtime's start pauses the launcher about 1.5 s once).
   void TickSceneStart() {
     // Task 332: not while the startup movies play (the scene's start pauses the launcher): it waits for them.
-    if (!scene_retry_ || menu_scene::Active() || leaving_ || played_ || modal_.open || page_ != kHome || movies_) return;
+    if (!scene_retry_ || menu_scene::Active() || leaving_ || played_ || modal_.open || page_ != kHome || MoviesPending()) return;
     if (ImGui::GetTime() < scene_retry_at_) return;
     scene_retry_at_ = ImGui::GetTime() + 1.0;
     const menu_scene::Reason r = menu_scene::Decide(SceneFacts());
@@ -7770,7 +7786,7 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
     // New in this update screen (job J6), nor while shaders are prepared (that loads every processor core and the
     // launcher answers slowly meanwhile). launcher_policy.h.
     if (open_whats_new_ &&
-        ShowWhatsNewNow({open_whats_new_, modal_.open, files_ok_, InSetup() || movies_ != nullptr, update_new_, ShaderScreen(), native_pack_.Busy(),
+        ShowWhatsNewNow({open_whats_new_, modal_.open, files_ok_, InSetup() || MoviesPending(), update_new_, ShaderScreen(), native_pack_.Busy(),
                          NativeShaderPack::Wanted(), native_pack_.Finished() || ShadersPreparedForThisVersion()})) {
       open_whats_new_ = false;
       whats_new_shown_ = true;
@@ -8010,7 +8026,7 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
     if (const std::string& w = steps[next]; w.rfind("wait-", 0) == 0) {
       bool met = true;
       if (w.rfind("wait-setup:", 0) == 0) met = InSetup() && SetupStage() == std::atoi(w.c_str() + 11);
-      else if (w == "wait-home") met = !InSetup() && !ShaderScreen() && !loop_ && !movies_;  // task 331/332: the loop and movies gone
+      else if (w == "wait-home") met = !InSetup() && !ShaderScreen() && !loop_ && !MoviesPending();  // task 331/332: the loop and movies gone
       else if (w == "wait-movies") met = movies_ != nullptr;  // task 332: the startup movies are up
       else if (w == "wait-modal") met = modal_.open;  // a pop-up is up (logged with its title)
       else if (w == "wait-artbook") {  // Beta 7: the artbook installed, or its download failed
@@ -8330,6 +8346,9 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
   // Task 332: the startup movies (StartStartupMovies / DrawStartupMovies).
   std::unique_ptr<StartupMovies> movies_;
   float movies_wait_ = 0.0f;  // seconds the first movie has waited for the scene's start
+  // Task 332 follow-up (owner): the "Startup movies" pop-up is up, over the plain background; no movie is loaded yet.
+  bool movies_asking_ = false;
+  bool MoviesPending() const { return movies_ != nullptr || movies_asking_; }
   // Task 331: the loading loop (StartLoadingLoop / DrawLoadingLoop).
   std::unique_ptr<LoadingLoop> loop_;
   loading_loop::Kind loop_kind_ = loading_loop::Kind::kNone;

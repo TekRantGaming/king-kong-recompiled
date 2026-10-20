@@ -987,7 +987,7 @@ for needle, why in (
         ('if (save) SaveSettings(paths_.config_path);', 'the full setup saves only when asked'),
         ('if (Get("kk_setup_version").empty()) Set("kk_setup_version", kSetupWaiting);', 'an update marks the New screen as waiting'),
         ('update_new_ = files_ok_ && !testing && Get("kk_setup_version") == kSetupWaiting;', 'the New screen only when waiting'),
-        ('InSetup() || movies_ != nullptr, update_new_, ShaderScreen()', "What's new is held back by the New screen and the startup movies"),
+        ('InSetup() || MoviesPending(), update_new_, ShaderScreen()', "What's new is held back by the New screen and the startup movies"),
 ):
     if needle not in launcher:
         fail(f'J6: {why} ({needle})')

@@ -67,7 +67,12 @@ void StartupMovies::Open() {
     sound_thread_ = std::thread([sound = sound_, file] {
       std::vector<uint8_t> pcm;
       try {
-        pcm = movies::DecodeAudio(file, sound->cancel);
+        movies::AudioStats st;
+        pcm = movies::DecodeAudio(file, sound->cancel, &st);
+        REXLOG_INFO("KK startup movies: {}: sound {:.2f} s, {} packets, {} joined ({} frames off), {} gaps ({} frames), "
+                    "{} overlaps ({} frames)", file.filename().string(),
+                    double(pcm.size()) / (movies::kAudioRate * movies::kAudioFrameBytes), st.packets, st.jitter,
+                    st.jitter_frames, st.gaps, st.gap_frames, st.overlaps, st.overlap_frames);
       } catch (const std::exception& e) {
         REXLOG_INFO("KK startup movies: {}: no sound ({})", file.filename().string(), e.what());
         pcm.clear();
