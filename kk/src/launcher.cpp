@@ -1735,8 +1735,8 @@ class Launcher final : public rex::ui::ImGuiDialog {
                                "G-Sync and FreeSync displays run freely.",
                                "d3d12_allow_variable_refresh_rate_and_tearing", "Off", "On", /*invert=*/true));
     items.push_back(CvarChoice("Aspect ratio",
-                               "Keep the original 16:9 frame, or fill your ultrawide display with an aspect-correct "
-                               "3D view using the monitor's exact ratio.",
+                               "Keep the original 16:9 frame, or render gameplay at your display's aspect ratio "
+                               "so the 3D view and screen elements stay in proportion.",
                                "present_letterbox", {{"Keep 16:9", "true"}, {"21:9 Ultrawide", "false"}}));
     items.push_back(CvarChoice("Pre-rendered cutscenes",
                                "Keep movies at their original 16:9 framing, or stretch them to fill the display.",

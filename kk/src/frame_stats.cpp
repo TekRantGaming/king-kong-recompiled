@@ -221,6 +221,10 @@ void NotifyMovieActivity() {
   g_last_movie_video_read_ns.store(now, std::memory_order_relaxed);
 }
 
+bool IsMoviePlayerActive(const uint8_t* base) {
+  return GetMoviePlayerState(base).playing();
+}
+
 void NotifyGameplayCamera() {
   const auto now = std::chrono::duration_cast<std::chrono::nanoseconds>(Clock::now().time_since_epoch()).count();
   g_last_gameplay_camera_ns.store(now, std::memory_order_relaxed);

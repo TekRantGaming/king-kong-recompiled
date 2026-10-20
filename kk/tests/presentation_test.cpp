@@ -42,6 +42,23 @@ int main() {
   ExpectBool(kk::KeepMenuFraming(true), true);
   ExpectBool(kk::KeepMenuFraming(false), false);
 
+  // Gameplay camera detection must not depend on Jack's default FOV: interaction
+  // and scripted gameplay views can use a different angle.
+  ExpectBool(kk::IsGameplayCameraView(false, false), true);
+  ExpectBool(kk::IsGameplayCameraView(true, false), false);
+  ExpectBool(kk::IsGameplayCameraView(false, true), false);
+
+  // Render at the selected output aspect so screen-space UI is not stretched
+  // when the guest frame is scaled to the display.
+  if (kk::GameFrameWidth(3440, 1440, false) != 1720 ||
+      kk::GameFrameWidth(1920, 1080, false) != 1280 ||
+      kk::GameFrameWidth(2560, 1600, false) != 1152 ||
+      kk::GameFrameWidth(3440, 1440, true) != 1280 ||
+      kk::GameFrameWidth(0, 0, false) != 1280) {
+    std::fprintf(stderr, "game frame width policy mismatch\n");
+    std::abort();
+  }
+
   // A buffered movie can go quiet on disk reads while it is still displayed.
   // Retain cutscene framing until the player or gameplay camera gives a positive
   // end-of-cutscene signal.

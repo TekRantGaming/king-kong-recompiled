@@ -130,6 +130,8 @@ void ApplyRuntimeOverrides();
 // Tells the camera hook the aspect ratio the game will be presented at.
 // Letterboxed output remains 16:9; fill mode uses the display's actual ratio.
 void SetOutputAspectRatio(int width, int height);
+// Guest render width to match the selected presentation aspect at 720p.
+int GameVideoModeWidth();
 // Whether the title flow or an in-game menu should keep its 16:9 framing.
 bool IsMenuActive();
 

@@ -1,11 +1,11 @@
 // Field of view (launcher: Gameplay > Field of view, kk_fov).
 //
-// Each frame the renderer copies the active view's camera into its own camera
-// (GDI = *(0x82CCAC30), camera at GDI +208) in sub_82872DB8: the view's field
-// of view (radians, horizontal) is at view +172 and goes to GDI +220. The same
-// call then builds the projection (sub_8278AB00, which uses tan(fov / 2)) and
-// the frustum used to skip objects outside the view (sub_827E5BB8), so a wider
-// angle passed in here widens both and nothing pops in at the screen edges.
+// Each frame the renderer copies the active view's horizontal field of view
+// (radians, at view +172) to the camera in GDI = *(0x82CCAC30), at GDI +220.
+// sub_8278AB00 builds the projection from it; sub_827E5BB8 builds the matching
+// frustum. The guest render target is sized to the selected output aspect so
+// the presenter scales it uniformly, keeping both 3D geometry and screen-space
+// UI in proportion.
 //
 // Jack's camera is 1.2 radians (about 69 degrees) in play; cutscene and
 // scripted cameras use their own angles (0.5 to 1.4). kk_fov is the angle
@@ -26,6 +26,7 @@
 #include <cstring>
 
 #include <rex/hook.h>
+#include <rex/logging.h>
 #include <rex/system/flags.h>
 
 #include "frame_stats.h"
@@ -37,6 +38,9 @@ namespace {
 constexpr float kJackFov = 1.2f;  // radians: the game's own angle for Jack's camera
 constexpr float kGameAspect = 16.0f / 9.0f;
 std::atomic<float> g_output_aspect{kGameAspect};
+std::atomic<int> g_output_width{0};
+std::atomic<int> g_output_height{0};
+std::atomic<bool> g_logged_gameplay_fov{false};
 
 float LoadF(const uint8_t* base, uint32_t a) {
   uint32_t v;
@@ -71,14 +75,25 @@ float LensFactor() {
 }  // namespace
 
 void kk::SetOutputAspectRatio(int width, int height) {
-  // The runtime's presenter can either preserve the 16:9 game image or fill
-  // the output. In fill mode the camera needs a wider horizontal FOV before
-  // the 16:9 render target is scaled to the display, or the world is stretched.
+  // In fill mode, match the guest render target to the display and widen the
+  // horizontal camera FOV to preserve the original vertical framing.
+  g_output_width.store(width, std::memory_order_relaxed);
+  g_output_height.store(height, std::memory_order_relaxed);
   if (REXCVAR_QUERY(bool, present_letterbox) || width <= 0 || height <= 0) {
     g_output_aspect.store(kGameAspect, std::memory_order_relaxed);
+    REXLOG_INFO("KK: aspect check: output={}x{} ({:.4f}:1), framing=16:9", width, height,
+                float(width) / float(height));
     return;
   }
-  g_output_aspect.store(float(width) / float(height), std::memory_order_relaxed);
+  const float aspect = float(width) / float(height);
+  g_output_aspect.store(aspect, std::memory_order_relaxed);
+  REXLOG_INFO("KK: aspect check: output={}x{} ({:.4f}:1), framing=display", width, height, aspect);
+}
+
+int kk::GameVideoModeWidth() {
+  return GameFrameWidth(g_output_width.load(std::memory_order_relaxed),
+                        g_output_height.load(std::memory_order_relaxed),
+                        REXCVAR_QUERY(bool, present_letterbox));
 }
 
 bool kk::IsMenuActive() {
@@ -102,7 +117,21 @@ REX_HOOK_RAW(sub_82872DB8) {
   const float fov = LoadF(base, at);
   const int since_menu = g_views_since_menu.load(std::memory_order_relaxed);
   if (since_menu < 1000) g_views_since_menu.store(since_menu + 1, std::memory_order_relaxed);
-  if (!kk::IsMenuActive() && std::abs(fov - kJackFov) < 0.01f) kk::NotifyGameplayCamera();
+  const bool gameplay_view = kk::IsGameplayCameraView(kk::IsMenuActive(), kk::IsMoviePlayerActive(base));
+  if (gameplay_view) {
+    kk::NotifyGameplayCamera();
+    bool not_logged = false;
+    if (!REXCVAR_QUERY(bool, present_letterbox) && std::abs(fov - kJackFov) < 0.01f &&
+        g_logged_gameplay_fov.compare_exchange_strong(not_logged, true, std::memory_order_relaxed)) {
+      const float corrected_fov = 2.0f * std::atan(k * std::tan(fov * 0.5f));
+      REXLOG_INFO(
+          "KK: aspect check: gameplay horizontal FOV {:.2f} -> {:.2f} degrees at output={}x{} ({:.4f}:1), "
+          "letterbox={}",
+          fov * 180.0f / 3.14159265f, corrected_fov * 180.0f / 3.14159265f,
+          g_output_width.load(std::memory_order_relaxed), g_output_height.load(std::memory_order_relaxed),
+          g_output_aspect.load(std::memory_order_relaxed), REXCVAR_QUERY(bool, present_letterbox));
+    }
+  }
   if (k == 1.0f || !(fov > 0.01f && fov < 3.0f)) {
     __imp__sub_82872DB8(ctx, base);
     return;

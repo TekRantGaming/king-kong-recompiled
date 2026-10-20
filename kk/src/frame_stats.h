@@ -1,5 +1,6 @@
 #pragma once
 
+#include <cstdint>
 #include <functional>
 
 #include <rex/ui/overlay/debug_overlay.h>
@@ -11,6 +12,7 @@ rex::ui::FrameStats GetGuestFrameStats();
 
 // Called by guest video reads and the XMV player's synchronization wait.
 void NotifyMovieActivity();
+bool IsMoviePlayerActive(const uint8_t* base);
 void NotifyGameplayCamera();
 
 // Runs `fn` once, on the game thread, `seconds` after the first guest frame

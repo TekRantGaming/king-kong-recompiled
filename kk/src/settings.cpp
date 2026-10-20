@@ -456,18 +456,19 @@ void ApplyRuntimeOverrides() {
                 rex::cvar::GetFlagByName("async_shader_wait_ms"));
   }
 
-  // The game sizes its frame from the console's video mode: 1280x720 on an HD
-  // mode, but the whole game at 640x480 (stretched to 16:9) on a mode under 720
-  // lines. The runtime reports the window size as that mode whenever a window
-  // size is set, even in fullscreen, and window sizes are kept in DPI-scaled
-  // units (1280x720 at 125% is saved as 1024x576), so some players got
-  // 640x480 everywhere (#32). Always report 720p, like a console on a 720p TV;
-  // the render resolution scales it up. A non-default value is needed for it
-  // to win over the window size, so the default moves to 0 (and SaveSettings
-  // leaves these out). This runs after the window is created, so its size
-  // doesn't change.
+  // Match the guest render target to the selected output ratio at 720 lines:
+  // 1280x720 on a 16:9 display, wider on ultrawide. This keeps screen-space UI
+  // in proportion when the presenter scales the frame to the display.
+  // Keep the guest mode at 720 lines: lower modes switch the whole game to
+  // 640x480. The runtime also reports window dimensions as the mode whenever a
+  // window size is set, even in fullscreen, and stores window sizes in
+  // DPI-scaled units (1280x720 at 125% is saved as 1024x576), so some players
+  // got 640x480 everywhere (#32). A non-default video mode is needed to win
+  // over the window size, so its default stays 0 and SaveSettings leaves it
+  // out. This runs after the window is created, so its size doesn't change.
+  const std::string video_width = std::to_string(GameVideoModeWidth());
   for (const auto& [name, value] :
-       {std::pair{"video_mode_width", "1280"}, std::pair{"video_mode_height", "720"}}) {
+       {std::pair{"video_mode_width", video_width.c_str()}, std::pair{"video_mode_height", "720"}}) {
     SetCvarDefault(name, "0");
     rex::cvar::SetFlagByName(name, value);
   }

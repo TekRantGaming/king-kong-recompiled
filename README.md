@@ -195,7 +195,7 @@ Everything is set up before the game starts, with a controller, the keyboard or 
 - **Window size** that fits your screen
 - **Choose the monitor**
 - **VSync** on or off (off by default, and great with G-Sync and FreeSync)
-- **Keep 16:9** with borders, or use the display's full ultrawide ratio with a wider, aspect-correct 3D camera view
+- **Keep 16:9** with borders, or render gameplay at your display's full ultrawide ratio so the 3D view and screen elements stay in proportion
 - **Pre-rendered cutscenes** can keep their original 16:9 framing or stretch to fill the display
 
 </td>
