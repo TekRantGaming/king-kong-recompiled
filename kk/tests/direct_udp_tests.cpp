@@ -23,7 +23,7 @@ using namespace kk::coop;
 namespace {
 void Check(bool value,const char* what) { if (!value) { std::fprintf(stderr,"FAIL: %s\n",what); std::exit(1); } }
 Compatibility Compatible() { return {kProtocolVersion,"test","build","mods"}; }
-SessionConfig Config(Role role,std::string code="TestCode") {
+SessionConfig Config(Role role,std::string code="TEST23") {
   SessionConfig config{true,role,role==Role::Host ? 123456789ull : 0,Compatible()};
   config.join_code=std::move(code); config.wait_for_peer=role==Role::Host;
   return config;
@@ -31,7 +31,7 @@ SessionConfig Config(Role role,std::string code="TestCode") {
 uint16_t next_port=31780;
 std::unique_ptr<DirectUdpTransport> Host(std::string address="127.0.0.1") {
   for (int i=0;i<100;++i) {
-    auto host=CreateDirectUdp({true,address,next_port++,"TestCode"});
+    auto host=CreateDirectUdp({true,address,next_port++,"TEST23"});
     if (host->State()==TransportState::Ready) return host;
   }
   Check(false,"bind loopback host"); return {};
@@ -40,14 +40,16 @@ void Codec() {
   Message hello; hello.hello=Compatible(); std::vector<uint8_t> legacy,bytes;
   Check(Encode(hello,legacy),"legacy Hello");
   hello.join_code=NewJoinCode(); Check(ValidJoinCode(hello.join_code),"generated short code");
+  Check(hello.join_code.size()==6 && hello.join_code.find_first_of("01OI")==std::string::npos,"six unambiguous generated characters");
+  Check(NormalizeJoinCode("aBc234")=="ABC234","case independent input");
   Check(Encode(hello,bytes),"code Hello encode"); Message decoded;
   Check(Decode(bytes,decoded) && decoded.join_code==hello.join_code,"code round trip");
   Check(Decode(legacy,decoded) && decoded.join_code.empty(),"Steam Hello unchanged");
   for (size_t n=legacy.size()+1;n<bytes.size();++n) Check(!Decode(std::span(bytes).first(n),decoded),"truncated code rejected");
   bytes.push_back(0); Check(!Decode(bytes,decoded),"trailing bytes rejected");
-  hello.join_code=std::string(33,'A'); Check(!Encode(hello,bytes),"code maximum");
+  hello.join_code=std::string(7,'A'); Check(!Encode(hello,bytes),"code maximum");
   hello.join_code="bad code"; Check(!Encode(hello,bytes),"code controls/spaces rejected");
-  Check(!ValidJoinCode("short") && !ValidJoinCode("has space") && !ValidJoinCode(std::string(33,'A')),"code UI bounds");
+  Check(!ValidJoinCode("short") && !ValidJoinCode("has space") && !ValidJoinCode(std::string(7,'A')),"code UI bounds");
 }
 void Limits() {
   UdpRateLimit limit(2,4);
@@ -61,21 +63,21 @@ void Bounds() {
   auto host=Host();
   std::vector<uint8_t> too_large(kMaxPacketBytes+1,1);
   Check(!host->Send({},true) && !host->Send(too_large,false),"empty and oversized application packets rejected");
-  Message hello; hello.hello=Compatible(); hello.join_code="TestCode";
+  Message hello; hello.hello=Compatible(); hello.join_code="TEST23";
   std::vector<uint8_t> bytes; Check(Encode(hello,bytes),"bounded packet fixture");
   for (int i=0;i<64;++i) Check(host->Send(bytes,true),"bounded reliable queue accepts window");
   Check(!host->Send(bytes,true) && host->State()==TransportState::Failed,"reliable overflow fails instead of losing ordered data");
   host->Close(); Check(host->State()==TransportState::Closed && !host->Send(bytes,false),"closed transport inert");
-  Check(CreateDirectUdp({true,"127.0.0.1",0,"TestCode"})->State()==TransportState::Failed,"zero port rejected");
+  Check(CreateDirectUdp({true,"127.0.0.1",0,"TEST23"})->State()==TransportState::Failed,"zero port rejected");
   Check(CreateDirectUdp({true,"127.0.0.1",31779,"short"})->State()==TransportState::Failed,"short code rejected before binding");
 }
 void Integration(std::string address) {
   auto a=Host(address); const auto port=a->LocalPort();
-  auto b=CreateDirectUdp({false,address,port,"TestCode"});
+  auto b=CreateDirectUdp({false,address,port,"test23"});
   Check(b->State()==TransportState::Ready,"join loopback family");
-  auto collision=CreateDirectUdp({true,address,port,"TestCode"});
+  auto collision=CreateDirectUdp({true,address,port,"TEST23"});
   Check(collision->State()==TransportState::Failed,"exclusive host port");
-  CoopSession host(Config(Role::Host),*a),guest(Config(Role::Guest),*b);
+  CoopSession host(Config(Role::Host),*a),guest(Config(Role::Guest,"test23"),*b);
   double now=1;
   // The host remains available after the ordinary 20-second connection deadline.
   for (;now<26;now+=.01) host.Tick(now);
@@ -88,6 +90,16 @@ void Integration(std::string address) {
   Check(!a->PeerReady() && !b->PeerReady(),"readiness explicit");
   Check(a->SetReady(true) && b->SetReady(true),"ready enqueue"); pump(100);
   Check(a->PeerReady() && b->PeerReady(),"both ready reliable");
+  Check(a->SetChoice({1,10,false}) && !a->PeerReady(),"chapter change immediately invalidates host view of guest readiness");
+  pump(100);
+  Check(b->Choice()==LobbyChoice{1,10,false} && !b->PeerReady(),"guest sees exact host chapter and readiness reset");
+  Check(!b->SetChoice({2,1,false}),"guest cannot choose chapter");
+  Check(!b->SetReady(true,99),"stale Ready revision rejected");
+  Check(a->SetReady(true,1) && b->SetReady(true,1),"new choice acknowledged by both"); pump(100);
+  Check(a->PeerReady() && b->PeerReady(),"both ready for new choice");
+  Check(a->SetChoice({2,1,true}),"Continue is explicit choice"); pump(100);
+  Check(b->Choice()==LobbyChoice{2,1,true} && !a->PeerReady() && !b->PeerReady(),"Continue resets both players and reaches guest");
+  Check(!b->SetReady(true,1) && a->SetReady(true,2) && b->SetReady(true,2),"old chapter readiness cannot ready Continue"); pump(100);
   Check(b->SetReady(false),"unready enqueue"); pump(100); Check(!a->PeerReady(),"unready delivered");
   b->SetReady(true); pump(100);
   // All session message families share this transport, including a full private save and load barrier.
@@ -106,21 +118,21 @@ void Integration(std::string address) {
   }
   Check(host.Poses().received>0 && guest.Poses().received>0 && host.Partner(now) && guest.Partner(now),"bidirectional poses");
   // A third correct-code peer cannot claim or disturb an established host.
-  auto c=CreateDirectUdp({false,address,port,"TestCode"}); CoopSession third(Config(Role::Guest),*c);
+  auto c=CreateDirectUdp({false,address,port,"TEST23"}); CoopSession third(Config(Role::Guest),*c);
   for (int i=0;i<100;++i,now+=.01) { third.Tick(now); host.Tick(now); guest.Tick(now); }
   Check(third.State()==SessionState::Connecting && host.State()==SessionState::Connected,"one peer only");
   guest.End(now);
   for (int i=0;i<100;++i,now+=.01) { b->Poll(now); host.Tick(now); }
   Check(host.State()==SessionState::Ended,"Bye ends peer");
 }
-void WrongCode() {
-  auto a=Host(); auto b=CreateDirectUdp({false,"127.0.0.1",a->LocalPort(),"WrongCode"});
-  CoopSession host(Config(Role::Host),*a),bad(Config(Role::Guest,"WrongCode"),*b);
+void WRONG2() {
+  auto a=Host(); auto b=CreateDirectUdp({false,"127.0.0.1",a->LocalPort(),"WRONG2"});
+  CoopSession host(Config(Role::Host),*a),bad(Config(Role::Guest,"WRONG2"),*b);
   double now=1;
   for (int i=0;i<200;++i,now+=.01) { host.Tick(now); bad.Tick(now); }
   Check(b->CodeRejected() && bad.State()==SessionState::Ended,"wrong code rejected explicitly");
   Check(host.State()==SessionState::Connecting && a->Stats().received==0,"wrong code cannot pin host");
-  auto c=CreateDirectUdp({false,"127.0.0.1",a->LocalPort(),"TestCode"}); CoopSession good(Config(Role::Guest),*c);
+  auto c=CreateDirectUdp({false,"127.0.0.1",a->LocalPort(),"TEST23"}); CoopSession good(Config(Role::Guest),*c);
   for (int i=0;i<200;++i,now+=.01) { host.Tick(now); good.Tick(now); }
   Check(host.State()==SessionState::Connected && good.State()==SessionState::Connected,"valid guest after wrong code");
 }
@@ -196,7 +208,7 @@ void ReliabilityAndFlood() {
   proxy.Flood();
   for (int i=0;i<4;++i) a->Poll(1);
   Check(a->Stats().malformed>0 && a->Stats().malformed<=40,"unauthenticated flood bounded by burst");
-  auto b=CreateDirectUdp({false,"127.0.0.1",proxy.Port(),"TestCode"});
+  auto b=CreateDirectUdp({false,"127.0.0.1",proxy.Port(),"TEST23"});
   CoopSession host(Config(Role::Host),*a),guest(Config(Role::Guest),*b);
   double now=5;
   for (int i=0;i<600;++i,now+=.01) { proxy.Poll(); host.Tick(now); guest.Tick(now); }
@@ -221,6 +233,6 @@ void ReliabilityAndFlood() {
 }
 }
 int main() {
-  Codec(); Limits(); Bounds(); WrongCode(); Integration("127.0.0.1"); Integration("::1"); ReliabilityAndFlood();
+  Codec(); Limits(); Bounds(); WRONG2(); Integration("127.0.0.1"); Integration("::1"); ReliabilityAndFlood();
   std::puts("Direct UDP codec, code, rate, IPv4/IPv6, readiness, save/load, poses and single-peer checks passed");
 }

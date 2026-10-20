@@ -190,6 +190,9 @@ void DirectRows() {
   Check(Find(rows,SocialRowKind::AddSteam).enabled,"recommendation links to existing Add to Steam");
   m.status=SocialStatus::Lobby; m.direct=true; m.self=m.owner=1; m.lobby=99;
   m.members={{1,"Host",false},{2,"Guest",false}};
+  Check(!Find(SocialRows(m),SocialRowKind::Ready).enabled && !Find(SocialRows(m),SocialRowKind::Start).enabled,
+      "no default chapter: Ready and Start wait for host selection");
+  m.choice={1,1,false};
   rows=SocialRows(m);
   Check(Find(rows,SocialRowKind::Ready).enabled && !Find(rows,SocialRowKind::Start).enabled,"Direct IP readiness is explicit");
   Check(std::none_of(rows.begin(),rows.end(),[](const auto& r) { return r.key.kind==SocialRowKind::Friend || r.key.kind==SocialRowKind::OverlayInvite || r.key.kind==SocialRowKind::DirectHost; }),"active Direct session has no Steam invites or second host");
@@ -198,6 +201,33 @@ void DirectRows() {
   m.self=2;
   rows=SocialRows(m);
   Check(std::none_of(rows.begin(),rows.end(),[](const auto& r) { return r.key.kind==SocialRowKind::Start; }),"Direct guest cannot Start");
+  Check(!Find(rows,SocialRowKind::ChapterSelect).enabled,"guest cannot change chapter");
+  for (const auto& row : rows) if (row.key.kind==SocialRowKind::Text && !row.detail.empty())
+    Check(row.focusable() && SocialFocus(rows,row.key)==int(&row-rows.data()),"Direct detail focus survives restoration");
+}
+void ChapterChoice() {
+  for (auto choice : {LobbyChoice{1,0,false},LobbyChoice{42,41,false},LobbyChoice{123,10,true}})
+    Check(DecodeLobbyChoice(EncodeLobbyChoice(choice))==choice,"Steam lobby choice round trip");
+  for (const char* bad : {"", "0", "1:0", "1:85", "0:1", "1:1:x", "-1:1", "18446744073709551616:1"})
+    Check(!DecodeLobbyChoice(bad).valid(),"malformed lobby choice rejected");
+  auto world=MakeFakeSocialWorld();
+  const Compatibility c{kProtocolVersion,"test","test","test"};
+  FakeSocialService host(world,1,"Host",c),guest(world,2,"Guest",c);
+  Check(host.Act({SocialAction::CreateLobby}) && host.Act({SocialAction::Invite,2}) &&
+      guest.Act({SocialAction::Accept,host.Snapshot().lobby}),"choice test joins two players");
+  Check(!Find(SocialRows(host.Snapshot()),SocialRowKind::Ready).enabled,"new lobby has no default choice");
+  Check(!guest.Act({SocialAction::SelectChapter,0,false,{0,1,false}}),"guest cannot publish choice");
+  Check(host.Act({SocialAction::SelectChapter,0,false,{0,10,false}}),"host chooses separate chapter");
+  const auto chosen=host.Snapshot().choice;
+  Check(chosen.valid() && guest.Snapshot().choice==chosen,"guest sees host choice");
+  Check(host.Act({SocialAction::SetReady,0,true,chosen}) && guest.Act({SocialAction::SetReady,0,true,chosen}),"both ready for choice");
+  Check(host.Act({SocialAction::SelectChapter,0,false,{0,40,false}}),"host changes to Watch chapter");
+  auto m=host.Snapshot();
+  Check(m.choice.revision==chosen.revision+1 && !m.members[0].ready && !m.members[1].ready,
+      "changed chapter resets both Ready values");
+  Check(!guest.Act({SocialAction::SetReady,0,true,chosen}),"stale Ready rejected after chapter change");
+  const auto policy=Find(SocialRows(m),SocialRowKind::Text,13);
+  Check(policy.detail=="Watch","per-chapter policy visible in lobby");
 }
 }
-int main() { InputPolicy(); FocusAndActions(); PreviewScenes(); DirectRows(); std::printf("Social panel: %u checks passed\n", checks); }
+int main() { InputPolicy(); FocusAndActions(); PreviewScenes(); DirectRows(); ChapterChoice(); std::printf("Social panel: %u checks passed\n", checks); }

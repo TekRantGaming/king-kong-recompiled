@@ -3006,8 +3006,18 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
       ui::DrawModal(dl, modal_, o_, ImVec2(o_.x + w_, o_.y + h_), m_, input_);
       DrawBottomBar(dl);  // over a pop-up's shade: its prompts stay clear
     }
+    ui::SocialChapters social_chapters;
+    if (social_.blocking()) {
+      if (saves_.empty()) ReadSaves();
+      social_chapters.slot=ChapterSlot();
+      social_chapters.continue_slot=play::MostRecentSave(saves_);
+      if (SlotUsed(social_chapters.continue_slot)) social_chapters.continue_chapter=coop::FlowChapter(uint32_t(saves_[size_t(social_chapters.continue_slot)].continue_level));
+      social_chapters.picture=[this](int entry,float* aspect) {
+        return ChapterPicture(play::Chapters()[size_t(entry)].picture,aspect);
+      };
+    }
     social_.Draw(dl, o_, ImVec2(w_, h_), m_, input_, glyphs_, PromptSet(), immediate_, coop::Social(),
-                 coop::SocialAllowed(GetBool("kk_coop_enabled"), SocialContext()), [this] { OpenSteamPrompt(); });
+                 coop::SocialAllowed(GetBool("kk_coop_enabled"), SocialContext()), [this] { OpenSteamPrompt(); },std::move(social_chapters));
     ImGui::End();
     NoteActivity(io);
     handoff::ContentDrawn();  // started by the game going back: it closes once this page is on screen
@@ -3913,7 +3923,10 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
         OpenModal("Co-op", "Choose Continue or Chapter select for co-op.", {"OK"}, 0, {});
         return;
       }
-      coop::SelectSessionStart(request);
+      if (!coop::SelectSessionStart(request)) {
+        OpenModal("Co-op","Could not select chapter",{"OK"},0,{});
+        return;
+      }
       OpenModal("Co-op", "Chapter selected. Open Social and press Start when both players are Ready.", {"OK"}, 0, {});
       return;
     }
@@ -4222,8 +4235,6 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
     // The page's own buttons, on the focused row (last frame's): on Load game X deletes and Y opens
     // Chapter select with that save; on Chapter select Y changes the save.
     const int row = st.focus >= 0 && st.focus < int(row_data_.size()) ? row_data_[size_t(st.focus)] : -1;
-    if (play_==PlayView::kChapters && row>=0)
-      coop::SelectSessionStart({play::StartKind::kChapter,ChapterSlot(),row,{}});
     if (!PageInputBlocked() && play_ == PlayView::kLoad && SlotUsed(row)) {
       if (input_.Pressed(Action::kDefault)) {
         input_.Consume(Action::kDefault);

@@ -59,15 +59,24 @@ std::string ShortSocialHash(SocialId id) {
   for (unsigned i = 0; i < 8; ++i) { hash ^= uint8_t(id >> (i * 8)); hash *= 16777619u; }
   char text[9]; std::snprintf(text, sizeof(text), "%08x", hash); return text;
 }
+std::string EncodeLobbyChoice(LobbyChoice c) {
+  return c.valid() ? std::to_string(c.revision)+":"+std::to_string(c.chapter+1+(c.continue_game ? 42 : 0)) : "0";
+}
+LobbyChoice DecodeLobbyChoice(std::string_view value) {
+  const auto split=value.find(':'); uint64_t revision=0, entry=0;
+  if (split==std::string_view::npos || !ParseLobbyId(value.substr(0,split),revision) ||
+      !ParseLobbyId(value.substr(split+1),entry) || entry>84) return {};
+  return {revision,int((entry-1)%42),entry>42};
+}
 bool CanStartLobby(const SocialModel& m) {
-  return m.status == SocialStatus::Lobby && m.owner == m.self && m.members.size() == 2 &&
+  return m.choice.valid() && m.status == SocialStatus::Lobby && m.owner == m.self && m.members.size() == 2 &&
       m.members[0].id && m.members[1].id && m.members[0].id != m.members[1].id &&
       (m.members[0].id == m.self || m.members[1].id == m.self) && m.members[0].ready && m.members[1].ready;
 }
 
 struct FakeSocialWorld {
   struct User { SocialModel model; Compatibility compatibility; bool enabled, available; };
-  struct Lobby { SocialId owner; LobbyKeys keys; std::vector<SocialId> members; bool started = false; };
+  struct Lobby { SocialId owner; LobbyKeys keys; std::vector<SocialId> members; bool started = false; LobbyChoice choice; };
   std::map<SocialId, User> users;
   std::map<SocialId, Lobby> lobbies;
   SocialId next_lobby = 1000;
@@ -86,6 +95,7 @@ SocialModel FakeSocialService::Snapshot() const {
   for (const auto& [id, u] : world_->users) if (id != self_) m.friends.push_back(u.model.friends.front());
   if (m.lobby && world_->lobbies.contains(m.lobby)) {
     const auto& l = world_->lobbies.at(m.lobby); m.owner = l.owner; m.members.clear();
+    m.choice=l.choice;
     for (auto id : l.members) {
       const auto& u = world_->users.at(id).model;
       m.members.push_back({id, u.friends.front().name, !u.members.empty() && u.members.front().ready});
@@ -140,11 +150,19 @@ bool FakeSocialService::Act(SocialCommand c) {
       std::erase_if(m.pending_invites, [&](auto i) { return i.lobby == c.id; }); return true;
     }
     case SocialAction::Decline: std::erase_if(m.pending_invites, [&](auto i) { return i.lobby == c.id; }); return true;
+    case SocialAction::SelectChapter: {
+      if (!m.lobby || Snapshot().status!=SocialStatus::Lobby || Snapshot().owner!=self_ || c.choice.chapter<0 || c.choice.chapter>=42) return false;
+      auto& l=world_->lobbies.at(m.lobby);
+      if (l.choice.valid() && l.choice.chapter==c.choice.chapter && l.choice.continue_game==c.choice.continue_game) return true;
+      l.choice={l.choice.revision+1,c.choice.chapter,c.choice.continue_game};
+      for (auto id : l.members) world_->users.at(id).model.members.clear();
+      return true;
+    }
     case SocialAction::SetReady:
-      if (!m.lobby || Snapshot().status != SocialStatus::Lobby) return false;
+      if (!m.lobby || Snapshot().status != SocialStatus::Lobby || !Snapshot().choice.valid() || c.choice!=Snapshot().choice) return false;
       m.members = {{self_, "", c.ready}}; return true;
     case SocialAction::Start:
-      if (!Snapshot().can_start) return false;
+      if (!Snapshot().can_start || c.choice!=Snapshot().choice) return false;
       world_->lobbies.at(m.lobby).started = true; return true;
     case SocialAction::Leave: leave(); return true;
     case SocialAction::OverlayInvite: return false;

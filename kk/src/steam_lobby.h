@@ -38,6 +38,15 @@ struct SocialFriend {
 };
 struct SocialMember { SocialId id = 0; std::string name; bool ready = false; };
 struct SocialInvite { SocialId lobby = 0, inviter = 0; };
+struct LobbyChoice {
+  uint64_t revision = 0;
+  int chapter = -1;
+  bool continue_game = false;
+  bool valid() const { return revision && chapter >= 0 && chapter < 42; }
+  bool operator==(const LobbyChoice&) const = default;
+};
+std::string EncodeLobbyChoice(LobbyChoice choice);
+LobbyChoice DecodeLobbyChoice(std::string_view value);
 struct SocialModel {
   SocialStatus status = SocialStatus::Dormant;
   std::string status_text, last_error;
@@ -49,10 +58,11 @@ struct SocialModel {
   bool direct = false;
   std::string direct_addresses, direct_code;
   uint16_t direct_port = 27080;
+  LobbyChoice choice;
 };
 bool CanStartLobby(const SocialModel& model);
-enum class SocialAction { Open, CreateLobby, Invite, OverlayInvite, Accept, Decline, SetReady, Start, Leave };
-struct SocialCommand { SocialAction action = SocialAction::Open; SocialId id = 0; bool ready = false; };
+enum class SocialAction { Open, CreateLobby, Invite, OverlayInvite, Accept, Decline, SetReady, Start, Leave, SelectChapter };
+struct SocialCommand { SocialAction action = SocialAction::Open; SocialId id = 0; bool ready = false; LobbyChoice choice; };
 // Actions enqueue work, snapshots are value copies. Call Open on the first UI use.
 // Start requests the transport/session handshake only; it never boots a chapter or writes saves.
 class ISocialService {

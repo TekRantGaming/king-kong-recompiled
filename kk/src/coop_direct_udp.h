@@ -1,5 +1,6 @@
 #pragma once
 #include "coop_transport.h"
+#include "steam_lobby.h"
 #include <string>
 #include <string_view>
 
@@ -12,6 +13,7 @@ struct DirectUdpOptions {
   std::string join_code;
 };
 bool ValidJoinCode(std::string_view code);
+std::string NormalizeJoinCode(std::string_view code);
 std::string NewJoinCode();
 std::string DirectLocalAddresses();
 // Clock-injected token bucket. Both work and memory remain bounded under a flood.
@@ -24,7 +26,9 @@ class UdpRateLimit {
 };
 class DirectUdpTransport : public ICoopTransport {
  public:
-  virtual bool SetReady(bool ready) = 0;
+  virtual bool SetReady(bool ready, uint64_t revision = 0) = 0;
+  virtual bool SetChoice(LobbyChoice choice) = 0;
+  virtual LobbyChoice Choice() const = 0;
   virtual bool PeerReady() const = 0;
   virtual bool CodeRejected() const = 0;
   virtual uint16_t LocalPort() const = 0;
