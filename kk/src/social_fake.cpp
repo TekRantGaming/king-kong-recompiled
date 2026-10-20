@@ -38,8 +38,9 @@ class Preview final : public ISocialPreview {
       if (!friend_host.Act({SocialAction::CreateLobby}) || !friend_host.Act({SocialAction::Invite, 1})) return false;
     }
     if (scene == "guest" || scene == "left") {
+      if (!friend_host.Act({SocialAction::SelectChapter,0,false,{0,1,false}})) return false;
       if (!self->Act({SocialAction::Accept, friend_host.Snapshot().lobby}) ||
-          !friend_host.Act({SocialAction::SetReady, 0, true})) return false;
+          !friend_host.Act({SocialAction::SetReady, 0, true,friend_host.Snapshot().choice})) return false;
       if (scene == "left" && !friend_host.Act({SocialAction::Leave})) return false;
     }
     if (scene == "mismatch") {
@@ -48,12 +49,13 @@ class Preview final : public ISocialPreview {
     }
     if (scene == "host" || scene == "ready" || scene == "starting") {
       if (!self->Act({SocialAction::CreateLobby})) return false;
+      if (!self->Act({SocialAction::SelectChapter,0,false,{0,1,false}})) return false;
       if (scene != "host") {
         auto& guest = *peers[1];
         if (!self->Act({SocialAction::Invite, 3}) || !guest.Act({SocialAction::Accept, self->Snapshot().lobby}) ||
-            !self->Act({SocialAction::SetReady, 0, true}) || !guest.Act({SocialAction::SetReady, 0, true})) return false;
+            !self->Act({SocialAction::SetReady, 0, true,self->Snapshot().choice}) || !guest.Act({SocialAction::SetReady, 0, true,guest.Snapshot().choice})) return false;
       }
-      if (scene == "starting" && !self->Act({SocialAction::Start})) return false;
+      if (scene == "starting" && !self->Act({SocialAction::Start,0,false,self->Snapshot().choice})) return false;
     }
     const auto model = self->Snapshot();
     if (scene == "host" && (!model.lobby || model.owner != model.self || model.members.size() != 1)) return false;

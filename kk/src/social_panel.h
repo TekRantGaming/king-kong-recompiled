@@ -3,6 +3,10 @@
 #include "social_panel_logic.h"
 
 namespace kk::ui {
+struct SocialChapters {
+  int slot = -1, continue_slot = -1, continue_chapter = -1;
+  std::function<rex::ui::ImmediateTexture*(int, float*)> picture;
+};
 class SocialPanel {
  public:
   SocialPanel();
@@ -13,11 +17,14 @@ class SocialPanel {
 #if defined(KK_DEV_TOOLS)
   void ResetPreview();  // deterministic focus/scroll and notices after a developer scene change
   bool DirectInput(std::string_view command, coop::ISocialService& service);
+  std::optional<coop::SocialRowKey> focused_row() const { return focus_; }
+  bool chapters_open() const { return chapter_screen_; }
+  std::string editor_text() const { return editor_text_; }
 #endif
   void Update(bool enabled, coop::SocialPage page, Input& input, coop::ISocialService& service);
   void Draw(ImDrawList* dl, ImVec2 origin, ImVec2 size, const Metrics& metrics, Input& input,
             Glyphs& glyphs, const std::string& prompt_set, rex::ui::ImmediateDrawer* drawer,
-            coop::ISocialService& service, bool active, std::function<void()> add_steam = {});
+            coop::ISocialService& service, bool active, std::function<void()> add_steam = {}, SocialChapters chapters = {});
  private:
   struct Avatars;
   std::unique_ptr<Avatars> avatars_;
@@ -34,6 +41,11 @@ class SocialPanel {
   int editor_ = 0, editor_key_ = 0;
   bool editor_just_opened_ = false;
   bool editor_lowercase_ = false, editor_symbols_ = false;
+  bool chapter_screen_ = false;
+  ListState chapter_list_;
+  SocialChapters chapters_;
+  void DrawChapters(ImDrawList* dl, ImVec2 origin, ImVec2 size, const Metrics& metrics, Input& in,
+                    Glyphs& glyphs, const std::string& set, coop::ISocialService& service, bool active);
   std::function<void()> add_steam_;
   void DrawEditor(ImDrawList* dl, ImVec2 origin, ImVec2 size, const Metrics& metrics, Input& in,
                   Glyphs& glyphs, const std::string& prompt_set);

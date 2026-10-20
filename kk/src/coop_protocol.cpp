@@ -285,8 +285,8 @@ bool Encode(const Message& m, std::vector<uint8_t>& out) {
       payload.U(m.display_name.size(), 1);
       payload.bytes.insert(payload.bytes.end(), m.display_name.begin(), m.display_name.end());
       if (!m.join_code.empty()) {
-        if (m.join_code.size() > 32) return false;
-        for (unsigned char c : m.join_code) if (c < 33 || c > 126) return false;
+        if (m.join_code.size() != 6) return false;
+        for (unsigned char c : m.join_code) if (!((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9'))) return false;
         payload.U(m.join_code.size(), 1);
         payload.bytes.insert(payload.bytes.end(), m.join_code.begin(), m.join_code.end());
       }
@@ -439,10 +439,10 @@ bool Decode(std::span<const uint8_t> bytes, Message& out) {
       if (SanitizeDisplayName(m.display_name) != m.display_name) return false;
       if (r.at < bytes.size()) {
         const size_t code_size = size_t(r.U(1));
-        if (!r.ok || !code_size || code_size > 32 || code_size > bytes.size()-r.at) return false;
+        if (!r.ok || code_size != 6 || code_size > bytes.size()-r.at) return false;
         m.join_code.assign(reinterpret_cast<const char*>(bytes.data()+r.at), code_size);
         r.at += code_size;
-        for (unsigned char c : m.join_code) if (c < 33 || c > 126) return false;
+        for (unsigned char c : m.join_code) if (!((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9'))) return false;
       }
       break;
     }

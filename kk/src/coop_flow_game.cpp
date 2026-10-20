@@ -27,7 +27,7 @@ namespace kk::coop {
 bool BeginSessionFlow(SessionStart start, std::vector<uint8_t> save);
 namespace {
 std::filesystem::path personal, private_root;
-play::StartRequest selected{play::StartKind::kContinue,-1,-1,{}};
+play::StartRequest selected;
 bool requested=false, launched=false;
 SocialId requested_lobby=0;
 int progress_slot=-1;
@@ -200,11 +200,28 @@ void ApplySessionSettings() {
   SetModSetting("kk_no_healing",v.start.difficulty ? "true" : "false");
 }
 std::filesystem::path SessionUserDir(const std::filesystem::path& root) { return private_root.empty() ? root : private_root; }
-void SelectSessionStart(const play::StartRequest& r) { if (!requested) selected=r; }
+bool SelectSessionStart(const play::StartRequest& r) {
+  if (requested || (r.kind!=play::StartKind::kContinue && r.kind!=play::StartKind::kChapter)) return false;
+  const auto model=Social().Snapshot();
+  if (!model.lobby || model.owner!=model.self || model.start_requested) return false;
+  auto request=r; int chapter=r.chapter;
+  if (r.kind==play::StartKind::kContinue) {
+    const auto slots=play::ListSaves(play::UserDir());
+    if (request.slot<0) request.slot=play::MostRecentSave(slots);
+    if (request.slot<0 || request.slot>=int(slots.size()) || !slots[size_t(request.slot)].exists) return false;
+    chapter=FlowChapter(uint32_t(slots[size_t(request.slot)].continue_level));
+  }
+  if (chapter<0 || chapter>=42) return false;
+  if (!Social().Act({SocialAction::SelectChapter,0,false,{0,chapter,r.kind==play::StartKind::kContinue}})) return false;
+  selected=request;
+  REXLOG_INFO("KK co-op lobby: host selected {} chapter {}",r.kind==play::StartKind::kContinue ? "Continue" : "chapter",chapter);
+  return true;
+}
 bool RequestSessionStart() {
   if (!REXCVAR_GET(kk_coop_enabled) || requested) return false;
   auto& social=Social(); const auto model=social.Snapshot();
   if (!CanStartLobby(model)) return false;
+  if (!model.choice.valid()) return false;
   const auto root=play::UserDir();
   const auto slots=play::ListSaves(root);
   auto r=selected;
@@ -243,8 +260,10 @@ bool RequestSessionStart() {
   s.difficulty=EffectiveFlag("kk_no_healing",plan) ? 1 : 0;
   s.save_bytes=uint32_t(save.size()); s.save_hash=SessionSaveHash(save);
   if (!ValidSessionStart(s)) return false;
+  if (model.choice.chapter!=s.chapter || model.choice.continue_game==s.chapter_select) return false;
+  REXLOG_INFO("KK co-op lobby: Start uses shown choice revision {} chapter {} level {}",model.choice.revision,s.chapter,s.level);
   // Steam starts the handshake here; dev link is already connected in the launcher.
-  if (!social.Act({SocialAction::Start})) return false;
+  if (!social.Act({SocialAction::Start,0,false,model.choice})) return false;
   if (!BeginSessionFlow(s,std::move(save))) return false;
   selected=r; requested=true; requested_lobby=model.lobby; return true;
 }

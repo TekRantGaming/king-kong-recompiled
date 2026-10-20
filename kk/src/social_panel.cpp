@@ -42,10 +42,12 @@ void SocialPanel::ResetPreview() {
   notice_until_ = 0;
   seen_lobby_ = 0;
   seen_members_ = 0;
+  chapter_screen_=false; editor_=0;
 }
 #endif
 void SocialPanel::Update(bool enabled, SocialPage page, Input& in, ISocialService& service) {
   const bool was = state_.open();
+  if (chapter_screen_ && in.Pressed(Action::kBack)) { chapter_screen_=false; in.Consume(Action::kBack); Cue(Sound::kBack); }
   just_opened_ = state_.Update(enabled, page, !editing() && in.Pressed(Action::kSocial), !editing() && in.Pressed(Action::kBack), ImGui::GetIO().DeltaTime);
   if (just_opened_) { service.Act({SocialAction::Open}); Cue(Sound::kSelect); }
   if (was && !state_.open()) Cue(Sound::kBack);
@@ -61,6 +63,12 @@ void SocialPanel::Activate(const SocialRow& row, ISocialService& service) {
   const auto current=std::find_if(rows.begin(),rows.end(),[&](const auto& r) { return r.key==row.key; });
   if (current==rows.end() || !current->enabled) { Cue(Sound::kDeny); return; }
   const auto kind=row.key.kind;
+  if (kind==SocialRowKind::ChapterSelect) {
+    chapter_screen_=true; chapter_list_={};
+    const auto choice=service.Snapshot().choice;
+    chapter_list_.focus=choice.valid() ? (choice.continue_game ? 0 : choice.chapter+1) : 0;
+    return;
+  }
   if (kind==SocialRowKind::AddSteam) { if (add_steam_) { state_.Update(true,SocialPage::Page,false,true,0); add_steam_(); } return; }
   if (kind==SocialRowKind::DirectAddress || kind==SocialRowKind::DirectPort || kind==SocialRowKind::DirectCode) {
     editor_=kind==SocialRowKind::DirectAddress ? 1 : kind==SocialRowKind::DirectPort ? 2 : 3;
@@ -71,7 +79,7 @@ void SocialPanel::Activate(const SocialRow& row, ISocialService& service) {
     unsigned port=0; const auto parsed=std::from_chars(direct_port_.data(),direct_port_.data()+direct_port_.size(),port);
     bool ok=parsed.ec==std::errc{} && parsed.ptr==direct_port_.data()+direct_port_.size() && port && port<=65535 && ValidJoinCode(direct_code_);
     if (ok) ok=kind==SocialRowKind::DirectHost ? HostDirect(uint16_t(port),direct_code_) : JoinDirect(direct_address_,uint16_t(port),direct_code_);
-    notice_=ok ? "" : "Enter an IP, port 1 to 65535 and a code of 6 to 32 characters";
+    notice_=ok ? "" : "Enter an IP, port 1 to 65535 and a 6-character code";
     notice_until_=ImGui::GetTime()+6; return;
   }
   const auto command = SocialRowCommand(row, service.Snapshot());
@@ -84,9 +92,10 @@ void SocialPanel::Activate(const SocialRow& row, ISocialService& service) {
 }
 void SocialPanel::Draw(ImDrawList* dl, ImVec2 o, ImVec2 size, const Metrics& m, Input& in,
                        Glyphs& glyphs, const std::string& set, rex::ui::ImmediateDrawer* drawer,
-                       ISocialService& service, bool active, std::function<void()> add_steam) {
+                       ISocialService& service, bool active, std::function<void()> add_steam, SocialChapters chapters) {
   if (!blocking()) return;
   add_steam_=std::move(add_steam);
+  chapters_=std::move(chapters);
   const float s = m.s, slide = state_.slide();
   const float width = std::min(size.x, 490 * s), right = o.x + size.x;
   const float x = right - width * slide;
@@ -96,6 +105,12 @@ void SocialPanel::Draw(ImDrawList* dl, ImVec2 o, ImVec2 size, const Metrics& m, 
   dl->AddRectFilled(ImVec2(x, o.y), ImVec2(x + width, end.y), color::kPanel);
   dl->AddLine(ImVec2(x, o.y), ImVec2(x, end.y), color::kAccent, s);
   const auto fonts = GetFonts();
+  const auto snapshot=service.Snapshot();
+  if (chapter_screen_ && (!snapshot.lobby || snapshot.self!=snapshot.owner || snapshot.start_requested)) chapter_screen_=false;
+  if (chapter_screen_) {
+    DrawChapters(dl,ImVec2(x,o.y),ImVec2(width,size.y),m,in,glyphs,set,service,active && state_.open());
+    dl->PopClipRect(); if (animating()) RequestUiPaint(); return;
+  }
   const float left = x + 24 * s, available = width - 48 * s;
   dl->AddText(fonts.display, 30 * s, ImVec2(left, o.y + 22 * s), color::kText,
               Ellipsize(fonts.display, 30 * s, T("Social"), available).c_str());
@@ -137,11 +152,21 @@ void SocialPanel::Draw(ImDrawList* dl, ImVec2 o, ImVec2 size, const Metrics& m, 
     item.label = row.label;
     if (kind==SocialRowKind::Text && !row.detail.empty()) {
       item.type=ItemType::kInfo; item.tall=true;
-      item.subtitle=row.detail; item.literal_subtitle=true;
+      item.subtitle=row.key.id==13 ? std::string(T(row.detail)) : row.detail; item.literal_subtitle=true;
     }
     if (kind==SocialRowKind::DirectAddress || kind==SocialRowKind::DirectPort || kind==SocialRowKind::DirectCode) {
       item.tall=true; item.subtitle=kind==SocialRowKind::DirectAddress ? direct_address_ : kind==SocialRowKind::DirectPort ? direct_port_ : direct_code_;
       item.literal_subtitle=true;
+    }
+    if (kind==SocialRowKind::ChapterSelect) {
+      item.tall=true; item.literal_subtitle=true;
+      item.subtitle=T("Choose Continue or a chapter");
+      if (model.choice.valid()) {
+        const auto& choice=model.choice;
+        const auto& chapter=play::Chapters()[size_t(choice.chapter)];
+        const auto chapter_name=chapter.name.empty() ? F("Chapter {0}",{std::to_string(choice.chapter+1)}) : std::string(T(chapter.name));
+        item.subtitle=(choice.continue_game ? std::string(T("Continue"))+": " : "") + chapter_name;
+      }
     }
     item.literal_label = person;
     item.disabled = !row.enabled && item.type == ItemType::kAction;
@@ -205,6 +230,63 @@ void SocialPanel::Draw(ImDrawList* dl, ImVec2 o, ImVec2 size, const Metrics& m, 
   dl->PopClipRect();
   if (animating()) RequestUiPaint();
 }
+void SocialPanel::DrawChapters(ImDrawList* dl,ImVec2 o,ImVec2 size,const Metrics& m,Input& in,
+                                Glyphs& glyphs,const std::string& set,ISocialService& service,bool active) {
+  const auto f=GetFonts(); const float s=m.s, left=o.x+24*s, width=size.x-48*s;
+  dl->AddText(f.display,28*s,ImVec2(left,o.y+24*s),color::kText,T("Chapter select"));
+  const auto policy_name=[](int entry) {
+    const auto policy=kChapterRules[size_t(entry)].policy;
+    return policy==ChapterPolicy::Together ? "Together" : policy==ChapterPolicy::SoloRegroup ? "Separate then regroup" : "Watch";
+  };
+  const auto name=[](int entry) {
+    const auto& chapter=play::Chapters()[size_t(entry)];
+    return chapter.name.empty() ? F("Chapter {0}",{std::to_string(entry+1)}) : std::string(T(chapter.name));
+  };
+  auto select=[&](int entry,bool resume) {
+    const auto before=service.Snapshot().choice;
+    const play::StartRequest request{resume ? play::StartKind::kContinue : play::StartKind::kChapter,
+        resume ? chapters_.continue_slot : chapters_.slot,entry,{}};
+    if (SelectSessionStart(request)) {
+      chapter_screen_=false;
+      notice_=before.valid() && before.chapter==entry && before.continue_game==resume ? "" : "Chapter changed. Both players must be ready again.";
+    }
+    else notice_="Could not select chapter";
+    notice_until_=ImGui::GetTime()+5;
+  };
+  std::vector<Item> items;
+  Item resume; resume.type=ItemType::kAction; resume.label="Continue"; resume.tall=true;
+  resume.disabled=chapters_.continue_slot<0 || chapters_.continue_chapter<0 || chapters_.continue_chapter>=int(play::Chapters().size());
+  resume.subtitle=resume.disabled ? T("No saved game") : name(chapters_.continue_chapter);
+  resume.literal_subtitle=true; resume.focus_subtitle_color=color::kOnFocus;
+  resume.on_activate=[&,entry=chapters_.continue_chapter] { select(entry,true); };
+  items.push_back(std::move(resume));
+  for (const auto& chapter : play::Chapters()) {
+    Item item; item.type=ItemType::kAction; item.label=name(chapter.entry); item.literal_label=true;
+    item.tall=true; item.subtitle=policy_name(chapter.entry); item.focus_subtitle_color=color::kOnFocus;
+    item.on_activate=[&,entry=chapter.entry] { select(entry,false); };
+    items.push_back(std::move(item));
+  }
+  const bool interactive=active && !just_opened_;
+  DrawList(dl,items,chapter_list_,ImVec2(left,o.y+304*s),ImVec2(left+width,o.y+size.y-102*s),m,in,interactive,&glyphs,set);
+  const int entry=chapter_list_.focus==0 ? chapters_.continue_chapter : chapter_list_.focus-1;
+  if (entry>=0 && entry<int(play::Chapters().size())) {
+    float aspect=16.f/9.f;
+    auto* picture=chapters_.picture ? chapters_.picture(entry,&aspect) : nullptr;
+    const float height=std::min(154*s,width/std::max(0.1f,aspect));
+    const ImVec2 a(left,o.y+76*s),b(left+height*aspect,a.y+height);
+    dl->AddRectFilled(a,b,color::kBase);
+    if (picture) dl->AddImage(Tex(picture),a,b);
+    dl->AddText(f.text,17*s,ImVec2(left,o.y+240*s),color::kText,
+        Ellipsize(f.text,17*s,name(entry),width).c_str());
+    dl->AddText(f.text,14*s,ImVec2(left,o.y+268*s),color::kAccent,T(policy_name(entry)));
+  }
+  const auto clicked=DrawPrompts(dl,glyphs,set,{{Action::kAccept,"Select"},{Action::kBack,"Back"}},
+      o.x+size.x-24*s,o.y+size.y-31*s,m,interactive);
+  if (clicked==Action::kBack) chapter_screen_=false;
+  if (clicked==Action::kAccept && chapter_list_.focus>=0 && chapter_list_.focus<int(items.size()) &&
+      !items[size_t(chapter_list_.focus)].disabled) items[size_t(chapter_list_.focus)].on_activate();
+  in.ConsumeAll();
+}
 void SocialPanel::DrawEditor(ImDrawList* dl,ImVec2 o,ImVec2 size,const Metrics& m,Input& in,Glyphs& glyphs,const std::string& set) {
   const auto f=GetFonts(); const float s=m.s;
   dl->AddRectFilled(o,ImVec2(o.x+size.x,o.y+size.y),IM_COL32(14,16,20,255));
@@ -213,9 +295,11 @@ void SocialPanel::DrawEditor(ImDrawList* dl,ImVec2 o,ImVec2 size,const Metrics& 
   dl->AddText(f.text,18*s,ImVec2(o.x+24*s,o.y+90*s),color::kText,
       Ellipsize(f.text,18*s,editor_text_+"_",size.x-48*s).c_str());
   if (editor_just_opened_) { editor_just_opened_=false; in.ConsumeAll(); RequestUiPaint(); return; }
-  const size_t limit=editor_==1 ? 64 : editor_==2 ? 5 : 32;
+  const size_t limit=editor_==1 ? 64 : editor_==2 ? 5 : 6;
   auto append=[&](char c) {
-    if (editor_text_.size()<limit && c>=33 && c<=126 && (editor_!=2 || (c>='0' && c<='9'))) editor_text_+=c;
+    if (editor_==3 && c>='a' && c<='z') c-='a'-'A';
+    if (editor_text_.size()<limit && c>=33 && c<=126 && (editor_!=2 || (c>='0' && c<='9')) &&
+        (editor_!=3 || (c>='0' && c<='9') || (c>='A' && c<='Z'))) editor_text_+=c;
   };
   for (const auto c : ImGui::GetIO().InputQueueCharacters) if (c<127) append(char(c));
   const std::string_view keys=editor_symbols_ ? "!\"#$%&'()*+,-./:;<=>?@[\\]^_`{|}~" :
@@ -260,7 +344,12 @@ void SocialPanel::DrawEditor(ImDrawList* dl,ImVec2 o,ImVec2 size,const Metrics& 
 bool SocialPanel::DirectInput(std::string_view command,ISocialService& service) {
   if (command.starts_with("address:")) { direct_address_=command.substr(8,64); return true; }
   if (command.starts_with("port:")) { direct_port_=command.substr(5,5); return true; }
-  if (command.starts_with("code:")) { direct_code_=command.substr(5,32); return true; }
+  if (command.starts_with("code:")) { direct_code_=NormalizeJoinCode(command.substr(5,6)); return true; }
+  if (command=="chapters") {
+    const auto rows=SocialRows(service.Snapshot());
+    for (const auto& row : rows) if (row.key.kind==SocialRowKind::ChapterSelect && row.enabled) { Activate(row,service); return true; }
+    return false;
+  }
   const auto kind=command=="host" ? SocialRowKind::DirectHost : command=="join" ? SocialRowKind::DirectJoin :
       command=="ready" ? SocialRowKind::Ready : command=="edit-address" ? SocialRowKind::DirectAddress :
       command=="edit-port" ? SocialRowKind::DirectPort : command=="edit-code" ? SocialRowKind::DirectCode :

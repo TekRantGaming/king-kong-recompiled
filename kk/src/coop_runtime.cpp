@@ -111,6 +111,7 @@ class Service {
     if (running_.exchange(true)) return;
     stop_ = false;
     direct_ = direct; local_ready_ = remote_ready_ = starting_ = code_rejected_ = open_failed_ = false;
+    choice_ = {};
     options_ = options;
     addresses_ = direct && options.host && options.address=="::" ? DirectLocalAddresses() : options.address;
     compatibility_ = config.compatibility;
@@ -151,9 +152,12 @@ class Service {
         previous_poll = now;
 #endif
         if (local && now - local->time > .25) { local.reset(); failure = "publish-expired"; }
-        bool ready;
-        { std::lock_guard lock(mutex_); ready = local_ready_; }
-        if (direct_ && session.State() == SessionState::Connected) transport->SetReady(ready);
+        bool ready; LobbyChoice choice;
+        { std::lock_guard lock(mutex_); ready = local_ready_; choice = choice_; }
+        if (direct_ && session.State() == SessionState::Connected) {
+          if (config.role==Role::Host && choice.valid() && choice!=transport->Choice()) transport->SetChoice(choice);
+          transport->SetReady(ready,choice.revision);
+        }
         session.Tick(now, local, &frame, &cheats);
         shots_.Exchange(session);
         combat_.Exchange(session, now);
@@ -178,7 +182,10 @@ class Service {
         bool lobby_changed;
         { std::lock_guard lock(mutex_);
           lobby_changed=remote_ready_!=transport->PeerReady() || (!starting_ && flow_active);
-          view_=std::move(view); remote_ready_=transport->PeerReady();
+          if (config.role==Role::Guest && choice_!=transport->Choice()) {
+            choice_=transport->Choice(); local_ready_=false; lobby_changed=true;
+          }
+          view_=std::move(view); remote_ready_=transport->Choice()==choice_ && transport->PeerReady();
           code_rejected_=transport->CodeRejected(); starting_=starting_ || flow_active;
         }
         if (shown != session.State() || lobby_changed) { shown = session.State(); RequestUiPaint(); }
@@ -235,11 +242,13 @@ class Service {
   SocialModel SocialSnapshot() {
     std::lock_guard lock(mutex_);
     SocialModel m; m.direct=true; m.self=view_.role==Role::Host ? 1 : 2; m.owner=1;
+    m.choice=choice_;
     m.direct_port=options_.port; m.direct_code=options_.join_code; m.direct_addresses=addresses_;
     const bool connected=view_.state==SessionState::Connected;
     const bool ended=view_.state==SessionState::Ended;
     m.lobby=ended ? 0 : (view_.epoch ? view_.epoch : 1);
     m.status=ended ? SocialStatus::Ended : connected ? (starting_ ? SocialStatus::Starting : SocialStatus::Lobby) : SocialStatus::Joining;
+    m.start_requested=starting_;
     m.status_text=ended ? "Direct connection ended" : connected ? "Direct partner connected" : "Waiting for Direct IP partner";
     if (code_rejected_) m.last_error="Wrong join code";
     else if (open_failed_) m.last_error="Could not open Direct connection. Check the IP and UDP port.";
@@ -257,8 +266,15 @@ class Service {
     }
     const auto m=SocialSnapshot();
     std::lock_guard lock(mutex_);
-    if (command.action==SocialAction::SetReady && m.status==SocialStatus::Lobby) { local_ready_=command.ready; return true; }
-    if (command.action==SocialAction::Start && m.can_start && view_.state==SessionState::Connected && local_ready_ && remote_ready_) return true;
+    if (command.action==SocialAction::SelectChapter && m.owner==m.self && !starting_ &&
+        command.choice.chapter>=0 && command.choice.chapter<42) {
+      if (choice_.valid() && choice_.chapter==command.choice.chapter && choice_.continue_game==command.choice.continue_game) return true;
+      choice_={choice_.revision+1,command.choice.chapter,command.choice.continue_game};
+      local_ready_=remote_ready_=false; RequestUiPaint(); return true;
+    }
+    if (command.action==SocialAction::SetReady && m.status==SocialStatus::Lobby &&
+        choice_.valid() && command.choice==choice_) { local_ready_=command.ready; return true; }
+    if (command.action==SocialAction::Start && command.choice==choice_ && choice_.valid() && m.can_start && view_.state==SessionState::Connected && local_ready_ && remote_ready_) return true;
     return false;
   }
   void Publish(PoseRead p) { std::lock_guard lock(mutex_); local_ = p; }
@@ -301,6 +317,7 @@ class Service {
   bool direct_ = false, local_ready_ = false, remote_ready_ = false, starting_ = false, code_rejected_ = false, open_failed_ = false;
   Compatibility compatibility_;
   DirectUdpOptions options_;
+  LobbyChoice choice_;
   std::string addresses_;
   PoseRead local_;
   View view_;
@@ -554,8 +571,8 @@ void Start(const std::filesystem::path& user_data) {
   }
   config.compatibility = {kProtocolVersion, KK_VERSION, KK_COOP_BUILD, mods::GameplayDigest(user_data)};
   REXLOG_INFO("KK co-op: dev link {} on 127.0.0.1:{}", role, port);
-  config.join_code = "LocalDev";
-  service.Start(std::move(config), {role == "host", "127.0.0.1", uint16_t(port), "LocalDev"});
+  config.join_code = "LDEV23";
+  service.Start(std::move(config), {role == "host", "127.0.0.1", uint16_t(port), "LDEV23"});
 #endif
 }
 ISocialService& Social() {
@@ -571,10 +588,12 @@ ISocialService& Social() {
 #if defined(KK_DEV_TOOLS)
   if (REXCVAR_GET(kk_direct_loopback)) return disabled;
   class DevSocial final : public ISocialService {
+    LobbyChoice choice_;
    public:
     SocialModel Snapshot() const override {
       const auto v=CurrentView();
       SocialModel m; m.self=v.role==Role::Host ? 1 : 2; m.owner=1; m.lobby=1;
+      m.choice=choice_;
       const bool connected=v.state==SessionState::Connected;
       m.status=connected ? SocialStatus::Lobby : SocialStatus::Starting;
       m.status_text=connected ? "Local dev partner connected" : "Waiting for local dev partner";
@@ -583,6 +602,7 @@ ISocialService& Social() {
       m.can_start=connected && v.role==Role::Host; return m;
     }
     bool Act(SocialCommand c) override {
+      if (c.action==SocialAction::SelectChapter) { choice_={choice_.revision+1,c.choice.chapter,c.choice.continue_game}; return true; }
       if (c.action==SocialAction::Start) return CanStartLobby(Snapshot());
       return c.action==SocialAction::Open || c.action==SocialAction::SetReady;
     }

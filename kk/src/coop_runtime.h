@@ -20,7 +20,7 @@ ISocialService& Social();
 bool HostDirect(uint16_t port, std::string code);
 bool JoinDirect(std::string address, uint16_t port, std::string code);
 // UI-thread start handoff; all peers launch through the existing Play callback.
-void SelectSessionStart(const play::StartRequest& request);
+bool SelectSessionStart(const play::StartRequest& request);
 bool RequestSessionStart();
 bool TakeSessionLaunch(play::StartRequest& request);
 FlowView SessionFlowSnapshot();

@@ -335,7 +335,7 @@ struct SteamRuntime::Impl
     api.SteamAPI_ISteamFriends_ClearRichPresence(friends);
     if (!self_test && !stop) api.SteamAPI_ISteamFriends_SetRichPresence(friends, kPresenceKey, kProductValue);
     model.lobby = model.owner = recorded_owner = epoch = validating = joining = joining_owner = 0;
-    model.members.clear(); model.start_requested = false; ready_token.clear();
+    model.members.clear(); model.start_requested = false; model.choice={}; ready_token.clear();
     RetireCalls();
     model.status = reason ? SocialStatus::Ended : SocialStatus::Idle;
     model.status_text = reason ? reason : "Steam connected";
@@ -365,6 +365,9 @@ struct SteamRuntime::Impl
     std::sort(members.begin(), members.end(), [](auto& a, auto& b) { return a.id < b.id; });
     if (!ParseLobbyId(Data(model.lobby, "kkrc_generation"), generation)) { Leave("Invalid ready generation"); return false; }
     std::string token = std::to_string(epoch) + ":" + std::to_string(generation);
+    const auto choice_value=Data(model.lobby,"kkrc_choice");
+    model.choice=DecodeLobbyChoice(choice_value);
+    token += ":" + choice_value;
     for (const auto& m : members) token += ":" + std::to_string(m.id);
     if (!ready_token.empty() && token != ready_token && model.start_requested) { Leave("The partner left the session"); return false; }
     if (token != ready_token)
@@ -411,6 +414,7 @@ struct SteamRuntime::Impl
     generation = 1;
     ok = SetData("kkrc_generation", "1") && ok;
     ok = SetData("kkrc_phase", "waiting") && ok;
+    ok = SetData("kkrc_choice", "0") && ok;
     api.SteamAPI_ISteamMatchmaking_SetLobbyMemberData(matchmaking, model.lobby, kReadyKey, "0");
     if (!ok) { Leave("Could not publish lobby compatibility"); if (self_test) stop = true; return; }
     if (self_test) {
@@ -495,12 +499,21 @@ struct SteamRuntime::Impl
           api.SteamAPI_ISteamFriends_ActivateGameOverlayInviteDialog(friends, model.lobby);
         else Error("Steam overlay is unavailable");
         return;
+      case SocialAction::SelectChapter: {
+        if (model.status!=SocialStatus::Lobby || !RefreshLobby() || model.self!=model.owner ||
+            c.choice.chapter<0 || c.choice.chapter>=42) return;
+        if (model.choice.valid() && model.choice.chapter==c.choice.chapter && model.choice.continue_game==c.choice.continue_game) return;
+        const LobbyChoice choice{model.choice.revision+1,c.choice.chapter,c.choice.continue_game};
+        if (!SetData("kkrc_choice",EncodeLobbyChoice(choice))) { Error("Could not complete Social action"); return; }
+        RefreshLobby(); return;
+      }
       case SocialAction::SetReady:
         if (model.status != SocialStatus::Lobby || !RefreshLobby()) return;
+        if (!model.choice.valid() || c.choice!=model.choice) return;
         api.SteamAPI_ISteamMatchmaking_SetLobbyMemberData(matchmaking, model.lobby, kReadyKey, c.ready ? ready_token.c_str() : "0");
         RefreshLobby(); return;
       case SocialAction::Start:
-        if (!RefreshLobby() || !CanStartLobby(model)) { Error("Both players must be ready"); return; }
+        if (!RefreshLobby() || !CanStartLobby(model) || !model.choice.valid() || c.choice!=model.choice) { Error("Both players must be ready"); return; }
         if (!api.SteamAPI_ISteamMatchmaking_SetLobbyJoinable(matchmaking, model.lobby, false) || !SetData("kkrc_phase", "starting")) {
           Leave("Could not start lobby"); return;
         }

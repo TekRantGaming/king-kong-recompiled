@@ -68,9 +68,10 @@ void Social() {
   Check(host.Snapshot().status == SocialStatus::Dormant, "fake starts dormant");
   Check(host.Act({SocialAction::Open}) && host.Snapshot().status == SocialStatus::Idle, "open fake");
   Check(host.Act({SocialAction::CreateLobby}), "create lobby");
+  Check(host.Act({SocialAction::SelectChapter,0,false,{0,1,false}}),"select chapter before Ready");
   const auto lobby = host.Snapshot().lobby;
   Check(lobby && host.Snapshot().owner == 1 && host.Snapshot().members.size() == 1, "host is owner");
-  Check(!host.Act({SocialAction::Start}), "one player cannot start");
+  Check(!host.Act({SocialAction::Start,0,false,host.Snapshot().choice}), "one player cannot start");
   Check(!guest.Act({SocialAction::Accept, lobby}), "cannot accept unknown invite");
   Check(host.Act({SocialAction::Invite, 2}) && host.Act({SocialAction::Invite, 2}), "invite deduplicated");
   Check(guest.Snapshot().pending_invites.size() == 1, "one pending invite");
@@ -78,24 +79,25 @@ void Social() {
   Check(host.Act({SocialAction::Invite, 2}) && guest.Act({SocialAction::Accept, lobby}), "accept invite");
   Check(guest.Snapshot().members.size() == 2 && guest.Snapshot().owner == 1, "two member lobby");
   Check(host.Act({SocialAction::Invite, 3}) && !third.Act({SocialAction::Accept, lobby}), "third member rejected");
-  Check(host.Act({SocialAction::SetReady, 0, true}) && !host.Snapshot().can_start, "one ready cannot start");
-  Check(guest.Act({SocialAction::SetReady, 0, true}) && host.Snapshot().can_start, "both ready");
+  Check(host.Act({SocialAction::SetReady, 0, true,host.Snapshot().choice}) && !host.Snapshot().can_start, "one ready cannot start");
+  Check(guest.Act({SocialAction::SetReady, 0, true,guest.Snapshot().choice}) && host.Snapshot().can_start, "both ready");
   Check(!guest.Act({SocialAction::Start}), "only owner starts");
-  Check(host.Act({SocialAction::Start}) && guest.Snapshot().start_requested, "start visible to both");
+  Check(host.Act({SocialAction::Start,0,false,host.Snapshot().choice}) && guest.Snapshot().start_requested, "start visible to both");
   Check(!third.Act({SocialAction::Accept, lobby}), "cannot join started lobby");
   Check(host.Act({SocialAction::Leave}), "host leaves");
   Check(guest.Snapshot().status == SocialStatus::Ended && guest.Snapshot().lobby == 0, "host departure ends guest lobby");
   Check(!guest.Snapshot().last_error.empty() && !guest.Snapshot().can_start, "departure has clear error");
   Check(host.Act({SocialAction::CreateLobby}), "fresh lobby after leave");
+  Check(host.Act({SocialAction::SelectChapter,0,false,{0,2,false}}),"select fresh lobby chapter");
   const auto fresh = host.Snapshot().lobby;
   Check(host.Act({SocialAction::Invite, 2}) && guest.Act({SocialAction::Accept, fresh}), "join fresh lobby");
-  Check(host.Act({SocialAction::SetReady, 0, true}) && guest.Act({SocialAction::Leave}), "guest leaves");
+  Check(host.Act({SocialAction::SetReady, 0, true,host.Snapshot().choice}) && guest.Act({SocialAction::Leave}), "guest leaves");
   Check(host.Snapshot().members.size() == 1 && !host.Snapshot().members.front().ready, "membership invalidates ready");
   auto mismatch = Compatible(); mismatch.gameplay_digest = "different";
   FakeSocialService wrong(world, 4, "Different mods", mismatch);
   Check(host.Act({SocialAction::Invite, 4}) && !wrong.Act({SocialAction::Accept, fresh}), "compatibility gates invite acceptance");
   Check(host.Act({SocialAction::Invite, 2}) && guest.Act({SocialAction::Accept, fresh}), "partner can return to waiting lobby");
-  Check(host.Act({SocialAction::SetReady, 0, true}) && guest.Act({SocialAction::SetReady, 0, true}) && host.Act({SocialAction::Start}), "fresh readiness required for another start");
+  Check(host.Act({SocialAction::SetReady, 0, true,host.Snapshot().choice}) && guest.Act({SocialAction::SetReady, 0, true,guest.Snapshot().choice}) && host.Act({SocialAction::Start,0,false,host.Snapshot().choice}), "fresh readiness required for another start");
   Check(guest.Act({SocialAction::Leave}) && host.Snapshot().status == SocialStatus::Ended, "partner leaving started session ends host session");
   FakeSocialService disabled(world, 5, "Disabled", Compatible(), false);
   Check(!disabled.Act({SocialAction::Open}) && disabled.Snapshot().status == SocialStatus::Disabled, "disabled fake stays disabled");
@@ -203,7 +205,7 @@ void EveryProtocolMessage() {
   };
   const MessageType unreliable[] = {MessageType::Ping, MessageType::Pong, MessageType::PlayerPose,
       MessageType::EnemySnapshot, MessageType::CameraPose};
-  static_assert(kProtocolVersion == 13 && std::size(reliable)+std::size(unreliable) == 30);
+  static_assert(kProtocolVersion == 14 && std::size(reliable)+std::size(unreliable) == 30);
   Backend a,b; a.self=1; b.self=2; a.remote=&b; b.remote=&a;
   SteamMessagesTransport at(a,2),bt(b,1);
   unsigned seen[31]{};
@@ -238,7 +240,7 @@ void StoryOverMessages() {
   CoopSession host({true,Role::Host,12345,Compatible()},at),guest({true,Role::Guest,0,Compatible()},bt);
   for (unsigned i=0;i<20;++i) { host.Tick(i*.01); guest.Tick(i*.01); }
   Check(host.State()==SessionState::Connected && guest.State()==SessionState::Connected,
-      "protocol 13 story session handshakes over Steam adapter");
+      "protocol 14 story session handshakes over Steam adapter");
   StoryMailbox h,g;
   uint32_t number=0;
   double now=.2;

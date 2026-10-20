@@ -1,4 +1,5 @@
 #include "social_panel_logic.h"
+#include "coop_flow.h"
 #include <algorithm>
 
 namespace kk::coop {
@@ -85,13 +86,21 @@ std::vector<SocialRow> SocialRows(const SocialModel& m) {
   if (show_steam || m.lobby) add(SocialRowKind::Section, 3, "Lobby");
   if (!m.lobby && show_steam) add(SocialRowKind::Create, 0, "Create lobby", "", free);
   else if (m.lobby) {
+    add(SocialRowKind::ChapterSelect,0,"Chapter select","",m.owner==m.self && !m.start_requested &&
+        (lobby || (m.direct && m.status==SocialStatus::Joining)));
+    if (m.choice.valid()) {
+      // The policy gets its own row so long chapter names cannot hide it.
+      const auto policy=kChapterRules[size_t(m.choice.chapter)].policy;
+      add(SocialRowKind::Text,13,"Co-op",policy==ChapterPolicy::Together ? "Together" :
+          policy==ChapterPolicy::SoloRegroup ? "Separate then regroup" : "Watch");
+    }
     bool ready = false, self_seen = false;
     for (const auto& member : m.members) {
       add(SocialRowKind::Member, member.id, member.name, member.ready ? "Ready" : "Not ready");
       if (member.id == m.self) { ready = member.ready; self_seen = true; }
     }
-    add(SocialRowKind::Ready, 0, ready ? "Not ready" : "Ready", "", lobby && self_seen);
-    if (m.owner == m.self) add(SocialRowKind::Start, 0, "Start", "", lobby && m.can_start && CanStartLobby(m));
+    add(SocialRowKind::Ready, 0, ready ? "Not ready" : "Ready", "", lobby && self_seen && m.choice.valid());
+    if (m.owner == m.self) add(SocialRowKind::Start, 0, "Start", "", lobby && m.choice.valid() && m.can_start && CanStartLobby(m));
     if (!m.direct) add(SocialRowKind::OverlayInvite, 0, "Invite friend", "", lobby && m.members.size() < 2 && m.overlay_available);
     add(SocialRowKind::Leave, 0, "Leave lobby", "", true);
   }
@@ -144,9 +153,9 @@ std::optional<SocialCommand> SocialRowCommand(const SocialRow& r, const SocialMo
     case SocialRowKind::Create: return SocialCommand{SocialAction::CreateLobby};
     case SocialRowKind::Ready: {
       const auto self = std::find_if(m.members.begin(), m.members.end(), [&](auto p) { return p.id == m.self; });
-      return SocialCommand{SocialAction::SetReady, 0, !self->ready};
+      return SocialCommand{SocialAction::SetReady, 0, !self->ready, m.choice};
     }
-    case SocialRowKind::Start: return SocialCommand{SocialAction::Start};
+    case SocialRowKind::Start: return SocialCommand{SocialAction::Start,0,false,m.choice};
     case SocialRowKind::OverlayInvite: return SocialCommand{SocialAction::OverlayInvite};
     case SocialRowKind::Leave: return SocialCommand{SocialAction::Leave};
     case SocialRowKind::Friend: return SocialCommand{SocialAction::Invite, r.key.id};

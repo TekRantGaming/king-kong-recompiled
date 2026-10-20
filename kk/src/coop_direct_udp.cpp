@@ -23,16 +23,21 @@
 
 namespace kk::coop {
 bool ValidJoinCode(std::string_view code) {
-  if (code.size() < 6 || code.size() > 32) return false;
-  for (unsigned char c : code) if (c < 33 || c > 126) return false;
+  if (code.size() != 6) return false;
+  for (unsigned char c : code) if (!((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9'))) return false;
   return true;
+}
+std::string NormalizeJoinCode(std::string_view code) {
+  std::string out(code);
+  for (char& c : out) if (c >= 'a' && c <= 'z') c -= 'a' - 'A';
+  return out;
 }
 std::string NewJoinCode() {
   constexpr char alphabet[] = "23456789ABCDEFGHJKLMNPQRSTUVWXYZ";
   std::random_device random;
   std::uniform_int_distribution<size_t> pick(0, sizeof(alphabet)-2);
   std::string out;
-  for (int i=0; i<10; ++i) out += alphabet[pick(random)];
+  for (int i=0; i<6; ++i) out += alphabet[pick(random)];
   return out;
 }
 bool UdpRateLimit::Take(double now, double count) {
@@ -129,10 +134,19 @@ class Udp final : public DirectUdpTransport {
   }
   ~Udp() override { Close(); }
   bool Send(std::span<const uint8_t> data, bool reliable) override { return Queue(data,reliable,false); }
-  bool SetReady(bool ready) override {
+  bool SetChoice(LobbyChoice choice) override {
+    if (!options_.host || !choice.valid() || choice.revision <= choice_.revision) return false;
+    std::array<uint8_t,11> data{}; data[0]=2; Put(data.data()+1,choice.revision,8);
+    data[9]=uint8_t(choice.chapter); data[10]=choice.continue_game;
+    if (!Queue(data,true,true)) return false;
+    choice_=choice; local_ready_=peer_ready_=false; return true;
+  }
+  LobbyChoice Choice() const override { return choice_; }
+  bool SetReady(bool ready, uint64_t revision) override {
+    if (revision && revision != choice_.revision) return false;
     if (ready==local_ready_) return true;
-    const uint8_t value=ready;
-    if (!Queue(std::span(&value,1),true,true)) return false;
+    std::array<uint8_t,9> value{}; value[0]=ready; Put(value.data()+1,choice_.revision,8);
+    if (!Queue(value,true,true)) return false;
     local_ready_=ready; return true;
   }
   bool PeerReady() const override { return peer_ready_; }
@@ -180,12 +194,13 @@ class Udp final : public DirectUdpTransport {
       }
       if ((kind==2 && (control || !payload.empty() || !seq)) || (kind!=2 && payload.empty()) ||
           (kind==0 && (seq || control)) || (kind==1 && !seq) ||
-          (control && (payload.size()!=1 || payload[0]>1))) { ++stats_.malformed; continue; }
+          (control && !((payload.size()==9 && payload[0]<=1) ||
+            (payload.size()==11 && payload[0]==2 && payload[9]<42 && payload[10]<=1 && Get(payload.data()+1,8))))) { ++stats_.malformed; continue; }
       if (!peer_nonce_) {
         Message hello;
         if (kind!=1 || control || seq!=1 || !Decode(payload,hello) || hello.type!=MessageType::Hello ||
             (options_.host ? hello.epoch!=0 : hello.epoch==0)) { ++stats_.malformed; continue; }
-        if (hello.join_code!=options_.join_code) {
+        if (NormalizeJoinCode(hello.join_code)!=NormalizeJoinCode(options_.join_code)) {
           // Bounded, smaller-than-request response. Do not pin or consume reliable sequence 1.
           if (options_.host && rejects_.Take(now)) {
             auto reject=Wire(3,0,false,std::array<uint8_t,1>{1});
@@ -251,7 +266,14 @@ class Udp final : public DirectUdpTransport {
   void DrainOrdered() {
     while (ready_.size()<kWindow) {
       auto it=ordered_.find(next_receive_); if (it==ordered_.end()) break;
-      if (it->second.control) peer_ready_=it->second.data[0]!=0;
+      if (it->second.control) {
+        const auto& data=it->second.data; const uint64_t revision=Get(data.data()+1,8);
+        if (data[0]==2) {
+          if (!options_.host && revision>choice_.revision) {
+            choice_={revision,int(data[9]),bool(data[10])}; local_ready_=peer_ready_=false;
+          }
+        } else if (revision==choice_.revision) peer_ready_=data[0]!=0;
+      }
       else ready_.push_back(std::move(it->second.data));
       ordered_.erase(it); ++next_receive_;
     }
@@ -271,6 +293,7 @@ class Udp final : public DirectUdpTransport {
   uint16_t local_port_=0;
   bool has_address_=false, peer_ready_=false, local_ready_=false, code_rejected_=false;
   uint64_t nonce_=0,peer_nonce_=0;
+  LobbyChoice choice_;
   uint32_t next_send_=1,next_receive_=1;
   double now_=0;
   TransportState state_=TransportState::Failed; TransportStats stats_;
