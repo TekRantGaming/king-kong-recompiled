@@ -31,9 +31,14 @@ namespace kk::content {
 // Task 212 (owner, 18 Oct): kComic, the Kong Comic Book pack, a second Workshop download like kUhd. New kinds are
 // only ever added at the end: the numbers are array indexes, and what is saved on disk uses Info::id, not them.
 // Task 255 (owner, 19 Oct): kTropical and kCartoon, Kong's Tropical Holiday and Kong Cartoon, two more like kComic.
-enum class Kind { kTexturePack = 0, kCutscenes = 1, kArtbook = 2, kUhd = 3, kImport = 4, kComic = 5, kTropical = 6, kCartoon = 7 };
-constexpr int kKindCount = 8;
-constexpr bool Quiet(Kind kind) { return kind == Kind::kArtbook; }
+// Task 333 (owner, 20 Oct, Beta 13): kManual, the game's Xbox 360 user manual (a PDF from the owner's link), quiet
+// like the artbook: it is kept as content\manual\manual.pdf and shown by Extras > User manual (pdf_pages.h).
+enum class Kind { kTexturePack = 0, kCutscenes = 1, kArtbook = 2, kUhd = 3, kImport = 4, kComic = 5, kTropical = 6, kCartoon = 7,
+                  kManual = 8 };
+constexpr int kKindCount = 9;
+constexpr bool Quiet(Kind kind) { return kind == Kind::kArtbook || kind == Kind::kManual; }
+// Kind::kManual: the file's name in its install folder.
+inline constexpr const char* kManualFile = "manual.pdf";
 
 // The Workshop's downloadable texture pack mods (task 212): each is a texture pack mod ZIP ("<name>/mod.toml",
 // picture.png, README, textures/pack.txt) that downloads like the HD pack and installs into <user data>/mods/<name>

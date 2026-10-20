@@ -144,6 +144,17 @@ std::atomic<int> g_save_jobs{0};
 std::atomic<bool> g_chapter_session{false};  // the session is a chapter-select run      // save jobs (sub_82722620) running now
 std::atomic<bool> g_story_session{false};    // task 331: a story run (New game, Continue, Load game)
 std::atomic<bool> g_saved_on_quit{false};    // task 331: a save job wrote the save after the pause menu's quit
+// Task 333: Extras > Original main menu (StartKind::kOriginalMenu): the game's own start menu runs as it was until
+// it starts play; then the session is the launcher's (g_session).
+std::atomic<bool> g_original_menu{false};
+std::atomic<uint32_t> g_original_universe{0};  // the universe's variables G, as uni_go last saw them
+// The original Extras' gallery and credits levels (extras.h, a level without the alternate ending's session flag):
+// started from the original main menu they come back to its Extras page, as they did.
+bool OriginalMenuBonusLevel(int32_t level) {
+  for (const auto& e : kExtras)
+    if (e.type == ExtraType::kLevel && e.session_flag == 0 && int32_t(e.level) == level) return true;
+  return false;
+}
 
 std::string Upper(std::string s) {
   for (char& c : s) c = char(std::toupper(static_cast<unsigned char>(c)));
@@ -235,6 +246,7 @@ const char* KindName(StartKind kind) {
     case StartKind::kNewGame: return "new";
     case StartKind::kChapter: return "chapter";
     case StartKind::kExtra: return "extra";
+    case StartKind::kOriginalMenu: return "original-menu";
     default: return "none";
   }
 }
@@ -267,6 +279,7 @@ std::string FormatRequest(const StartRequest& r) {
     case StartKind::kNewGame: return fmt::format("new:{}:{}", r.slot, EncodeName(r.new_name));
     case StartKind::kChapter: return fmt::format("chapter:{}:{}:{}", r.slot, r.chapter, EncodeName(r.new_name));
     case StartKind::kExtra: return fmt::format("extra:{}:{}", r.slot, r.chapter);
+    case StartKind::kOriginalMenu: return "original-menu";
     default: return "";
   }
 }
@@ -289,6 +302,8 @@ StartRequest ParseRequest(const std::string& text) {
     r.slot = num(1, -1);
     r.chapter = num(2, 0);
     if (parts.size() > 3) r.new_name = DecodeName(parts[3]);
+  } else if (parts[0] == "original-menu" && parts.size() == 1) {
+    r.kind = StartKind::kOriginalMenu;
   } else if (parts[0] == "extra" && parts.size() == 3) {
     // Extra ids must be exact: an invalid request must never start a different bonus.
     try {
@@ -481,7 +496,8 @@ void SetStartRequest(const StartRequest& request) {
   g_request = request;
   // Task 330: a launcher with the live menu scene runs the game too; the request is for the new process its Play
   // starts (restart_and_play), never carried out by the scene.
-  g_starting = request.kind != StartKind::kNone && !kk::menu_scene::Active();
+  g_starting = request.kind != StartKind::kNone && request.kind != StartKind::kOriginalMenu && !kk::menu_scene::Active();
+  g_original_menu = request.kind == StartKind::kOriginalMenu && !kk::menu_scene::Active();
 #if defined(KK_DEV_TOOLS)
   if (request.kind == StartKind::kExtra && std::getenv("KK_DEV_LAUNCHER_INPUT")) {
     // A scripted controller activation is for this session, never repeated after returning to Extras;
@@ -537,6 +553,31 @@ void FlushRendererFiles() {
   // Linux (on hold): the plugin's writes are lost only if the process ends within a write (milliseconds).
 }
 bool SessionActive() { return g_session; }
+bool OriginalMenuActive() { return g_original_menu && !g_session; }
+
+// Task 333: the title (level 2) waits for Start; on the way to the original start menu the port presses it for the
+// player, as the live menu scene does (menu_scene_logic.h: from the 10th read on the title, 3 reads in 20, until
+// the start menu is asked for). Pad 1 only; every other read, and every read after the title, is the player's.
+void OriginalMenuPad(uint32_t user, uint8_t* base, uint8_t* state, uint32_t& result) {
+  if (!g_original_menu || g_session || user != 0 || !state) return;
+  const uint32_t g = g_original_universe.load(std::memory_order_relaxed);
+  if (!g) return;
+  static kk::menu_scene::Tracker tracker;  // game thread only
+  kk::menu_scene::GuestView v;
+  v.current_level = Load32(base, g + 0x18);
+  v.request = Load32(base, g + 4) != 0;
+  v.requested = Load32(base, g + 8);
+  if (v.current_level != kTitleLevel) return;
+  tracker.Step(v);
+  if (!tracker.start_pressed) return;
+  if (result != 0) {  // no pad 1 (the keyboard alone): a connected pad with only Start down
+    std::memset(state + 4, 0, 12);
+    result = 0;
+  }
+  state[5] |= 0x10;  // XINPUT_GAMEPAD_START (the low byte of the big-endian buttons word)
+  static bool logged = false;
+  if (!std::exchange(logged, true)) REXLOG_INFO("KK play: original main menu: Start pressed on the title");
+}
 bool ProfileSaveBusy(const uint8_t* base) {
   return g_save_jobs != 0 || Load32(base, kSaveQueue + 0xC) != 0;
 }
@@ -1176,6 +1217,30 @@ REX_HOOK_RAW(sub_8253DB80) {
   const uint32_t ai = Load32(base, kAiPtr);
   const uint32_t g = ai ? Load32(base, ai + 0x40) : 0;
   if (g && kk::menu_scene::Active()) kk::menu_scene::NoteUniverse(g);  // task 330: the live menu scene
+  if (g && g_original_menu && !g_session) {
+    // Task 333: Extras > Original main menu. The saves are backed up once before the game's own pages can write
+    // them; the port's save guards (sub_8266AD80, sub_82722620 below) apply as always.
+    g_original_universe.store(g, std::memory_order_relaxed);
+    static bool backed_up = false;
+    if (!std::exchange(backed_up, true)) {
+      REXLOG_INFO("KK play: original main menu: the game boots into its own start menu");
+      if (!BackupSaves(g_user_dir, "before the original main menu"))
+        REXLOG_ERROR("KK play: the saves could not be backed up before the original main menu");
+    }
+    // Play started from it: a level other than the title, the start menu and the bonus galleries / credits (those
+    // come back to its Extras page, as they did). From now on the session is the launcher's.
+    const uint32_t wanted = Load32(base, g + 8);
+    if (Load32(base, g + 4) != 0 && wanted != 0 && wanted != kTitleLevel && wanted != kStartMenuLevel &&
+        !OriginalMenuBonusLevel(int32_t(wanted))) {
+      g_session = true;
+      g_chapter_session = Load32(base, g + 0x5668) != 0;
+      g_story_session = !g_chapter_session && Load32(base, g + 0x5674) == 0;
+      REXLOG_INFO("KK play: original main menu: it started play (level {} start {}, {}): the pause menu's Return "
+                  "to main menu and Quit game now go back to the launcher",
+                  int32_t(wanted), int32_t(Load32(base, g + 0xC)),
+                  g_chapter_session ? "chapter select" : g_story_session ? "story" : "a bonus");
+    }
+  }
   if (g) {
     if (const int chapter = kk::benchmark::NextChapter(); chapter >= 0) {
       g_level_loaded = false;

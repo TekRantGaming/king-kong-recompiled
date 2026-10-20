@@ -335,7 +335,7 @@ static_assert(kSettingsTabCount == 8);
 // Sub-pages of Controls.
 enum SubPage { kNoSubPage, kRemapPage, kKeysPage };
 // Play on Home: the Play menu and its pages (docs/menus.md).
-enum class PlayView { kNone, kMenu, kLoad, kNew, kChapters, kExtras, kArtbook };
+enum class PlayView { kNone, kMenu, kLoad, kNew, kChapters, kExtras, kArtbook, kManual };
 
 struct Achievement {
   uint32_t id = 0;
@@ -4032,7 +4032,7 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
               {"Save", slot >= 0 ? SaveName(saves_[size_t(slot)]) : T("A new one is made")}};
     } else if (label == "Extras") {
       cols = {{"Extras", T("Every bonus is unlocked.")},
-              {"Bonuses", std::to_string(std::size(play::kExtras) + 1)}};  // and the Artbook
+              {"Bonuses", std::to_string(std::size(play::kExtras) + 2)}};  // and the Artbook and the user manual
     }
     DrawInfoColumns(dl, x, o_.y + h_ - 120 * s, a, cols);
   }
@@ -4059,6 +4059,7 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
       case PlayView::kChapters: return "Chapter select";
       case PlayView::kExtras: return "Extras";
       case PlayView::kArtbook: return "Artbook";
+      case PlayView::kManual: return "User manual";
       default: return "";
     }
   }
@@ -4223,6 +4224,7 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
   // Load game, New game and Chapter select: the settings pages' layout (list and description).
   void DrawPlayPage(ImDrawList* dl) {
     if (play_ == PlayView::kArtbook) return DrawArtbook(dl);  // Beta 7: its own page (artbook.h)
+    if (play_ == PlayView::kManual) return DrawManual(dl);    // task 333: the artbook's page for the manual
     const float s = S();
     std::vector<Item> items = play_ == PlayView::kLoad     ? LoadItems()
                               : play_ == PlayView::kNew    ? NewGameItems()
@@ -4439,6 +4441,9 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
       case PlayView::kArtbook:
         if (artbook_) return artbook_->Prompts();
         return {{Action::kBack, "Back"}};
+      case PlayView::kManual:
+        if (manual_) return manual_->Prompts();
+        return {{Action::kBack, "Back"}};
       default:
         return {{Action::kAccept, "Select"}, {Action::kBack, "Back"}};
     }
@@ -4446,12 +4451,13 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
 
   void HandlePlayInput() {
     ui::Input& in = input_;
-    if (play_ == PlayView::kArtbook) {  // LB / RB are its previous / next; B leaves the viewer, then the page
-      in.Consume(Action::kPlay);
+    if (play_ == PlayView::kArtbook || play_ == PlayView::kManual) {  // LB / RB are its previous / next; B leaves the
+      in.Consume(Action::kPlay);                                       // viewer, then the page
       if (in.Pressed(Action::kBack)) {
         in.Consume(Action::kBack);
         ui::Cue(ui::Sound::kBack);
-        if (!(artbook_ && artbook_->Back())) play_ = PlayView::kExtras;  // on its Extras row again
+        Artbook* book = play_ == PlayView::kManual ? manual_.get() : artbook_.get();
+        if (!(book && book->Back())) play_ = PlayView::kExtras;  // on its Extras row again
       }
       return;
     }
@@ -5215,6 +5221,28 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
       it.on_activate = [this] { OpenPlayView(PlayView::kArtbook); };
       items.push_back(std::move(it));
     }
+    // Task 333 (owner, 20 Oct, Beta 13): the game's own user manual and its original main menu.
+    items.push_back(Section("Original game"));
+    {
+      auto& service = content::Service::Get();
+      const content::Status st = service.Ready() ? service.Get(content::Kind::kManual) : content::Status{};
+      Item it;
+      it.type = ItemType::kAction;
+      it.label = "User manual";
+      it.value_text = st.installed ? T("Ready") : st.Busy() ? T("Downloading") : T("Not downloaded");
+      it.value_color = st.installed ? color::kAccent : color::kTextFaint;
+      it.description = T("The game's Xbox 360 manual, page by page.");
+      it.on_activate = [this] { OpenPlayView(PlayView::kManual); };
+      items.push_back(std::move(it));
+    }
+    {
+      Item it;
+      it.type = ItemType::kAction;
+      it.label = "Original main menu";
+      it.description = T("The game's own main menu, as it was on the Xbox 360. You can start a game from it.");
+      it.on_activate = [this] { AskOriginalMenu(); };
+      items.push_back(std::move(it));
+    }
     items.push_back(Section("Extras"));
     for (const auto& extra : play::kExtras) {
       const int id = extra.id;
@@ -5326,6 +5354,26 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
     const float s = S();
     workshop_->Draw(dl, ImVec2(o_.x + Margin(), o_.y + 96 * s), ImVec2(o_.x + w_ - Margin(), o_.y + h_ - 96 * s), m_,
                     input_, !modal_.open);
+    focused_ = nullptr;
+  }
+
+  // Task 333 (owner, 20 Oct): Extras > Original main menu. A pop-up first; Continue starts the game on its own start
+  // menu (play_session.cpp, StartKind::kOriginalMenu), once: the next launcher start is this menu again.
+  void AskOriginalMenu() {
+    OpenModal("Original main menu", "To come back here, start a game from the original main menu, then pause and quit.",
+              {"Continue", "Back"}, 1, [this](int i) {
+                if (i != 0) return;
+                REXLOG_INFO("KK: Extras > Original main menu: Continue");
+                PlayWith({play::StartKind::kOriginalMenu, -1, -1, ""});
+              });
+  }
+
+  // Task 333: Play > Extras > User manual (artbook.cpp, Book::kManual); its viewer covers the whole window.
+  void DrawManual(ImDrawList* dl) {
+    if (!manual_) manual_ = std::make_unique<Artbook>(immediate_, paths_.user_dir, Artbook::Book::kManual);
+    const float s = S();
+    manual_->Draw(dl, ImVec2(o_.x + Margin(), o_.y + 96 * s), ImVec2(o_.x + w_ - Margin(), o_.y + h_ - 96 * s), o_,
+                  ImVec2(o_.x + w_, o_.y + h_), m_, input_, !modal_.open);
     focused_ = nullptr;
   }
 
@@ -7223,6 +7271,8 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
       service.OverrideUrl(content::Kind::kCutscenes, v, content::InfoFor(content::Kind::kCutscenes).sha256);
     if (const char* v = std::getenv("KK_DEV_CONTENT_URL_ART"); v && *v)
       service.OverrideUrl(content::Kind::kArtbook, v, content::InfoFor(content::Kind::kArtbook).sha256);
+    if (const char* v = std::getenv("KK_DEV_CONTENT_URL_MANUAL"); v && *v)  // task 333
+      service.OverrideUrl(content::Kind::kManual, v, content::InfoFor(content::Kind::kManual).sha256);
     for (const content::ModPack& pack : content::kModPacks) {  // KK_DEV_CONTENT_URL_UHD, KK_DEV_CONTENT_URL_COMIC
       std::string name = "KK_DEV_CONTENT_URL_";
       for (const char* k = pack.key; *k; ++k) name += char(std::toupper(static_cast<unsigned char>(*k)));
@@ -7302,7 +7352,10 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
       const auto st = service.Get(kind);
       auto& last = content_last_[i];
       if (content::Quiet(kind)) {
-        if (st.stage != last) ArtbookStageChanged(st, last);
+        if (st.stage != last) {
+          if (kind == content::Kind::kManual) ManualStageChanged(st, last);
+          else ArtbookStageChanged(st, last);
+        }
         last = st.stage;
         continue;
       }
@@ -7330,6 +7383,7 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
       }
     }
     TickArtbook();
+    TickManual();
     // The progress pop-up: closed by something else (forget it), its buttons changed with the stage (open
     // it again with the same focus), or its job cancelled (close it).
     if (content_watch_ >= 0) {
@@ -7456,6 +7510,101 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
       });
     }
     artbook::WriteAuto(paths_.user_dir, a);
+  }
+
+  // ------------------------------------------- task 333: the user manual ---
+  // The game's Xbox 360 manual (owner, 20 Oct, Beta 13): downloaded quietly in the background at run time, with the
+  // artbook's handling: once a session while it is not installed (from the first launcher start on), a failed try
+  // again after a while in the same session and at the next starts, and after kManualTries failed tries in a row a
+  // pop-up (Try again / Later); Extras > User manual shows its progress and has Download now. Remembered in
+  // content\downloads\manual.auto until it is installed. Developer builds only with KK_DEV_CONTENT_URL_MANUAL or
+  // KK_DEV_MANUAL_AUTO=1.
+  static constexpr int kManualTries = 3;
+  bool manual_checked_ = false;   // looked at this session
+  bool manual_auto_run_ = false;  // the running download was started automatically
+  double manual_retry_at_ = 0;    // ImGui time of the retry in this session (0: none)
+  std::string manual_want_;       // developer step: start now
+  static bool ManualAutoAllowed() {
+#if defined(KK_DEV_TOOLS)
+    const char* url = std::getenv("KK_DEV_CONTENT_URL_MANUAL");
+    const char* on = std::getenv("KK_DEV_MANUAL_AUTO");
+    return (url && *url) || (on && std::string_view(on) == "1");
+#else
+    return true;
+#endif
+  }
+  void StartManualAuto(const std::string& why) {
+    if (!ManualAutoAllowed()) {
+      REXLOG_INFO("KK manual: automatic download not started ({}): developer build without KK_DEV_CONTENT_URL_MANUAL "
+                  "or KK_DEV_MANUAL_AUTO=1", why);
+      return;
+    }
+    REXLOG_INFO("KK manual: downloading the user manual in the background ({})", why);
+    manual_auto_run_ = true;
+    content::Service::Get().Download(content::Kind::kManual);
+  }
+  void TickManual() {
+    auto& service = content::Service::Get();
+    const content::Status st = service.Get(content::Kind::kManual);
+    const std::filesystem::path& user = paths_.user_dir;
+    if (!manual_checked_ || !manual_want_.empty()) {
+      manual_checked_ = true;
+      const std::string why = manual_want_.empty() ? "not downloaded yet" : std::exchange(manual_want_, std::string());
+      artbook::AutoState a = artbook::ReadAuto(user, "manual");
+      if (st.installed) {
+        if (a.wanted) artbook::ClearAuto(user, "manual");
+      } else if (st.Busy()) {
+        manual_auto_run_ = true;  // continued by the service as it started
+      } else if (a.fails < kManualTries) {
+        if (!a.wanted) artbook::WriteAuto(user, {true, a.fails, a.told}, "manual");
+        StartManualAuto(why);
+      }
+    }
+    if (manual_retry_at_ > 0 && ImGui::GetTime() >= manual_retry_at_) {
+      manual_retry_at_ = 0;
+      if (!st.installed && !st.Busy()) StartManualAuto("trying again");
+    }
+  }
+  void ManualStageChanged(const content::Status& st, content::Stage last) {
+    using content::Stage;
+    if (st.stage != Stage::kUnpacking) REXLOG_INFO("KK content: manual stage {} -> {}", int(last), int(st.stage));
+    if (st.stage == Stage::kInstalled && last != Stage::kNone) {
+      artbook::ClearAuto(paths_.user_dir, "manual");
+      manual_auto_run_ = false;
+      manual_retry_at_ = 0;
+      REXLOG_INFO("KK manual: ready in Play > Extras > User manual");
+      return;
+    }
+    if (st.stage != Stage::kFailed) return;
+    REXLOG_WARN("KK manual: download failed: {}", ContentError(st, false));
+    if (!std::exchange(manual_auto_run_, false)) return;  // started on the manual's page: the page shows it
+    artbook::AutoState a = artbook::ReadAuto(paths_.user_dir, "manual");
+    a.wanted = true;
+    ++a.fails;
+    if (a.fails < kManualTries) {
+      double wait = 90.0;
+#if defined(KK_DEV_TOOLS)
+      if (const char* v = std::getenv("KK_DEV_ARTBOOK_RETRY_S"); v && *v) wait = std::atof(v);  // tests: shorter
+#endif
+      manual_retry_at_ = ImGui::GetTime() + wait;
+      REXLOG_INFO("KK manual: try {} of {} failed; trying again in {:.0f} s", a.fails, kManualTries, wait);
+    } else if (!a.told) {
+      a.told = true;
+      REXLOG_INFO("KK manual: {} tries failed: telling the player", a.fails);
+      content_popups_.push_back([this] {
+        OpenModal("Manual download failed",
+                  "The user manual could not be downloaded after several tries. You can try again now, or later in "
+                  "Play > Extras > User manual.",
+                  {"Try again", "Later"}, 1, [this](int i) {
+                    if (i != 0) return;
+                    artbook::WriteAuto(paths_.user_dir, {true, 0, false}, "manual");
+                    REXLOG_INFO("KK manual: try again");
+                    manual_auto_run_ = true;
+                    content::Service::Get().Download(content::Kind::kManual);
+                  });
+      });
+    }
+    artbook::WriteAuto(paths_.user_dir, a, "manual");
   }
 
   void SaveIfChanged() {
@@ -7743,6 +7892,10 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
         const auto st = content::Service::Get().Get(content::Kind::kArtbook);
         met = st.installed || st.stage == content::Stage::kFailed;
       }
+      else if (w == "wait-manual") {  // task 333: the user manual installed, or its download failed
+        const auto st = content::Service::Get().Get(content::Kind::kManual);
+        met = st.installed || st.stage == content::Stage::kFailed;
+      }
       else if (w == "wait-unpack") {  // job J3: a download is being unpacked
         met = false;
         for (int i = 0; i < content::kKindCount; ++i)
@@ -7805,6 +7958,23 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
         artbook_want_ = "developer step";
       } else if (artbook_) {
         artbook_->DevCommand(c);
+      }
+      return;
+    }
+    if (t.rfind("manual:", 0) == 0) {  // task 333: manual:<page|auto|state|open:N|next|prev|zoom:X|pan:DX:DY|back|download>
+      const std::string c = t.substr(7);
+      if (c == "page") {
+        OpenPlayMenu();
+        OpenPlayView(PlayView::kExtras);
+        OpenPlayView(PlayView::kManual);
+      } else if (c == "auto") {
+        manual_want_ = "developer step";
+      } else if (c == "original-menu") {  // the Original main menu row's pop-up
+        OpenPlayMenu();
+        OpenPlayView(PlayView::kExtras);
+        AskOriginalMenu();
+      } else if (manual_) {
+        manual_->DevCommand(c);
       }
       return;
     }
@@ -8001,6 +8171,7 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
   std::map<int, ui::ListState> lists_;
   std::vector<Item> focused_items_;
   std::unique_ptr<Artbook> artbook_;  // Beta 7: made when Extras > Artbook first opens
+  std::unique_ptr<Artbook> manual_;   // task 333: made when Extras > User manual first opens
   std::unique_ptr<Workshop> workshop_;  // job J8: made when the Workshop page first opens
   const Item* focused_ = nullptr;
   Action pending_click_ = Action::kCount;

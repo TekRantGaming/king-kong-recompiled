@@ -19,6 +19,7 @@
 #include "artbook_logic.h"
 #include "content.h"
 #include "launcher_text.h"
+#include "pdf_pages.h"
 #include "toast.h"
 #include "workshop_net.h"
 
@@ -40,6 +41,9 @@ std::string U8(const fs::path& p) {
 constexpr int kThumbWidth = 800;
 constexpr int kFullWidth = 4096;
 constexpr float kMaxPixelZoom = 4.0f;  // at most 4 screen pixels per picture pixel
+// Task 333, the user manual: a page drawn for the viewer fits in this square (its pages are 2-page spreads of
+// about 650 x 508 points: 3072 x 2400 pixels, about 340 dots per inch; PDFium draws one in about 0.1 s).
+constexpr int kManualFull = 3072;
 
 // The decoding worker: jobs in, pictures out.
 struct Job {
@@ -58,21 +62,33 @@ struct Shared {
   std::deque<Job> jobs;
   std::deque<Result> results;
   bool stop = false;
+  std::shared_ptr<const pdf::Document> doc;  // the user manual: its pages are drawn instead of decoded
 };
 
 void RunWorker(std::shared_ptr<Shared> sh) {
   for (;;) {
     Job job;
+    std::shared_ptr<const pdf::Document> doc;
     {
       std::unique_lock lock(sh->mutex);
       sh->cv.wait(lock, [&] { return sh->stop || !sh->jobs.empty(); });
       if (sh->stop) return;
       job = std::move(sh->jobs.front());
       sh->jobs.pop_front();
+      doc = sh->doc;
     }
-    std::vector<uint8_t> bytes;
-    if (!artbook::ReadBytes(job.file, bytes, artbook::kMaxPictureBytes)) bytes.clear();
-    Result r{job.index, job.full, workshop::DecodePicture(bytes, job.full ? kFullWidth : kThumbWidth)};
+    Result r{job.index, job.full, {}};
+    if (doc) {
+      const int edge = job.full ? kManualFull : kThumbWidth;
+      pdf::Bitmap b = doc->Render(job.index, edge, edge);
+      r.picture.width = b.width;
+      r.picture.height = b.height;
+      r.picture.rgba = std::move(b.rgba);
+    } else {
+      std::vector<uint8_t> bytes;
+      if (!artbook::ReadBytes(job.file, bytes, artbook::kMaxPictureBytes)) bytes.clear();
+      r.picture = workshop::DecodePicture(bytes, job.full ? kFullWidth : kThumbWidth);
+    }
     std::lock_guard lock(sh->mutex);
     if (sh->stop) return;
     sh->results.push_back(std::move(r));
@@ -107,7 +123,9 @@ struct Artbook::Impl {
   };
 
   rex::ui::ImmediateDrawer* drawer;
+  const bool manual;  // Book::kManual (task 333)
   fs::path folder;
+  std::string open_error;  // the manual is installed but cannot be shown (no PDFium, or it did not open)
   std::shared_ptr<Shared> shared = std::make_shared<Shared>();
   std::thread worker;
   bool started = false;
@@ -133,8 +151,10 @@ struct Artbook::Impl {
   bool message_bad = false;
   double message_until = 0;
 
-  Impl(rex::ui::ImmediateDrawer* d, const fs::path& user_dir)
-      : drawer(d), folder(content::InstallDir(user_dir, content::Kind::kArtbook)) {}
+  Impl(rex::ui::ImmediateDrawer* d, const fs::path& user_dir, Book book)
+      : drawer(d), manual(book == Book::kManual), folder(content::InstallDir(user_dir, Kind())) {}
+  content::Kind Kind() const { return manual ? content::Kind::kManual : content::Kind::kArtbook; }
+  const char* Tag() const { return manual ? "KK manual" : "KK artbook"; }
 
   ~Impl() {
     if (started) {
@@ -172,6 +192,7 @@ struct Artbook::Impl {
   // The installed pictures, once the disc has been turned into them.
   void LoadPaintings() {
     loaded = true;
+    if (manual) return LoadManual();
     for (const fs::path& file : artbook::Paintings(folder)) {
       Painting p;
       p.file = file;
@@ -185,6 +206,35 @@ struct Artbook::Impl {
     for (int i = 0; i < int(paintings.size()); ++i) Queue(i, false);
     focus = std::clamp(focus, 0, std::max(0, int(paintings.size()) - 1));
     REXLOG_INFO("KK artbook: {} paintings, readme {} characters, in {}", paintings.size(), readme.size(), U8(folder));
+  }
+
+  // Task 333: the manual's pages from its PDF (opened here, a few milliseconds; drawn on the worker).
+  void LoadManual() {
+    const auto t0 = std::chrono::steady_clock::now();
+    std::string why;
+    std::shared_ptr<const pdf::Document> doc = pdf::Document::Open(folder / content::kManualFile, why);
+    if (!doc) {
+      open_error = why;
+      REXLOG_WARN("KK manual: cannot show {}: {}", U8(folder / content::kManualFile), why);
+      return;
+    }
+    for (int i = 0; i < doc->PageCount(); ++i) {
+      const pdf::PageSize size = doc->Size(i);
+      const float scale = std::min(kManualFull / size.width, kManualFull / size.height);
+      Painting p;
+      p.title = F("Page {0}", {std::to_string(i + 1)});
+      p.width = std::max(1, int(std::lround(size.width * scale)));
+      p.height = std::max(1, int(std::lround(size.height * scale)));
+      paintings.push_back(std::move(p));
+    }
+    {
+      std::lock_guard lock(shared->mutex);
+      shared->doc = std::move(doc);
+    }
+    for (int i = 0; i < int(paintings.size()); ++i) Queue(i, false);
+    focus = std::clamp(focus, 0, std::max(0, int(paintings.size()) - 1));
+    REXLOG_INFO("KK manual: {} pages in {} (opened in {} ms)", paintings.size(), U8(folder),
+                std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - t0).count());
   }
 
   void TakeResults() {
@@ -206,7 +256,7 @@ struct Artbook::Impl {
       }
       if (!r.picture || !drawer) {
         t.state = Load::kFailed;
-        REXLOG_WARN("KK artbook: {} did not decode", U8(p.file.filename()));
+        REXLOG_WARN("{}: {} did not decode", Tag(), manual ? p.title : U8(p.file.filename()));
         continue;
       }
       t.tex = drawer->CreateTexture(uint32_t(r.picture.width), uint32_t(r.picture.height),
@@ -233,6 +283,7 @@ struct Artbook::Impl {
   }
 
   void Save(int index) {
+    if (manual) return;  // the manual has no Save to PC
     if (index < 0 || index >= int(paintings.size())) return;
     const fs::path to = artbook::SaveFolder();
     const artbook::Saved saved = artbook::SavePicture(paintings[size_t(index)].file, to);
@@ -258,7 +309,7 @@ struct Artbook::Impl {
     anchor = ImVec2(-1, -1);
     dragging = false;
     Queue(index, true);
-    REXLOG_INFO("KK artbook: viewer {} ({})", index, paintings[size_t(index)].title);
+    REXLOG_INFO("{}: viewer {} ({})", Tag(), index, paintings[size_t(index)].title);
   }
   void Step(int dir) {
     if (paintings.size() < 2) return;
@@ -363,7 +414,7 @@ struct Artbook::Impl {
           cy -= io.MouseDelta.y / scale_now;
         }
       }
-      if (in.Pressed(Action::kResetPage)) {
+      if (!manual && in.Pressed(Action::kResetPage)) {
         in.Consume(Action::kResetPage);
         Save(view);
       }
@@ -463,7 +514,8 @@ struct Artbook::Impl {
     const ui::Fonts f = ui::GetFonts();
     const int n = int(paintings.size());
     const float avail = p1.x - p0.x;
-    DrawCaption(dl, f, p0.x, p1.x, p0.y + 6 * s, s, "WETA COLLECTOR'S ARTWORK");  // the disc's own name for it
+    DrawCaption(dl, f, p0.x, p1.x, p0.y + 6 * s, s,
+                manual ? text::Upper(T("User manual")) : "WETA COLLECTOR'S ARTWORK");  // the disc's own name for it
     float y = p0.y + 34 * s;
     if (!readme.empty()) {
       const float rfs = 14.5f * s, wrap = std::min(avail, 1040 * s);
@@ -473,12 +525,13 @@ struct Artbook::Impl {
       dl->PopClipRect();
       y += h + 18 * s;
     }
-    // Three across, two down, filling what is left.
-    const int cols = 3, rows = (n + cols - 1) / cols;
+    // Three across, two down, filling what is left. The manual: its 11 pages four across (most are spreads).
+    const int cols = manual ? 4 : 3, rows = (n + cols - 1) / cols;
+    const float tile_shape = manual ? 0.78f : 0.56f;
     const float gap = 18 * s, band = 40 * s;
     const float tile_w = std::floor((avail - gap * (cols - 1)) / cols);
     const float room = p1.y - y - 30 * s;
-    const float tile_h = std::floor(std::min(tile_w * 0.56f + band, (room - gap * (rows - 1)) / std::max(rows, 1)));
+    const float tile_h = std::floor(std::min(tile_w * tile_shape + band, (room - gap * (rows - 1)) / std::max(rows, 1)));
     const float pic_h = std::max(20 * s, tile_h - band);
     const int before = focus;
     if (active && n > 0) {
@@ -523,7 +576,7 @@ struct Artbook::Impl {
       in.Consume(Action::kAccept);
       open = focus;
     }
-    if (active && in.Pressed(Action::kResetPage) && n > 0) {
+    if (!manual && active && in.Pressed(Action::kResetPage) && n > 0) {
       in.Consume(Action::kResetPage);
       Save(focus);
     }
@@ -542,15 +595,24 @@ struct Artbook::Impl {
     const ui::Fonts f = ui::GetFonts();
     using content::Stage;
     const bool busy = st.Busy();
-    DrawCaption(dl, f, p0.x, p1.x, p0.y + 6 * s, s, text::Upper(T("Artbook")));
+    DrawCaption(dl, f, p0.x, p1.x, p0.y + 6 * s, s, text::Upper(T(manual ? "User manual" : "Artbook")));
     const float w = std::min(p1.x - p0.x, 820 * s);
     const ImVec2 a(p0.x, p0.y + 40 * s);
     const float pad = 28 * s;
+    // Task 333: the manual is installed but cannot be shown (no PDF reader beside the game, or it did not open).
+    const bool broken = manual && loaded && !open_error.empty();
     const std::string heading =
-        text::Upper(T(busy ? "The artbook is still downloading" : "The artbook is not downloaded yet"));
-    const std::string body = F("The paintings come from the game's PS2 bonus disc, which the launcher downloads from "
-                               "archive.org ({0} MB). Only the pictures are kept.",
-                               {Mb(content::InfoFor(content::Kind::kArtbook).zip_size)});
+        text::Upper(T(broken   ? "The manual cannot be shown"
+                      : manual ? (busy ? "The manual is still downloading" : "The manual is not downloaded yet")
+                               : (busy ? "The artbook is still downloading" : "The artbook is not downloaded yet")));
+    const std::string body =
+        broken ? T("The PDF reader that comes with the game (pdfium) is missing or could not open the manual. "
+                   "Installing the game again brings it back.")
+        : manual ? F("The game's Xbox 360 manual, which the launcher downloads from oldgamesdownload.com ({0} MB).",
+                     {Mb(content::InfoFor(content::Kind::kManual).zip_size)})
+                 : F("The paintings come from the game's PS2 bonus disc, which the launcher downloads from "
+                     "archive.org ({0} MB). Only the pictures are kept.",
+                     {Mb(content::InfoFor(content::Kind::kArtbook).zip_size)});
     std::string line;
     float fraction = -1;
     if (st.stage == Stage::kQueued) line = T("Waiting for another download to finish.");
@@ -559,7 +621,7 @@ struct Artbook::Impl {
       fraction = float(double(st.done) / double(st.total));
     } else if (st.stage == Stage::kStarting) line = T("Starting the download");
     else if (st.stage == Stage::kVerifying || st.stage == Stage::kUnpacking) {
-      line = T("Preparing the pictures");
+      line = T(manual ? "Preparing the manual" : "Preparing the pictures");
       if (st.total) fraction = float(double(st.done) / double(st.total));
     } else if (st.stage == Stage::kFailed) line = T("The download did not finish. Check your internet connection, then try again.");
     else if (st.stage == Stage::kPaused && st.done) line = F("{0} of {1} MB", {Mb(st.done), Mb(st.total)});
@@ -567,7 +629,9 @@ struct Artbook::Impl {
     float h = pad + 26 * s + f.text->CalcTextSizeA(15 * s, FLT_MAX, wrap, body.c_str()).y + 16 * s;
     if (!line.empty()) h += 24 * s;
     if (fraction >= 0) h += 18 * s;
-    if (!busy) h += 62 * s;
+    if (broken) line.clear(), fraction = -1;
+    const bool button = !busy && !broken;
+    if (button) h += 62 * s;
     h += pad - 10 * s;
     const ImVec2 b(a.x + w, a.y + h);
     dl->AddRectFilled(a, b, ui::WithAlpha(color::kPanel, 0.82f));
@@ -590,7 +654,7 @@ struct Artbook::Impl {
       dl->AddRectFilled(r0, ImVec2(r0.x + (r1.x - r0.x) * std::clamp(fraction, 0.0f, 1.0f), r1.y), color::kAccent);
       y += 18 * s;
     }
-    if (!busy) {
+    if (button) {
       const std::string label = T("Download now");
       const ImVec2 ts = ui::TextSize(f.semibold, 15.5f * s, label);
       const ImVec2 c0(a.x + pad, y + 8 * s), c1(c0.x + ts.x + 44 * s, c0.y + 42 * s);
@@ -607,8 +671,8 @@ struct Artbook::Impl {
       }
       if (press) {
         ui::Cue(ui::Sound::kSelect);
-        REXLOG_INFO("KK artbook: Download now");
-        content::Service::Get().Download(content::Kind::kArtbook);
+        REXLOG_INFO("{}: Download now", Tag());
+        content::Service::Get().Download(Kind());
       }
     }
   }
@@ -616,7 +680,7 @@ struct Artbook::Impl {
   void Draw(ImDrawList* dl, ImVec2 p0, ImVec2 p1, ImVec2 v0, ImVec2 v1, const ui::Metrics& m, ui::Input& in,
             bool active) {
     auto& service = content::Service::Get();
-    const content::Status st = service.Ready() ? service.Get(content::Kind::kArtbook) : content::Status{};
+    const content::Status st = service.Ready() ? service.Get(Kind()) : content::Status{};
     if (!loaded && st.installed) LoadPaintings();
     TakeResults();
     if (!loaded || paintings.empty()) {
@@ -631,32 +695,39 @@ struct Artbook::Impl {
   std::vector<ui::Prompt> Prompts() const {
     if (!loaded || paintings.empty()) {
       auto& service = content::Service::Get();
-      const content::Status st = service.Ready() ? service.Get(content::Kind::kArtbook) : content::Status{};
-      if (st.Busy()) return {{Action::kBack, "Back"}};
+      const content::Status st = service.Ready() ? service.Get(Kind()) : content::Status{};
+      if (st.Busy() || (manual && loaded && !open_error.empty())) return {{Action::kBack, "Back"}};
       return {{Action::kAccept, "Download now"}, {Action::kBack, "Back"}};
     }
     if (view >= 0) {
       const bool zoomed = zoom_target > 1.02f;
+      if (manual)
+        return {{Action::kPrevTab, "Previous"},
+                {Action::kNextTab, "Next"},
+                {Action::kAccept, zoomed ? "Fit to screen" : "Zoom in"},
+                {Action::kBack, "Back"}};
       return {{Action::kPrevTab, "Previous"},
               {Action::kNextTab, "Next"},
               {Action::kAccept, zoomed ? "Fit to screen" : "Zoom in"},
               {Action::kResetPage, "Save to PC"},
               {Action::kBack, "Back"}};
     }
+    if (manual) return {{Action::kAccept, "View"}, {Action::kBack, "Back"}};
     return {{Action::kAccept, "View"}, {Action::kResetPage, "Save to PC"}, {Action::kBack, "Back"}};
   }
 
   void Dev(const std::string& c) {
     if (c == "state") {
-      const auto st = content::Service::Get().Get(content::Kind::kArtbook);
+      const auto st = content::Service::Get().Get(Kind());
       int thumbs = 0, fulls = 0;
       for (const Painting& p : paintings) thumbs += p.thumb.tex != nullptr, fulls += p.full.tex != nullptr;
-      REXLOG_INFO("KK dev: artbook installed {} stage {} error {} paintings {} readme {} thumbs {} full {} view {} "
-                  "zoom {:.3f} centre {:.0f},{:.0f} focus {} message '{}'",
-                  st.installed, int(st.stage), int(st.error), paintings.size(), readme.size(), thumbs, fulls, view,
-                  zoom, cx, cy, focus, message);
+      const char* name = manual ? "manual" : "artbook";
+      REXLOG_INFO("KK dev: {} installed {} stage {} error {} paintings {} readme {} thumbs {} full {} view {} "
+                  "zoom {:.3f} centre {:.0f},{:.0f} focus {} message '{}' open error '{}'",
+                  name, st.installed, int(st.stage), int(st.error), paintings.size(), readme.size(), thumbs, fulls,
+                  view, zoom, cx, cy, focus, message, open_error);
       for (const Painting& p : paintings)
-        REXLOG_INFO("KK dev: artbook painting '{}' {}x{} thumb {} full {}", p.title, p.width, p.height,
+        REXLOG_INFO("KK dev: {} painting '{}' {}x{} thumb {} full {}", name, p.title, p.width, p.height,
                     int(p.thumb.state), int(p.full.state));
     } else if (c.rfind("open:", 0) == 0) {
       view_fade = 0;
@@ -676,13 +747,13 @@ struct Artbook::Impl {
     } else if (c == "back") {
       view = -1;
     } else if (c == "download") {
-      content::Service::Get().Download(content::Kind::kArtbook);
+      content::Service::Get().Download(Kind());
     }
   }
 };
 
-Artbook::Artbook(rex::ui::ImmediateDrawer* drawer, fs::path user_dir)
-    : impl_(std::make_unique<Impl>(drawer, user_dir)) {}
+Artbook::Artbook(rex::ui::ImmediateDrawer* drawer, fs::path user_dir, Book book)
+    : impl_(std::make_unique<Impl>(drawer, user_dir, book)) {}
 Artbook::~Artbook() = default;
 
 void Artbook::Draw(ImDrawList* dl, ImVec2 p0, ImVec2 p1, ImVec2 v0, ImVec2 v1, const ui::Metrics& m, ui::Input& in,

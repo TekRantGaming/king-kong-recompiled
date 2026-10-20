@@ -417,3 +417,35 @@ Files: `kk/launcher-video/` in git, copied beside the program as `launcher/video
 - **Test kit:** `kk/out/task331/run331.ps1` (player layout: package copy, game files beside the exe, settings beside
   the exe, no --game_data_root; `-Start continue:0` / `chapter:0:8` starts the game as Play does, shots count from
   the launcher the game starts on its way back; `-LowTier`, `-NotPrepared`, `-StepsFile`).
+
+## Extras: the original main menu and the user manual (task 333, Beta 13)
+
+Owner, 20 Oct (DECISIONS "Beta 13 additions" C and D). Code: `play_session.cpp` (StartKind::kOriginalMenu,
+OriginalMenuPad), `input_remap.cpp`, `launcher.cpp` (ExtrasItems, AskOriginalMenu, DrawManual, TickManual),
+`artbook.cpp` (Book::kManual), `pdf_pages.*`, `content.*` (Kind::kManual).
+
+- **Original main menu** (Play > Extras > Original game): a pop-up ("To come back here, start a game from the
+  original main menu, then pause and quit." Continue / Back). Continue is a Play with the start request
+  `original-menu` (`--kk_start=original-menu`, never saved): the logos are skipped (as for every start request), the
+  port presses Start on the title for pad 1 (menu_scene_logic.h's PressStartOnTitle; a pad 1 that is not connected
+  is reported connected for those reads), and the game's start menu (level 3) runs as it was: its save page, main
+  page, options, extras and chapter select, drawn and read by the game. Nothing is covered and no request is
+  carried out. The saves are backed up once ("before the original main menu") before its pages can write them;
+  the save guards (sub_8266AD80, sub_82722620) apply as always.
+- **Play from it:** the first level request for a level other than the title (2), the start menu (3) and the
+  original Extras' galleries and credits (extras.h, a level without the alternate ending's flag) makes the session
+  the launcher's (`g_session`; chapter select when G+0x5668 is set, story when neither it nor G+0x5674 is): the
+  pause menu is ours, and a return to the start menu (Return to main menu, Quit game, a chapter-select run's end)
+  goes back to the launcher as after any Play. A gallery or the credits started from its Extras page come back to
+  that page, as they did. The relaunch drops `--kk_start`, so the next launcher is ours (one time only).
+- **User manual** (Play > Extras > Original game): the Xbox 360 manual PDF from the owner's link (1,717,617 bytes,
+  SHA-256 5d0ad72b...bca4 checked after every download; a changed file fails and is deleted), `content::Kind::kManual`,
+  quiet like the artbook, kept as `<user data>\content\manual\manual.pdf` (never in git or the package). It
+  downloads in the background once a session while it is not installed (developer builds only with
+  KK_DEV_CONTENT_URL_MANUAL or KK_DEV_MANUAL_AUTO=1), with the artbook's retry (90 s, 3 tries, then a pop-up;
+  `content\downloads\manual.auto`). The artbook's page and viewer show it (grid of 11 pages, four across; viewer with
+  zoom and pan; no Save to PC). Pages are drawn on the page's worker by PDFium (`pdf_pages.h`, pdfium.dll /
+  libpdfium.so beside the program, bblanchon/pdfium-binaries chromium/8076, BSD 3-Clause / Apache 2.0, no
+  JavaScript or XFA; THIRD-PARTY-NOTICES), up to 3072 pixels a side (about 0.1 s a page). Without PDFium the page
+  says the manual cannot be shown. Dev steps `manual:<page|auto|state|open:N|next|prev|zoom:X|back|download|
+  original-menu>`, `wait-manual`.

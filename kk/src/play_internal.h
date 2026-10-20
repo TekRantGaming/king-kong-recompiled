@@ -70,6 +70,13 @@ bool ApplyCheatsNow(uint8_t* base);
 // The session the launcher started (a start request was carried out).
 bool SessionActive();
 
+// Task 333, Extras > Original main menu: the game's own start menu runs (it has not started play yet).
+bool OriginalMenuActive();
+// Each pad state the game reads (input_remap.cpp, after the port's own changes): on the title the port presses
+// Start for the player (pad 1), so the game goes straight on to its start menu. `result` is the read's XInput
+// result (a pad 1 that is not connected is reported connected for those reads).
+void OriginalMenuPad(uint32_t user, uint8_t* base, uint8_t* state, uint32_t& result);
+
 // A start the port carries out (the launcher's, --kk_start, the benchmark) is waiting for its level or
 // loading it: the frames before it (logos, title) are covered. False once that level has loaded.
 bool StartLevelLoading();
