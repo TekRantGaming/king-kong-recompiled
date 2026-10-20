@@ -105,6 +105,7 @@ int main() {
   // rules from the low-memory/core fallbacks. Dedicated Arc cards stay distinct.
   const Case first_setup_cases[] = {
     {GpuVendor::kAmd, "AMD Radeon(TM) Graphics", 16, 8, 32, false, 0},
+    {GpuVendor::kAmd, "AMD Radeon(TM)Graphics", 16, 8, 32, false, 0},
     {GpuVendor::kAmd, "AMD RADEON GRAPHICS", 16, 8, 32, false, 0},
     {GpuVendor::kAmd, "AMD Radeon 780M Graphics", 16, 8, 32, false, 0},
     {GpuVendor::kAmd, "AMD Radeon 890M Graphics", 16, 12, 32, false, 0},
@@ -114,13 +115,19 @@ int main() {
     {GpuVendor::kAmd, "AMD Ryzen Z1 Extreme", 16, 8, 32, false, 0},
     {GpuVendor::kAmd, "AMD Ryzen Z2 Extreme", 16, 8, 32, false, 0},
     {GpuVendor::kIntel, "Intel(R) Arc(TM) Graphics", 16, 16, 32, false, 0},
+    {GpuVendor::kIntel, "Intel(R)Arc(TM)Graphics", 16, 16, 32, false, 0},
     {GpuVendor::kIntel, "Intel Arc 140V GPU", 16, 8, 32, false, 0},
     {GpuVendor::kIntel, "Intel Arc 130V GPU", 16, 8, 32, false, 0},
     {GpuVendor::kIntel, "Intel Arc 140T GPU", 16, 16, 32, false, 0},
     {GpuVendor::kIntel, "Intel Arc 8-Core iGPU", 16, 16, 32, false, 0},
     {GpuVendor::kIntel, "Intel Arc 7-Core iGPU", 16, 16, 32, false, 0},
     {GpuVendor::kIntel, "Intel Arc integrated GPU", 16, 16, 32, false, 0},
+    {GpuVendor::kIntel, "Intel(R) Arc(TM) B370 GPU", 16, 14, 32, false, 0},
+    {GpuVendor::kIntel, "Intel(R) Arc(TM) B390 GPU", 16, 16, 32, false, 0},
+    {GpuVendor::kIntel, "Intel Arc Pro B370 Graphics", 16, 14, 32, false, 0},
+    {GpuVendor::kIntel, "Intel Arc Pro B390 Graphics", 16, 16, 32, false, 0},
     {GpuVendor::kNvidia, "NVIDIA GeForce RTX 4050 Laptop GPU", 8, 12, 32, false, 0},
+    {GpuVendor::kNvidia, "NVIDIA GeForce RTX 4050 (Laptop GPU)", 8, 12, 32, false, 0},
     {GpuVendor::kNvidia, "NVIDIA GeForce RTX 3050 Laptop GPU", 8, 12, 32, false, 0},
     {GpuVendor::kNvidia, "NVIDIA GeForce RTX 2050 Laptop GPU", 8, 12, 32, false, 0},
     {GpuVendor::kNvidia, "RTX 4050 Notebook", 8, 12, 32, false, 0},
@@ -142,7 +149,9 @@ int main() {
     Check(FirstSetupHardwareTierIndex(fake) == c.tier, c.model);
   }
   for (uint32_t id : {0x7D51, 0x7DD1, 0x7D41, 0x7D67, 0xB640, 0x7D40, 0x7D45,
-                     0x7D55, 0x7D60, 0x7DD5, 0x6420, 0x64A0, 0x64B0}) {
+                     0x7D55, 0x7D60, 0x7DD5, 0x6420, 0x64A0, 0x64B0,
+                     0xB080, 0xB081, 0xB082, 0xB083, 0xB084, 0xB085,
+                     0xB086, 0xB087, 0xB08F, 0xB090, 0xB0A0, 0xB0B0}) {
     fake = {{GpuVendor::kIntel, "Generic display adapter", 16 * GiB, "", 0x8086, id}, 16, 32 * GiB};
     Check(FirstSetupHardwareTierIndex(fake) == 0, "integrated Intel PCI ID");
     fake.gpu.vendor = GpuVendor::kNvidia;
@@ -151,6 +160,8 @@ int main() {
   }
   fake = {{GpuVendor::kIntel, "Intel Arc A770", 16 * GiB, "", 0x8086, 0x56A0}, 8, 32 * GiB};
   Check(FirstSetupHardwareTierIndex(fake) == 2, "dedicated Intel ID retains high");
+  fake = {{GpuVendor::kIntel, "Intel Arc B580", 12 * GiB, "", 0x8086, 0xE20B}, 8, 32 * GiB};
+  Check(FirstSetupHardwareTierIndex(fake) == 2, "dedicated B-series ID retains high");
   fake = {{GpuVendor::kNvidia, "RTX 4070 Ti", 6 * GiB + 1}, 7, 32 * GiB};
   Check(FirstSetupHardwareTierIndex(fake) == 1, "just above both low thresholds");
   fake.gpu.dedicated_memory = 6 * GiB;
