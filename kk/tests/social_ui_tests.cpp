@@ -4,6 +4,7 @@
 #include "art.h"
 #include "platform.h"
 #include <rex/ui/immediate_drawer.h>
+#include <rex/ui/keybinds.h>
 #include <SDL3/SDL.h>
 #include <iostream>
 #include <stdexcept>
@@ -20,8 +21,9 @@ struct Service : ISocialService {
   SocialModel Snapshot() const override { return model; }
   bool Act(SocialCommand c) override { last=c; return true; }
 } service;
-int joined=0, selected=-1, starts=0;
-std::string joined_code;
+int joined=0, hosted=0, selected=-1, starts=0;
+std::string joined_code, joined_address;
+uint16_t joined_port=0;
 }
 namespace kk {
 const UiFonts& GetUiFonts() { static UiFonts fonts{}; return fonts; }
@@ -37,17 +39,24 @@ const std::vector<ChapterInfo>& Chapters() {
 }
 }
 namespace coop {
-bool HostDirect(uint16_t,std::string) { return true; }
-bool JoinDirect(std::string,uint16_t,std::string code) { ++joined; joined_code=code; return true; }
+bool HostDirect(uint16_t,std::string) { ++hosted; return true; }
+bool JoinDirect(std::string address,uint16_t port,std::string code) { ++joined; joined_code=code; joined_address=address; joined_port=port; return true; }
 bool SelectSessionStart(const play::StartRequest& r) { selected=r.chapter; return true; }
 bool RequestSessionStart() { ++starts; return true; }
 }
 }
 int main() {
   try {
+    bool sdk_settings=false;
+    rex::ui::RegisterBind("bind_settings","F4","Test SDK settings",[&] { sdk_settings=true; });
+    ReserveSocialHotkey(false);
+    rex::ui::KeyEvent before(nullptr,rex::ui::VirtualKey::kF4,1,false,false,false,false,false);
+    Check(rex::ui::ProcessKeyEvent(before) && sdk_settings,"co-op off retains the SDK F4 binding");
+    sdk_settings=false; ReserveSocialHotkey(true);
+    rex::ui::KeyEvent after(nullptr,rex::ui::VirtualKey::kF4,1,false,false,false,false,false);
+    Check(!rex::ui::ProcessKeyEvent(after) && !sdk_settings,"co-op F4 cannot open a hidden SDK settings overlay");
     ImGui::CreateContext(); auto& io=ImGui::GetIO(); io.DisplaySize={1280,720}; io.DeltaTime=.05f; io.IniFilename=nullptr;
     unsigned char* pixels; int width,height; io.Fonts->GetTexDataAsRGBA32(&pixels,&width,&height);
-    SDL_SetHint(SDL_HINT_JOYSTICK_ALLOW_BACKGROUND_EVENTS,"1");
     Check(SDL_InitSubSystem(SDL_INIT_GAMEPAD),"SDL init");
     SDL_VirtualJoystickDesc desc{}; SDL_INIT_INTERFACE(&desc); desc.type=SDL_JOYSTICK_TYPE_GAMEPAD;
     desc.naxes=SDL_GAMEPAD_AXIS_COUNT; desc.nbuttons=SDL_GAMEPAD_BUTTON_COUNT;
@@ -61,7 +70,8 @@ int main() {
     {
       Input input; Glyphs glyphs(nullptr,{}); SocialPanel panel; Metrics metrics;
       auto frame=[&] {
-        ImGui::NewFrame(); ImGui::Begin("Social test"); input.set_social_triggers(true); input.Update();
+        ImGui::NewFrame(); ImGui::Begin("Social test"); input.set_social_triggers(true);
+        input.set_keyboard_enabled(!panel.editing()); input.Update();
         panel.Update(true,SocialPage::Page,input,service);
         input.set_social_blocking(panel.blocking());
         panel.Draw(ImGui::GetWindowDrawList(),{0,0},{1280,720},metrics,input,glyphs,"xbox360",nullptr,service,true);
@@ -72,8 +82,12 @@ int main() {
         SDL_SetJoystickVirtualButton(joystick,key,false); frame();
       };
       auto focus=[&](SocialRowKind kind,int bound=40) {
+        // Lists stop at their ends. Start from the top when revisiting a field.
+        for (int i=0;i<bound;++i) button(SDL_GAMEPAD_BUTTON_DPAD_UP);
         for (int i=0;i<bound && (!panel.focused_row() || panel.focused_row()->kind!=kind);++i) button(SDL_GAMEPAD_BUTTON_DPAD_DOWN);
-        Check(panel.focused_row() && panel.focused_row()->kind==kind,"pad reaches requested row");
+        if (!panel.focused_row() || panel.focused_row()->kind!=kind)
+          throw std::runtime_error("pad reaches requested row "+std::to_string(int(kind))+"; actual="+
+              (panel.focused_row() ? std::to_string(int(panel.focused_row()->kind)) : "none"));
       };
       frame(); Check(input.gamepad_count()>0,"real SDL enumerate/open path");
       SDL_SetJoystickVirtualAxis(joystick,SDL_GAMEPAD_AXIS_RIGHT_TRIGGER,32767); frame();
@@ -81,23 +95,51 @@ int main() {
       Check(panel.blocking(),"real SDL RT opens Social");
       SDL_SetJoystickVirtualAxis(joystick,SDL_GAMEPAD_AXIS_LEFTY,32767); frame();
       SDL_SetJoystickVirtualAxis(joystick,SDL_GAMEPAD_AXIS_LEFTY,0); frame();
-      Check(panel.focused_row() && panel.focused_row()->kind==SocialRowKind::DirectAddress,"left stick moves Social focus");
+      Check(panel.focused_row() && panel.focused_row()->kind==SocialRowKind::DirectChooseHost,"left stick moves Social focus");
+      focus(SocialRowKind::DirectChooseJoin); button(SDL_GAMEPAD_BUTTON_SOUTH);
       focus(SocialRowKind::DirectAddress); button(SDL_GAMEPAD_BUTTON_SOUTH); Check(panel.editing(),"A opens IP keyboard");
       button(SDL_GAMEPAD_BUTTON_EAST); Check(!panel.editing() && panel.blocking(),"B cancels editor without closing Social");
       focus(SocialRowKind::DirectPort); button(SDL_GAMEPAD_BUTTON_SOUTH); Check(panel.editing(),"A opens port keyboard");
       button(SDL_GAMEPAD_BUTTON_EAST);
       focus(SocialRowKind::DirectCode); button(SDL_GAMEPAD_BUTTON_SOUTH); Check(panel.editing(),"A opens code keyboard");
+      Check(panel.editor_text().empty(),"guest starts with an empty code, not a generated host code");
+      button(SDL_GAMEPAD_BUTTON_SOUTH);
       for (int i=0;i<6;++i) button(SDL_GAMEPAD_BUTTON_WEST);
-      Check(panel.editor_text().empty(),"X erases generated six-character code");
-      button(SDL_GAMEPAD_BUTTON_DPAD_DOWN); // index 10 = A
+      Check(panel.editor_text().empty(),"X erases on-screen characters");
+      button(SDL_GAMEPAD_BUTTON_DPAD_DOWN); button(SDL_GAMEPAD_BUTTON_DPAD_DOWN); // index 20 = A in QWERTY
       for (int i=0;i<7;++i) button(SDL_GAMEPAD_BUTTON_SOUTH);
       Check(panel.editor_text()=="AAAAAA","pad keyboard enters exactly six characters");
       // index 43 is Keep. All keyboard controls are reachable by d-pad.
-      for (int i=0;i<3;++i) button(SDL_GAMEPAD_BUTTON_DPAD_DOWN);
+      for (int i=0;i<2;++i) button(SDL_GAMEPAD_BUTTON_DPAD_DOWN);
       for (int i=0;i<3;++i) button(SDL_GAMEPAD_BUTTON_DPAD_RIGHT);
       button(SDL_GAMEPAD_BUTTON_SOUTH); Check(!panel.editing(),"pad keeps text");
+      Check(joined==1 && joined_code=="AAAAAA","pad confirmation joins with entered code");
       focus(SocialRowKind::DirectJoin); button(SDL_GAMEPAD_BUTTON_SOUTH);
-      Check(joined==1 && joined_code=="AAAAAA","pad-driven join uses entered code");
+      Check(joined==2,"explicit Join button works");
+      // Real ImGui key/text events, no direct editor-text writes. The widget
+      // must request OS text input, replace old contents and consume Enter/Esc.
+      auto key=[&](ImGuiKey k) { io.AddKeyEvent(k,true); frame(); io.AddKeyEvent(k,false); frame(); };
+      for (auto field : {SocialRowKind::DirectAddress,SocialRowKind::DirectPort,SocialRowKind::DirectCode}) {
+        focus(field); button(SDL_GAMEPAD_BUTTON_SOUTH); frame();
+        Check(io.WantTextInput,"physical text widget requests OS text input");
+        io.AddKeyEvent(ImGuiMod_Ctrl,true); io.AddKeyEvent(ImGuiKey_A,true); frame();
+        io.AddKeyEvent(ImGuiKey_A,false); io.AddKeyEvent(ImGuiMod_Ctrl,false); frame();
+        const char* value=field==SocialRowKind::DirectAddress ? "127.0.0.1" : field==SocialRowKind::DirectPort ? "27080" : "ab2cd3";
+        io.AddInputCharactersUTF8(value); frame();
+        Check(panel.editor_text()==(field==SocialRowKind::DirectCode ? "AB2CD3" : value),"physical typing in IP, port and code");
+        key(ImGuiKey_Enter); Check(!panel.editing(),"Enter confirms entry");
+      }
+      Check(joined==3 && joined_code=="AB2CD3","physical Enter on code confirms Join");
+      Check(joined_address=="127.0.0.1" && joined_port==27080,"Enter commits exact physical IP and port text");
+      focus(SocialRowKind::DirectCode); button(SDL_GAMEPAD_BUTTON_SOUTH); frame(); key(ImGuiKey_Escape);
+      Check(!panel.editing() && panel.blocking(),"physical Escape cancels just the editor");
+      frame(); Check(!io.WantTextInput,"closing editor releases OS text input");
+      focus(SocialRowKind::DirectChooseHost); button(SDL_GAMEPAD_BUTTON_SOUTH);
+      focus(SocialRowKind::DirectCode); button(SDL_GAMEPAD_BUTTON_SOUTH); frame();
+      button(SDL_GAMEPAD_BUTTON_START);
+      Check(!panel.editing() && joined==3 && hosted==0,"host code confirmation keeps text without joining");
+      focus(SocialRowKind::DirectHost); button(SDL_GAMEPAD_BUTTON_SOUTH);
+      Check(hosted==1,"pad Host confirmation is reachable after role selection");
       service.model.direct=true; service.model.status=SocialStatus::Lobby;
       service.model.self=service.model.owner=1; service.model.lobby=55;
       service.model.members={{1,"Host",false},{2,"Guest",false}}; frame();

@@ -121,6 +121,13 @@ float Approach(float v, float target, float rate) {
 enum PadButton { kPadA, kPadB, kPadX, kPadY, kPadLB, kPadRB, kPadStart, kPadBack };
 
 Input::Input(bool own_gamepads) {
+  // This SDL copy is separate from the runtime's on Windows. Keep device
+  // sampling independent of SDL focus; the native-window gate below decides
+  // which instance may act on a pad. A windowless SDL alone does not suppress
+  // joystick events, so this hint is not evidence of Craig's failure's cause.
+#if defined(_WIN32)
+  if (own_gamepads) SDL_SetHint(SDL_HINT_JOYSTICK_ALLOW_BACKGROUND_EVENTS, "1");
+#endif
   // The program's own SDL (the game's input runs in the runtime's): only
   // while the launcher is open. Gamepads already connected arrive as events.
   // KK_DEV_NO_PADS (tests): the controllers are left alone, so one in use in another program cannot press anything.

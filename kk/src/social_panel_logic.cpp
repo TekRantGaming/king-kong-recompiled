@@ -57,7 +57,7 @@ const char* SocialStatusKey(const SocialModel& m) {
   }
   return "Steam is needed for co-op";
 }
-std::vector<SocialRow> SocialRows(const SocialModel& m) {
+std::vector<SocialRow> SocialRows(const SocialModel& m, int direct_mode) {
   std::vector<SocialRow> rows;
   auto add = [&](SocialRowKind kind, SocialId id, std::string label, std::string detail = "", bool enabled = false) {
     rows.push_back({{kind, id}, std::move(label), std::move(detail), enabled});
@@ -78,7 +78,7 @@ std::vector<SocialRow> SocialRows(const SocialModel& m) {
   }
   }
   if (m.direct && m.lobby) {
-    add(SocialRowKind::Section, 6, "Direct connection");
+    add(SocialRowKind::Section, 6, "2. Share these details");
     add(SocialRowKind::Text, 10, "UDP port", std::to_string(m.direct_port));
     add(SocialRowKind::Text, 11, "Join code", m.direct_code);
     add(SocialRowKind::Text, 12, "Local IP", m.direct_addresses);
@@ -86,6 +86,7 @@ std::vector<SocialRow> SocialRows(const SocialModel& m) {
   if (show_steam || m.lobby) add(SocialRowKind::Section, 3, "Lobby");
   if (!m.lobby && show_steam) add(SocialRowKind::Create, 0, "Create lobby", "", free);
   else if (m.lobby) {
+    add(SocialRowKind::Section, 7, "3. Choose a chapter");
     add(SocialRowKind::ChapterSelect,0,"Chapter select","",m.owner==m.self && !m.start_requested &&
         (lobby || (m.direct && m.status==SocialStatus::Joining)));
     if (m.choice.valid()) {
@@ -99,7 +100,9 @@ std::vector<SocialRow> SocialRows(const SocialModel& m) {
       add(SocialRowKind::Member, member.id, member.name, member.ready ? "Ready" : "Not ready");
       if (member.id == m.self) { ready = member.ready; self_seen = true; }
     }
+    add(SocialRowKind::Section, 8, "4. Both players choose Ready");
     add(SocialRowKind::Ready, 0, ready ? "Not ready" : "Ready", "", lobby && self_seen && m.choice.valid());
+    add(SocialRowKind::Section, 9, "5. The host starts the game");
     if (m.owner == m.self) add(SocialRowKind::Start, 0, "Start", "", lobby && m.choice.valid() && m.can_start && CanStartLobby(m));
     if (!m.direct) add(SocialRowKind::OverlayInvite, 0, "Invite friend", "", lobby && m.members.size() < 2 && m.overlay_available);
     add(SocialRowKind::Leave, 0, "Leave lobby", "", true);
@@ -124,12 +127,17 @@ std::vector<SocialRow> SocialRows(const SocialModel& m) {
     const bool available = m.status != SocialStatus::Creating && m.status != SocialStatus::Joining &&
         m.status != SocialStatus::Starting && m.status != SocialStatus::Connected;
     add(SocialRowKind::AddSteam, 0, "Add to Steam", "", !m.direct);
-    add(SocialRowKind::Section, 6, "Direct connection");
-    add(SocialRowKind::DirectAddress, 0, "IP address", "", available);
+    add(SocialRowKind::Section, 6, "1. Host or Join by IP");
+    add(SocialRowKind::DirectChooseHost, 0, "Host a game", "", available);
+    add(SocialRowKind::DirectChooseJoin, 0, "Join a game", "", available);
+    if (direct_mode) {
+    add(SocialRowKind::Section, 10, direct_mode==1 ? "2. Create and share a code" : "2. Enter the host's details");
+    if (direct_mode==2) add(SocialRowKind::DirectAddress, 0, "IP address", "", available);
     add(SocialRowKind::DirectPort, 0, "UDP port", "", available);
     add(SocialRowKind::DirectCode, 0, "Join code", "", available);
-    add(SocialRowKind::DirectHost, 0, "Host by IP", "", available);
-    add(SocialRowKind::DirectJoin, 0, "Join by IP", "", available);
+    if (direct_mode==1) add(SocialRowKind::DirectHost, 0, "Host by IP", "", available);
+    else add(SocialRowKind::DirectJoin, 0, "Join", "", available);
+    }
   }
   return rows;
 }

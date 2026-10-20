@@ -59,6 +59,7 @@
 #include "coop_runtime.h"
 #include "coop_pose.h"
 #include "coop_observer.h"
+#include "input_diag.h"
 #include "settings.h"
 #include "backend/picture_adjust.h"  // brightness and gamma on the kept frame
 
@@ -479,6 +480,7 @@ void FilterPad(uint32_t user, uint8_t* state) {
     g_was_open = true;
     g_hidden_mask = 0xFFFF;
     std::memset(state + 4, 0, 12);  // no buttons, triggers or sticks
+    kk::input_diag::Stage(user, menu ? "pause-menu" : "loading-cover", state);
     return;
   }
   if (g_was_open) {  // just closed: whatever is still held stays hidden until let go
@@ -491,9 +493,11 @@ void FilterPad(uint32_t user, uint8_t* state) {
     const uint16_t shown = buttons & ~g_hidden_mask;
     state[4] = uint8_t(shown >> 8), state[5] = uint8_t(shown);
   }
+  kk::input_diag::Stage(user,"pause-held-mask",state);
   // Menu input is already serviced above. Score/Save/Options also keep their
   // ordinary input; only the underlying observer gameplay pad is restricted.
   if (!g_game_page) kk::coop::observer::FilterPad(user,state);
+  kk::input_diag::Stage(user,"observer-flow",state);
 }
 
 bool LeftByQuit() { return g_left_by_quit; }

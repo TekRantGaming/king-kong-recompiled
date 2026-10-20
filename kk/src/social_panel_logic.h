@@ -33,7 +33,8 @@ class SocialPanelState {
   float progress_ = 0;
 };
 enum class SocialRowKind { Section, Member, Accept, Decline, Create, Ready, Start, OverlayInvite, Leave, Friend, Text,
-                           AddSteam, DirectAddress, DirectPort, DirectCode, DirectHost, DirectJoin, ChapterSelect };
+                           AddSteam, DirectAddress, DirectPort, DirectCode, DirectHost, DirectJoin, ChapterSelect,
+                           DirectChooseHost, DirectChooseJoin };
 struct SocialRowKey {
   SocialRowKind kind = SocialRowKind::Section;
   SocialId id = 0;
@@ -45,7 +46,8 @@ struct SocialRow {
   bool enabled = false;
   bool focusable() const { return key.kind != SocialRowKind::Section && (key.kind != SocialRowKind::Text || !detail.empty()); }
 };
-std::vector<SocialRow> SocialRows(const SocialModel& model);
+// 0 chooses a role, 1 prepares a host, 2 enters a host's connection details.
+std::vector<SocialRow> SocialRows(const SocialModel& model, int direct_mode = 0);
 // Retain identity across friend reordering, duplicate names, invite removal and translation changes.
 int SocialFocus(const std::vector<SocialRow>& rows, std::optional<SocialRowKey> key, int fallback = 0);
 std::optional<SocialCommand> SocialRowCommand(const SocialRow& row, const SocialModel& model);

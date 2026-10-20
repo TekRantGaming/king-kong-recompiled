@@ -3,6 +3,8 @@
 #include "social_panel_logic.h"
 
 namespace kk::ui {
+// Called after the SDK registers its shortcuts, before the launcher opens.
+void ReserveSocialHotkey(bool enabled);
 struct SocialChapters {
   int slot = -1, continue_slot = -1, continue_chapter = -1;
   std::function<rex::ui::ImmediateTexture*(int, float*)> picture;
@@ -40,6 +42,8 @@ class SocialPanel {
   std::string editor_text_;
   int editor_ = 0, editor_key_ = 0;
   bool editor_just_opened_ = false;
+  bool editor_sync_ = false;
+  int direct_mode_ = 0;
   bool editor_lowercase_ = false, editor_symbols_ = false;
   bool chapter_screen_ = false;
   ListState chapter_list_;
@@ -48,7 +52,7 @@ class SocialPanel {
                     Glyphs& glyphs, const std::string& set, coop::ISocialService& service, bool active);
   std::function<void()> add_steam_;
   void DrawEditor(ImDrawList* dl, ImVec2 origin, ImVec2 size, const Metrics& metrics, Input& in,
-                  Glyphs& glyphs, const std::string& prompt_set);
+                  Glyphs& glyphs, const std::string& prompt_set, coop::ISocialService& service);
   void Activate(const coop::SocialRow& row, coop::ISocialService& service);
 };
 }  // namespace kk::ui

@@ -25,6 +25,7 @@
 #include <rex/logging.h>
 
 #include "mouse_look.h"
+#include "input_diag.h"
 #include "debug_overlay.h"
 #include "play_internal.h"
 #include "benchmark.h"
@@ -213,6 +214,13 @@ REX_HOOK_RAW(sub_821074E8) {
   const uint32_t user = ctx.r3.u32;
   const uint32_t state_ptr = ctx.r4.u32;
   __imp__sub_821074E8(ctx, base);
+  if (kk::input_diag::Enabled() && !user)
+    kk::input_diag::Begin(user, ctx.r3.u32, state_ptr && !ctx.r3.u32 ? base + state_ptr : nullptr,
+        int32_t(LoadBE<uint32_t>(base+0x82C63704)),LoadBE<uint32_t>(base+0x82CCAE2C));
+  struct InputDiagnosticEnd {
+    uint32_t user; const uint8_t* state; PPCContext& ctx;
+    ~InputDiagnosticEnd() { kk::input_diag::Stage(user,"game-final",ctx.r3.u32 ? nullptr : state,ctx.r3.u32); }
+  } diagnostic_end{user,state_ptr ? base+state_ptr : nullptr,ctx};
 #if defined(KK_DEV_TOOLS)
   DevInputTrace input_trace{user,state_ptr ? base+state_ptr : nullptr,base,ctx};
 #endif
@@ -228,6 +236,7 @@ REX_HOOK_RAW(sub_821074E8) {
     if (kk::freecam::DevPadInput(user, base + state_ptr)) connected = true;
 #endif
     kk::freecam::Pad(user, base + state_ptr, connected);
+    kk::input_diag::Stage(user,"free-camera",base+state_ptr);
     g_aim[user & 3] = {};
     ctx.r3.u64 = 0;
     return;
@@ -235,6 +244,7 @@ REX_HOOK_RAW(sub_821074E8) {
   uint32_t replay_status = ctx.r3.u32;  // the player's own read, for a cancel press
   if (state_ptr && kk::benchmark::Pad(user, base + state_ptr, replay_status)) {
     ctx.r3.u64 = replay_status;
+    kk::input_diag::Stage(user,"benchmark",base+state_ptr,replay_status);
     return;
   }
   const bool dev_input = kk::g_dev_pad_input && state_ptr && kk::g_dev_pad_input(user, base + state_ptr);
@@ -249,11 +259,14 @@ REX_HOOK_RAW(sub_821074E8) {
     // its focus suppression. Do not move this behind the native success check:
     // background tests must also work without a physical controller connected.
     ctx.r3.u64 = 0;  // ERROR_SUCCESS: a pad is connected
+    kk::input_diag::Stage(user,"virtual-injection",base+state_ptr);
 #if defined(KK_DEV_TOOLS)
     DevFirePadTrace fire_trace{user, base + state_ptr, base[state_ptr+6], base[state_ptr+7]};
 #endif
     if (kk::g_dev_pad_filter) kk::g_dev_pad_filter(user, base + state_ptr);
+    kk::input_diag::Stage(user,"dev-filter",base+state_ptr);
     if (kk::DebugOverlayFilterPad(user, base + state_ptr)) {
+      kk::input_diag::Stage(user,"debug-overlay",base+state_ptr);
 #if defined(KK_DEV_TOOLS)
       fire_trace.stage = "overlay";
 #endif
@@ -272,11 +285,15 @@ REX_HOOK_RAW(sub_821074E8) {
   }
   if (ctx.r3.u32 == 0 && state_ptr) {  // ERROR_SUCCESS
     if (kk::DebugOverlayFilterPad(user, base + state_ptr)) {
+      kk::input_diag::Stage(user,"debug-overlay",base+state_ptr);
       g_aim[user & 3] = {};
       return;
     }
+    kk::input_diag::Stage(user,"debug-overlay",base+state_ptr);
     Remap(user, base + state_ptr);
+    kk::input_diag::Stage(user,"remap",base+state_ptr);
     if (kk::g_dev_pad_filter) kk::g_dev_pad_filter(user, base + state_ptr);
+    kk::input_diag::Stage(user,"dev-filter",base+state_ptr);
     // The port's pause menu: the game reads an empty pad while it is open (pause_hooks.cpp).
     kk::play::FilterPad(user, base + state_ptr);
   } else {

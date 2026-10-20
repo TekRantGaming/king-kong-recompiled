@@ -35,6 +35,7 @@
 #include "crash_dump.h"
 #include "exit_evidence.h"
 #include "diagnostics.h"
+#include "input_diag.h"
 #include "discord_presence.h"
 #include "display_modes.h"
 #include "frame_stats.h"
@@ -55,6 +56,7 @@ void InstallFpeGuard();  // fpe_guard.cpp
 #include "online.h"
 #include "shader_pack.h"
 #include "launcher.h"
+#include "social_panel.h"
 #include "mods.h"
 #include "coop_runtime.h"
 #include "overlay.h"
@@ -374,6 +376,7 @@ class KingKongApp : public rex::ReXApp {
   }
 
   void OnPostSetup() override {
+    kk::input_diag::Launcher(false, 0, false, false);
     kk::coop::Start(user_data_root_);
     kk::g_guest_base = runtime()->virtual_membase();
     kk::InstallFpeGuard();  // after the runtime's own signal handlers
@@ -440,6 +443,11 @@ class KingKongApp : public rex::ReXApp {
   }
 
   void OnCreateDialogs(rex::ui::ImGuiDrawer* drawer) override {
+    // F4 belongs to Social in this build. Otherwise the SDK also opens its
+    // settings overlay behind the launcher and its active callback can zero
+    // both native pad and MnK reads after Play.
+    kk::ui::ReserveSocialHotkey(REXCVAR_GET(kk_coop_enabled));
+    kk::input_diag::Install(drawer, window());
     kk::SetUiPaintRequest([this] {
       app_context().CallInUIThreadDeferred([this] {
         if (window()) window()->RequestPresenterUIPaintFromUIThread();

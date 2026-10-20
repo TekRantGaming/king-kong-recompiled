@@ -16,6 +16,7 @@
 #include "launcher_text.h"
 #include "launcher_ui.h"
 #include "social_panel.h"
+#include "input_diag.h"
 #include "coop_runtime.h"
 #include "notify_logic.h"
 #include "system_notify.h"
@@ -2901,6 +2902,7 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
     }
     input_.set_social_triggers(GetBool("kk_coop_enabled") && play_ != PlayView::kArtbook);
     input_.Update();
+    input_diag::Launcher(pads_active_, input_.gamepad_count(), social_.blocking(), social_.editing());
     if (ui_sounds_) {
       const float volume = GetBool("kk_launcher_sounds") ? GetInt("kk_launcher_sounds_volume", 50) / 100.0f : 0.0f;
       ui_sounds_->SetVolume(volume * volume);

@@ -65,7 +65,7 @@ void FocusAndActions() {
   Check(Find(rows, SocialRowKind::Create).enabled, "idle may create lobby");
   std::vector<SocialRowKind> order;
   for (const auto& r : rows) if (r.focusable()) order.push_back(r.key.kind);
-  Check(order.size() == 14 && order[0] == SocialRowKind::Accept && order[1] == SocialRowKind::Decline &&
+  Check(order.size() == 11 && order[0] == SocialRowKind::Accept && order[1] == SocialRowKind::Decline &&
         order[2] == SocialRowKind::Create && order[3] == SocialRowKind::Friend, "focus order follows invites, lobby, friends");
   Check(SocialFocus(rows, {}) == 1, "first focus skips section header");
   const SocialRowKey friend_key{SocialRowKind::Friend, 2};
@@ -123,7 +123,7 @@ void FocusAndActions() {
   }
   fake->Scenario("needed");
   Check(std::string_view(SocialStatusKey(fake->Snapshot())) == "Steam is unavailable. You can connect by IP.", "missing client points to Direct IP");
-  Check(Find(SocialRows(fake->Snapshot()), SocialRowKind::DirectHost).enabled, "missing Steam leaves Direct IP available");
+  Check(Find(SocialRows(fake->Snapshot()), SocialRowKind::DirectChooseHost).enabled, "missing Steam leaves Direct IP available");
   fake->Scenario("unavailable");
   Check(std::string_view(SocialStatusKey(fake->Snapshot())) == "Steam is unavailable. You can connect by IP.", "SDK-missing state points to Direct IP");
   fake->Scenario("mismatch");
@@ -186,7 +186,8 @@ void PreviewScenes() {
 void DirectRows() {
   SocialModel m; m.status=SocialStatus::Unavailable;
   auto rows=SocialRows(m);
-  Check(Find(rows,SocialRowKind::DirectHost).enabled && Find(rows,SocialRowKind::DirectJoin).enabled,"Direct IP works without Steam");
+  Check(Find(rows,SocialRowKind::DirectChooseHost).enabled && Find(rows,SocialRowKind::DirectChooseJoin).enabled,"Direct IP role choice works without Steam");
+  Check(Find(SocialRows(m,1),SocialRowKind::DirectHost).enabled && Find(SocialRows(m,2),SocialRowKind::DirectJoin).enabled,"Direct IP confirmations work without Steam");
   Check(Find(rows,SocialRowKind::AddSteam).enabled,"recommendation links to existing Add to Steam");
   m.status=SocialStatus::Lobby; m.direct=true; m.self=m.owner=1; m.lobby=99;
   m.members={{1,"Host",false},{2,"Guest",false}};

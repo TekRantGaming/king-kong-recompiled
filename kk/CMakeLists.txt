@@ -38,6 +38,7 @@ set(KINGKONG_SOURCES
     src/social_panel_logic.cpp
     src/social_fake.cpp
     src/input_remap.cpp
+    src/input_diag.cpp
     src/launcher.cpp
     src/launcher_ui.cpp
     src/launcher_art.cpp
