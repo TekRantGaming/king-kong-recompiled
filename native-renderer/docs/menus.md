@@ -379,6 +379,12 @@ moving light) runs live behind the launcher instead of the stills. Code: `kk/src
   "failed <version>": stills for the rest of that version).
 - **Rebuild shaders** while it runs: the scene's renderer holds the shader pack open (no rename on Windows), so
   the launcher starts again with `--kk_launcher_open=rebuild --kk_menu_scene_off=true` and rebuilds there.
+- **Lighter than play** (owner, 20 Oct, to save power), for the launcher's process only through the renderer's
+  `nr_set_menu_scene_light` (`backend/menu_scene_light.h`; the player's settings and the game's process are not
+  touched): GI off, AO at half resolution, volumetrics off, original shadows and water reflections, shadow maps
+  at the game's own size, no tessellation, a temporal upscaler at most Performance.
+- **Same-session setup:** a launcher that opened without game files, in the setup, on New in this update or
+  with shaders not prepared starts the scene once it is back on Home with all of that done (TickSceneStart).
 - **Frame rate:** the player's cap up to 60 (unlimited counts as 60), 10 while minimised or handing over; the
   launcher paints with the game's frames (60 a second) instead of continuously.
 - **Dev aids:** `KK_DEV_SCENE_TRACE=1` (levels, Start presses, movie flag), `KK_DEV_FRAME_LOG=1` (launcher frame

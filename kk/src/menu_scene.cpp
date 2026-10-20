@@ -100,7 +100,7 @@ void SetRendererLight(bool on) {
 #endif
   if (fn) fn(on ? 1u : 0u);
   REXLOG_INFO("KK menu scene: {}", fn ? (on ? "lighter effects for the scene (GI off, AO half, volumetrics off, original "
-                                              "shadows and water, no tessellation, upscaler at most Performance)"
+                                              "shadows and water, game-size shadow maps, no tessellation, upscaler at most Performance)"
                                            : "the player's own effects for the scene")
                                      : "the renderer has no lighter scene mode");
 }

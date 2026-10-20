@@ -4,7 +4,8 @@
 // sets it through the plugin's nr_set_menu_scene_light export (plugin/photo_api.cpp).
 //
 // Lowered: global illumination off, ambient occlusion at half resolution, volumetric light off, shadows and water
-// reflections the original ones, tessellation off, and a temporal upscaler's mode at most Performance.
+// reflections the original ones (shadow maps at the game's own size), tessellation off, and a temporal upscaler's
+// mode at most Performance.
 #pragma once
 
 #include <atomic>
@@ -25,6 +26,7 @@ inline void LightenForMenuScene(EffectSettings& s) {
   s.lighting.shadows = ShadowQuality::kOriginal;
   s.lighting.water = WaterReflections::kOriginal;
   s.tessellation = false;
+  s.shadow_scale = 1.0f;  // shadow maps at the game's own size (play scales them with the render scale)
   if (s.upscale.quality == UpscaleQuality::kNative || s.upscale.quality == UpscaleQuality::kQuality ||
       s.upscale.quality == UpscaleQuality::kBalanced)
     s.upscale.quality = UpscaleQuality::kPerformance;
