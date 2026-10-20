@@ -549,7 +549,7 @@ void Capture(const uint8_t* b, uint32_t w, bool initial = true) {
     REXLOG_INFO("ENEMIES census id={:016X}/0/{} spawn=({:.3f},{:.3f},{:.3f}) scheduled={} init={}",
         key, uint16_t(family), a.x, a.y, a.z, Member(b, w, actor), initializing);
 #endif
-    const auto vars = Ptr(b, ai, 64, 1780);
+    const auto vars = Ptr(b, ai, 64, 7808);
     if (!spawner || !vars) continue;
     Spawner sp{key, ai, vars, 0};
     if (const auto old=private_spawner_sequences.find(key); old!=private_spawner_sequences.end()) sp.sequence=old->second;
@@ -1873,8 +1873,14 @@ void Spawned(const uint8_t* b, uint32_t spawner, uint32_t source, uint32_t actor
   if (!REXCVAR_GET(kk_coop_enabled) || !Environment(b,s.world) || !PoseAddress(actor, 32)) return;
   auto it = s.spawners.find(spawner); if (it == s.spawners.end()) return;
   auto& sp = it->second;
-  if (Ptr(b, Ptr(b, spawner, 24, 8), 4, 88) != sp.ai || Ptr(b, sp.ai, 64, 1780) != sp.vars) return;
-  const auto template_key=SpawnerTemplateKey(sp.key,source,Ptr(b,sp.vars,1592,32),Ptr(b,sp.vars,1776,32));
+  if (Ptr(b, Ptr(b, spawner, 24, 8), 4, 88) != sp.ai || Ptr(b, sp.ai, 64, 7808) != sp.vars) return;
+  uint32_t wave_templates[17]{};
+  for (unsigned i=0;i<17;++i) wave_templates[i]=Load32(b,sp.vars+1972+4*i);
+  // 826F9154 advances/wraps V+7804 BEFORE the native factory call.
+  const auto wave_index = SpawnerPreviousWaveIndex(wave_templates,Load32(b,sp.vars+7804),source);
+  if (wave_templates[0] && wave_index==UINT32_MAX) return;
+  const auto wave_source = wave_index<17 ? wave_templates[wave_index] : 0;
+  const auto template_key=SpawnerTemplateKey(sp.key,source,Ptr(b,sp.vars,1592,32),Ptr(b,sp.vars,1776,32),wave_index,wave_source);
   if (!template_key || sp.sequence == UINT32_MAX) return;
   ++sp.sequence;
   bool is_spawner = false; uint32_t state = 0;
@@ -2224,7 +2230,23 @@ REX_HOOK_RAW(sub_82715AC8) {
   const bool observe = uint32_t(ctx.lr) == 0x826F9240 && REXCVAR_GET(kk_coop_enabled);
   const auto source = ctx.r3.u32;
   const auto spawner = observe ? kk::hfr::Load32(base, 0x82CCBF6C) : 0;
+#if defined(KK_DEV_TOOLS)
+  const auto caller = uint32_t(ctx.lr), current = kk::hfr::Load32(base, 0x82CCBF6C);
+  bool is_spawner = false; uint32_t state = 0;
+  const bool crab = REXCVAR_GET(kk_coop_enabled) && kk::coop::Tracks(base,
+      kk::coop::Ptr(base, kk::coop::Ptr(base, source, 24, 8), 4, 88), state, is_spawner) == kk::coop::EnemyFamily::Crab;
+#endif
   __imp__sub_82715AC8(ctx, base);
+#if defined(KK_DEV_TOOLS)
+  static unsigned crab_lines = 0;
+  if (crab && ctx.r3.u32 && crab_lines++ < 16) {
+    const auto vars = kk::coop::Ptr(base, kk::coop::Ptr(base, kk::coop::Ptr(base, current, 24, 8), 4, 88), 64, 7808);
+    REXLOG_INFO("COOP crab factory caller={:08X} current={:08X} source={:08X} child={:08X} observed={} known-spawner={} primary={:08X} secondary={:08X} wave-index={} wave-first={:08X} cap=16",
+        caller, current, source, ctx.r3.u32, observe, kk::coop::Get().spawners.contains(current),
+        vars ? kk::hfr::Load32(base, vars+1592) : 0, vars ? kk::hfr::Load32(base, vars+1776) : 0,
+        vars ? kk::hfr::Load32(base, vars+7804) : UINT32_MAX, vars ? kk::hfr::Load32(base, vars+1972) : 0);
+  }
+#endif
   if (observe && ctx.r3.u32) kk::coop::Spawned(base, spawner, source, ctx.r3.u32);
 }
 REX_HOOK_RAW(sub_82696A28) {

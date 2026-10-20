@@ -43,6 +43,18 @@ void IdentityAndMatching() {
   Check(SpawnerTemplateKey(key,0x40002000,0x40001000,0x40002000)!=
       SpawnerTemplateKey(key,0x40001000,0x40001000,0x40002000),"distinct live template selectors remain distinct");
   Check(!SpawnerTemplateKey(key,0x40003000,0x40001000,0x40002000),"replaced or unknown template is refused");
+  Check(SpawnerTemplateKey(key,0x40003000,0,0,2,0x40003000)==
+      SpawnerTemplateKey(key,0x50004000,0,0,2,0x50004000),"wave-array templates retain numeric identity across heaps");
+  Check(SpawnerTemplateKey(key,0x40003000,0,0,2,0x40003000)!=
+      SpawnerTemplateKey(key,0x40003000,0,0,3,0x40003000),"wave-array slots remain distinct even with one template");
+  Check(!SpawnerTemplateKey(key,0x40003000,0,0,17,0x40003000) &&
+      !SpawnerTemplateKey(key,0x40003000,0,0,2,0x40004000),"wave index bounds and selected source are validated");
+  const uint32_t wave[]={0x40003000,0x40003000,0x40004000,0};
+  Check(SpawnerPreviousWaveIndex(wave,1,wave[0])==0 && SpawnerPreviousWaveIndex(wave,2,wave[1])==1,
+      "native pre-factory advance distinguishes repeated wave templates");
+  Check(SpawnerPreviousWaveIndex(wave,0,wave[2])==2,"native pre-factory wrap retains the last wave slot");
+  Check(SpawnerPreviousWaveIndex(wave,0,wave[0])==UINT32_MAX &&
+      SpawnerPreviousWaveIndex(wave,5,wave[0])==UINT32_MAX,"mismatched wrapped source or wave index refuses");
   EnemyId authored{key, 0, EnemyFamily::Raptor};
   // Two machines have different heap values and table order but the same authored IDs.
   std::vector<Binding> host{{authored, 10, 20, 30, 40}, {one, 50, 60, 70, 80}};

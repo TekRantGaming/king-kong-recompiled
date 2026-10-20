@@ -52,8 +52,21 @@ inline EnemyId SpawnId(uint64_t spawner, uint64_t source, uint32_t sequence, Ene
 }
 // Resolve the live template at creation time, after native initialization.
 // Only its authored numeric slot contributes to identity, never its pointer.
-inline uint64_t SpawnerTemplateKey(uint64_t spawner, uint32_t source, uint32_t primary, uint32_t secondary) {
+inline uint32_t SpawnerPreviousWaveIndex(std::span<const uint32_t> templates, uint32_t next, uint32_t source) {
+  if (!source || templates.empty() || templates.size()>17 || !templates[0] || next>templates.size()) return UINT32_MAX;
+  size_t index = next ? next-1 : 0;
+  if (!next) {
+    while (index<templates.size() && templates[index]) ++index;
+    --index;
+  }
+  return index<templates.size() && templates[index]==source ? uint32_t(index) : UINT32_MAX;
+}
+inline uint64_t SpawnerTemplateKey(uint64_t spawner, uint32_t source, uint32_t primary, uint32_t secondary,
+    uint32_t wave_index = UINT32_MAX, uint32_t wave_source = 0) {
   if (!spawner || !source) return 0;
+  // 826F9130 selects V[1972 + 4*index] before the two fallback
+  // templates. The pointer array ends before the structs at V+2040.
+  if (wave_index < 17 && source == wave_source) return Mix(spawner,1972+4*wave_index);
   if (source==primary) return Mix(spawner,1592);
   if (source==secondary) return Mix(spawner,1776);
   return 0;
