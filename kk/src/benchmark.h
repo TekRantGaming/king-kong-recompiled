@@ -9,6 +9,12 @@ bool Active();
 bool RecordingRoute();
 std::filesystem::path RouteFile();
 bool RouteAvailable();
+#if defined(KK_DEV_TOOLS)
+// Replay one recorded chapter inside the host's existing lobby, without benchmark
+// saves, artificial chapter jumps, launcher return, or changing host cheat policy.
+void DevCoopLoaded(uint32_t level);
+bool DevCoopPad(uint32_t user, uint8_t* state);
+#endif
 // Final state/status returned to the game, after remapping and developer input.
 void PadRead(uint32_t user, const uint8_t* state, uint32_t status, const uint8_t* base);
 // Game thread only, before uni_go services a load. -1 means no route jump.

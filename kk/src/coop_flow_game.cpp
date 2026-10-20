@@ -3,6 +3,8 @@
 #include "coop_enemies_game.h"
 #include "coop_observer.h"
 #include "coop_story_game.h"
+#include "coop_dev_follow.h"
+#include "benchmark.h"
 #include "play_internal.h"
 #include "hfr.h"
 #include "settings.h"
@@ -12,6 +14,8 @@
 #include <rex/hook.h>
 #include <rex/logging.h>
 #include <atomic>
+#include <bit>
+#include <cstring>
 #include <chrono>
 #include <cstdlib>
 #include <fstream>
@@ -43,6 +47,19 @@ bool private_load=false, private_request=false, reload_sent=false;
 std::optional<FlowEvent> independent_load;
 bool sent_downed=false, life_sent=false;
 double next_life=0;
+#if defined(KK_DEV_TOOLS)
+DevFollowHost dev_follow;
+DevFollowResult dev_follow_pad;
+double dev_follow_at=-1, dev_follow_log=0;
+uint32_t dev_follow_generation=0;
+bool DevFollowEnabled() {
+  static const bool enabled=[] {
+    const char* value=std::getenv("KK_DEV_FOLLOW_HOST");
+    return value && std::string_view(value)=="1";
+  }();
+  return enabled;
+}
+#endif
 double Now() { return std::chrono::duration<double>(std::chrono::steady_clock::now().time_since_epoch()).count(); }
 bool EffectiveFlag(const char* name,const mods::Plan& plan) {
   auto value=rex::cvar::GetFlagByName(name);
@@ -334,6 +351,9 @@ void SessionAfterGo(uint8_t* base,uint32_t g,bool loaded) {
     return;
   }
   if (private_load && loaded) {
+#if defined(KK_DEV_TOOLS)
+    benchmark::DevCoopLoaded(hfr::Load32(base,g+0x18));
+#endif
     if (hfr::Load32(base,g+0x18)==SessionFlowSnapshot().world.level) recovery.Loaded();
     else recovery.phase=revive::Phase::ReloadBoth;
     return; // living partner keeps simulating; no Loaded or LoadRelease
@@ -342,6 +362,9 @@ void SessionAfterGo(uint8_t* base,uint32_t g,bool loaded) {
   auto v=SessionFlowSnapshot();
   if (v.world.generation!=loading_generation) return;
   if (hfr::Load32(base,g+0x18)!=v.world.level) { Send(MessageType::FlowAbort,v.world); return; }
+#if defined(KK_DEV_TOOLS)
+  benchmark::DevCoopLoaded(v.world.level);
+#endif
   StoryLoaded(base);
   loaded_generation=loading_generation; loading_generation=0;
   observer::LevelLoaded();
@@ -361,6 +384,12 @@ void SessionCheckpoint(uint32_t level,uint32_t checkpoint) {
     Send(MessageType::Checkpoint,{v.world.generation,level,checkpoint,v.completed});
 }
 void SessionReloadFrame(uint8_t* base) {
+#if defined(KK_DEV_TOOLS)
+  dev_follow_at=-1;
+  struct ResetInactiveFollow {
+    ~ResetInactiveFollow() { if (dev_follow_at<0) dev_follow={}; }
+  } reset_inactive_follow;
+#endif
   if (!REXCVAR_GET(kk_coop_enabled) || !launched || !base) {
     observer::SetPartnerSpectating(false); return;
   }
@@ -433,6 +462,35 @@ void SessionReloadFrame(uint8_t* base) {
       return;
     }
   }
+#if defined(KK_DEV_TOOLS)
+  if (DevFollowEnabled()) {
+    if (dev_follow_generation!=v.world.generation) {
+      dev_follow={}; dev_follow_generation=v.world.generation;
+    }
+    const auto link=EnemyLinkSnapshot();
+    const bool allowed=!v.host && v.policy==ChapterPolicy::Together && link.connected &&
+        !private_load && !private_request && !observer::Active() && !play::StartLevelLoading() &&
+        !play::CoverScreen() && !play::PauseMenuOpen() && !play::GamePausePageUp();
+    const auto local=allowed ? ReadJackPose([base](uint32_t a){return hfr::Load32(base,a);},
+        [base](uint32_t a){return hfr::Load16(base,a);},[base](uint32_t a){return hfr::LoadF(base,a);},now) : PoseRead{};
+    dev_follow_pad=dev_follow.Tick(now,local.pose,allowed ? link.partner : std::optional<PlayerPose>{});
+    if (local.pose && link.partner) {
+      dev_follow_at=now;
+      if (now>=dev_follow_log) {
+        dev_follow_log=now+5;
+        REXLOG_INFO("KK dev follow: generation {} level {}/{} distance {:.2f} LS {},{} local {:.2f},{:.2f},{:.2f} host {:.2f},{:.2f},{:.2f}",
+            v.world.generation,local.pose->level,link.partner->level,dev_follow_pad.distance,
+            dev_follow_pad.x,dev_follow_pad.y,local.pose->x,local.pose->y,local.pose->z,
+            link.partner->x,link.partner->y,link.partner->z);
+      }
+      if (dev_follow_pad.move && !pending_move && !move_request.load()) {
+        move_offer=true;
+        REXLOG_INFO("KK dev follow: far for over 10 s, accepting existing Move to partner path, distance {:.2f}",dev_follow_pad.distance);
+        MoveToPartner(false);
+      }
+    }
+  }
+#endif
   // sub_82857F28 calls the frame-time hook, then consumes this reset flag.
   // Intercept here, before its re-init, not later in uni_go after consumption.
   if (!reset) return;
@@ -441,6 +499,14 @@ void SessionReloadFrame(uint8_t* base) {
   REXLOG_INFO("KK co-op flow: death/reload fallback, both reload the host checkpoint");
 }
 #if defined(KK_DEV_TOOLS)
+bool SessionDevFollowPad(uint32_t user,uint8_t* state) {
+  if (!DevFollowEnabled() || user!=0 || dev_follow_at<0 || Now()-dev_follow_at>.5) return false;
+  std::memset(state,0,16);
+  const uint32_t packet=std::byteswap(uint32_t(Now()*20));
+  const auto x=std::byteswap(dev_follow_pad.x), y=std::byteswap(dev_follow_pad.y);
+  std::memcpy(state,&packet,4); std::memcpy(state+8,&x,2); std::memcpy(state+10,&y,2);
+  return true;
+}
 bool SessionDevChapterEnd() {
   const auto v=SessionFlowSnapshot();
   if (!launched || !v.active || v.phase!=FlowPhase::Playing || !play::SessionActive()) return false;

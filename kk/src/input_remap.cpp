@@ -203,7 +203,14 @@ REX_HOOK_RAW(sub_821074E8) {
     ctx.r3.u64 = replay_status;
     return;
   }
-  if (kk::g_dev_pad_input && state_ptr && kk::g_dev_pad_input(user, base + state_ptr)) {
+  const bool dev_input = kk::g_dev_pad_input && state_ptr && kk::g_dev_pad_input(user, base + state_ptr);
+#if defined(KK_DEV_TOOLS)
+  const bool coop_input = state_ptr && (kk::benchmark::DevCoopPad(user, base + state_ptr) ||
+      kk::coop::SessionDevFollowPad(user, base + state_ptr));
+#else
+  constexpr bool coop_input = false;
+#endif
+  if (dev_input || coop_input) {
     // The dev virtual pad is injected AFTER the native SDL/XInput read, including
     // its focus suppression. Do not move this behind the native success check:
     // background tests must also work without a physical controller connected.

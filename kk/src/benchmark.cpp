@@ -38,6 +38,9 @@
 #include "settings.h"
 #include "cheats.h"
 #include "ui_paint.h"
+#if defined(KK_DEV_TOOLS)
+#include "coop_runtime.h"
+#endif
 
 #if defined(_WIN32)
 #ifndef WIN32_LEAN_AND_MEAN
@@ -135,6 +138,42 @@ Recording ReadRecording(const std::filesystem::path& path, std::string* id = nul
   if (id) *id = RecordingId(data);
   return decoded;
 }
+
+#if defined(KK_DEV_TOOLS)
+struct DevCoopRoute {
+  Recording recording;
+  RouteReplay replay;
+  size_t chapter=0;
+  uint32_t generation=0;
+  double seconds=0, input=0, log_at=0;
+  uint64_t frames=0, missed=0, reads=0;
+  bool tried=false, running=false, exhausted=false;
+} dev_coop;
+
+void DevCoopFrame(double dt) {
+  if (!dev_coop.running) return;
+  const auto v=coop::SessionFlowSnapshot();
+  if (!v.active || !v.host || v.world.generation!=dev_coop.generation || v.phase==coop::FlowPhase::Failed) {
+    REXLOG_INFO("KK dev co-op route: stopped at {:.3f}s, world generation {} -> {}, level {}; native flow owns transitions",
+        dev_coop.seconds,dev_coop.generation,v.world.generation,v.world.level);
+    dev_coop.running=false; return;
+  }
+  if (v.phase!=coop::FlowPhase::Playing || play::StartLevelLoading() || play::CoverScreen() ||
+      play::PauseMenuOpen() || play::GamePausePageUp() || !std::isfinite(dt) || dt<=0) return;
+  dev_coop.input=dev_coop.seconds;
+  dev_coop.seconds+=dt; ++dev_coop.frames;
+  const auto& chapter=dev_coop.recording.chapters[dev_coop.chapter];
+  if (dev_coop.seconds>=dev_coop.log_at) {
+    dev_coop.log_at=dev_coop.seconds+5;
+    REXLOG_INFO("KK dev co-op route: entry {} time {:.3f}/{} game seconds, reads {} missed-edge polls {}",
+        chapter.entry,dev_coop.seconds,chapter.duration,dev_coop.reads,dev_coop.missed);
+  }
+  if (!dev_coop.exhausted && dev_coop.input>=chapter.duration) {
+    dev_coop.exhausted=true;
+    REXLOG_INFO("KK dev co-op route: input exhausted at {:.3f}s; neutral pad, waiting for a NATIVE chapter end, not claiming completion",dev_coop.seconds);
+  }
+}
+#endif
 
 void ApplyReplayControls() {
   // These affect the path after the captured input hook. Keep graphics/caps
@@ -591,6 +630,69 @@ bool RouteAvailable() {
   try { ReadRecording(RouteFile()); return true; }
   catch (const std::exception& e) { REXLOG_WARN("KK benchmark route: {}", e.what()); return false; }
 }
+#if defined(KK_DEV_TOOLS)
+// KK_DEV_COOP_ROUTE=<kkbr path>; optional KK_DEV_COOP_ROUTE_CHAPTER=<1-based index>.
+// The normal Direct IP/Steam lobby selects the starting chapter and owns saves.
+void DevCoopLoaded(uint32_t level) {
+  const char* path=std::getenv("KK_DEV_COOP_ROUTE");
+  if (!path || !*path || Active()) return;
+  const auto v=coop::SessionFlowSnapshot();
+  if (!v.active || !v.host) return;
+  if (dev_coop.tried) {
+    if (dev_coop.running) REXLOG_INFO("KK dev co-op route: native load at {:.3f}s, level {} generation {}; replay stopped (no restart)",
+        dev_coop.seconds,level,v.world.generation);
+    dev_coop.running=false; return;
+  }
+  dev_coop.tried=true;
+  try {
+    std::string id;
+    dev_coop.recording=ReadRecording(path,&id);
+    const auto& chapters=dev_coop.recording.chapters;
+    size_t index=chapters.size();
+    if (const char* value=std::getenv("KK_DEV_COOP_ROUTE_CHAPTER"); value && *value) {
+      char* end=nullptr; const auto selected=std::strtoul(value,&end,10);
+      if (end==value || *end || selected<1 || selected>chapters.size())
+        throw std::runtime_error("invalid KK_DEV_COOP_ROUTE_CHAPTER");
+      index=selected-1;
+    } else {
+      for (size_t i=0;i<chapters.size();++i) if (chapters[i].entry==coop::FlowChapter(level)) { index=i; break; }
+    }
+    if (index>=chapters.size() || chapters[index].entry!=coop::FlowChapter(level) || v.world.start!=1)
+      throw std::runtime_error("route entry/start does not match lobby chapter start");
+    // Recorded pads are already remapped. Preserve host-controlled cheats and
+    // graphics; restore only the post-input camera/timing controls from the route.
+    std::istringstream lines(dev_coop.recording.settings);
+    for (std::string line; std::getline(lines,line);) {
+      const auto split=line.find(" = "); if (split==std::string::npos) continue;
+      const auto key=line.substr(0,split);
+      if (key=="kk_camera_sensitivity" || key=="kk_camera_modern" || key=="kk_fov" ||
+          key=="kk_hfr_fixes" || key=="kk_camera_shake") rex::cvar::SetFlagByName(key,line.substr(split+3));
+    }
+    dev_coop.chapter=index; dev_coop.generation=v.world.generation;
+    dev_coop.replay.Attach(dev_coop.recording); dev_coop.replay.Reset(index);
+    dev_coop.running=true;
+    REXLOG_INFO("KK dev co-op route: loaded {} id {} recording-build '{}' chapter {} entry {} duration {}; native lobby flow, no forced transition",
+        path,id,dev_coop.recording.build,index+1,chapters[index].entry,chapters[index].duration);
+  } catch (const std::exception& e) {
+    REXLOG_WARN("KK dev co-op route: disabled: {}",e.what());
+  }
+}
+bool DevCoopPad(uint32_t user,uint8_t* state) {
+  if (!dev_coop.running || user!=0) return false;
+  const auto v=coop::SessionFlowSnapshot();
+  if (!v.active || !v.host || v.world.generation!=dev_coop.generation || v.phase!=coop::FlowPhase::Playing) return false;
+  std::memset(state,0,16);
+  if (!dev_coop.exhausted) {
+    uint32_t missed=0;
+    if (const auto* sample=dev_coop.replay.Read(user,dev_coop.input,missed,dev_coop.frames==0)) {
+      if (!sample->status) std::memcpy(state,sample->state.data(),16);
+      ++dev_coop.reads;
+      if (missed) ++dev_coop.missed;
+    }
+  }
+  return true;
+}
+#endif
 void Shutdown() { writer.Shutdown(); monitor.Stop(); }
 
 std::filesystem::path Prepare(const std::filesystem::path& root) {
@@ -715,6 +817,9 @@ void LevelLoaded() {
 }
 
 void Frame(double dt, double scaled_dt, const uint8_t* base) {
+#if defined(KK_DEV_TOOLS)
+  DevCoopFrame(dt);
+#endif
   const auto p = phase.load();
   if (p != Phase::kRunning) return;
   if (recording_route) {

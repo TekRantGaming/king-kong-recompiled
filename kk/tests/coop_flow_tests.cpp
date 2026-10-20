@@ -1,5 +1,6 @@
 #include "coop_flow.h"
 #include "coop_progress.h"
+#include "coop_dev_follow.h"
 #include <array>
 #include <cstdlib>
 #include <iostream>
@@ -393,6 +394,28 @@ void WorkerHandoff() {
 int main() {
   Codecs(); LifeObservations(); SaveTransfer(); BarriersAndFollow(); SoloAndObserver(); DeathRouting(); PoliciesAndBehind(); PersonalProgress(); WorkerHandoff();
 #if defined(KK_DEV_TOOLS)
+  {
+    DevFollowHost follow;
+    PlayerPose own{}, host{}; own.level=host.level=201; own.time=0; host.x=40;
+    auto p=follow.Tick(0,own,host);
+    Check(p.x==0 && p.y==28000 && !p.move,"follow walks forward toward host");
+    own.time=10;
+    Check(!follow.Tick(10,own,host).move,"follow needs over ten seconds continuously far");
+    own.time=10.01;
+    Check(follow.Tick(10.01,own,host).move,"follow requests existing teleport after threshold");
+    own.time=11; own.facing=1.57079632679f;
+    p=follow.Tick(11,own,host);
+    Check(p.x>27990 && std::abs(p.y)<2,"world direction rotates into local stick axes");
+    host.x=2;
+    Check(follow.Tick(11,own,host).y==0,"follow leaves space beside host");
+    host.x=40; own.time=12; follow.Tick(12,own,host);
+    follow.Tick(20,{},host); own.time=23;
+    Check(!follow.Tick(23,own,host).move,"missing poses reset the far timer");
+    host.level=203; own.time=24; p=follow.Tick(24,own,host);
+    Check(p.x==0 && p.y==0,"different levels never cause blind walking");
+    own.time=34.1; Check(follow.Tick(34.1,own,host).move,"different level requests safe move after ten seconds");
+    Check(!follow.Tick(36,own,host).move,"stale local pose resets follow");
+  }
   PolicyOverrideTests();
 #endif
   std::cout<<"coop session flow tests passed\n";
