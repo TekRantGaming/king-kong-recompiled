@@ -353,3 +353,34 @@ in `runs\menus-game-data`), run folders `F:\KK-native-renderer\runs\menus-game-1
 | A Kong chapter (entry 10, level 304, playing as Kong): pause, Resume, Start again | `062250-kong-entry10` (`printwindow_170`) | yes |
 | Keyboard and mouse in the real pause menu | `062155-input-kbm` | not testable under the test rules: posted key and mouse messages to the unfocused window reach neither SDL nor ImGui, and focusing the window is not allowed; the game side blocks the game's keyboard (same path as the pad) and mouse look while the menu is open |
 | Return to main menu (chapter run) | `053106-realpause-ch8-quit`, `060043-final-ch8-return-to-menu` (`printwindow_400_<launcher pid>`) | launcher's Play menu |
+
+## The live menu scene behind the launcher (task 330, test build)
+
+Owner, 20 Oct: the original start menu's 3D scene (the Venture on a stormy sea under Skull Island, waves and
+moving light) runs live behind the launcher instead of the stills. Code: `kk/src/menu_scene.*`,
+`menu_scene_logic.h` (tested: `menu-scene`), hooks in `input_remap.cpp`, `ultrawide.cpp`, `play_session.cpp`,
+`frame_stats.cpp`, `scheduled_audio.h`, the renderer's `kDrawTagHideAll` (`backend/draw_tags.h`).
+
+- **How:** the launcher's own process starts the game (the runtime, as an in-process Play does) as the launcher
+  opens. Logos skipped; on the title (level 2) the port presses Start (the game's only input), the start menu
+  (level 3) loads and opens its save page. The executor's HUD pass (the menu's logo, texts, pages, loading text)
+  is left out whole; every controller read is empty; the launcher's Play start request is never carried out
+  there. Level 3 up for 45 pad reads = Ready: the launcher fades its stills out (0.6 s) and draws over the
+  game's frame with the same darkening as before. The start menu's attract movie (`Video/Attract.wmv`, after
+  about a minute idle, played by `sub_8272EED8` through `sub_82723AF0`) is never played.
+- **Play** always starts the game as a new process (restart_and_play), so the game's path is unchanged; the
+  scene drops to 10 FPS and its sound fades while the new process starts (handoff about 3 s, as before).
+- **Sound** (owner, 20 Oct): the scene's own audio (its music plus the sea) plays at Menu music on/off and
+  volume; the launcher's copy of the music stays silent. With the stills the launcher's music is as before.
+- **Stills instead:** Settings > Display > Main menu background = Pictures (at once while it runs; Live from the
+  next launcher start), setup / New in this update / shaders not prepared / a shader job, `kk_hardware_tier`
+  low (Steam Deck), Windows on battery, and after a launcher that did not get the scene up (marker
+  `<user data>\menu-scene.txt`: "starting <version>" until the scene shows; found at the next start it becomes
+  "failed <version>": stills for the rest of that version).
+- **Rebuild shaders** while it runs: the scene's renderer holds the shader pack open (no rename on Windows), so
+  the launcher starts again with `--kk_launcher_open=rebuild --kk_menu_scene_off=true` and rebuilds there.
+- **Frame rate:** the player's cap up to 60 (unlimited counts as 60), 10 while minimised or handing over; the
+  launcher paints with the game's frames (60 a second) instead of continuously.
+- **Dev aids:** `KK_DEV_SCENE_TRACE=1` (levels, Start presses, movie flag), `KK_DEV_FRAME_LOG=1` (launcher frame
+  intervals and the scene's sound gain every 5 s). Test kit: `kk/out/task330` (run330.ps1, steps*.txt,
+  perf330.ps1, sheet.py).
