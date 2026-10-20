@@ -12,10 +12,13 @@ namespace kk::coop::puppet {
 // Native animation-event lookup (823F8FB0) reads layer+4 -> descriptor+0
 // -> header+4. A live layer can temporarily have no header during a switch.
 template<class Pointer>
-uint32_t AnimationEventHeader(uint32_t animation, Pointer pointer) {
-  const auto layer = pointer(animation, 132, 8);
+uint32_t AnimationLayerHeader(uint32_t layer, Pointer pointer) {
   const auto descriptor = pointer(layer, 4, 4);
   return pointer(descriptor, 0, 6);
+}
+template<class Pointer>
+uint32_t AnimationEventHeader(uint32_t animation, Pointer pointer) {
+  return AnimationLayerHeader(pointer(animation, 132, 8), pointer);
 }
 // Shared resources (AI model/action table) are intentionally absent. Every
 // mutable component of an engine-created body must belong to the new body.

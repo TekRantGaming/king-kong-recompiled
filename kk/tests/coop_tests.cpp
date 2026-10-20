@@ -432,9 +432,11 @@ void PuppetPolicies() {
     return it == animation_memory.end() ? uint32_t{0} : it->second;
   };
   Check(AnimationEventHeader(100, pointer) == 500, "complete animation event metadata remains usable");
+  Check(AnimationLayerHeader(300, pointer) == 500, "root motion resolves a complete layer header");
   for (const auto address : {232u, 304u, 400u}) {
     const auto saved = animation_memory[address]; animation_memory[address] = 0;
     Check(!AnimationEventHeader(100, pointer), "missing animation metadata returns no event instead of reading null");
+    if (address != 232u) Check(!AnimationLayerHeader(300, pointer), "root motion rejects a missing descriptor or header");
     animation_memory[address] = saved;
   }
   const MutableRig original{1, 2, 3, 4, 5, 6, 7}, copy{8, 9, 10, 11, 12, 13, 14};

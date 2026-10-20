@@ -52,6 +52,7 @@ REX_EXTERN(__imp__sub_82401AA8);
 REX_EXTERN(__imp__sub_82850100);
 REX_EXTERN(__imp__sub_823F8AF0);
 REX_EXTERN(__imp__sub_823F8FB0);
+REX_EXTERN(__imp__sub_8280F328);
 REX_EXTERN(__imp__sub_82715AC8);
 REX_EXTERN(__imp__sub_826ECDF8);
 #if defined(KK_DEV_TOOLS)
@@ -1665,6 +1666,23 @@ void PartnerBodyScriptRecord(const uint8_t* b) {
   }
 }
 }  // namespace kk
+
+REX_HOOK_RAW(sub_8280F328) {
+  if (REXCVAR_GET(kk_coop_enabled) && kk::Range(ctx.r4.u32, 12) &&
+      !kk::coop::puppet::AnimationLayerHeader(ctx.r3.u32,
+          [&](uint32_t p, uint32_t off, uint32_t size) { return kk::Ptr(base, p, off, size); })) {
+    // Native empty-track handling leaves a zero motion delta and clears the
+    // current header/cursor. A temporarily absent header has the same result.
+    for (uint32_t off = 0; off < 12; off += 4) kk::hfr::Store32(base, ctx.r4.u32 + off, 0);
+    kk::hfr::Store32(base, 0x82CCBF94, 0);
+    kk::hfr::Store32(base, 0x82CCBF98, 0);
+    static unsigned logged = 0;
+    if (logged++ < 16) REXLOG_INFO("PUPPET root motion deferred layer={:08X} actor={:08X} reason=missing-layer-header",
+        ctx.r3.u32, kk::hfr::Load32(base, 0x82CCBF7C));
+    return;
+  }
+  __imp__sub_8280F328(ctx, base);
+}
 
 REX_HOOK_RAW(sub_823F8FB0) {
   if (REXCVAR_GET(kk_coop_enabled)) {
