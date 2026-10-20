@@ -76,9 +76,39 @@ inline uint16_t HumanAction(uint8_t weapon, bool moving, bool crouched, bool fir
   if (firing && weapon) return weapon >= 3 ? 162 : weapon==2 ? 164 : 14;
   return moving ? 10 : 0;
 }
+// Try the body's own weapon first, then another loaded gun's recoil, then aim.
+// Item resolution belongs to the rig; never reuse an item from another bank.
+template<class LoadedItem>
+std::optional<Action> FireAction(uint8_t weapon, bool crouched, LoadedItem loaded) {
+  const uint16_t preferred = HumanAction(weapon ? weapon : 1,false,crouched,true);
+  if (auto item=loaded(preferred)) return Action{preferred,*item,0};
+  for (const uint16_t action : {14,164,162,28,38,13,161,11,165,150,26,36})
+    if (auto item=loaded(action)) return Action{action,*item,0};
+  return {};
+}
+struct Gait { Action clip; float yaw = 0; bool crouched = false; };
+struct GaitChoice { Action clip; float facing = 0; bool directional = false; };
+inline std::optional<GaitChoice> ChooseGait(float vx, float vy, float view, bool crouched,
+                                          std::span<const Gait> gaits) {
+  const float speed=std::hypot(vx,vy), direction=std::atan2(vy,vx);
+  if (!std::isfinite(speed) || speed<kIdleSpeed || !std::isfinite(view)) return {};
+  std::optional<GaitChoice> best;
+  float score=1000;
+  for (const auto& gait : gaits) {
+    if (gait.crouched!=crouched || !std::isfinite(gait.clip.speed) || gait.clip.speed<kIdleSpeed) continue;
+    const float error=std::abs(std::remainder(direction-view-gait.yaw,6.283185307f));
+    const float rank=error+0.1f*std::abs(std::log(speed/gait.clip.speed));
+    if (rank>=score) continue;
+    score=rank;
+    // Without a matching strafe/back clip, face the travel direction. The root
+    // clip's own heading is subtracted, so its feet still move the correct way.
+    best=GaitChoice{gait.clip,error<.65f ? view : direction-gait.yaw,error<.65f};
+  }
+  return best;
+}
 struct AnimationDrive {
-  float speed = 0, fire_left = 0;
-  bool moving = false, have_fire = false, new_shot = false;
+  float speed = 0, fire_left = 0, land_left = 0;
+  bool moving = false, have_fire = false, new_shot = false, was_airborne = false, have_airborne = false;
   uint32_t last_fire = 0;
   void Update(const PlayerPose& p, float dt) {
     dt = std::clamp(dt,0.f,.1f);
@@ -86,6 +116,9 @@ struct AnimationDrive {
     speed += (target-speed)*(1-std::exp(-dt*14.f));
     moving = speed > (moving ? .08f : .18f);
     fire_left = std::max(0.f,fire_left-dt); new_shot = false;
+    land_left=std::max(0.f,land_left-dt);
+    if (have_airborne && was_airborne && !p.airborne) land_left=.5f;
+    was_airborne=p.airborne; have_airborne=true;
     if (have_fire && p.fire != last_fire && uint32_t(p.fire-last_fire) < 0x80000000u) {
       fire_left = .35f; new_shot = true; last_fire = p.fire;
     }

@@ -67,6 +67,24 @@ PoseRead ReadJackPose(U32 load32, U16 load16, F32 loadf, double now) {
   const uint32_t weapon = load32(g + 13128);
   p.weapon = weapon <= 4 ? uint8_t(weapon) : 0;
   p.crouched = load32(vars + 2912) != 0;
+  // 82808310(actor, world, 64), used by H's contact/airborne update at
+  // 826A1214. Read its bounded floor-contact list without calling native code
+  // or modifying the native query's global cursor flag.
+  const auto world=load32(0x828E8388);
+  if (PoseAddress(world,728)) {
+    const auto count=load32(world+656);
+    if (count<=4096 && PoseAddress(world,728+60*count)) {
+      bool grounded=false;
+      const bool filtered=load32(0x828D2A74)!=0;
+      for (uint32_t i=0;i<count;++i) {
+        const auto contact=world+728+60*i, flags=load32(contact+48);
+        if (load32(contact)!=actor && load32(contact+4)!=actor) continue;
+        if (flags&(0x80043000u | (filtered ? 0x80000u : 0))) continue;
+        grounded|=(flags&64)!=0;
+      }
+      p.airborne=!grounded;
+    }
+  }
   const uint32_t animation_base = load32(actor + 20);
   if (PoseAddress(animation_base)) {
     const uint32_t animation = load32(animation_base);

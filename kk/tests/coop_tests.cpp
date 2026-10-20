@@ -81,7 +81,7 @@ struct Pair {
   }
 };
 void Protocol() {
-  static_assert(kProtocolVersion == 15);
+  static_assert(kProtocolVersion == 16);
   constexpr std::array types{MessageType::Hello, MessageType::HelloAck, MessageType::Reject,
       MessageType::Ping, MessageType::Pong, MessageType::PlayerPose, MessageType::Bye,
       MessageType::EnemySnapshot, MessageType::EnemyEvent, MessageType::ShotIntent,
@@ -94,7 +94,7 @@ void Protocol() {
       MessageType::CameraPose, MessageType::CameraCut, MessageType::StoryEvent, MessageType::TriggerRequest};
   for (size_t i = 0; i < types.size(); ++i) {
     const auto type = types[i];
-    Check(uint16_t(type) == i+1, "protocol 15 message IDs have no collisions or gaps");
+    Check(uint16_t(type) == i+1, "protocol 16 message IDs have no collisions or gaps");
     Check(IsFlowMessage(type) == ((i >= 12 && i <= 20) || i == 24 || i == 25), "flow includes life events and excludes combat and cameras");
     Message input;
     input.type = type; input.sequence = 0x12345678; input.epoch = 0x0123456789ABCDEFull;
@@ -119,8 +119,8 @@ void Protocol() {
     input.story={9,101,1,123,456,1,kStoryRecords,StoryPhase::Armed};
     const auto bytes = Packet(input);
     Check(bytes[0] == 'K' && bytes[1] == 'K' && bytes[2] == 'C' && bytes[3] == '1', "wire magic");
-    Check(bytes[4] == 0 && bytes[5] == 15 && bytes[6] == 0 && bytes[7] == i+1,
-        "protocol 15 and message ID in wire header");
+    Check(bytes[4] == 0 && bytes[5] == 16 && bytes[6] == 0 && bytes[7] == i+1,
+        "protocol 16 and message ID in wire header");
     Check(bytes[8] == 0x12 && bytes[11] == 0x78 && bytes[12] == 1 && bytes[19] == 0xEF,
         "header byte order independent of host endianness");
     Message output;
@@ -172,7 +172,7 @@ void Protocol() {
 void IntegratedMessageRouting() {
   Pair pair; pair.Pump(0,.2);
   Check(pair.host.State()==SessionState::Connected && pair.guest.State()==SessionState::Connected,
-      "protocol 15 integration handshake");
+      "protocol 16 integration handshake");
   const EnemyState enemy{{123,0,EnemyFamily::Raptor},1,2,3,0,50};
   Message ownership; ownership.type=MessageType::OwnershipChange; ownership.epoch=pair.host.Epoch();
   ownership.ownership={{101,1,1},OwnershipPhase::Prepare,1,EnemyOwner::Guest,enemy};
@@ -282,7 +282,7 @@ void Handshake() {
   for (RejectReason reason : {RejectReason::Protocol, RejectReason::Version, RejectReason::Build,
       RejectReason::GameplayMods}) {
     auto c = Compatible();
-    if (reason == RejectReason::Protocol) --c.protocol; // Previous C61/C69 peers use 14.
+    if (reason == RejectReason::Protocol) --c.protocol; // Previous C70 peers use 15.
     if (reason == RejectReason::Version) c.version += "-different";
     if (reason == RejectReason::Build) c.build += "-different";
     if (reason == RejectReason::GameplayMods) c.gameplay_digest += "-different";
@@ -337,12 +337,15 @@ void Poses() {
   Check(!sampled.vx,"new level clears the velocity anchor");
   Message extended; extended.type=MessageType::PlayerPose;
   extended.pose.vx=3; extended.pose.vy=-2; extended.pose.pitch=.6f;
-  extended.pose.weapon=4; extended.pose.crouched=1; extended.pose.fire=17; extended.pose.fire_weapon=2;
+  extended.pose.weapon=4; extended.pose.crouched=1; extended.pose.airborne=1; extended.pose.fire=17; extended.pose.fire_weapon=2;
   Message decoded;
   Check(Decode(Packet(extended),decoded) && decoded.pose.fire==17 && decoded.pose.fire_weapon==2 &&
-      decoded.pose.weapon==4 && decoded.pose.crouched==1 && Near(decoded.pose.pitch,.6) && Near(decoded.pose.vy,-2),
+      decoded.pose.weapon==4 && decoded.pose.crouched==1 && decoded.pose.airborne==1 && Near(decoded.pose.pitch,.6) && Near(decoded.pose.vy,-2),
       "animation pose fields survive the wire");
   std::vector<uint8_t> invalid;
+  extended.pose.airborne=2;
+  Check(!Encode(extended,invalid),"invalid airborne state rejected");
+  extended.pose.airborne=1;
   for (float value : {std::numeric_limits<float>::quiet_NaN(), 1000.f}) {
     extended.pose.vx=value; Check(!Encode(extended,invalid), "invalid animation velocity rejected");
   }
@@ -423,6 +426,17 @@ void PoseReadingAndDisplay() {
   Check(pose.pose && pose.pose->level == 201 && pose.pose->x == 3 &&
       std::string_view(pose.failure) == "ok", "retained load-page mode does not suppress a loaded Jack");
   Check(pose.pose->action == 123 && pose.pose->item == 0xAB, "read diagnostic action and big-endian item byte");
+  constexpr uint32_t world=0x40010000, contact=world+728;
+  words[0x828E8388]=world; words[world+656]=1;
+  words[contact]=actor; words[contact+48]=64;
+  Check(!read().pose->airborne,"native floor contact is grounded");
+  words[contact+48]=0;
+  Check(read().pose->airborne,"no floor contact publishes airborne state");
+  words[contact+48]=64|0x1000;
+  Check(read().pose->airborne,"native excluded contact never proves grounded");
+  words[contact+48]=64; words[contact]=actor+4;
+  Check(read().pose->airborne,"other actor floor contact cannot ground Jack");
+  words[0x828E8388]=0;
   words[0x82CC97C0] = 0x9fffe000;
   check("globals-span"); // Weapon sampling also needs the far end of G to be readable.
   words[0x82CC97C0] = g;
@@ -516,11 +530,41 @@ void PuppetPolicies() {
   motion.vx=0;
   for (unsigned i=0;i<20;++i) drive.Update(motion,.05f);
   Check(!drive.moving && !drive.fire_left, "stop settles to idle and recoil expires");
+  motion.airborne=1; drive.Update(motion,.05f);
+  motion.airborne=0; drive.Update(motion,.05f);
+  Check(drive.land_left>0,"native airborne to grounded edge starts a landing clip");
+  AnimationDrive late_air; late_air.Update(motion,.05f);
+  Check(!late_air.land_left,"joining an already grounded partner never invents a landing");
   Check(HumanAction(1,false,false,false)!=HumanAction(1,true,false,false) &&
       HumanAction(3,true,false,true)!=HumanAction(1,true,false,true), "native motion and weapon firing differ");
   Check(HumanAction(2,true,true,false)!=HumanAction(2,true,true,true),"crouched motion and fire use separate native actions");
   Check(HumanAction(2,false,false,true)==164 && HumanAction(1,false,false,true)==14,
       "native machine-gun shoot state differs from revolver");
+  const auto carl=[](uint16_t action)->std::optional<uint8_t> {
+    return action==14 ? std::optional<uint8_t>{2} : std::nullopt;
+  };
+  const auto fallback=FireAction(2,false,carl);
+  Check(fallback && fallback->action==14 && fallback->item==2,
+      "missing machine-gun bank uses loaded revolver recoil and its own variant");
+  Check(FireAction(2,true,carl)->action==14,"crouched missing weapon still has a firing visual");
+  Check(FireAction(2,false,[](uint16_t a)->std::optional<uint8_t> {
+    return a==13 ? std::optional<uint8_t>{0} : std::nullopt;
+  })->action==13,"aim is the final loaded fallback when all recoil clips are absent");
+  Check(!FireAction(2,false,[](uint16_t)->std::optional<uint8_t> { return {}; }),
+      "empty action bank cannot manufacture an unloaded clip");
+  const Gait directional[] = {{{10,0,3},0,false},{{42,1,2},1.570796327f,false},
+      {{43,2,1.5f},3.141592654f,false},{{27,0,1},0,true}};
+  auto gait=ChooseGait(0,2,0,false,directional);
+  Check(gait && gait->clip.action==42 && gait->clip.item==1 && gait->directional && Near(gait->facing,0),
+      "loaded strafe keeps view yaw and native speed");
+  gait=ChooseGait(-1.5f,0,0,false,directional);
+  Check(gait && gait->clip.action==43 && gait->directional && Near(gait->facing,0),
+      "loaded backward gait keeps the body facing the view");
+  gait=ChooseGait(0,2,0,false,std::span(directional,1));
+  Check(gait && !gait->directional && Near(gait->facing,1.570796327f),
+      "missing strafe turns a forward-only body into its travel direction");
+  Check(ChooseGait(1,0,0,true,directional)->clip.action==27,"crouch uses its own calibrated gait");
+  Check(!ChooseGait(0,0,0,false,directional),"idle never chooses a directional gait");
   Check(ChooseAction(.09f, observed)->action == 41, "observed idle below threshold");
   Check(ChooseAction(.1f, observed)->action == 22, "threshold chooses observed moving tuple");
   Check(ChooseAction(1.2f, observed)->action == 22, "walk uses closest observed speed");

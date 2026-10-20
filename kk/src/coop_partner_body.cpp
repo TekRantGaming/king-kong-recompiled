@@ -10,6 +10,7 @@
 // and gives drive mode a stationary target at that creation point.
 #include "coop_partner_body.h"
 #if defined(KK_DEV_TOOLS)
+#include "art.h"
 #include "dev_puppet_mesh.h"
 #include "coop_stimulus_debug.h"
 #include "dev_puppet_variant.h"
@@ -64,6 +65,9 @@ REX_EXTERN(__imp__sub_82454690);
 REX_EXTERN(__imp__sub_8271E4E8);
 REX_EXTERN(__imp__sub_82449F18);
 REX_EXTERN(__imp__sub_8242AA88);
+REX_EXTERN(__imp__sub_826BB350);
+REX_EXTERN(__imp__sub_8271A6F8);
+REX_EXTERN(__imp__sub_827128F0);
 #if defined(KK_DEV_TOOLS)
 namespace kk {
 void DevFishAfterWorld(PPCContext&, uint8_t*);
@@ -293,8 +297,8 @@ uint8_t AnimationSupport(const uint8_t* b, const Rig& r, uint8_t weapon) {
   const bool gun=held>=1 && held<=4;
   if (gun) weapon=uint8_t(held);
   const bool gait = LoadedItem(b,r,0).has_value() && LoadedItem(b,r,10).has_value();
-  const bool fire = weapon ? LoadedItem(b,r,coop::puppet::HumanAction(weapon,false,false,true)).has_value() :
-      LoadedItem(b,r,14).has_value() || LoadedItem(b,r,164).has_value() || LoadedItem(b,r,162).has_value();
+  const bool fire = coop::puppet::FireAction(weapon,false,
+      [&](uint16_t action) { return LoadedItem(b,r,action); }).has_value();
   return 4*uint8_t(gait) + 2*uint8_t(fire) + uint8_t(gun);
 }
 bool Active(const uint8_t* b, const Rig& r) {
@@ -410,6 +414,9 @@ struct State {
   uint8_t saved_rate = 60, playback_rate = 60;
   uint32_t requested_tuple = UINT32_MAX;
   uint32_t animation_shots = 0;
+#if defined(KK_DEV_TOOLS)
+  unsigned capture_left = 0;
+#endif
   std::set<uint32_t> retired;
   std::map<uint32_t, std::pair<uint32_t, uint32_t>> deferred_prg;
   std::map<uint32_t, Clock::time_point> story_cooldown;
@@ -417,6 +424,7 @@ struct State {
   uint64_t frame = 0, updated_frame = ~uint64_t{0}, updates = 0;
   coop::PuppetSnapshot partner;
   std::vector<coop::puppet::Action> observed_motion;
+  std::vector<coop::puppet::Gait> native_gaits;
   Clock::time_point loaded{}, census_at{}, tick_at{};
   std::map<uint32_t, Observation> humans;
   // Retain script quarantine after release except in explicit unsafe free mode.
@@ -510,6 +518,30 @@ struct State {
   }
 };
 State& Get() { static State state; return state; }
+
+uint32_t OwnedAimBone(const uint8_t* b,const Rig& rig,uint8_t tag) {
+  const auto list=Ptr(b,Ptr(b,rig.anim,8,4),0,20);
+  if (!list) return 0;
+  const auto begin=Load32(b,list+16), end=Load32(b,list+4);
+  if (end<begin || (end-begin)%8 || (end-begin)/8>128 || !Range(begin,end-begin)) return 0;
+  const auto count=(end-begin)/8, tags=Ptr(b,rig.anim,84,count+4);
+  for (uint32_t i=0;i<count;++i) {
+    if ((tags ? b[tags+4+i] : i)!=tag) continue;
+    const auto bone=Load32(b,begin+8*i);
+    if (!Range(bone,32) || !Ptr(b,bone,12,240)) return 0;
+    auto owner=bone;
+    // The local matrix's owner chain is the same one used by 8270FCE0.
+    // Refuse shared/source bones, malformed chains and unattached rigid parts.
+    for (unsigned depth=0;depth<64 && owner!=rig.actor;++depth) {
+      if (!(Load32(b,owner)&1)) return 0;
+      const auto local=Ptr(b,Ptr(b,owner,20,16),12,88);
+      owner=Ptr(b,local,80,32);
+      if (!owner) return 0;
+    }
+    return owner==rig.actor ? bone : 0;
+  }
+  return 0;
+}
 
 // Read-only reconstruction of the position chain in 8270FCE0 (.4:27633+),
 // with the owner walk from 8286CC40 (.43:33799+). Never refresh dirty matrices.
@@ -687,6 +719,92 @@ float Frame(PPCContext& ctx, uint8_t* b, uint32_t actor) {
   ctx.r3.u64 = actor; ctx.r4.u64 = 0;
   __imp__sub_823F8AF0(ctx, b);
   return float(ctx.r3.s32) / 60.0f;
+}
+
+std::optional<Vec> NativeRootVelocity(PPCContext& ctx, uint8_t* b, const Rig& r,
+                                    uint16_t action, uint8_t item) {
+  if (!LoadedAction(b,r,action,item)) return {};
+  const auto items=Ptr(b,r.table,4*(action+4),20);
+  const auto descriptor=Ptr(b,items,20*item+4,8), header=Ptr(b,descriptor,0,20);
+  if (!header) return {};
+  const auto count=Load16(b,header+4);
+  const auto tracks=count<=512 ? Ptr(b,header,0,24*count) : 0;
+  if (!count || count>512 || !tracks) return {};
+  // The native reader uses the last two translation keys. Reject a partial
+  // root track before it could step before the key array or divide by zero.
+  for (unsigned i=0;i<count;++i) {
+    const auto track=tracks+24*i;
+    if (Load16(b,track+20)!=65535) continue;
+    const auto keys=Load16(b,track+16);
+    const auto data=Ptr(b,track,4,8*keys);
+    if (keys<2 || !data || !(Load16(b,data+8*(keys-2))&0x7fff)) return {};
+  }
+  Scratch scratch(ctx,b);
+  const auto layer=scratch.Vector({},0x100), result=scratch.Vector({},0x110);
+  b[layer+2]=60; Store32(b,layer+4,descriptor);
+  const auto saved_header=Load32(b,0x82CCBF94), saved_cursor=Load32(b,0x82CCBF98);
+  ctx.r3.u64=layer; ctx.r4.u64=result;
+  // 8280F328 (.59) returns (last root key - previous root key) * fps / frames.
+  // A scratch layer leaves the live clip, time cursor and resource unchanged.
+  __imp__sub_8280F328(ctx,b);
+  const auto velocity=ReadVec(b,result);
+  Store32(b,0x82CCBF94,saved_header); Store32(b,0x82CCBF98,saved_cursor);
+  return Finite(velocity) ? std::optional<Vec>{velocity} : std::nullopt;
+}
+
+void CalibrateGaits(PPCContext& ctx,uint8_t* b,const Rig& r) {
+  auto& s=Get(); s.native_gaits.clear();
+  // H's native locomotion families, including directional player clips only
+  // when this full-body bank really contains a translating root track.
+  for (const uint16_t action : {10,12,15,27,37,40,41,42,43,44,45,50,51,52,53,54,55,160,163,166,167}) {
+    const auto item=LoadedItem(b,r,action);
+    if (!item) continue;
+    const auto root=NativeRootVelocity(ctx,b,r,action,*item);
+    const float speed=root ? std::hypot(root->x,root->y) : 0;
+    if (speed<coop::puppet::kIdleSpeed || speed>30) continue;
+    // Native actor forward is local -Y (8270FA58).
+    const float yaw=std::remainder(std::atan2(root->y,root->x)+1.570796327f,6.283185307f);
+    s.native_gaits.push_back({{action,*item,speed},yaw,action==27 || action==37 || (action>=50 && action<=55)});
+    REXLOG_INFO("PUPPET native gait actor={:08X} action={} item={} speed={:.4f} local-yaw={:.4f} source=root-key-velocity fps=60",
+        r.actor,action,*item,speed,yaw);
+  }
+}
+
+void PartnerBodyAim(PPCContext& ctx,uint8_t* b,uint32_t actor,uint32_t ai) {
+  auto& s=Get();
+  Rig rig;
+  if (!Enabled() || !Opt().partner || !s.driving || s.selected_copy ||
+      actor!=s.selected.actor || ai!=s.selected.ai || !s.partner.partner ||
+      !s.partner.fresh || !s.Validate(b,s.world,rig) || !Scratch::CanUse(ctx) ||
+      s.humans.at(actor).other_human) return;
+  const auto& p=*s.partner.partner;
+  const float body_yaw=std::atan2(s.facing.y,s.facing.x);
+  const float yaw=body_yaw+std::clamp(std::remainder(p.facing-body_yaw,6.283185307f),-1.22f,1.22f);
+  const float pitch=std::clamp(p.pitch,-.96f,.96f);
+  const Vec aim{std::cos(yaw)*std::cos(pitch),std::sin(yaw)*std::cos(pitch),std::sin(pitch)};
+  unsigned applied=0;
+  // H_callback_after_blend uses tags 3 and 2 with 8271A6F8 (inverse
+  // orientation) then 827128F0 (weighted local rotation), .22:32690+.
+  // This hook runs after each new native blend, so offsets never accumulate.
+  for (const uint8_t tag:{3,2}) {
+    const auto bone=OwnedAimBone(b,rig,tag);
+    if (!bone) continue;
+    Scratch scratch(ctx,b);
+    const auto forward=scratch.Vector(s.facing,0x100), target=scratch.Vector(aim,0x110);
+    const auto local_forward=scratch.Vector({},0x120), local_target=scratch.Vector({},0x130);
+    ctx.r3.u64=bone; ctx.r4.u64=forward; ctx.r5.u64=local_forward;
+    __imp__sub_8271A6F8(ctx,b);
+    ctx.r3.u64=bone; ctx.r4.u64=target; ctx.r5.u64=local_target;
+    __imp__sub_8271A6F8(ctx,b);
+    if (!Finite(ReadVec(b,local_forward)) || !Finite(ReadVec(b,local_target))) continue;
+    ctx.r3.u64=bone; ctx.r4.u64=local_forward; ctx.r5.u64=local_target; ctx.f1.f64=.5;
+    __imp__sub_827128F0(ctx,b);
+    ++applied;
+  }
+#if defined(KK_DEV_TOOLS)
+  if (s.updates%120==0) REXLOG_INFO("PUPPET aim actor={:08X} bones={} yaw-offset={:.3f} pitch={:.3f} native-after-blend=1",
+      actor,applied,yaw-body_yaw,pitch);
+#endif
 }
 
 // 82712D40 (.77:28379) and 82715438 (.32:28175): source, instance,
@@ -1286,6 +1404,9 @@ void CensusAndSelect(PPCContext& ctx, uint8_t* b, uint32_t w) {
   s.animation = {};
   s.requested_tuple = UINT32_MAX;
   s.animation_shots = 0;
+#if defined(KK_DEV_TOOLS)
+  s.capture_left=0;
+#endif
   s.rate_base = b; s.rate_layer = selected.layer; s.saved_rate = b[selected.layer+2]; s.playback_rate = s.saved_rate;
   if (s.selected_copy) { s.action = selected.action; s.item = selected.item; }
   if (Opt().partner) {
@@ -1297,6 +1418,7 @@ void CensusAndSelect(PPCContext& ctx, uint8_t* b, uint32_t w) {
           sample.speed < coop::puppet::kIdleSpeed ? "idle" : "moving");
     }
     REXLOG_INFO("PUPPET partner observed-set count={} actor={:08X}", s.observed_motion.size(), pick->rig.actor);
+    CalibrateGaits(ctx,b,selected);
   }
   s.transition_pending = s.action != selected.action || s.item != selected.item;
   s.origin = selected.pos; s.initial_forward = selected.forward;
@@ -1426,19 +1548,53 @@ void PartnerBodyAfterAi(PPCContext& ctx, uint8_t* b, uint32_t w) {
     s.facing = {std::cos(p.facing), std::sin(p.facing), 0};
     s.animation.Update(p,s.dt);
     if (s.animation.new_shot) ++s.animation_shots;
+#if defined(KK_DEV_TOOLS)
+    static const bool capture_shots=[] { const char* v=std::getenv("KK_DEV_PARTNER_SHOTS"); return v && *v=='1'; }();
+    if (capture_shots && s.animation.new_shot && s.animation_shots<=4) s.capture_left=8;
+#endif
     const bool log_shot = s.animation_shots <= 8 || s.animation_shots%60 == 0;
     auto choice = coop::puppet::ChooseAction(s.animation.moving ? s.animation.speed : 0, s.observed_motion);
     const bool human = !s.humans.at(rig.actor).other_human && Load32(b,rig.vars) == 0;
     const auto held=human ? BodyWeapon(b,rig) : 0;
     const auto weapon=held>=1 && held<=4 ? uint8_t(held) : s.animation.fire_left>0 ? p.fire_weapon : p.weapon;
-    const auto native = coop::puppet::HumanAction(weapon,
-        s.animation.moving,p.crouched,s.animation.fire_left > 0);
-    const auto native_item = human ? LoadedItem(b,rig,native) : std::nullopt;
-    if (human && s.animation.new_shot && log_shot && !native_item)
-      REXLOG_INFO("PUPPET firing unavailable actor={:08X} weapon={} fire={} requested-action={} reason=clip-not-loaded-on-this-rig",
-          rig.actor,p.fire_weapon,p.fire,native);
-    if (native_item)
-      choice = coop::puppet::Action{native,*native_item,s.animation.moving && s.animation.fire_left <= 0 ? 2.f : 0.f};
+    const bool firing=s.animation.fire_left>0;
+    const auto native = coop::puppet::HumanAction(weapon,s.animation.moving,p.crouched,firing);
+    if (human) {
+      if (const auto item=LoadedItem(b,rig,native)) {
+        float speed=choice && choice->action==native && choice->item==*item ? choice->speed : 0;
+        for (const auto& gait:s.native_gaits)
+          if (gait.clip.action==native && gait.clip.item==*item) speed=gait.clip.speed;
+        choice=coop::puppet::Action{native,*item,speed};
+      }
+      if (s.animation.moving && !firing) {
+        if (const auto gait=coop::puppet::ChooseGait(p.vx,p.vy,p.facing,p.crouched,s.native_gaits)) {
+          choice=gait->clip;
+          s.facing={std::cos(gait->facing),std::sin(gait->facing),0};
+        } else {
+          const float direction=std::atan2(p.vy,p.vx);
+          s.facing={std::cos(direction),std::sin(direction),0};
+        }
+      }
+      if (firing) {
+        const auto fire=coop::puppet::FireAction(weapon,p.crouched,
+            [&](uint16_t action) { return LoadedItem(b,rig,action); });
+        if (fire) choice=fire;
+        if (s.animation.new_shot && log_shot)
+          REXLOG_INFO("PUPPET fire visual actor={:08X} shot={} weapon={} requested={} chosen={} item={} fallback={} loaded={}",
+              rig.actor,p.fire,p.fire_weapon,native,fire ? int(fire->action) : -1,
+              fire ? int(fire->item) : -1,fire && fire->action!=native,bool(fire));
+      }
+      // H's native airborne/landing chain is 20 -> 21/22 (826A80B4).
+      // Position still comes entirely from the peer; these clips add no jump force.
+      if (!firing && (p.airborne || s.animation.land_left>0)) {
+        const uint16_t air=p.airborne ? 20 : 21;
+        if (const auto item=LoadedItem(b,rig,air)) choice=coop::puppet::Action{air,*item,0};
+        else if (!p.airborne) if (const auto item=LoadedItem(b,rig,22)) choice=coop::puppet::Action{22,*item,0};
+      }
+    } else if (s.animation.moving && !firing) {
+      const float direction=std::atan2(p.vy,p.vx);
+      s.facing={std::cos(direction),std::sin(direction),0};
+    }
     // Tier C may be a copy of Jack's first-person rig. Its loaded bank can
     // replay the peer's arms actions, but it cannot acquire missing leg clips.
     Rig jack_bank;
@@ -1450,15 +1606,17 @@ void PartnerBodyAfterAi(PPCContext& ctx, uint8_t* b, uint32_t w) {
       s.action = choice->action; s.item = choice->item;
       const uint32_t tuple = (s.action<<8)|s.item;
       const bool changed = tuple != s.requested_tuple;
-      s.transition_pending = changed;
+      // A completed non-looping recoil may replay for a later round. Never
+      // rewind an advancing burst on every incoming shot.
+      s.transition_pending = changed || (firing && s.animation.new_shot && (Load16(b,rig.layer)&0x80));
       s.requested_tuple = tuple;
       s.missing_action_kind = 0;
       // The engine stores frames/second in layer+2 (826A9338, 826A93BC).
       // Scale a proven gait instead of restarting it for every pose packet.
       s.playback_rate = s.animation.moving && choice->speed > .1f ?
           uint8_t(std::clamp(std::lround(60*s.animation.speed/choice->speed),15l,150l)) : 60;
-      if (s.transition_pending) REXLOG_INFO("PUPPET partner action={} item={} speed={:.3f} moving={} weapon={} body-weapon={} crouch={} fire={} restart=0 copy={} pitch={:.3f}",
-          s.action, s.item, s.animation.speed,s.animation.moving,p.weapon,held,p.crouched,p.fire,s.selected_copy,p.pitch);
+      if (s.transition_pending) REXLOG_INFO("PUPPET partner action={} item={} speed={:.3f} moving={} weapon={} body-weapon={} crouch={} fire={} restart={} copy={} pitch={:.3f}",
+          s.action, s.item, s.animation.speed,s.animation.moving,p.weapon,held,p.crouched,p.fire,!changed,s.selected_copy,p.pitch);
     } else {
       s.action = rig.action; s.item = rig.item; s.transition_pending = false; s.requested_tuple = UINT32_MAX;
       const unsigned kind = std::abs(p.speed) < coop::puppet::kIdleSpeed ? 1 : 2;
@@ -1499,6 +1657,7 @@ void PartnerBodyAfterAi(PPCContext& ctx, uint8_t* b, uint32_t w) {
     // Native H shooting keeps its state playing (826F4C88). Repeated network
     // rounds extend that state, never reset the clip to its first frame.
     if (s.transition_pending) {
+      if (rig.layer==s.rate_layer) b[rig.layer+2]=s.saved_rate;
       ctx.r3.u64 = rig.actor; ctx.r4.u64 = s.action; ctx.r5.u64 = s.item;
       ctx.r6.u64 = 0;
       __imp__sub_82850100(ctx, b);
@@ -1506,7 +1665,10 @@ void PartnerBodyAfterAi(PPCContext& ctx, uint8_t* b, uint32_t w) {
     }
   }
   if (!s.Validate(b, w, rig)) return;
-  if (Opt().partner && rig.layer == s.rate_layer) b[rig.layer+2] = s.playback_rate;
+  if (Opt().partner) {
+    if (rig.layer!=s.rate_layer) { s.rate_layer=rig.layer; s.saved_rate=b[rig.layer+2]; }
+    b[rig.layer+2] = s.playback_rate;
+  }
   // A requested action can take a few frames to show, and the rig may refuse one: never drop the body for it
   // (Claude, run c08 14:49: released after 1 update). Log, then follow what the rig really plays.
   if (rig.action != s.action || rig.item != s.item) {
@@ -1557,6 +1719,15 @@ void PartnerBodyLateWorld(PPCContext& ctx, uint8_t* b, uint32_t w) {
   s.measure = false;
   Rig rig;
   if (!s.Validate(b, w, rig)) return;
+#if defined(KK_DEV_TOOLS)
+  if (Opt().partner && s.capture_left && Scratch::CanUse(ctx)) {
+    --s.capture_left;
+    const auto filename=fmt::format("partner-shot-{}-{}-{}.png",s.epoch,s.animation_shots,s.updates);
+    art::CaptureFrame(filename);
+    REXLOG_INFO("PUPPET shot-frame file={} shot={} action={} item={} frame={:.3f}",
+        filename,s.partner.partner->fire,rig.action,rig.item,Frame(ctx,b,rig.actor));
+  }
+#endif
   if (Opt().partner) coop::SetPartnerHead(PartnerHead(b,rig), s.partner.partner->level);
   if (!Scratch::CanUse(ctx)) { s.Abort("invalid-guest-scratch-stack"); return; }
   const auto now = Clock::now();
@@ -1847,6 +2018,11 @@ REX_HOOK_RAW(sub_8268D8E8) {
   const uint32_t ai = on ? kk::hfr::Load32(base, 0x82CCBF64) : 0;
   __imp__sub_8268D8E8(ctx, base);
   if (on) kk::PuppetObserveInit(base, actor, ai);
+}
+REX_HOOK_RAW(sub_826BB350) {
+  const uint32_t actor=kk::hfr::Load32(base,0x82CCBF6C), ai=kk::hfr::Load32(base,0x82CCBF64);
+  __imp__sub_826BB350(ctx,base);
+  kk::PartnerBodyAim(ctx,base,actor,ai);
 }
 // PNJInd_Init is the independently identified human-shaped native family.
 // KAnn is deliberately never observed into the candidate set.
