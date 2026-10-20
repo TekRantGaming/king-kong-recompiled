@@ -407,7 +407,11 @@ void CheckpointCatchupTests() {
   catchup.NativeCheckpoint(3);
   Check(!catchup.Available(),"loaded guest cannot loop at the same host checkpoint");
   catchup.Observe(1,4,30); catchup.NativeCheckpoint(4);
-  Check(!catchup.Available(),"guest reaching checkpoint naturally also suppresses reload");
+  Check(!catchup.Available(),"guest reaching checkpoint naturally suppresses automatic reload");
+  Check(catchup.Offer(true,true,30) && catchup.Begin(true),"fresh host checkpoint still offers private catch-up for script lag at the same native checkpoint");
+  Check(!catchup.Offer(true,true,31) && !catchup.Begin(true),"same-checkpoint offer can be accepted only once per host checkpoint");
+  catchup.Observe(1,5,31); catchup.NativeCheckpoint(5);
+  Check(catchup.Begin(true) && !catchup.Begin(true),"host checkpoint advancing during a queued offer is consumed once even if reached locally");
   catchup.NativeCheckpoint(5); catchup.Observe(1,2,31);
   Check(!catchup.Available(),"guest ahead of the host never reloads backwards");
   catchup.Observe(2,1,32);

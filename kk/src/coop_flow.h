@@ -147,10 +147,13 @@ class CheckpointCatchup {
   void NativeCheckpoint(uint32_t checkpoint) { world_=checkpoint; }
   bool Available() const { return host_>world_ && !attempted_; }
   bool Offer(bool script_behind,bool safe,double now) const {
-    return Available() && script_behind && safe && std::isfinite(now) &&
+    return !attempted_ && offered_until_>=0 && host_>=world_ && script_behind && safe && std::isfinite(now) &&
         now>=offered_until_-6 && now<=offered_until_;
   }
-  bool Begin() { if (!Available()) return false; attempted_=true; return true; }
+  bool Begin(bool checkpoint_offer=false) {
+    if (!Available() && !(checkpoint_offer && !attempted_ && offered_until_>=0 && host_==world_)) return false;
+    attempted_=true; return true;
+  }
   uint32_t Target() const { return host_; }
   uint32_t WorldCheckpoint() const { return world_; }
  private:

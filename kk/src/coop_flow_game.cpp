@@ -42,6 +42,7 @@ CheckpointCatchup catchup;
 enum class CatchupPhase { None, Requested, Loading, Placing };
 CatchupPhase catchup_phase=CatchupPhase::None;
 uint32_t catchup_target=0;
+bool catchup_from_offer=false;
 double catchup_deadline=0;
 uint32_t pending_move=0;
 double move_until=0;
@@ -107,10 +108,11 @@ bool CatchupSafe(uint8_t* base,double now) {
 }
 void CancelCatchup() {
   catchup_phase=CatchupPhase::None; catchup_offer=false; catchup_request=0;
-  private_load=private_request=false; catchup_notice_until=0;
+  private_load=private_request=false; catchup_notice_until=0; catchup_from_offer=false;
 }
-void BeginCatchup(const FlowView& v,double now,const char* reason) {
-  if (!catchup.Begin()) return;
+void BeginCatchup(const FlowView& v,double now,const char* reason,bool checkpoint_offer=false) {
+  if (!catchup.Begin(checkpoint_offer)) return;
+  catchup_from_offer=checkpoint_offer;
   catchup_target=catchup.Target(); catchup_phase=CatchupPhase::Requested;
   catchup_deadline=now+revive::kLoadTimeout; private_request=true;
   catchup_offer=move_offer=false; move_request=0; pending_move=0;
@@ -301,7 +303,8 @@ bool SessionBeforeGo(PPCContext& ctx,uint8_t* base,uint32_t g) {
     const auto link=EnemyLinkSnapshot();
     if (catchup_phase==CatchupPhase::Requested) {
       const auto condition=LocalPlayerCondition(base);
-      if ((condition && *condition==PlayerCondition::Dead) || v.checkpoint<=catchup.WorldCheckpoint()) {
+      if ((condition && *condition==PlayerCondition::Dead) || v.checkpoint<catchup.WorldCheckpoint() ||
+          (!catchup_from_offer && v.checkpoint==catchup.WorldCheckpoint())) {
         CancelCatchup(); return false; // The normal death route wins this race.
       }
     }
@@ -322,7 +325,7 @@ bool SessionBeforeGo(PPCContext& ctx,uint8_t* base,uint32_t g) {
     local_checkpoint=v.host ? v.partner_life.life.checkpoint : v.checkpoint;
     if (catchup_phase==CatchupPhase::Requested) {
       catchup.Observe(v.world.generation,v.checkpoint,Now());
-      catchup.Begin(); // Also consume a checkpoint that advanced after queuing.
+      catchup.Begin(catchup_from_offer); // Also consume a checkpoint that advanced after queuing.
       catchup_target=local_checkpoint; catchup_phase=CatchupPhase::Loading;
       REXLOG_INFO("KK co-op catch-up: loading guest only generation {} level {} checkpoint {}",v.world.generation,v.world.level,catchup_target);
     }
@@ -556,15 +559,15 @@ void SessionReloadFrame(uint8_t* base) {
         !observer::Active() && !observer::InCutscene(base) && !play::StartLevelLoading() &&
         !play::CoverScreen() && !play::PauseMenuOpen() && !play::GamePausePageUp();
     const uint32_t accepted=catchup_request.exchange(0);
-    const bool immediate=eligible && catchup.Available() &&
-        (catchup.Offer(StoryAnyBehind(),true,now) || StoryBehind()) && CatchupSafe(base,now);
+    const bool immediate=eligible &&
+        (catchup.Offer(StoryAnyBehind(),true,now) || (catchup.Available() && StoryBehind())) && CatchupSafe(base,now);
     if (immediate && !catchup_offer.load())
       REXLOG_INFO("KK co-op catch-up: checkpoint offer generation {} guest checkpoint {} host checkpoint {}; no nearby enemy or cutscene",
           v.world.generation,catchup.WorldCheckpoint(),catchup.Target());
     catchup_offer=immediate;
-    if (eligible && catchup.Available() &&
-        (StoryCatchupReady() || (accepted==v.world.generation && immediate))) {
-      BeginCatchup(v,now,StoryCatchupReady() ? "persistent lag after soft move" : "checkpoint offer accepted");
+    const bool automatic=eligible && catchup.Available() && StoryCatchupReady();
+    if (automatic || (accepted==v.world.generation && immediate)) {
+      BeginCatchup(v,now,automatic ? "persistent lag after soft move" : "checkpoint offer accepted",!automatic);
       return;
     }
   }
