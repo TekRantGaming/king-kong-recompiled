@@ -97,12 +97,13 @@ bool CoopResetTrace() {
   }();
   return on;
 }
-void CoopResetNote(uint32_t fn, uint32_t caller, uint32_t arg, uint32_t before, uint8_t* base) {
+void CoopResetNote(uint32_t fn, uint32_t caller, uint32_t arg, uint32_t actor, uint32_t ai,
+                   uint32_t before, uint8_t* base) {
   static unsigned count = 0;
   if (before || kk::hfr::Load32(base, 0x82CCAA80) != 1 || count >= 16) return;
   ++count;
-  REXLOG_INFO("KK co-op reset origin: fn={:08X} caller={:08X} arg={:08X} frames={} hero={:08X}",
-      fn, caller, arg, kk::hfr::Load32(base, 0x82CCBFD4), kk::hfr::Load32(base, 0x82CCBF7C));
+  REXLOG_INFO("KK co-op reset origin: fn={:08X} caller={:08X} arg={:08X} actor={:08X} ai={:08X} frames={} hero={:08X}",
+      fn, caller, arg, actor, ai, kk::hfr::Load32(base, 0x82CCBFD4), kk::hfr::Load32(base, 0x82CCBF7C));
 }
 }
 #define KK_COOP_RESET(addr)                                                  \
@@ -111,8 +112,10 @@ void CoopResetNote(uint32_t fn, uint32_t caller, uint32_t arg, uint32_t before, 
     if (!CoopResetTrace()) { __imp__sub_##addr(ctx, base); return; }          \
     const auto before = kk::hfr::Load32(base, 0x82CCAA80);                    \
     const uint32_t caller = uint32_t(ctx.lr), arg = ctx.r3.u32;              \
+    const auto actor = kk::hfr::Load32(base, 0x82CCBF6C);                     \
+    const auto ai = kk::hfr::Load32(base, 0x82CCBF64);                        \
     __imp__sub_##addr(ctx, base);                                            \
-    CoopResetNote(0x##addr, caller, arg, before, base);                        \
+    CoopResetNote(0x##addr, caller, arg, actor, ai, before, base);             \
   }
 KK_COOP_RESET(82501270)
 KK_COOP_RESET(82643978)
