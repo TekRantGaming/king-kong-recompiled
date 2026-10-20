@@ -10,6 +10,7 @@
 #include <cstdint>
 #include <cstdlib>
 #include <mutex>
+#include <string_view>
 #include <unordered_map>
 
 #include <rex/hook.h>
@@ -84,5 +85,41 @@ void DevTrigCapaResult(uint8_t* base, uint32_t record, uint32_t caller, uint32_t
   if (On()) DevTrigNote("CapaBit", base, record, caller, result);
 }
 }
+
+// C55: attribute native same-level resets without changing their policy or
+// touching generated code. These are the non-menu writers of AA80/BFD4.
+// Opt-in, developer builds only; log only a newly raised reset, at most 16.
+namespace {
+bool CoopResetTrace() {
+  static const bool on = [] {
+    const char* v = std::getenv("KK_DEV_COOP_RESET_TRACE");
+    return v && std::string_view(v) == "1";
+  }();
+  return on;
+}
+void CoopResetNote(uint32_t fn, uint32_t caller, uint32_t arg, uint32_t before, uint8_t* base) {
+  static unsigned count = 0;
+  if (before || kk::hfr::Load32(base, 0x82CCAA80) != 1 || count >= 16) return;
+  ++count;
+  REXLOG_INFO("KK co-op reset origin: fn={:08X} caller={:08X} arg={:08X} frames={} hero={:08X}",
+      fn, caller, arg, kk::hfr::Load32(base, 0x82CCBFD4), kk::hfr::Load32(base, 0x82CCBF7C));
+}
+}
+#define KK_COOP_RESET(addr)                                                  \
+  REX_EXTERN(__imp__sub_##addr);                                             \
+  REX_HOOK_RAW(sub_##addr) {                                                 \
+    if (!CoopResetTrace()) { __imp__sub_##addr(ctx, base); return; }          \
+    const auto before = kk::hfr::Load32(base, 0x82CCAA80);                    \
+    const uint32_t caller = uint32_t(ctx.lr), arg = ctx.r3.u32;              \
+    __imp__sub_##addr(ctx, base);                                            \
+    CoopResetNote(0x##addr, caller, arg, before, base);                        \
+  }
+KK_COOP_RESET(82501270)
+KK_COOP_RESET(82643978)
+KK_COOP_RESET(8258B208)
+KK_COOP_RESET(826B95A0)
+KK_COOP_RESET(82709418)
+KK_COOP_RESET(82709970)
+#undef KK_COOP_RESET
 
 #endif

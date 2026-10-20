@@ -124,6 +124,9 @@ class Service {
       });
       SessionState shown = SessionState::Idle;
       double next_pose_log = Now() + 10;
+#if defined(KK_DEV_TOOLS)
+      double previous_poll = Now();
+#endif
       while (!stop_.load()) {
         const double copy_started = Now();
         std::optional<PlayerPose> local;
@@ -135,6 +138,10 @@ class Service {
         // Copying a frame may wait for the game thread or allocator. Stamp
         // received packets with the time we actually poll, not before that wait.
         const double now = Now();
+#if defined(KK_DEV_TOOLS)
+        const double poll_gap = now - previous_poll;
+        previous_poll = now;
+#endif
         if (local && now - local->time > .25) { local.reset(); failure = "publish-expired"; }
         bool ready;
         { std::lock_guard lock(mutex_); ready = local_ready_; }
@@ -156,9 +163,9 @@ class Service {
         view.epoch = session.Epoch();
 #if defined(KK_DEV_TOOLS)
         LogPoses(view, now, next_pose_log);
-        if (now-copy_started>.5) {
+        if (now-copy_started>.5 || poll_gap>.5) {
           static unsigned logged=0;
-          if (logged++<8) REXLOG_INFO("KK co-op worker: shared snapshot waited {:.3f}s; packet clock sampled after wait",now-copy_started);
+          if (logged++<8) REXLOG_INFO("KK co-op worker: shared snapshot waited {:.3f}s; poll gap {:.3f}s; packet clock sampled after wait",now-copy_started,poll_gap);
         }
 #endif
         bool lobby_changed;
