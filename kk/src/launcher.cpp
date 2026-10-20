@@ -952,7 +952,7 @@ class SettingsPages {
       items.push_back(Section("Launcher"));
       items.push_back(CvarToggle("Menu music",
                                  "The game's main menu music while the launcher is open, from your copy of the game.",
-                                 "kk_launcher_music"));
+                                 "kk_launcher_music"));  // task 330: with the live scene, the scene's own sound
       {
         Item it = CvarSlider("Menu music volume", "How loud the launcher's music is.", "kk_launcher_music_volume", 0,
                              100, 5, [](float v) { return std::to_string(int(std::lround(v))) + "%"; });
@@ -2779,7 +2779,7 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
       rebuild_shaders_screen_ = true;
       REXLOG_INFO("KK: rebuilding the native renderer's shaders (asked for, launcher restarted for it)");
     }
-    MaybeStartScene();
+    MaybeStartScene(!open_on.empty());  // back from the game (or a restart): before the first frame
     saved_changes_ = seen_changes_ = g_changes;
     StartHeartbeat();
   }
@@ -2844,10 +2844,10 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
         std::sort(gaps.begin(), gaps.end());
         float sum = 0;
         for (float g : gaps) sum += g;
-        REXLOG_INFO("KK dev frames: {} in {:.1f} s, mean {:.2f} ms, median {:.2f}, p95 {:.2f}, max {:.2f} (scene {} ready {})",
+        REXLOG_INFO("KK dev frames: {} in {:.1f} s, mean {:.2f} ms, median {:.2f}, p95 {:.2f}, max {:.2f} (scene {} ready {} sound {:.2f})",
                     gaps.size(), std::chrono::duration<float>(draw_start - since).count(), sum / gaps.size(),
                     gaps[gaps.size() / 2], gaps[gaps.size() * 95 / 100], gaps.back(), menu_scene::Active(),
-                    menu_scene::Ready());
+                    menu_scene::Ready(), scene_gain_);
         gaps.clear();
         since = draw_start;
       }
@@ -2902,6 +2902,7 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
     m_.section_h = 52 * s;
     if (leaving_) {  // the game is starting in a new process (StartGame): the backdrop only, the music fading
       if (music_) music_->Update(0.0f, io.DeltaTime);
+      FadeSceneSound(0.0f, io.DeltaTime);  // task 330: the scene's sound fades with it
       DrawBackdrop(dl);
       ImGui::End();
       return;
@@ -3005,7 +3006,14 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
       // build takes nearly every hardware thread and the music would stutter. It fades back in after.
       const bool on = GetBool("kk_launcher_music") && !native_pack_.Working();
       const float v = on ? GetInt("kk_launcher_music_volume", 50) / 100.0f : 0.0f;
-      music_->Update(v * v, io.DeltaTime);  // a gentler curve than linear
+      // Task 330 (owner, 20 Oct): with the live menu scene its own sound plays (the same music, with the sea),
+      // at this volume (FadeSceneSound); the launcher's copy of the music then stays silent.
+      music_->Update(SceneSoundPlays() ? 0.0f : v * v, io.DeltaTime);  // a gentler curve than linear
+    }
+    if (menu_scene::Active()) {
+      const bool on = GetBool("kk_launcher_music") && !native_pack_.Working();
+      const float v = on ? GetInt("kk_launcher_music_volume", 50) / 100.0f : 0.0f;
+      FadeSceneSound(SceneSoundPlays() ? v * v : 0.0f, io.DeltaTime);
     }
     if (files_ok_ && GetBool("kk_launcher_sounds") && !ui_sounds_)
       ui_sounds_ = std::make_unique<LauncherSounds>(paths_.game_dir);
@@ -6255,8 +6263,21 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
     if (cb_.quit) cb_.quit();
   }
 
+  // Task 330: the live menu scene's own sound replaces the launcher's music while the scene runs and is wanted
+  // (Main menu background switched to Pictures: the launcher's music again, the scene silent).
+  bool SceneSoundPlays() const {
+    return menu_scene::Active() && menu_scene::WantsLive(Get("kk_menu_background"));
+  }
+  // Its volume: the launcher's music volume, faded over about a second and a half as the music is.
+  void FadeSceneSound(float target, float dt) {
+    if (!menu_scene::Active()) return;
+    const float step = std::clamp(dt, 0.0f, 0.1f) / 1.5f;
+    scene_gain_ = target > scene_gain_ ? std::min(target, scene_gain_ + step) : std::max(target, scene_gain_ - step);
+    menu_scene::SetAudioGain(scene_gain_);
+  }
+
   // Task 330: the game's start menu scene behind the launcher, when nothing needs the stills (menu_scene_logic.h).
-  void MaybeStartScene() {
+  void MaybeStartScene(bool before_first_frame) {
     menu_scene::StartFacts f;
     f.files_ok = files_ok_;
     f.native_renderer = NativeShaderPack::Wanted();
@@ -6265,7 +6286,7 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
     f.setup = InSetup() || update_new_;
     f.low_end = Get("kk_hardware_tier") == "low";
     if (menu_scene::DecideAtLauncherStart(f, paths_.user_dir) != menu_scene::Reason::kLive || !cb_.start_scene) return;
-    cb_.start_scene();
+    cb_.start_scene(before_first_frame);
   }
 
   void StartGame() {
@@ -7848,6 +7869,7 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
   std::vector<float> home_offset_;
   float home_mix_ = 1.0f;
   float scene_mix_ = 0.0f;  // task 330: the live menu scene over the stills (0 .. 1)
+  float scene_gain_ = 0.0f;  // task 330: the live menu scene's sound (0 .. 1)
   float tab_x_ = -1, tab_w_ = 0;
 
   std::vector<std::string> restart_baseline_;

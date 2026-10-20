@@ -2,7 +2,9 @@
 
 #include "menu_scene.h"
 
+#include <algorithm>
 #include <atomic>
+#include <cmath>
 #include <cstdlib>
 #include <bit>
 #include <cstring>
@@ -16,6 +18,18 @@
 #include <rex/logging.h>
 
 #include "ui_paint.h"
+
+#include <SDL3/SDL.h>
+
+#if defined(_WIN32)
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN
+#endif
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#include <windows.h>
+#endif
 
 REXCVAR_DEFINE_STRING(kk_menu_background, "live", "KK",
                       "Main menu background: live (the game's own start menu scene runs behind the launcher) or "
@@ -74,6 +88,10 @@ void NoteShown() {
 Reason DecideAtLauncherStart(StartFacts facts, const std::filesystem::path& user_dir) {
   facts.setting = REXCVAR_GET(kk_menu_background);
   facts.off_this_session = facts.off_this_session || REXCVAR_GET(kk_menu_scene_off);
+#if defined(_WIN32)
+  // A laptop or handheld on its battery keeps the stills (the scene costs about as much as play).
+  if (SYSTEM_POWER_STATUS power{}; GetSystemPowerStatus(&power) && power.ACLineStatus == 0) facts.on_battery = true;
+#endif
   const auto marker = MarkerPath(user_dir);
   std::error_code ec;
   if (!user_dir.empty() && std::filesystem::exists(marker, ec)) {
@@ -115,7 +133,28 @@ void SetHidden(bool hidden) {
 
 namespace {
 std::atomic<bool> g_throttled{false};
+std::mutex g_audio_mutex;
+SDL_AudioStream* g_audio_stream = nullptr;
+float g_audio_gain = 0.0f, g_audio_set = -1.0f;
+void ApplyGainLocked() {
+  if (!g_audio_stream || g_audio_set == g_audio_gain) return;
+  SDL_SetAudioStreamGain(g_audio_stream, g_audio_gain);
+  g_audio_set = g_audio_gain;
+}
 }  // namespace
+void SetAudioStream(void* stream) {
+  std::lock_guard lock(g_audio_mutex);
+  g_audio_stream = static_cast<SDL_AudioStream*>(stream);
+  g_audio_set = -1.0f;
+  ApplyGainLocked();
+  REXLOG_INFO("KK menu scene: the game's sound plays at the launcher's music volume ({})",
+              stream ? "stream found" : "no stream: at full volume");
+}
+void SetAudioGain(float gain) {
+  std::lock_guard lock(g_audio_mutex);
+  g_audio_gain = std::clamp(gain, 0.0f, 1.0f);
+  if (std::abs(g_audio_gain - g_audio_set) >= 0.002f || g_audio_gain == 0.0f) ApplyGainLocked();
+}
 void SetThrottled(bool throttled, const char* why) {
   if (!Active()) return;
   if (g_throttled.exchange(throttled) != throttled)

@@ -20,7 +20,8 @@ struct StartFacts {
   bool shaders_prepared = true;  // this version's one shader preparation has run (shader_prepared.h)
   bool shader_job = false;       // a shader job is running or about to (setup, update, Rebuild)
   bool setup = false;            // the first-run setup or the New in this update screen is up
-  bool low_end = false;          // kk_hardware_tier "low"
+  bool low_end = false;          // kk_hardware_tier "low" (a Steam Deck, a GPU under 4 GB, ...)
+  bool on_battery = false;       // a laptop or handheld running on its battery (Windows; elsewhere false)
   bool off_this_session = false; // --kk_menu_scene_off (a launcher restarted for a Rebuild)
   bool failed_this_version = false;  // the scene did not come up last time in this version
 };
@@ -34,6 +35,7 @@ enum class Reason {
   kShaderJob,
   kSetup,
   kLowEnd,
+  kOnBattery,
   kOffThisSession,
   kFailedBefore,
 };
@@ -46,6 +48,7 @@ inline Reason Decide(const StartFacts& f) {
   if (f.shader_job) return Reason::kShaderJob;
   if (f.setup) return Reason::kSetup;
   if (f.low_end) return Reason::kLowEnd;
+  if (f.on_battery) return Reason::kOnBattery;
   if (f.off_this_session) return Reason::kOffThisSession;
   if (f.failed_this_version) return Reason::kFailedBefore;
   return Reason::kLive;
@@ -61,6 +64,7 @@ inline const char* ReasonText(Reason r) {
     case Reason::kShaderJob: return "a shader job runs";
     case Reason::kSetup: return "setup or the New in this update screen";
     case Reason::kLowEnd: return "low-end hardware tier";
+    case Reason::kOnBattery: return "running on battery";
     case Reason::kOffThisSession: return "off for this launcher (restarted for a shader rebuild)";
     case Reason::kFailedBefore: return "the scene did not come up last time in this version";
   }

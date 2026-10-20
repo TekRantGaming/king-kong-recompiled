@@ -25,8 +25,9 @@ struct LauncherCallbacks {
   std::function<void()> restart_and_play;    // relaunch with saved settings, skip launcher
   std::function<void()> benchmark;           // relaunch the fixed replay with private user data
   std::function<void()> quit;
-  // Task 330 (menu_scene.h): start the game's start menu scene behind the launcher (deferred, UI thread).
-  std::function<void()> start_scene;
+  // Task 330 (menu_scene.h): start the game's start menu scene behind the launcher (UI thread, as the launcher is
+  // made): at once (before the launcher's first frame) or just after it.
+  std::function<void(bool before_first_frame)> start_scene;
   // Starts the launcher again as a new process with these arguments, then this one closes.
   std::function<void(const std::wstring&)> restart_launcher;
   std::function<void(bool)> set_fullscreen;  // apply window mode live

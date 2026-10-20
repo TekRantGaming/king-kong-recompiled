@@ -304,14 +304,19 @@ class KingKongApp : public rex::ReXApp {
     cb.desktop_mode = [this](int monitor) { return kk::DesktopDisplayMode(monitor, window()); };
     // Task 330: the game's start menu scene behind the launcher (menu_scene.h): the game starts in this process
     // as Play does, with the launcher staying up; Play then always starts the game as a new process.
-    cb.start_scene = [this, resume, defaults] {
-      app_context().CallInUIThreadDeferred([this, resume, defaults] {
+    // The runtime's start takes about 1.5 s on the UI thread. Back from the game (a handoff: the game's black
+    // cover stays until the launcher's first frame) it happens at once, before that frame; on a start from the
+    // desktop just after the launcher's first frames, so its window shows at once (it then pauses briefly).
+    cb.start_scene = [this, resume, defaults](bool before_first_frame) {
+      auto start = [this, resume, defaults] {
         nr::kk::StopLauncherPrewarm();  // the scene's renderer makes what it draws
         { const auto out = OutputSize(); kk::ApplyRenderPreset(out.first, out.second); }
         kk::ApplyVideoMode();  // before the GPU starts: it sizes its frame from the mode (settings.cpp)
         kk::menu_scene::Begin(defaults.user_data_root);
         resume(defaults);
-      });
+      };
+      if (before_first_frame) start();
+      else app_context().CallInUIThreadDeferred(std::move(start));
     };
     // A launcher that starts again (task 330: a shader rebuild while the scene runs, which holds the pack open).
     cb.restart_launcher = [this](const std::wstring& args) {
@@ -338,7 +343,7 @@ class KingKongApp : public rex::ReXApp {
     // The native renderer makes the game's pipelines while the player is in the launcher, when
     // --native_launcher_prewarm is on (the plugin decides; nothing happens otherwise). After the
     // launcher is made: it applies the Original look, which the settings the prewarm reads follow.
-    nr::kk::StartLauncherPrewarm(defaults.cache_root);
+    if (!kk::menu_scene::Active()) nr::kk::StartLauncherPrewarm(defaults.cache_root);  // task 330: not beside the scene
     return std::nullopt;
   }
 

@@ -31,6 +31,7 @@ int main() {
   { StartFacts g = f; g.shader_job = true; CHECK(Decide(g) == Reason::kShaderJob); }
   { StartFacts g = f; g.setup = true; CHECK(Decide(g) == Reason::kSetup); }
   { StartFacts g = f; g.low_end = true; CHECK(Decide(g) == Reason::kLowEnd); }
+  { StartFacts g = f; g.on_battery = true; CHECK(Decide(g) == Reason::kOnBattery); }
   { StartFacts g = f; g.off_this_session = true; CHECK(Decide(g) == Reason::kOffThisSession); }
   { StartFacts g = f; g.failed_this_version = true; CHECK(Decide(g) == Reason::kFailedBefore); }
   { StartFacts g = f; g.setting = "pictures"; g.shaders_prepared = false; CHECK(Decide(g) == Reason::kSetting); }

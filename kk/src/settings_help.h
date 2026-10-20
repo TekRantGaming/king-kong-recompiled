@@ -299,7 +299,8 @@ inline constexpr Help kHelp[] = {
     {"Main menu background", C::kMedium, C::kLow, A::kNextStart,
      "The live scene is the game itself running behind the menus at your graphics settings, so the graphics card "
      "works about as hard as in play.",
-     {{"Live scene", "The Venture rolls on the waves under Skull Island, as in the original game's menu."},
+     {{"Live scene",
+       "The Venture rolls on the waves under Skull Island with the menu's own music and the sound of the sea, as in the original game."},
       {"Pictures", "Still pictures from the game, one after another. Almost no work for the graphics card."}}},
     {"Startup logos", C::kNone, C::kUnset, A::kAuto, nullptr,
      {{"Play", "The logo movies play before the title screen."}, {"Skip", "Straight to the title screen."}}},

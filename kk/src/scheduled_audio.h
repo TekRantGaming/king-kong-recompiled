@@ -50,12 +50,10 @@ class ScheduledAudioSystem : public rex::audio::sdl::SDLAudioSystem {
 #endif
     const rex::X_STATUS status = SDLAudioSystem::CreateDriver(index, semaphore, out_driver);
     done->store(true);
-    // Task 330: the live menu scene behind the launcher is silent (the launcher plays the same menu music).
-    if (kk::menu_scene::Active() && out_driver && *out_driver) {
-      SDL_AudioStream* stream = DriverStream::Of(static_cast<rex::audio::sdl::SDLAudioDriver*>(*out_driver));
-      const bool muted = stream && SDL_SetAudioStreamGain(stream, 0.0f);
-      REXLOG_INFO("KK menu scene: the game's sound {}", muted ? "is muted" : "could not be muted");
-    }
+    // Task 330: the live menu scene's own sound (its music, the sea) at the launcher's Menu music volume, set by
+    // the launcher through this stream (menu_scene.h SetAudioGain).
+    if (kk::menu_scene::Active() && out_driver && *out_driver)
+      kk::menu_scene::SetAudioStream(DriverStream::Of(static_cast<rex::audio::sdl::SDLAudioDriver*>(*out_driver)));
     const double ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - start).count();
     if (ms >= 2000.0) REXLOG_WARN("KK audio: opening the audio device took {:.1f} s", ms / 1000.0);
     return status;
