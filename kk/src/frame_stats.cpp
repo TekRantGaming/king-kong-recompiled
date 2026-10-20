@@ -11,6 +11,7 @@
 
 #include "frame_stats.h"
 #include "frame_pacer.h"
+#include "menu_scene.h"
 #include "benchmark.h"
 
 #include <algorithm>
@@ -222,7 +223,8 @@ namespace {
 // of the wait, then a short spin for precision.
 void LimitFrameRate() {
   static pacing::Limiter limiter;
-  limiter.Wait(REXCVAR_GET(kk_frame_rate), REXCVAR_GET(kk_cpu_priority) >= 1);  // task 295
+  // Task 330: the live menu scene behind the launcher has its own cap (menu_scene.h).
+  limiter.Wait(menu_scene::FrameCap(REXCVAR_GET(kk_frame_rate)), REXCVAR_GET(kk_cpu_priority) >= 1);  // task 295
 }
 
 }  // namespace

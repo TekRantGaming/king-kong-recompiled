@@ -123,7 +123,9 @@ int64_t FrameTime(const AVFrame* frame) {
 bool DecoderAvailable() { return true; }
 const char* DecoderName() { return "FFmpeg " LIBAVCODEC_IDENT " (LGPL)"; }
 
-std::vector<uint8_t> DecodeAudio(const std::filesystem::path& file, const std::atomic<bool>& cancel) {
+std::vector<uint8_t> DecodeAudio(const std::filesystem::path& file, const std::atomic<bool>& cancel, AudioStats* stats) {
+  AudioStats local;
+  AudioStats& st = stats ? *stats : local;
   Stream audio(file, AVMEDIA_TYPE_AUDIO);
   SwrContext* swr = nullptr;
   struct FreeSwr { SwrContext** p; ~FreeSwr() { swr_free(p); } } free_swr{&swr};
@@ -173,11 +175,19 @@ std::vector<uint8_t> DecodeAudio(const std::filesystem::path& file, const std::a
       if (origin == AV_NOPTS_VALUE) origin = at;
       const int64_t want = at <= origin ? 0 : av_rescale_q(at - origin, audio.time_base(), AVRational{1, kAudioRate});
       const int64_t have = int64_t(pcm.size() / kAudioFrameBytes) + swr_get_delay(swr, kAudioRate) - trim;
+      ++st.packets;
       if (want - have > kSlack) {
         if (size_t(want) * kAudioFrameBytes > kLimit) throw std::runtime_error("soundtrack exceeds the private clip limit (60 s)");
         pcm.resize(pcm.size() + size_t(want - have) * kAudioFrameBytes, 0);
+        ++st.gaps;
+        st.gap_frames += want - have;
       } else if (have - want > kSlack) {
         trim += have - want;
+        ++st.overlaps;
+        st.overlap_frames += have - want;
+      } else if (want != have) {
+        ++st.jitter;
+        st.jitter_frames += want > have ? want - have : have - want;
       }
     }
     const int room = swr_get_out_samples(swr, f->nb_samples);

@@ -7,6 +7,10 @@
 //
 // Pictures are decoded on the page's own worker thread; the UI thread only makes textures (at most two a
 // frame), so the launcher never waits for the disk.
+//
+// Task 333 (owner, 20 Oct, Beta 13): the same page and viewer show the game's Xbox 360 user manual (Book::kManual,
+// Extras > User manual): its PDF (content::Kind::kManual, downloaded in the background like the artbook) is drawn
+// page by page by PDFium (pdf_pages.h) on the same worker. The manual has no readme and no Save to PC.
 
 #pragma once
 
@@ -27,7 +31,8 @@ namespace kk {
 
 class Artbook {
  public:
-  Artbook(rex::ui::ImmediateDrawer* drawer, std::filesystem::path user_dir);
+  enum class Book { kArtbook, kManual };
+  Artbook(rex::ui::ImmediateDrawer* drawer, std::filesystem::path user_dir, Book book = Book::kArtbook);
   ~Artbook();
   Artbook(const Artbook&) = delete;
   Artbook& operator=(const Artbook&) = delete;

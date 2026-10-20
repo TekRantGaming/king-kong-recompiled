@@ -74,9 +74,10 @@ struct AutoState {
   int fails = 0;
   bool told = false;
 };
-std::filesystem::path AutoFile(const std::filesystem::path& user_dir);
-AutoState ReadAuto(const std::filesystem::path& user_dir);
-bool WriteAuto(const std::filesystem::path& user_dir, const AutoState& state);
-void ClearAuto(const std::filesystem::path& user_dir);
+// Task 333: the user manual's automatic download keeps the same record in manual.auto (name "manual").
+std::filesystem::path AutoFile(const std::filesystem::path& user_dir, const char* name = "artbook");
+AutoState ReadAuto(const std::filesystem::path& user_dir, const char* name = "artbook");
+bool WriteAuto(const std::filesystem::path& user_dir, const AutoState& state, const char* name = "artbook");
+void ClearAuto(const std::filesystem::path& user_dir, const char* name = "artbook");
 
 }  // namespace kk::artbook

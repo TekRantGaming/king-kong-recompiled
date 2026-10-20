@@ -682,6 +682,71 @@ if 'kk::MigrateFrameCounter();' not in (src / 'king_kong_app.h').read_text(encod
 _pt = (src / 'picture_text_table.inc').read_text(encoding='utf-8')
 if '\u2014' in _pt or '\u2013' in _pt:
     fail('dash in picture_text_table.inc')
+# Task 331: the Returning to the main menu loop's lines: every tip and the saved line in launcher.cpp are
+# translated (checked above with the rest), and none has a dash (owner: plain words, no dashes).
+_l331 = (src / 'launcher.cpp').read_text(encoding='utf-8')
+_tips331 = re.search(r'kTips\[kTipCount\] = \{(.*?)\};', _l331, re.S)
+if not _tips331:
+    fail('331: the tips list is missing')
+else:
+    _t331 = re.findall(r'"((?:[^"\\]|\\.)*)"', _tips331.group(1))
+    if len(_t331) != 12:
+        fail(f'331: {len(_t331)} tips, not 12')
+    strings |= set(_t331)
+    for _s in _t331 + [x for e in _t331 for x in entries.get(e, [])]:
+        if '-' in _s or '\u2014' in _s or '\u2013' in _s:
+            fail(f'331: dash in a tip: {_s!r}')
+strings |= {'Game saved at your last checkpoint.'}
+# Task 332 (owner, 20 Oct): the new first-time setup order (the FULL Settings pages Display, Graphics and Controls
+# built by the same code as Settings, no Use recommended or pictures there; button prompts; texture pack; PS2
+# cutscenes; the Workshop page; all set), Skip all on every page after the game files, and the startup movies.
+strings |= {
+    'Skip all', 'You can change all of these settings later from Settings on the main menu.', 'Startup movies',
+    'The startup movies play this first time. From the next start, your choice to skip them is used.',
+    'You can change these any time in Settings > Controls on the main menu.', 'The Workshop',
+    'The Workshop is on the main menu.',
+    'It has mods and texture packs for King Kong, and other projects from TRG Studios.',
+    'The Workshop opens from the main menu once the setup is done.', 'Workshop', 'Next', 'Back', 'The next page.',
+    'The page before.', 'Button remapping', 'Keyboard bindings',
+}
+_pages332 = (src / 'launcher_setup_pages.inc').read_text(encoding='utf-8')
+for needle, why in (
+        ('#include "launcher_setup_pages.inc"', 'launcher.cpp includes the new setup pages'),
+        ('std::vector<Item> items = SettingsPageItems(page_);', 'Settings builds its rows in SettingsPageItems'),
+        (': setup_settings_ ? kSettingsFirstStage', 'the Settings pages come right after the shaders'),
+        (': setup_prompts_ ? kPromptsStage : setup_textures_ ? 6 : setup_cutscenes_ ? 7\n           : setup_workshop_ ? kWorkshopStage : setup_all_set_ ? kAllSetStage',
+         'the owner\'s order: prompts, texture pack, cutscenes, Workshop, all set'),
+        ('startup_movies::AtLauncherStart(open_on, files_ok_, InSetup(), GetBool("kk_skip_intros"))',
+         'the movies at a start from the desktop unless kk_skip_intros'),
+        ('startup_movies::AskFirst(true, skip)', 'the pop-up before the movies after the setup with skip on'),
+        ('DrawSkipAll(dl);  // task 332: the first-time setup\'s shader screen', 'Skip all on the shader screen'),
+):
+    if needle.replace('\\n', '\n') not in _l331:
+        fail(f'332: {why} ({needle})')
+for needle, why in (
+        ('{kDisplay, kGraphics, kControls}', 'the Display, Graphics and Controls pages'),
+        ('SettingsPageItems(kSetupSettingsPages[page])', 'built by the same code as Settings'),
+        ('AttachHelp(items);', 'the same descriptions as Settings'),
+        ('ui::DrawDescription(dl, focused, ImVec2(dx, top + 18 * s)', 'the same right-hand description panel'),
+        ('{{Action::kResetPage, "Skip all"}}', 'Skip all at the top'),
+        ('"You can change all of these settings later from Settings on the main menu."', 'the Skip all pop-up'),
+        ('{"OK"}, -1, [this](int) { SkipAllSetup(); }', 'OK then straight on'),
+):
+    if needle not in _pages332:
+        fail(f'332: {why} ({needle})')
+for banned in ('Use recommended', 'DrawCompare', 'CompareFor'):
+    if banned in _pages332:
+        fail(f'332: the setup Settings pages have {banned}')
+_end332 = (src / 'launcher_setup_end.inc').read_text(encoding='utf-8')
+if 'StartMoviesAfterSetup();' not in _end332:
+    fail('332: Finish setup does not start the movies')
+if _end332.count('DrawSkipAll(dl);') != 2:
+    fail('332: Skip all missing on the button prompts or all set page')
+if '\u2014' in _pages332 or '\u2013' in _pages332:
+    fail('dash in launcher_setup_pages.inc')
+_vid332 = root / 'launcher-video' / 'trg-startup.mp4'
+if not _vid332.is_file():
+    fail('332: launcher-video/trg-startup.mp4 is missing')
 for s in sorted(strings):
     if s == 'Home':
         continue  # never drawn as text
@@ -796,8 +861,9 @@ for name in ('Cheats', 'About', 'Settings'):
 # buttons as specified, the J1 temporary rows gone, the pause menu with the switches only, and no log line
 # from the UI thread while a download unpacks (REPORT-181).
 for needle, why in (
-        ('setup_shaders_ ? 4 : setup_textures_ ? 6', 'the texture pack page does not follow the shaders'),
-        ('setup_cutscenes_ ? 7 : setup_graphics_ ? kGfxFirstStage', 'the cutscene page does not follow the texture pack page (the graphics pages after it)'),
+        # Task 332: the texture pack page after the button prompts, the cutscene page after it (the owner's order).
+        ('setup_prompts_ ? kPromptsStage : setup_textures_ ? 6', 'the texture pack page does not follow the button prompts'),
+        ('setup_textures_ ? 6 : setup_cutscenes_ ? 7', 'the cutscene page does not follow the texture pack page'),
         ('setup_cutscenes_ = movies::PlaybackAvailable();', 'the cutscene page is not tied to PS2 movie playback'),
         ('if (movies::PlaybackAvailable()) {', 'Advanced > Cutscenes is not tied to PS2 movie playback (Linux too, task 187)'),
         ('{"Download HD texture pack", true,', 'the texture pack page lost Download'),
@@ -840,7 +906,6 @@ gfx = (src / 'launcher_setup_graphics.inc').read_text(encoding='utf-8')
 for needle, why in (
         ('#include "launcher_setup_graphics.inc"', 'launcher.cpp includes the graphics pages'),
         ('setup_graphics_ ? kGfxFirstStage', 'SetupStage has the graphics pages'),
-        ('setup_graphics_ = true;', 'the setup asks the graphics pages'),
 ):
     if needle not in launcher:
         fail(f'{why} ({needle})')
@@ -880,12 +945,10 @@ for needle, why in (
 ):
     if needle not in launcher:
         fail(f'{why} ({needle})')
-if 'setup_prompts_ = true;' not in gfx:
-    fail('the graphics pages do not go on to the button prompts')
 for needle, why in (
         ('Set("kk_button_prompts", value)', 'the cards set kk_button_prompts'),
         ('SetInputMode(true)', 'Keyboard and mouse switches Input as Controls does'),
-        ('"Controller buttons and keyboard keys can be remapped any time in Settings > Controls."', 'remap note'),
+        ('"You can change these any time in Settings > Controls on the main menu."', 'task 332: where to change them'),
         ('{"auto", "Automatic"}', 'Automatic card'), ('{"xbox360", "Xbox 360"}', 'Xbox 360 card'),
         ('{"xbox_series", "Xbox Series"}', 'Xbox Series card'), ('{"ps5", "PlayStation 5"}', 'PlayStation 5 card'),
         ('{"ps2", "PlayStation 2"}', 'PlayStation 2 card'), ('{"steam_deck", "Steam Deck"}', 'Steam Deck card'),
@@ -911,6 +974,8 @@ if '\u2014' in end or '\u2013' in end:
 # Job J6: the Original or Remastered step is gone (new installs are Remastered from the setup's start; the Original
 # look stays on graphics page 4 and in Settings), and players who updated get the one-time New in this update screen.
 new_src = (src / 'launcher_setup_new.inc').read_text(encoding='utf-8')
+if 'setup_graphics_ = true;' not in new_src:  # task 332: the four graphics pages only from the New screen now
+    fail('the New screen does not ask the graphics pages')
 for banned in ('setup_style_', 'DrawStyleCards', 'ApplyOriginal', '"Choose a look"', 'look:original'):
     if banned in launcher or banned in gfx or banned in end or banned in new_src:
         fail(f'J6: the old look step is back: {banned}')
@@ -922,7 +987,7 @@ for needle, why in (
         ('if (save) SaveSettings(paths_.config_path);', 'the full setup saves only when asked'),
         ('if (Get("kk_setup_version").empty()) Set("kk_setup_version", kSetupWaiting);', 'an update marks the New screen as waiting'),
         ('update_new_ = files_ok_ && !testing && Get("kk_setup_version") == kSetupWaiting;', 'the New screen only when waiting'),
-        ('InSetup(), update_new_, ShaderScreen()', "What's new is held back by the New screen"),
+        ('InSetup() || MoviesPending(), update_new_, ShaderScreen()', "What's new is held back by the New screen and the startup movies"),
 ):
     if needle not in launcher:
         fail(f'J6: {why} ({needle})')

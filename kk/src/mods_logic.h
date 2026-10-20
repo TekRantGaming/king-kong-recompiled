@@ -151,7 +151,8 @@ inline bool BlockedSetting(std::string_view name) {
       "kk_discord_status", "kk_discord_app_id", "kk_setup_version", "kk_settings_version", "kk_hardware_tier",
       "kk_ps2_movie_folder", "native_texture_pack_folder", "game_data_root", "user_data_root", "cache_root",
       "log_file", "kk_achievement_sound_file", "gpu_plugin", "kk_launcher", "kk_skip_launcher", "kk_start",
-      "kk_renderer", "kk_benchmark", "kk_benchmark_passes", "kk_benchmark_from", "kk_launcher_open"};
+      "kk_renderer", "kk_benchmark", "kk_benchmark_passes", "kk_benchmark_from", "kk_launcher_open",
+      "kk_launcher_saved"};
   return kBlocked.contains(name);
 }
 

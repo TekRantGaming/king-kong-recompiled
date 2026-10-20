@@ -117,10 +117,20 @@ setup and on About; no reminder opens by itself. What's new never opens during t
 New in this update screen; it opens once on the main menu after Finish setup (new install) or after that screen's
 Continue (a player who updated), with the game files installed and the shaders prepared (`launcher_policy.h`).
 
-**First-time setup and New in this update (job J6, 17 Oct; spec `codex/state/setup-flow.md`).** The setup's pages
-(SetupStage numbers in `launcher.cpp`): 0 disc image, 1 install, 2 artwork, 4 shaders, 6 HD texture pack, 7 PS2
-cutscenes (where PS2 movies play), 8 to 11 the graphics pages (`launcher_setup_graphics.inc`), 12 button prompts,
-13 You're all set (`launcher_setup_end.inc`). There is no Original or Remastered step any more (stage 5 removed):
+**First-time setup and New in this update (job J6, 17 Oct; task 332, 20 Oct; spec `codex/state/setup-flow.md`).**
+The setup's pages in order (SetupStage numbers in `launcher.cpp`): 0 disc image, 1 install, 2 artwork (the game
+files), 4 shaders, 16 to 18 the **FULL Settings pages Display, Graphics and Controls** (`launcher_setup_pages.inc`:
+the same rows, built by the same code as Settings, `SettingsPageItems`, with the same right-hand description panel and
+Next / Back rows under them, so **the setup shows these Settings pages and any setting added to them appears there by
+itself**; no recommended-settings button, no pictures), 12 button prompts ("You can change these any time in Settings >
+Controls on the main menu."), 6 HD texture pack, 7 PS2 cutscenes (where PS2 movies play), 15 the Workshop (what it
+is), 13 You're all set (`launcher_setup_end.inc`), then the startup movies (below). Every page after the game files
+has **Skip all** at the top right (Y, R or a click): a pop-up "You can change all of these settings later from
+Settings on the main menu." [OK], then straight to the startup movies; the shaders go on in the background if they are
+still being prepared, and every setting not chosen keeps what it has. The graphics pages 8 to 11 with pictures
+(`launcher_setup_graphics.inc`) now only come up from the New in this update screen. During the setup, Graphics'
+"Texture packs in the Workshop" row is greyed (the Workshop opens from the main menu afterwards). There is no
+Original or Remastered step any more (stage 5 removed):
 a new install starts Remastered as the setup begins (`StartFullSetup` -> `ApplyRemastered`: the hardware
 recommendation's preset with that preset's global illumination, Strong GTAO, 60 FPS), the Original look is a switch
 on graphics page 4 and on the Graphics page, and "Use recommended for my PC" gives Remastered again. A player who had
@@ -353,3 +363,141 @@ in `runs\menus-game-data`), run folders `F:\KK-native-renderer\runs\menus-game-1
 | A Kong chapter (entry 10, level 304, playing as Kong): pause, Resume, Start again | `062250-kong-entry10` (`printwindow_170`) | yes |
 | Keyboard and mouse in the real pause menu | `062155-input-kbm` | not testable under the test rules: posted key and mouse messages to the unfocused window reach neither SDL nor ImGui, and focusing the window is not allowed; the game side blocks the game's keyboard (same path as the pad) and mouse look while the menu is open |
 | Return to main menu (chapter run) | `053106-realpause-ch8-quit`, `060043-final-ch8-return-to-menu` (`printwindow_400_<launcher pid>`) | launcher's Play menu |
+
+## The live menu scene behind the launcher (task 330, test build)
+
+Owner, 20 Oct: the original start menu's 3D scene (the Venture on a stormy sea under Skull Island, waves and
+moving light) runs live behind the launcher instead of the stills. Code: `kk/src/menu_scene.*`,
+`menu_scene_logic.h` (tested: `menu-scene`), hooks in `input_remap.cpp`, `ultrawide.cpp`, `play_session.cpp`,
+`frame_stats.cpp`, `scheduled_audio.h`, the renderer's `kDrawTagHideAll` (`backend/draw_tags.h`).
+
+- **How:** the launcher's own process starts the game (the runtime, as an in-process Play does) as the launcher
+  opens. Logos skipped; on the title (level 2) the port presses Start (the game's only input), the start menu
+  (level 3) loads and opens its save page. The executor's HUD pass (the menu's logo, texts, pages, loading text)
+  is left out whole; every controller read is empty; the launcher's Play start request is never carried out
+  there. Level 3 up for 45 pad reads = Ready: the launcher fades its stills out (0.6 s) and draws over the
+  game's frame with the same darkening as before. The start menu's attract movie (`Video/Attract.wmv`, after
+  about a minute idle, played by `sub_8272EED8` through `sub_82723AF0`) is never played.
+- **Play** always starts the game as a new process (restart_and_play), so the game's path is unchanged; the
+  scene drops to 10 FPS and its sound fades while the new process starts (handoff about 3 s, as before).
+- **Sound** (owner, 20 Oct): the scene's own audio (its music plus the sea) plays at Menu music on/off and
+  volume; the launcher's copy of the music stays silent. With the stills the launcher's music is as before.
+- **No setting** (owner, 20 Oct): the live scene is how the launcher looks. **Stills only** where it cannot or
+  should not run: setup / New in this update / the first start after an update / shaders not prepared / a
+  shader job, `kk_hardware_tier` low (Steam Deck), and after a launcher that did not get the scene up (marker
+  `<user data>\menu-scene.txt`: "starting <version>" until the scene shows; found at the next start it becomes
+  "failed <version>": stills for the rest of that version).
+- **Rebuild shaders** while it runs: the scene's renderer holds the shader pack open (no rename on Windows), so
+  the launcher starts again with `--kk_launcher_open=rebuild --kk_menu_scene_off=true` and rebuilds there.
+- **Lighter than play** (owner, 20 Oct, to save power), for the launcher's process only through the renderer's
+  `nr_set_menu_scene_light` (`backend/menu_scene_light.h`; the player's settings and the game's process are not
+  touched): GI off, AO at half resolution, volumetrics off, original shadows and water reflections, shadow maps
+  at the game's own size, no tessellation, a temporal upscaler at most Performance.
+- **Same-session setup:** a launcher that opened without game files, in the setup, on New in this update or
+  with shaders not prepared starts the scene once it is back on Home with all of that done (TickSceneStart).
+- **Frame rate:** the player's cap up to 60 (unlimited counts as 60), 10 while minimised or handing over; the
+  launcher paints with the game's frames (60 a second) instead of continuously.
+- **Dev aids:** `KK_DEV_SCENE_TRACE=1` (levels, Start presses, movie flag), `KK_DEV_FRAME_LOG=1` (launcher frame
+  intervals and the scene's sound gain every 5 s). Test kit: `kk/out/task330` (run330.ps1, steps*.txt,
+  perf330.ps1, sheet.py).
+
+## The startup movies (task 332, Beta 13)
+
+Owner, 20 Oct (DECISIONS row B): the game's logo movies (`Video/Ubisoft.wmv`, `Universal.wmv`, `Wingnut.wmv` from the
+player's game files: the boot logos `intros.cpp` skips) and then the owner's TRG Studios movie (`trg-startup.mp4`,
+7.5 s, silent, in `kk/launcher-video/` like the loops) play full screen over the launcher. Code:
+`kk/src/startup_movies.*` (the loops' player once per file, `LoadingLoop` with `once`; a movie's sound decoded whole by
+the PS2 cutscenes' decoder and played through the launcher's own SDL audio stream, the picture following the sound),
+`startup_movies_logic.h` (rules, tested in `menu-scene`), `launcher.cpp` StartStartupMovies / DrawStartupMovies.
+
+- **After the setup** (Finish setup or Skip all) they ALWAYS play once. With `kk_skip_intros` on (the default) a
+  pop-up comes first, over the launcher's plain dark background before any movie is loaded (owner, after testing;
+  the movies and the scene start after its OK): "The startup movies play this first time. From the next start, your choice to skip them is
+  used." [OK].
+- **Later**, a launcher opened from the desktop with the setup done plays them unless `kk_skip_intros` is on (Settings
+  > Gameplay > Startup logos; it skips the TRG movie too). Not on a launcher the game starts on its way back, nor one
+  restarted for a shader rebuild, nor when a setup or update screen comes first (that start shows the notice loop as
+  before).
+- **Then** the save notice loop always follows (task 331 rules: at least 3 s, then until the scene is ready, 20 s at
+  most). The live menu scene starts as the movies start (after the setup: once the pop-up is closed) and the first
+  movie waits for that start (it pauses the launcher about 1.5 s; 5 s at most), so the movies and the notice cover the
+  scene's start: no pictures when the scene can run. The launcher's music and the scene's sound are silent under the
+  movies; nothing else is drawn or answered over them but their pop-up; What's new waits for them.
+- **Sound** (follow-up, owner heard crackling): the WMA logo soundtracks come out of Media Foundation's resampler
+  a frame or two off their timestamps on almost every packet (Ubisoft 114 of 129, Universal 294 of 297); the Windows
+  decoder used to pad or cut each by the timestamp, a click every packet. Now, as the FFmpeg decoder, only a real gap
+  or overlap over 10 ms is kept (`AudioStats`, logged per movie; `kk-ps2-movie-decode-tests <clip>` prints them and
+  KK_PS2_TEST_RAW=<file> writes the sound out).
+- A movie that cannot be played is left out and logged (Linux: the shipped FFmpeg build has no WMV decoder, so only
+  the TRG movie plays there). Log: `KK startup movies:` lines. Test kit: `kk/out/task332/run332.ps1` (player layout,
+  `-Fresh` for a new player, `-Reuse <run>` for the next start) with `stepsFull.txt`, `stepsSkip.txt`; dev steps
+  `wait-movies`, and `wait-home` waits for the movies too.
+
+## The loading loops over the launcher (task 331, Beta 13)
+
+Owner, 20 Oct: two short videos he made (1920x1080 H.264, 4.6 s seamless loops, no sound, English text in the
+picture) cover the launcher while the live menu scene starts. Code: `kk/src/loading_loop.*` (decoder thread and
+texture), `loading_loop_logic.h` (rules, tested in `menu-scene`), `launcher.cpp` StartLoadingLoop / DrawLoadingLoop.
+Files: `kk/launcher-video/` in git, copied beside the program as `launcher/video/` (build, AppImage).
+
+- **Which:** opening the game from the desktop plays `save-notice-loop.mp4`; any launcher started by the game
+  (`--kk_launcher_open` play, chapters, extras, benchmark) plays `returning-loop.mp4`; a launcher restarted for a
+  shader rebuild (`rebuild`) plays none.
+- **How long:** from the launcher's first frame (that frame waits up to 0.4 s for the first picture), at least 3 s
+  of real time, then until the scene is Ready (scene started for this launcher); without a scene (low tier, shaders
+  not prepared, setup, failed before) it ends after the 3 s. A scene not up after 20 s: the loop ends anyway and the
+  pictures show until the scene comes. Then a 0.5 s fade into the launcher over the scene (the stills' crossfade is
+  skipped under the loop). While it covers the window the launcher draws nothing else and takes no input.
+- **Our lines** (Returning only), in the launcher's font and the loop's greys, below its title (rows 520-561 of 1080):
+  "Game saved at your last checkpoint." when the game passed `--kk_launcher_saved=true` (a story run, New game /
+  Continue / Load game, quit from the pause menu, and the save job after that choice changed the slot's file:
+  play_session.cpp's sub_82722620 hook); then one of 12 tips (launcher.cpp kTips, 5 languages), the next one each
+  time, remembered in `<user data>\loading-tip.txt` (not the settings file).
+- **Decoder:** the PS2 cutscenes' `movies::VideoReader` (Media Foundation on Windows, the shipped FFmpeg libraries on
+  Linux) on a worker thread, 4 frames ahead, the file reopened for each repeat; each new frame becomes a new launcher
+  texture (the drawers free the old one once its frames are done). No decoder or no file: no loop (logged).
+- **Test kit:** `kk/out/task331/run331.ps1` (player layout: package copy, game files beside the exe, settings beside
+  the exe, no --game_data_root; `-Start continue:0` / `chapter:0:8` starts the game as Play does, shots count from
+  the launcher the game starts on its way back; `-LowTier`, `-NotPrepared`, `-StepsFile`).
+
+## Extras: the original main menu and the user manual (task 333, Beta 13)
+
+Owner, 20 Oct (DECISIONS "Beta 13 additions" C and D). Code: `play_session.cpp` (StartKind::kOriginalMenu,
+OriginalMenuPad), `input_remap.cpp`, `launcher.cpp` (ExtrasItems, AskOriginalMenu, DrawManual, TickManual),
+`artbook.cpp` (Book::kManual), `pdf_pages.*`, `content.*` (Kind::kManual).
+
+- **Original main menu** (Play > Extras > Original game): a pop-up ("To come back here, start a game from the
+  original main menu, then pause and quit." Continue / Back). Continue is a Play with the start request
+  `original-menu` (`--kk_start=original-menu`, never saved): the logos are skipped (as for every start request), the
+  port presses Start on the title for pad 1 (menu_scene_logic.h's PressStartOnTitle; a pad 1 that is not connected
+  is reported connected for those reads), and the game's start menu (level 3) runs as it was: its save page, main
+  page, options, extras and chapter select, drawn and read by the game. Nothing is covered and no request is
+  carried out. The saves are backed up once ("before the original main menu") before its pages can write them;
+  the save guards (sub_8266AD80, sub_82722620) apply as always.
+- **Play from it:** the first level request for a level other than the title (2), the start menu (3) and the
+  original Extras' galleries and credits (extras.h, a level without the alternate ending's flag) makes the session
+  the launcher's (`g_session`; chapter select when G+0x5668 is set, story when neither it nor G+0x5674 is): the
+  pause menu is ours, and a return to the start menu (Return to main menu, Quit game, a chapter-select run's end)
+  goes back to the launcher as after any Play. A gallery or the credits started from its Extras page come back to
+  that page, as they did. The relaunch drops `--kk_start`, so the next launcher is ours (one time only).
+- **User manual** (Play > Extras > Original game): the Xbox 360 manual PDF from the owner's link (1,717,617 bytes,
+  SHA-256 5d0ad72b...bca4 checked after every download; a changed file fails and is deleted), `content::Kind::kManual`,
+  quiet like the artbook, kept as `<user data>\content\manual\manual.pdf` (never in git or the package). It
+  downloads in the background once a session while it is not installed (developer builds only with
+  KK_DEV_CONTENT_URL_MANUAL or KK_DEV_MANUAL_AUTO=1), with the artbook's retry (90 s, 3 tries, then a pop-up;
+  `content\downloads\manual.auto`). The artbook's page and viewer show it (grid of 11 pages, four across; viewer with
+  zoom and pan; no Save to PC). Pages are drawn on the page's worker by PDFium (`pdf_pages.h`, pdfium.dll /
+  libpdfium.so beside the program, bblanchon/pdfium-binaries chromium/8076, BSD 3-Clause / Apache 2.0, no
+  JavaScript or XFA; THIRD-PARTY-NOTICES), up to 3072 pixels a side (about 0.1 s a page). Without PDFium the page
+  says the manual cannot be shown. Dev steps `manual:<page|auto|state|open:N|next|prev|zoom:X|back|download|
+  original-menu>`, `wait-manual`.
+- **Tested (kk-dev-vulkan, player layout, runs `F:\KK-native-renderer\runs\task333-*`, 20 Oct):** Continue -> new
+  process with `--kk_skip_launcher=true --kk_start=original-menu`; logos skipped, Start pressed on the title, the
+  save page (Accessing content, profile list, Load Successful), the main page (Play, Options, Extras), Options (Audio,
+  Video, Controls, Additional languages) and back, Play -> level 100 (story); our pause menu -> Return to main menu ->
+  the game's own save -> "the save job ... wrote slot 1" -> launcher (`--kk_launcher_open=play
+  --kk_launcher_saved=true`, Returning loop with the saved line). **The original profile page's Delete does not
+  delete:** its save job comes with continue level 0 and the port's guard (sub_82722620) writes the save back with
+  its own continue point (100 -1), so the profile stays (the file stays valid; only its header time changes).
+  Saves are deleted in the launcher's Load game (backed up first). Not tested: Create new (the game's keyboard),
+  Extras (greyed on the fixture profile), Chapter select from it, Quit game to the desktop, Linux.

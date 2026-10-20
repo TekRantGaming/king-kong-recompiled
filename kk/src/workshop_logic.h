@@ -53,6 +53,31 @@ inline constexpr Project kProjects[] = {
 };
 inline constexpr int kProjectCount = int(sizeof(kProjects) / sizeof(kProjects[0]));
 
+// Task 334 (owner, 20 Oct row E): each project's tile artwork from SteamGridDB, chosen by the coordinator.
+// Direct CDN links (the SteamGridDB API needs a key that cannot ship). Fetched at run time into the user
+// cache like everything else here, never committed or packaged; until it is there (or when it cannot be
+// fetched) the tile keeps its GitHub picture. A project missing here (not on SteamGridDB) keeps that picture.
+struct Artwork {
+  const char* repo;
+  const char* url;  // https://cdn2.steamgriddb.com/grid/...
+};
+inline constexpr Artwork kArtwork[] = {
+    {"point-blank-recompiled", "https://cdn2.steamgriddb.com/grid/24f5d2bc2e14744b5bfd41a47c9d25f3.png"},
+    {"simpsons-wrestling-recompiled", "https://cdn2.steamgriddb.com/grid/63d36bef6780ab6f8195f0803b728ac4.jpg"},
+    {"earthworm-jim-hd-recompiled", "https://cdn2.steamgriddb.com/grid/48019033f9941955c6348a063eeb09c9.png"},
+    {"sms-launcher", "https://cdn2.steamgriddb.com/grid/e05d8eb9513ddafd8f410d874077d1b8.png"},
+    {"digdug-native", "https://cdn2.steamgriddb.com/grid/455a8d4a5cbf27ca5c8e480ea66c6a8f.png"},
+    {"south-park-tenormans-revenge-recompiled", "https://cdn2.steamgriddb.com/grid/a22997b93b15692ee45f7a9fb6778c8d.jpg"},
+    {"south-park-tower-defense-recompiled", "https://cdn2.steamgriddb.com/grid/e65e26a9a28ef7478d953cbec82be1b0.png"},
+};
+
+// The project's SteamGridDB artwork link, or "" when it has none.
+inline std::string ArtworkUrl(const Project& p) {
+  for (const Artwork& a : kArtwork)
+    if (std::string_view(a.repo) == p.repo) return a.url;
+  return {};
+}
+
 // A day: README, repository facts and pictures are asked for again at most this often (GitHub allows 60
 // unauthenticated API requests an hour per address; a 304 reply to a conditional request does not count).
 inline constexpr int64_t kRefreshSeconds = 24 * 60 * 60;

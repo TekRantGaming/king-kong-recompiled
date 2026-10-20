@@ -20,6 +20,9 @@ namespace nr {
 
 inline constexpr uint32_t kDrawTagHud = 1u;
 inline constexpr uint32_t kDrawTagHideHud = 2u;
+// kDrawTagHideAll (task 330): every draw of the tagged pass is left out (2D, 3D, fades): the game's menus while its
+// start menu scene runs live behind the launcher (the launcher draws over the scene instead).
+inline constexpr uint32_t kDrawTagHideAll = 4u;
 // Bits 8-15: the executor pass number + 1 the draw comes from (diagnostics only).
 inline constexpr uint32_t kDrawTagLeafShift = 8;
 

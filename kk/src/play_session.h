@@ -57,6 +57,11 @@ enum class StartKind {
   kNewGame,       // create a new save in `slot` (empty, or overwritten after a backup), start the story
   kChapter,       // load `slot` (or create one when it's empty), start chapter-select entry `chapter`
   kExtra,         // `chapter` is an original Extras id; load the selected save, never create one
+  // Task 333 (owner, 20 Oct, Beta 13; Extras > Original main menu): the game's own start menu (level 3), shown and
+  // usable as it was (its pages, options, saves). Nothing is carried out: the port presses Start on the title for
+  // the player, the saves are backed up first, and once the menu starts play (a story or chapter-select level) the
+  // session is the launcher's as usual: the pause menu's Return to main menu / Quit game go back to the launcher.
+  kOriginalMenu,
 };
 
 struct StartRequest {

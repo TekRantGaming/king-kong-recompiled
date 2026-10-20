@@ -3,6 +3,25 @@
 Every release of the King Kong PC port, newest first. The launcher shows this on its About page, and a
 version's notes the first time you start it.
 
+## v2.0.0-beta.13 (20 October 2026)
+
+**Beta 13**: a live main menu, from the beta channel (**About** > **Change version**). Your saves and settings are kept. Windows only for this beta.
+
+### What's new
+- **The main menu is the game's own start menu scene, live**: the Venture rolls on the stormy sea under Skull Island behind the launcher, moving, with the menu's own music and the sound of the sea (Settings > Audio > Menu music and its volume apply to it). It replaces the slideshow of pictures. The pictures still show during setup, on the first start after an update, while shaders are prepared, on low-end PCs such as the Steam Deck, and if the scene could not start last time.
+- **Loading screens for the main menu**: when you open the game, a screen explains when the game saves (when you choose Save game or quit from the pause menu) while the main menu gets ready. When you come back from the game, **Returning to the main menu** shows until the main menu is ready, with **Game saved at your last checkpoint.** after a story game you quit from the pause menu, and a tip about the game, a different one each time.
+- **A new first-time setup**: after the game files and the shaders, the full **Display**, **Graphics** and **Controls** settings pages, then button prompts, the HD texture pack, the PS2 cutscenes, what the **Workshop** is, and Join our Discord / Add to Steam. **Skip all** at the top of every page after the game files goes straight on, with every setting as it is; all of them can be changed later in Settings on the main menu. Players who update keep the one-time New in this update screen.
+- **Startup movies**: the Ubisoft, Universal and WingNut logo movies from your copy of the game, then a TRG Studios movie, play once after the setup, and then each time you open the game unless Settings > Gameplay > Startup logos is set to Skip (it skips the TRG Studios movie too). The loading screen follows them until the main menu is ready.
+- **Extras > Original main menu**: the game's own Xbox 360 main menu, as it was, with its pages, options and saves. Start a game from it, then pause and quit to come back to the launcher. The next time you open the game, the launcher's menu is back.
+- **Extras > User manual**: the game's Xbox 360 manual, page by page, with zoom. It downloads in the background (about 2 MB) the first time the launcher runs.
+- **Workshop**: the other TRG Studios projects show their proper artwork, downloaded the first time you open the Workshop.
+
+### Changed
+- **More graphics prepared ahead of time**: the shipped list now has 14,697 graphics pipelines (59 more), from players who share them with Online players on.
+
+### Fixed
+- **After the first-time setup, the old pictures showed before the live main menu.** The startup movies and the loading screen now cover the main menu while it gets ready.
+
 ## v2.0.0-beta.12 (19 October 2026)
 
 **Beta 12**: fixes from the beta channel (**About** > **Change version**). Your saves and settings are kept. Windows only for this beta.

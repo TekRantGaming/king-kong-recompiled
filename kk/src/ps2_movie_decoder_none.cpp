@@ -7,7 +7,7 @@
 namespace kk::movies {
 bool DecoderAvailable() { return false; }
 const char* DecoderName() { return "none"; }
-std::vector<uint8_t> DecodeAudio(const std::filesystem::path&, const std::atomic<bool>&) {
+std::vector<uint8_t> DecodeAudio(const std::filesystem::path&, const std::atomic<bool>&, AudioStats*) {
   throw std::runtime_error("this build has no movie decoder");
 }
 struct VideoReader::Impl {};

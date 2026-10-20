@@ -94,6 +94,9 @@ set(KINGKONG_SOURCES
     src/mods.cpp
     src/changelog.cpp
     src/menu_hook.cpp
+    src/menu_scene.cpp
+    src/loading_loop.cpp
+    src/startup_movies.cpp
     src/glyphs.cpp
     src/crash_dump.cpp
     src/exit_evidence.cpp
@@ -104,6 +107,7 @@ set(KINGKONG_SOURCES
     src/content.cpp
     src/artbook_files.cpp
     src/artbook.cpp
+    src/pdf_pages.cpp
     src/workshop.cpp
     src/workshop_mods.cpp
     src/workshop_texpacks.cpp
@@ -223,6 +227,31 @@ if(TARGET kk_ffmpeg)
             COMMAND ${CMAKE_COMMAND} -E copy_if_different "${path}" $<TARGET_FILE_DIR:king_kong>/)
     endforeach()
 endif()
+# Task 333: the user manual's pages are drawn by PDFium (src/pdf_pages.h; BSD 3-Clause / Apache 2.0, the
+# bblanchon/pdfium-binaries build without JavaScript or XFA), loaded at run time from beside the program. Its
+# release folder for this platform (bin/pdfium.dll, lib/libpdfium.so): -DKK_PDFIUM_DIR=<folder>, the KK_PDFIUM_DIR
+# environment variable, or tools/pdfium/<win-x64|linux-x64> (a link to F:\KK-native-renderer\downloads\
+# pdfium-binaries-chromium-8076 on the build PC; never in git). Copied beside the program; packages must ship it.
+# Without it the program runs and Extras > User manual says the manual cannot be shown.
+if(WIN32)
+    set(_kk_pdfium_platform win-x64)
+    set(_kk_pdfium_lib bin/pdfium.dll)
+else()
+    set(_kk_pdfium_platform linux-x64)
+    set(_kk_pdfium_lib lib/libpdfium.so)
+endif()
+set(_kk_pdfium_default "$ENV{KK_PDFIUM_DIR}")
+if(NOT _kk_pdfium_default AND EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/../tools/pdfium/${_kk_pdfium_platform}/${_kk_pdfium_lib}")
+    set(_kk_pdfium_default "${CMAKE_CURRENT_SOURCE_DIR}/../tools/pdfium/${_kk_pdfium_platform}")
+endif()
+set(KK_PDFIUM_DIR "${_kk_pdfium_default}" CACHE PATH "PDFium release folder (bin/pdfium.dll or lib/libpdfium.so) for the user manual")
+if(KK_PDFIUM_DIR AND EXISTS "${KK_PDFIUM_DIR}/${_kk_pdfium_lib}")
+    message(STATUS "King Kong: ${KK_PDFIUM_DIR}/${_kk_pdfium_lib} goes beside the game (the user manual)")
+    add_custom_command(TARGET king_kong POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different "${KK_PDFIUM_DIR}/${_kk_pdfium_lib}" $<TARGET_FILE_DIR:king_kong>/)
+else()
+    message(WARNING "King Kong: no PDFium (set KK_PDFIUM_DIR): Extras > User manual cannot show the manual")
+endif()
 if(WIN32)
     target_link_libraries(king_kong PRIVATE windowscodecs ole32 pdh psapi runtimeobject shell32)
     target_link_libraries(king_kong PRIVATE ws2_32)
@@ -266,7 +295,7 @@ endif()
 # The port's version: shown in the launcher and compared with GitHub releases by the updater.
 # (-DKK_VERSION=x.y.z overrides it, to test the updater with an "older" build.)
 if(NOT DEFINED KK_VERSION)
-    set(KK_VERSION "2.0.0-beta.12")
+    set(KK_VERSION "2.0.0-beta.13")
 endif()
 target_compile_definitions(king_kong PRIVATE KK_VERSION="${KK_VERSION}" KK_VERSION_W=L"${KK_VERSION}")
 execute_process(COMMAND git describe --always --dirty --abbrev=12 WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}"
@@ -498,6 +527,12 @@ if(KK_DEV_TOOLS)
     target_include_directories(kk-cheat-rules-tests PRIVATE src)
     target_compile_features(kk-cheat-rules-tests PRIVATE cxx_std_20)
     add_test(NAME cheat-rules COMMAND kk-cheat-rules-tests)
+    # Task 330: the live main menu scene (when it runs, the failure marker, Start on the title, readiness); task 331:
+    # the loading loops' rules (loading_loop_logic.h).
+    add_executable(kk-menu-scene-tests tests/menu_scene_tests.cpp)
+    target_include_directories(kk-menu-scene-tests PRIVATE src)
+    target_compile_features(kk-menu-scene-tests PRIVATE cxx_std_20)
+    add_test(NAME menu-scene COMMAND kk-menu-scene-tests)
     # Task 219: HDR follows Windows (the default decision, the calibration profile's brightness, automatic
     # levels; prints what this PC's screen reports) and the setup's comparison pictures made from the game files.
     add_executable(kk-hdr-tests tests/hdr_tests.cpp src/hdr_display.cpp)
@@ -521,6 +556,9 @@ endif()
 add_custom_command(TARGET king_kong POST_BUILD
     COMMAND ${CMAKE_COMMAND} -E copy_directory ${CMAKE_CURRENT_SOURCE_DIR}/mods-builtin $<TARGET_FILE_DIR:king_kong>/mods-builtin
     COMMAND ${CMAKE_COMMAND} -E copy_if_different ${CMAKE_CURRENT_SOURCE_DIR}/../MODDING.md $<TARGET_FILE_DIR:king_kong>/MODDING.md)
+# Task 331: the owner's two loading loops (the launcher plays them from launcher/video beside the program).
+add_custom_command(TARGET king_kong POST_BUILD
+    COMMAND ${CMAKE_COMMAND} -E copy_directory ${CMAKE_CURRENT_SOURCE_DIR}/launcher-video $<TARGET_FILE_DIR:king_kong>/launcher/video)
 add_custom_command(TARGET king_kong POST_BUILD
     COMMAND ${CMAKE_COMMAND} -E copy_directory ${CMAKE_CURRENT_SOURCE_DIR}/glyphs $<TARGET_FILE_DIR:king_kong>/glyphs
     COMMAND ${CMAKE_COMMAND} -E copy_if_different ${CMAKE_CURRENT_SOURCE_DIR}/THIRD-PARTY-NOTICES.txt

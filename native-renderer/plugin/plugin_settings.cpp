@@ -1,5 +1,6 @@
 #include "plugin/plugin_settings.h"
 
+#include "backend/menu_scene_light.h"
 #include "backend/render_scale.h"
 
 #include <algorithm>
@@ -436,6 +437,8 @@ GameSettings ReadGameSettings(bool vulkan) {
     s.anisotropic_override = aniso.empty() ? -1 : std::atoi(aniso.c_str());
     // The port's brightness and gamma (kk_brightness -50..50, kk_gamma 0.5..1.5; absent: the defaults).
     s.picture = PictureAdjust::FromSettings(number("kk_brightness", 0.0), number("kk_gamma", 1.0));
+    // Task 330: the live menu scene behind the launcher, lighter (backend/menu_scene_light.h).
+    if (MenuSceneLight()) LightenForMenuScene(s);
     return s;
   };
   return game;

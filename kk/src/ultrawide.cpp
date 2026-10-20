@@ -49,6 +49,7 @@
 #endif
 
 #include "freecam.h"
+#include "menu_scene.h"
 #include "photo_mode.h"
 #include "settings.h"
 #include "ultrawide_logic.h"
@@ -68,6 +69,7 @@ std::atomic<bool> g_logged_view{false};
 
 constexpr uint32_t kTagHud = 1u;        // draw_tags.h kDrawTagHud
 constexpr uint32_t kTagHideHud = 2u;    // draw_tags.h kDrawTagHideHud
+constexpr uint32_t kTagHideAll = 4u;    // draw_tags.h kDrawTagHideAll (task 330)
 constexpr uint32_t kTagLeafShift = 8;   // draw_tags.h kDrawTagLeafShift (diagnostics)
 thread_local uint32_t g_tags = 0;
 
@@ -140,6 +142,16 @@ REX_HOOK_RAW(sub_82796C10) {
   const uint32_t pass = ctx.r4.u32;
   const bool box = kk::UltrawideFactor() != 1.0f && !kk::fov::InMenus() && (pass == kHudPass || PassDiag());
   const bool hide = pass == kHudPass && HideHudPass(base);
+  // Task 330: the live menu scene behind the launcher: the game's menus (the HUD pass: its logo, texts, pages,
+  // loading text) are left out whole.
+  const bool hide_all = pass == kHudPass && kk::menu_scene::HideGameScreen();
+  if (hide_all) {
+    const uint32_t old = g_tags;
+    SetTags(kTagHideAll | (((pass + 1) & 0xFF) << kTagLeafShift));
+    __imp__sub_82796C10(ctx, base);
+    SetTags(old);
+    return;
+  }
   if (!box && !hide) {
     __imp__sub_82796C10(ctx, base);
     return;

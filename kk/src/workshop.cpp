@@ -152,6 +152,28 @@ void LoadProject(Shared& sh, int index, const ws::Fetcher& fetch) {
   Post(sh, std::move(doc));
   if (sh.stop) return;
 
+  // Task 334: the SteamGridDB artwork once it is in the cache (any age: its link never changes) is the tile's
+  // picture right away; else the GitHub picture below shows until the artwork is downloaded.
+  const std::string art_url = ws::ArtworkUrl(p);
+  if (!art_url.empty()) {
+    const ws::CacheResult art = ws::CachedGet(sh.dir, art_url, {}, ws::kMaxImageBytes, Now(), sh.max_age, nullptr);
+    ws::Picture art_pic = art.ok ? ws::DecodePicture(art.bytes, 960) : ws::Picture{};
+    if (art_pic) {
+      if (sh.stop) return;
+      const int aw = art_pic.width, ah = art_pic.height;
+      Result tile;
+      tile.kind = Result::kTile;
+      tile.project = index;
+      tile.ok = true;
+      tile.url = art_url;
+      tile.pic = std::move(art_pic);
+      Post(sh, std::move(tile));
+      REXLOG_INFO("KK workshop: {}/{}: facts {}, README {} ({} blocks), picture (SteamGridDB) {} {}x{} cache", p.owner,
+                  p.repo, How(facts_reply), How(readme), block_count, art_url, aw, ah);
+      return;
+    }
+  }
+
   // The tile's picture: the README's first picture, else the repository's social preview.
   std::string source = "README";
   ws::CacheResult page;
@@ -183,6 +205,22 @@ void LoadProject(Shared& sh, int index, const ws::Fetcher& fetch) {
   const auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - start).count();
   REXLOG_INFO("KK workshop: {}/{}: facts {}, README {} ({} blocks), picture ({}) {} {}x{} {}, {} ms", p.owner, p.repo,
               How(facts_reply), How(readme), block_count, source, picture_url, pw, ph, How(image), ms);
+
+  // Task 334: then the SteamGridDB artwork, replacing the GitHub picture once it is downloaded.
+  if (art_url.empty() || sh.stop) return;
+  const ws::CacheResult art = get(art_url, {}, ws::kMaxImageBytes);
+  ws::Picture art_pic = art.ok ? ws::DecodePicture(art.bytes, 960) : ws::Picture{};
+  if (sh.stop) return;
+  REXLOG_INFO("KK workshop: {}/{}: SteamGridDB picture {} {}x{} {}", p.owner, p.repo, art_url, art_pic.width,
+              art_pic.height, How(art));
+  if (!art_pic) return;
+  Result art_tile;
+  art_tile.kind = Result::kTile;
+  art_tile.project = index;
+  art_tile.ok = true;
+  art_tile.url = art_url;
+  art_tile.pic = std::move(art_pic);
+  Post(sh, std::move(art_tile));
 }
 
 void LoadImage(Shared& sh, const Job& job, const ws::Fetcher& fetch) {

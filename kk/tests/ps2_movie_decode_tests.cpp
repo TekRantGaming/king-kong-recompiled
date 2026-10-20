@@ -63,7 +63,11 @@ int main(int argc, char** argv) {
     const std::filesystem::path file = std::filesystem::u8path(clip);
     std::atomic<bool> cancel{false};
     double t = Now();
-    const auto pcm = DecodeAudio(file, cancel);
+    AudioStats stats;
+    const auto pcm = DecodeAudio(file, cancel, &stats);
+    std::printf("audio packets %d: joined %d (%lld frames off in all), gaps %d (%lld frames), overlaps %d (%lld frames)\n",
+                stats.packets, stats.jitter, (long long)stats.jitter_frames, stats.gaps, (long long)stats.gap_frames,
+                stats.overlaps, (long long)stats.overlap_frames);
     const double audio_ms = (Now() - t) * 1000;
     const double audio_seconds = double(pcm.size()) / (kAudioRate * kAudioFrameBytes);
     double peak = 0, energy = 0;
@@ -73,6 +77,28 @@ int main(int argc, char** argv) {
       energy += s * s;
     }
     const double rms = pcm.empty() ? 0 : std::sqrt(energy / double(pcm.size() / 2));
+    // Task 332 follow-up: dropouts, silent frames (both channels exactly 0) between loud ones: a padded packet
+    // boundary clicks there.
+    int dropouts = 0;
+    {
+      auto at = [&](size_t frame, int ch) { const size_t i = frame * 4 + size_t(ch) * 2; return int(int16_t(uint16_t(pcm[i] | pcm[i + 1] << 8))); };
+      const size_t n = pcm.size() / 4;
+      for (size_t f = 1; f + 1 < n; ++f) {
+        if (at(f, 0) || at(f, 1)) continue;
+        size_t e = f;
+        while (e + 1 < n && !at(e, 0) && !at(e, 1)) ++e;
+        // (one silent frame at a zero crossing, between opposite signs, is the waveform itself)
+        if (e - f < 2400 && std::abs(at(f - 1, 0)) > 256 && std::abs(at(e, 0)) > 256 && (at(f - 1, 0) > 0) == (at(e, 0) > 0)) ++dropouts;
+        f = e;
+      }
+    }
+    std::printf("audio dropouts (silent frames inside loud sound): %d\n", dropouts);
+    if (const char* raw = std::getenv("KK_PS2_TEST_RAW")) {  // the decoded sound as raw 48 kHz s16 stereo, to listen to
+      if (FILE* out = std::fopen(raw, "wb")) {
+        std::fwrite(pcm.data(), 1, pcm.size(), out);
+        std::fclose(out);
+      }
+    }
 
     t = Now();
     VideoReader video(file);

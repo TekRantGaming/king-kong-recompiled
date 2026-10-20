@@ -95,7 +95,13 @@ const char* DecoderName() { return "Media Foundation"; }
 
 // Audio is small (under 3 MB for these clips). The player decodes it before starting the clock so that 4K
 // video decoding can never starve the soundtrack's queue.
-std::vector<uint8_t> DecodeAudio(const std::filesystem::path& file, const std::atomic<bool>& cancel) {
+std::vector<uint8_t> DecodeAudio(const std::filesystem::path& file, const std::atomic<bool>& cancel, AudioStats* stats) {
+  AudioStats local;
+  AudioStats& st = stats ? *stats : local;
+  // Task 332 follow-up: as the FFmpeg decoder, only a real gap or overlap (over 10 ms) is filled with silence or
+  // trimmed. The game's WMA logo movies come out of the resampler a frame or two off their timestamps on nearly
+  // every packet; padding or cutting each of those by the timestamp made a click every packet (the crackle).
+  constexpr size_t kSlackBytes = size_t(kRate / 100) * kFrameBytes;
   MfScope scope;
   auto reader = Reader(file, false);
   std::vector<uint8_t> pcm;
@@ -115,11 +121,26 @@ std::vector<uint8_t> DecodeAudio(const std::filesystem::path& file, const std::a
       BYTE* bytes = nullptr;
       DWORD length = 0;
       Check(buffer->Lock(&bytes, nullptr, &length), "lock audio");
-      // Preserve gaps/trim overlaps in the source timestamps.
-      const size_t offset = size_t(std::max<LONGLONG>(0, pts)) * kRate / 10000000 * kFrameBytes;
+      // Preserve real gaps/trim real overlaps in the source timestamps; join packets that are only a little off.
+      size_t offset = size_t(std::max<LONGLONG>(0, pts)) * kRate / 10000000 * kFrameBytes;
       if (offset + length > size_t(kRate) * kFrameBytes * 60) {
         buffer->Unlock();
         throw std::runtime_error("soundtrack exceeds the private clip limit (60 s)");
+      }
+      ++st.packets;
+      const size_t have = pcm.size();
+      if (offset > have + kSlackBytes) {
+        ++st.gaps;
+        st.gap_frames += int64_t((offset - have) / kFrameBytes);
+      } else if (have > offset + kSlackBytes) {
+        ++st.overlaps;
+        st.overlap_frames += int64_t((have - offset) / kFrameBytes);
+      } else {
+        if (offset != have) {
+          ++st.jitter;
+          st.jitter_frames += int64_t((offset > have ? offset - have : have - offset) / kFrameBytes);
+        }
+        offset = have;
       }
       if (offset > pcm.size()) pcm.resize(offset, 0);
       const size_t skip = std::min<size_t>(length, pcm.size() > offset ? pcm.size() - offset : 0);

@@ -35,6 +35,7 @@
 #if defined(KK_DEV_TOOLS)
 #include "coop_runtime.h"
 #endif
+#include "menu_scene.h"
 
 namespace {
 
@@ -224,6 +225,12 @@ REX_HOOK_RAW(sub_821074E8) {
 #if defined(KK_DEV_TOOLS)
   DevInputTrace input_trace{user,state_ptr ? base+state_ptr : nullptr,base,ctx};
 #endif
+  // The live menu scene behind the launcher (task 330): no controller reaches the game, only the port's Start
+  // on the title.
+  if (kk::menu_scene::Active() && state_ptr) {
+    ctx.r3.u64 = kk::menu_scene::GuestPad(user, base, base + state_ptr);
+    return;
+  }
   struct RecordRead {
     uint32_t user; const uint8_t* state; PPCContext& ctx; const uint8_t* base;
     ~RecordRead() { kk::benchmark::PadRead(user, state, ctx.r3.u32, base); }
@@ -281,6 +288,11 @@ REX_HOOK_RAW(sub_821074E8) {
     if (fire_trace.rt && !filtered_rt) fire_trace.stage = "dev-filter";
     else if (filtered_rt && !base[state_ptr+7]) fire_trace.stage = "pause-cover";
 #endif
+    if (kk::play::OriginalMenuActive()) {  // task 333: Start on the title on the way to the original main menu
+      uint32_t result = ctx.r3.u32;
+      kk::play::OriginalMenuPad(user, base, base + state_ptr, result);
+      ctx.r3.u64 = result;
+    }
     return;
   }
   if (ctx.r3.u32 == 0 && state_ptr) {  // ERROR_SUCCESS
@@ -298,6 +310,11 @@ REX_HOOK_RAW(sub_821074E8) {
     kk::play::FilterPad(user, base + state_ptr);
   } else {
     g_aim[user & 3] = {};  // no pad: let go of a toggled aim
+  }
+  if (state_ptr && kk::play::OriginalMenuActive()) {  // task 333: Start on the title for the original main menu
+    uint32_t result = ctx.r3.u32;
+    kk::play::OriginalMenuPad(user, base, base + state_ptr, result);
+    ctx.r3.u64 = result;
   }
 }
 

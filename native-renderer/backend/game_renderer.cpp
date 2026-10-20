@@ -2156,6 +2156,7 @@ void GameRenderer::Draw(nvrhi::ICommandList* cl, const DrawCall& call) {
   if (PhotoHidesDraw(call, d, *vs, ps.get())) return;  // photo mode (game_photo.cpp): arms, weapon, pause cover
   // Hide HUD / F10 (task 243, draw_tags.h): the HUD pass's textured 2D (the ammo counter, subtitles) is left
   // out. Fades stay: untextured draws, full-width draws, and draws whose positions can't be read are kept.
+  if (call.tags & kDrawTagHideAll) return;  // task 330: the game's menus under the launcher (draw_tags.h)
   if ((call.tags & kDrawTagHideHud) && call.textures[0]) {
     bool readable = false;
     if (!HudDrawCoversWidth(call, d, &readable) && readable) return;
