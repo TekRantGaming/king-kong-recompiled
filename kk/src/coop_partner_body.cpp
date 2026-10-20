@@ -346,6 +346,7 @@ struct Observation {
   bool observed_ally = false;
   bool scheduled = false;
   bool other_human = false;  // Natural PNJInd_Init, never inferred from a rig.
+  bool story_copy_failed = false;  // Per observed identity; allow the lease if native copying fails.
   std::set<uint32_t> actions;
   // Separate idle/moving examples of each tuple; never learn from a driven body.
   std::map<uint32_t, coop::puppet::Action> motion;
@@ -1122,6 +1123,7 @@ void CensusAndSelect(PPCContext& ctx, uint8_t* b, uint32_t w) {
   bool tied = false;
   std::vector<coop::puppet::AutoCandidate> facts;
   Candidate hands_source;
+  bool copy_before_lease = false;
   if (Opt().automatic) {
     for (const auto& c : candidates) {
       auto f = AutoFacts(b, c.rig, !*c.reason && !s.retired.count(c.rig.actor),
@@ -1175,6 +1177,12 @@ void CensusAndSelect(PPCContext& ctx, uint8_t* b, uint32_t w) {
       s.selected_tier = 6;
     } else {
       s.selected_tier = coop::puppet::BodyTier(facts[pick-candidates.data()]);
+      copy_before_lease = coop::puppet::PreferStoryCopy(facts[pick-candidates.data()],
+          s.humans.at(pick->rig.actor).story_copy_failed) && Registered(b, w, pick->rig.actor);
+      if (copy_before_lease) {
+        s.selected_tier = 6;
+        REXLOG_INFO("PUPPET story-copy preferred source={:08X} reason=preserve-authored-human-before-lease",pick->rig.actor);
+      }
     }
     const auto chosen = pick == &hands_source ? coop::puppet::AutoCandidate{} : facts[pick-candidates.data()];
     REXLOG_INFO("PUPPET auto pick epoch={} level={} actor={:08X} index={} score={} tier={} reason={} scheduled={} kind={}",
@@ -1216,7 +1224,13 @@ void CensusAndSelect(PPCContext& ctx, uint8_t* b, uint32_t w) {
       if (SpawnIdentity(b, copy) && ReadRig(b, copy.rig.actor, selected) &&
           Same(selected, copy.rig) && !*s.Qualify(b, selected, jack)) { reused = true; break; }
     }
-    if (!reused && !SpawnCopy(ctx, b, w, pick->rig, jack, selected)) return;
+    if (!reused && !SpawnCopy(ctx, b, w, pick->rig, jack, selected)) {
+      if (copy_before_lease) {
+        obs.story_copy_failed = true;
+        s.Abort("story-copy-unavailable-lease-on-next-selection");
+      }
+      return;
+    }
   }
   if (PassiveSpawn()) {
     s.terminal = true;
@@ -1362,7 +1376,7 @@ void PartnerBodyAfterAi(PPCContext& ctx, uint8_t* b, uint32_t w) {
         s.epoch, XYZ(rig.pos), XYZ({p.x, p.y, p.z}));
     s.desired = {step->target.x, step->target.y, step->target.z};
     s.facing = {std::cos(p.facing), std::sin(p.facing), 0};
-    const auto choice = coop::puppet::ChooseAction(p.speed, s.observed_motion);
+    const auto choice = coop::puppet::ChooseAction(p.speed, s.observed_motion, s.selected_copy);
     if (choice) {
       s.action = choice->action; s.item = choice->item;
       s.transition_pending = rig.action != s.action || rig.item != s.item;
@@ -1372,7 +1386,8 @@ void PartnerBodyAfterAi(PPCContext& ctx, uint8_t* b, uint32_t w) {
     } else {
       s.action = rig.action; s.item = rig.item; s.transition_pending = false;
       const unsigned kind = std::abs(p.speed) < coop::puppet::kIdleSpeed ? 1 : 2;
-      if (s.missing_action_kind != kind) REXLOG_INFO("PUPPET partner keep-current reason=no-observed-{}-action action={} item={}",
+      if (s.missing_action_kind != kind) REXLOG_INFO("PUPPET partner keep-current reason={} motion={} action={} item={}",
+          s.selected_copy ? "native-copy-tuple-not-requalified" : "no-observed-action",
           std::abs(p.speed) < coop::puppet::kIdleSpeed ? "idle" : "moving", s.action, s.item);
       s.missing_action_kind = kind;
     }

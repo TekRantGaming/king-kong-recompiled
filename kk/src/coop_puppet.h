@@ -47,7 +47,10 @@ struct Action {
   uint8_t item = 0;
   float speed = 0;  // Horizontal speed actually observed with this tuple on this rig.
 };
-inline std::optional<Action> ChooseAction(float speed, std::span<const Action> observed) {
+inline std::optional<Action> ChooseAction(float speed, std::span<const Action> observed, bool native_copy = false) {
+  // Source gaits do not prove a duplicated rig can switch its item/action bank.
+  // Rigid stand-ins keep their validated tuple while following partner position.
+  if (native_copy) return {};
   if (!std::isfinite(speed)) return {};
   speed = std::abs(speed);
   std::optional<Action> best;

@@ -87,6 +87,11 @@ inline int BodyTier(const AutoCandidate& c) {
   if (safe >= 0) return safe;
   return FallbackReject(c) ? -1 : c.other_human ? 5 : 4;
 }
+// Keep an authored human in place when the native copy path is available.
+// A failed copy still permits Craig's story-human lease as the last resort.
+inline bool PreferStoryCopy(const AutoCandidate& c, bool copy_failed) {
+  return !copy_failed && BodyTier(c) == 4;
+}
 inline int BodyScore(const AutoCandidate& c) {
   const int tier = BodyTier(c);
   if (tier < 0) return -1;

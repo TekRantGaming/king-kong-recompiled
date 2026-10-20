@@ -459,6 +459,8 @@ void PuppetPolicies() {
   std::array<uint32_t, 3> all_hidden{8, 8, 9};
   Check(FilterActors(all_hidden, hidden) == 0, "volume query can exclude every spawned result");
   const Action observed[] = {{41, 3, 0}, {22, 3, 1}, {35, 4, 4}};
+  Check(!ChooseAction(0, observed, true) && !ChooseAction(4, observed, true),
+      "native rigid copy does not switch to a source-only idle, gait or item bank");
   Check(ChooseAction(.09f, observed)->action == 41, "observed idle below threshold");
   Check(ChooseAction(.1f, observed)->action == 22, "threshold chooses observed moving tuple");
   Check(ChooseAction(1.2f, observed)->action == 22, "walk uses closest observed speed");
@@ -572,6 +574,9 @@ void PartnerSelection() {
 
   auto story = spare; story.script_reference = true; story.mission_distance = 10;
   Check(BodyTier(story) == 4, "referenced H is a tier A fallback");
+  Check(PreferStoryCopy(story, false), "copy a referenced story human before moving its authored actor");
+  Check(!PreferStoryCopy(story, true), "failed native copy preserves the last-resort story lease");
+  Check(!PreferStoryCopy(spare, false), "safe spare humans keep normal borrowing priority");
   const AutoCandidate safe_first[]{story, spare};
   Check(SelectBody(safe_first) == 1, "safe tiers always precede story borrowing");
   auto distant_record = story; distant_record.actor = 104; distant_record.mission_distance = 30;
@@ -581,6 +586,7 @@ void PartnerSelection() {
   const AutoCandidate state_rank[]{story, distant_record};
   Check(SelectBody(state_rank) == 0, "avoid a cinematic even if its mission reference is farther away");
   auto native = spare; native.natural_h = false; native.other_human = true;
+  Check(!PreferStoryCopy(native, false), "PNJInd fallback is not sent through the H-only copy path");
   const AutoCandidate human_fallback[]{native, story};
   Check(BodyTier(native) == 5 && SelectBody(human_fallback) == 1, "PNJInd is tier B after story H");
   auto leased = story; leased.current_script_use = true;
