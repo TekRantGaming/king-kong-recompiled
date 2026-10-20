@@ -52,7 +52,8 @@ constexpr float kIdleSpeed = .1f;
 struct Action {
   uint16_t action = 0;
   uint8_t item = 0;
-  float speed = 0;  // Horizontal speed actually observed with this tuple on this rig.
+  float speed = 0;  // Native horizontal speed, normalized to the driver's 60 fps layer rate.
+  float yaw = 0;    // Natural travel heading relative to body forward, for observed gaits.
 };
 inline std::optional<Action> ChooseAction(float speed, std::span<const Action> observed) {
   if (!std::isfinite(speed)) return {};

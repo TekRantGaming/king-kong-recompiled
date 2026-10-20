@@ -65,7 +65,6 @@ REX_EXTERN(__imp__sub_82454690);
 REX_EXTERN(__imp__sub_8271E4E8);
 REX_EXTERN(__imp__sub_82449F18);
 REX_EXTERN(__imp__sub_8242AA88);
-REX_EXTERN(__imp__sub_826BB350);
 REX_EXTERN(__imp__sub_8271A6F8);
 REX_EXTERN(__imp__sub_827128F0);
 #if defined(KK_DEV_TOOLS)
@@ -409,6 +408,8 @@ struct State {
   int selected_tier = -1;
   unsigned missing_action_kind = 0;
   coop::puppet::AnimationDrive animation;
+  float aim_clip_frame = -1;
+  uint32_t aim_tuple = UINT32_MAX;
   uint32_t rate_layer = 0;
   uint8_t* rate_base = nullptr; // game thread only; restored before relinquishing the exact rig
   uint8_t saved_rate = 60, playback_rate = 60;
@@ -723,13 +724,20 @@ float Frame(PPCContext& ctx, uint8_t* b, uint32_t actor) {
 
 std::optional<Vec> NativeRootVelocity(PPCContext& ctx, uint8_t* b, const Rig& r,
                                     uint16_t action, uint8_t item) {
+  auto unavailable=[&](const char* reason,uint32_t first=0,uint32_t second=0)->std::optional<Vec> {
+#if defined(KK_DEV_TOOLS)
+    REXLOG_INFO("PUPPET gait unavailable actor={:08X} action={} item={} reason={} data={}/{}",
+        r.actor,action,item,reason,first,second);
+#endif
+    return {};
+  };
   if (!LoadedAction(b,r,action,item)) return {};
   const auto items=Ptr(b,r.table,4*(action+4),20);
   const auto descriptor=Ptr(b,items,20*item+4,8), header=Ptr(b,descriptor,0,20);
-  if (!header) return {};
+  if (!header) return unavailable("header");
   const auto count=Load16(b,header+4);
   const auto tracks=count<=512 ? Ptr(b,header,0,24*count) : 0;
-  if (!count || count>512 || !tracks) return {};
+  if (!count || count>512 || !tracks) return unavailable("track-list",count,tracks);
   // The native reader uses the last two translation keys. Reject a partial
   // root track before it could step before the key array or divide by zero.
   for (unsigned i=0;i<count;++i) {
@@ -737,7 +745,8 @@ std::optional<Vec> NativeRootVelocity(PPCContext& ctx, uint8_t* b, const Rig& r,
     if (Load16(b,track+20)!=65535) continue;
     const auto keys=Load16(b,track+16);
     const auto data=Ptr(b,track,4,8*keys);
-    if (keys<2 || !data || !(Load16(b,data+8*(keys-2))&0x7fff)) return {};
+    if (keys<2 || !data) return unavailable("root-keys",keys,data);
+    if (!(Load16(b,data+8*(keys-2))&0x7fff)) return unavailable("root-key-duration",keys,Load16(b,data+8*(keys-2)));
   }
   Scratch scratch(ctx,b);
   const auto layer=scratch.Vector({},0x100), result=scratch.Vector({},0x110);
@@ -749,6 +758,9 @@ std::optional<Vec> NativeRootVelocity(PPCContext& ctx, uint8_t* b, const Rig& r,
   __imp__sub_8280F328(ctx,b);
   const auto velocity=ReadVec(b,result);
   Store32(b,0x82CCBF94,saved_header); Store32(b,0x82CCBF98,saved_cursor);
+#if defined(KK_DEV_TOOLS)
+  REXLOG_INFO("PUPPET gait read actor={:08X} action={} item={} tracks={} velocity={}",r.actor,action,item,count,XYZ(velocity));
+#endif
   return Finite(velocity) ? std::optional<Vec>{velocity} : std::nullopt;
 }
 
@@ -760,32 +772,50 @@ void CalibrateGaits(PPCContext& ctx,uint8_t* b,const Rig& r) {
     const auto item=LoadedItem(b,r,action);
     if (!item) continue;
     const auto root=NativeRootVelocity(ctx,b,r,action,*item);
-    const float speed=root ? std::hypot(root->x,root->y) : 0;
+    float speed=root ? std::hypot(root->x,root->y) : 0;
+    float yaw=root ? std::remainder(std::atan2(root->y,root->x)+1.570796327f,6.283185307f) : 0;
+    const char* source="root-key-velocity";
+    // Some loaded banks have in-place clips, with no translating root track.
+    // A naturally played instance of this exact action/item supplies its native
+    // speed and heading instead. Observations are normalized by the live fps.
+    if (speed<coop::puppet::kIdleSpeed) for (const auto& sample:s.observed_motion) {
+      if (sample.action==action && sample.item==*item && sample.speed>speed) {
+        speed=sample.speed; yaw=sample.yaw; source="native-observed";
+      }
+    }
     if (speed<coop::puppet::kIdleSpeed || speed>30) continue;
     // Native actor forward is local -Y (8270FA58).
-    const float yaw=std::remainder(std::atan2(root->y,root->x)+1.570796327f,6.283185307f);
     s.native_gaits.push_back({{action,*item,speed},yaw,action==27 || action==37 || (action>=50 && action<=55)});
-    REXLOG_INFO("PUPPET native gait actor={:08X} action={} item={} speed={:.4f} local-yaw={:.4f} source=root-key-velocity fps=60",
-        r.actor,action,*item,speed,yaw);
+    REXLOG_INFO("PUPPET native gait actor={:08X} action={} item={} speed={:.4f} local-yaw={:.4f} source={} fps=60",
+        r.actor,action,*item,speed,yaw,source);
   }
 }
 
 void PartnerBodyAim(PPCContext& ctx,uint8_t* b,uint32_t actor,uint32_t ai) {
   auto& s=Get();
   Rig rig;
-  if (!Enabled() || !Opt().partner || !s.driving || s.selected_copy ||
+  if (!Enabled() || !Opt().partner || !s.driving ||
       actor!=s.selected.actor || ai!=s.selected.ai || !s.partner.partner ||
       !s.partner.fresh || !s.Validate(b,s.world,rig) || !Scratch::CanUse(ctx) ||
       s.humans.at(actor).other_human) return;
+  const auto clip_frame=Frame(ctx,b,actor);
+  const auto tuple=(rig.action<<8)|rig.item;
+  if (clip_frame==s.aim_clip_frame && tuple==s.aim_tuple) return;
+  s.aim_clip_frame=clip_frame; s.aim_tuple=tuple;
   const auto& p=*s.partner.partner;
   const float body_yaw=std::atan2(s.facing.y,s.facing.x);
   const float yaw=body_yaw+std::clamp(std::remainder(p.facing-body_yaw,6.283185307f),-1.22f,1.22f);
   const float pitch=std::clamp(p.pitch,-.96f,.96f);
   const Vec aim{std::cos(yaw)*std::cos(pitch),std::sin(yaw)*std::cos(pitch),std::sin(pitch)};
   unsigned applied=0;
+#if defined(KK_DEV_TOOLS)
+  float matrix_delta=0;
+#endif
   // H_callback_after_blend uses tags 3 and 2 with 8271A6F8 (inverse
   // orientation) then 827128F0 (weighted local rotation), .22:32690+.
-  // This hook runs after each new native blend, so offsets never accumulate.
+  // The authored H callback is held with its AI. Apply only its isolated bone
+  // rotation after the native world/animation pass, once per advancing clip
+  // sample. A stopped/culled pose must not accumulate another rotation.
   for (const uint8_t tag:{3,2}) {
     const auto bone=OwnedAimBone(b,rig,tag);
     if (!bone) continue;
@@ -797,13 +827,20 @@ void PartnerBodyAim(PPCContext& ctx,uint8_t* b,uint32_t actor,uint32_t ai) {
     ctx.r3.u64=bone; ctx.r4.u64=target; ctx.r5.u64=local_target;
     __imp__sub_8271A6F8(ctx,b);
     if (!Finite(ReadVec(b,local_forward)) || !Finite(ReadVec(b,local_target))) continue;
+#if defined(KK_DEV_TOOLS)
+    const auto bone_matrix=Ptr(b,bone,12,80);
+    const auto before=bone_matrix ? ReadVec(b,bone_matrix+16) : Vec{};
+#endif
     ctx.r3.u64=bone; ctx.r4.u64=local_forward; ctx.r5.u64=local_target; ctx.f1.f64=.5;
     __imp__sub_827128F0(ctx,b);
+#if defined(KK_DEV_TOOLS)
+    if (bone_matrix) matrix_delta+=Distance(before,ReadVec(b,bone_matrix+16));
+#endif
     ++applied;
   }
 #if defined(KK_DEV_TOOLS)
-  if (s.updates%120==0) REXLOG_INFO("PUPPET aim actor={:08X} bones={} yaw-offset={:.3f} pitch={:.3f} native-after-blend=1",
-      actor,applied,yaw-body_yaw,pitch);
+  if (s.updates%120==0) REXLOG_INFO("PUPPET aim actor={:08X} bones={} yaw-offset={:.3f} pitch={:.3f} matrix-delta={:.5f} native-world-pose=1",
+      actor,applied,yaw-body_yaw,pitch,matrix_delta);
 #endif
 }
 
@@ -1247,13 +1284,17 @@ void CensusAndSelect(PPCContext& ctx, uint8_t* b, uint32_t w) {
         const float speed = delta / s.dt;
         if (delta <= 5 && speed < 10000) {
           const bool moving = speed >= coop::puppet::kIdleSpeed;
+          const auto fps=b[rig.layer+2];
+          const float native_speed=moving ? (fps ? speed*60.f/fps : 0) : speed;
+          const float yaw=moving ? std::remainder(std::atan2(rig.pos.y-obs.previous.y,rig.pos.x-obs.previous.x)-
+              std::atan2(rig.forward.y,rig.forward.x),6.283185307f) : 0;
           const uint32_t sample_key = (tuple << 1) | uint32_t(moving);
           auto [sample, added] = obs.motion.emplace(sample_key,
-              coop::puppet::Action{uint16_t(rig.action), uint8_t(rig.item), speed});
+              coop::puppet::Action{uint16_t(rig.action), uint8_t(rig.item), native_speed,yaw});
           // Retain the fastest natural example to distinguish walk from run.
-          sample->second.speed = std::max(sample->second.speed, speed);
+          if (native_speed>=sample->second.speed) { sample->second.speed=native_speed; sample->second.yaw=yaw; }
           if (added) REXLOG_INFO("PUPPET observed actor={:08X} action={} item={} motion={} speed={:.3f}",
-              actor, rig.action, rig.item, moving ? "moving" : "idle", speed);
+              actor, rig.action, rig.item, moving ? "moving" : "idle", native_speed);
         }
       }
       obs.previous = rig.pos; obs.previous_tuple = tuple; obs.sampled = true;
@@ -1402,6 +1443,7 @@ void CensusAndSelect(PPCContext& ctx, uint8_t* b, uint32_t w) {
   }
   s.selected = selected; s.selected_generation = s.humans.at(selected.actor).generation;
   s.animation = {};
+  s.aim_clip_frame=-1; s.aim_tuple=UINT32_MAX;
   s.requested_tuple = UINT32_MAX;
   s.animation_shots = 0;
 #if defined(KK_DEV_TOOLS)
@@ -1719,8 +1761,9 @@ void PartnerBodyLateWorld(PPCContext& ctx, uint8_t* b, uint32_t w) {
   s.measure = false;
   Rig rig;
   if (!s.Validate(b, w, rig)) return;
+  if (Opt().partner) PartnerBodyAim(ctx,b,rig.actor,rig.ai);
 #if defined(KK_DEV_TOOLS)
-  if (Opt().partner && s.capture_left && Scratch::CanUse(ctx)) {
+  if (Opt().partner && s.capture_left && s.updates%3==0 && Scratch::CanUse(ctx)) {
     --s.capture_left;
     const auto filename=fmt::format("partner-shot-{}-{}-{}.png",s.epoch,s.animation_shots,s.updates);
     art::CaptureFrame(filename);
@@ -2018,11 +2061,6 @@ REX_HOOK_RAW(sub_8268D8E8) {
   const uint32_t ai = on ? kk::hfr::Load32(base, 0x82CCBF64) : 0;
   __imp__sub_8268D8E8(ctx, base);
   if (on) kk::PuppetObserveInit(base, actor, ai);
-}
-REX_HOOK_RAW(sub_826BB350) {
-  const uint32_t actor=kk::hfr::Load32(base,0x82CCBF6C), ai=kk::hfr::Load32(base,0x82CCBF64);
-  __imp__sub_826BB350(ctx,base);
-  kk::PartnerBodyAim(ctx,base,actor,ai);
 }
 // PNJInd_Init is the independently identified human-shaped native family.
 // KAnn is deliberately never observed into the candidate set.

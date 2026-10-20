@@ -426,17 +426,16 @@ void PoseReadingAndDisplay() {
   Check(pose.pose && pose.pose->level == 201 && pose.pose->x == 3 &&
       std::string_view(pose.failure) == "ok", "retained load-page mode does not suppress a loaded Jack");
   Check(pose.pose->action == 123 && pose.pose->item == 0xAB, "read diagnostic action and big-endian item byte");
-  constexpr uint32_t world=0x40010000, contact=world+728;
-  words[0x828E8388]=world; words[world+656]=1;
-  words[contact]=actor; words[contact+48]=64;
-  Check(!read().pose->airborne,"native floor contact is grounded");
-  words[contact+48]=0;
-  Check(read().pose->airborne,"no floor contact publishes airborne state");
-  words[contact+48]=64|0x1000;
-  Check(read().pose->airborne,"native excluded contact never proves grounded");
-  words[contact+48]=64; words[contact]=actor+4;
-  Check(read().pose->airborne,"other actor floor contact cannot ground Jack");
-  words[0x828E8388]=0;
+  Check(!read().pose->airborne,"cleared native flight height stays grounded");
+  floats[vars+13268]=1;
+  Check(!read().pose->airborne,"native one-unit flight threshold excludes small steps");
+  floats[vars+13268]=1.2f;
+  Check(read().pose->airborne,"native fall height publishes airborne state");
+  floats[vars+13268]=-1.2f;
+  Check(read().pose->airborne,"rising above the last floor also uses the airborne clip");
+  floats[vars+13268]=std::numeric_limits<float>::quiet_NaN();
+  Check(!read().pose->airborne,"invalid flight height cannot invent a jump");
+  floats[vars+13268]=0;
   words[0x82CC97C0] = 0x9fffe000;
   check("globals-span"); // Weapon sampling also needs the far end of G to be readable.
   words[0x82CC97C0] = g;
