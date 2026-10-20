@@ -1559,6 +1559,10 @@ void ShotRay(const uint8_t* b, uint32_t origin, uint32_t point, uint32_t object,
 bool ForwardShotEvent(PPCContext& ctx, uint8_t* b) {
   auto& s = Get();
   const auto link = EnemyLinkSnapshot();
+  // Solo chapters keep independent native worlds even while the lobby stays
+  // connected. Withhold guest hits only in the shared world policy.
+  const auto flow = SessionFlowSnapshot();
+  if (flow.active && flow.policy != ChapterPolicy::Together) return false;
   // Preserve host authority during transient loss too. A stale worker snapshot
   // can withhold forwarding, but must not turn the guest into a damage owner.
   if (!REXCVAR_GET(kk_coop_enabled) || link.role != Role::Guest ||
