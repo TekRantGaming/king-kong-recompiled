@@ -15,6 +15,7 @@
 #include <chrono>
 #include <cstdlib>
 #include <fstream>
+#include <string_view>
 #include <thread>
 
 REX_EXTERN(__imp__sub_82413190);
@@ -163,6 +164,18 @@ bool RequestSessionStart() {
     if (r.chapter<0 || r.chapter>=42) return false;
     s.chapter=uint16_t(r.chapter); s.level=kChapterRules[size_t(r.chapter)].level;
     s.start=r.chapter==0 || r.chapter==41 ? 0 : r.chapter==40 ? 49 : 1;
+#if defined(KK_DEV_TOOLS)
+    // The normal chapter fixture supports alternate native checkpoints. Carry
+    // the host's explicit dev override in SessionStart so both worlds agree.
+    if (const char* value=std::getenv("KK_DEV_START_POINT"); value && *value) {
+      char* end=nullptr;
+      const auto point=std::strtoul(value,&end,10);
+      if (end!=value && !*end && point<=10000) {
+        s.start=uint32_t(point);
+        REXLOG_INFO("KK dev co-op: shared chapter start override entry={} level={} start={}",s.chapter,s.level,s.start);
+      } else REXLOG_WARN("KK dev co-op: ignored invalid KK_DEV_START_POINT");
+    }
+#endif
   } else {
     if (save.empty() || r.slot<0) return false;
     const auto& slot=slots[size_t(r.slot)]; const int chapter=FlowChapter(uint32_t(slot.continue_level));
@@ -363,6 +376,24 @@ void SessionReloadFrame(uint8_t* base) {
   if (!v.active || v.phase!=FlowPhase::Playing) {
     observer::SetPartnerSpectating(false); return;
   }
+#if defined(KK_DEV_TOOLS)
+  // Background sweep equivalent of pressing each existing catch-up button once.
+  // Never creates an offer or escalates a move into a checkpoint reload.
+  static const bool dev_catchup=[] {
+    const char* value=std::getenv("KK_DEV_CATCHUP");
+    return value && std::string_view(value)=="1";
+  }();
+  static bool dev_moved=false, dev_recovered=false;
+  if (dev_catchup && !v.host && v.policy==ChapterPolicy::Together && MoveToPartnerOffered()) {
+    const bool checkpoint=StoryBehind();
+    bool& accepted=checkpoint ? dev_recovered : dev_moved;
+    if (!accepted) {
+      accepted=true;
+      REXLOG_INFO("KK dev catch-up: accepting existing {} offer once",checkpoint ? "checkpoint recovery" : "move");
+      MoveToPartner(checkpoint);
+    }
+  }
+#endif
   observer::SetPartnerSpectating(false);
   if (recovery_generation!=v.world.generation) {
     recovery_generation=v.world.generation; recovery={}; private_load=private_request=reload_sent=false;
