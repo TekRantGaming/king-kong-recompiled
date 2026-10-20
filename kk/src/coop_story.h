@@ -57,6 +57,12 @@ class Hints {
       if (p.Reached(*it)) { note(*it); it=pending_.erase(it); } else ++it;
   }
   std::size_t Pending() const { return pending_.size(); }
+  bool Passed(uint32_t run,uint32_t record) const {
+    for (const auto& e : pending_) if (e.run==run &&
+        ((e.phase==StoryPhase::Advance && e.record==record) ||
+         (e.phase==StoryPhase::Finished && e.record>record))) return true;
+    return false;
+  }
  private:
   std::deque<StoryEvent> pending_;
 };

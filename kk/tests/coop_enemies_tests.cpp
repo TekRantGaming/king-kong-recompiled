@@ -173,6 +173,15 @@ void ScorpionDamagePools() {
   Check(commit && Near(commit->enemy.life, 24) && Near(commit->enemy.secondary_life, 3), "handover preserves both damaged pools");
   Message wire; wire.type = MessageType::OwnershipChange; wire.epoch = 1; wire.ownership = *commit;
   Check(Decode(Packet(wire), decoded) && Near(decoded.ownership.enemy.secondary_life, 3), "handover wire retains secondary health");
+  auto malformed = Packet(Snapshot(b)); malformed[malformed.size()-4] = 0x7f; malformed[malformed.size()-3] = 0xc0;
+  Check(!Decode(malformed, decoded), "nonfinite wire secondary health refused");
+  Check(owner.Commit(*commit) && guest.Commit(*commit), "both sides commit damaged scorpion");
+  auto final = guest.last; final.life = 18; final.secondary_life = 2;
+  const auto back = owner.Begin(World(), EnemyOwner::Host, owner.last);
+  const auto final_ready = guest.Prepare(*back, final);
+  const auto final_commit = owner.Ready(*final_ready);
+  Check(final_commit && Near(final_commit->enemy.life, 18) && Near(final_commit->enemy.secondary_life, 2),
+      "return to host preserves final guest-native damage in both pools");
 }
 struct Transport final : ICoopTransport {
   Transport* peer = nullptr;

@@ -241,6 +241,8 @@ void LenientConvergence() {
   events.Tick(40);
   Check(!events.Behind() && !events.Front() && hints.Pending()==4,
       "unsupported native script consumes hints without holding global replay or a five-second apply deadline");
+  Check(hints.Passed(2,0) && !hints.Passed(1,0) && !hints.Passed(3,0) && !hints.Passed(2,1),
+      "host completion permits only an actually passed boundary in the same activation");
   unsigned converged=0;
   auto collect=[&](const StoryEvent&){ ++converged; };
   hints.Converge(local,collect); Check(!converged,"host hints never claim the guest's callback ran");

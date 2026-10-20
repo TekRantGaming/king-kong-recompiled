@@ -26,6 +26,7 @@ REX_EXTERN(__imp__sub_8250EDE8);
 REX_EXTERN(__imp__sub_82543CA0);
 REX_EXTERN(__imp__sub_826F9E70);
 REX_EXTERN(__imp__sub_82847478);
+REX_EXTERN(__imp__sub_82501A30);
 #if defined(KK_DEV_TOOLS)
 namespace kk { void DevTrigPivotResult(uint8_t*,uint32_t,uint32_t,uint32_t); }
 #endif
@@ -76,6 +77,32 @@ bool Trace() {
 #else
   return false;
 #endif
+}
+void TraceLayout(const uint8_t* b,const Script& s) {
+#if defined(KK_DEV_TOOLS)
+  static const uint64_t selected=[] {
+    const char* value=std::getenv("KK_DEV_STORY_LAYOUT");
+    return value ? std::strtoull(value,nullptr,16) : 0ull;
+  }();
+  if (!selected || s.binding.source!=selected) return;
+  const auto vars=s.binding.vars;
+  REXLOG_INFO("KK dev story layout: source={:016X} script={:016X} actor={:08X} vars={:08X} detect={:08X}",
+      s.binding.source,s.binding.script,s.binding.actor,vars,Load32(b,vars+20));
+  for (uint32_t i=0;i<=kStoryRecords;++i) {
+    const auto fn=Load32(b,vars+924+180*i),p=vars+992+180*i;
+    REXLOG_INFO("KK dev story record: source={:016X} index={} fn={:08X} args={:08X},{:08X},{:08X},{:08X} flags={:08X} local={}",
+        selected,i,fn,Load32(b,p+4),Load32(b,p+8),Load32(b,p+12),Load32(b,p+16),Load32(b,p+84),Load32(b,p+100));
+    if (!fn) break;
+  }
+#endif
+}
+void TraceLag(const uint8_t* b,const Script& s,const StoryEvent& e) {
+  if (!Trace()) return;
+  const auto vars=s.binding.vars,index=Load32(b,vars+19812);
+  const auto p=vars+992+180*std::min(index,kStoryRecords);
+  REXLOG_INFO("KK co-op story lag detail: source={:016X} script={:016X} host={}/{} local={}/{} detect={:08X} callback={:08X} args={:08X},{:08X},{:08X},{:08X} flags={:08X} local-word={} loop={} exact={}",
+      e.source,e.script,e.run,e.record,s.run,index,Load32(b,vars+20),Load32(b,p-68),
+      Load32(b,p+4),Load32(b,p+8),Load32(b,p+12),Load32(b,p+16),Load32(b,p+84),Load32(b,p+100),s.saw_loop,s.exact);
 }
 void Note(const char* what,const StoryEvent& e,const char* reason="") {
   if (Trace()) REXLOG_INFO("KK co-op {}: {} role={} gen={} level={} number={} source={:016X} script={:016X} run={} record={} phase={} {}",
@@ -170,6 +197,7 @@ void Census(const uint8_t* b) {
       s.exact=SafeRequest(b,s);
       if (const auto run=runs.find(source); run!=runs.end()) s.run=run->second;
       it=scripts.emplace(actor,s).first;
+      TraceLayout(b,it->second);
     }
     // Include dormant and ambiguous objects. Never pick the first same-position script.
     bindings.push_back(it->second.binding);
@@ -406,6 +434,7 @@ void ChecksumFrame(uint8_t* b,double now) {
             stage==story::Lag::Stage::Move ? "persistent lag: move offered" :
             stage==story::Lag::Stage::Reload ? "lag after soft fix: checkpoint recovery offered" : "checksum lag grace started";
         Note(what,e,"guest must remain behind without advancing for more than 20 seconds");
+        if (stage!=story::Lag::Stage::Clear) TraceLag(b,s,e);
       }
       if (reply.run!=e.run || reply.record!=e.record) Note("checksum differs (hint)",reply);
       else Note("checksum matched",reply);
@@ -661,10 +690,35 @@ bool StoryLoop(PPCContext& ctx,uint8_t* b) {
   Store32(b,vars+19816,1); // native waiting result; no guest-local callback is run
   return true;
 }
+bool ConvergeFlagWait(uint8_t* b,uint32_t payload) {
+  if (!Ensure(b) || host || failed) return false;
+  auto* s=Current(b);
+  if (!s || s->exact || !s->saw_loop) return false;
+  const auto index=Load32(b,s->binding.vars+19812);
+  if (index>=kStoryRecords || payload!=s->binding.vars+992+180*index ||
+      Load32(b,payload-68)!=0x82501A30 || Load32(b,payload+84)!=0x100) return false;
+  // This native variant only reads one non-player object's flag. With +8..+20
+  // null, success has no completion flags to consume (.65:18510-18799).
+  // Never extend to Jack's volumes, NPC movement waits or action callbacks.
+  const auto target=Load32(b,payload+4);
+  if (!PoseAddress(target,32) || target==Load32(b,0x82CCBF7C) || !Ptr(b,target,24,42)) return false;
+  for (uint32_t off=8;off<=20;off+=4) if (Load32(b,payload+off)) return false;
+  const auto stage=s->lag.State(Now());
+  if ((stage!=story::Lag::Stage::Move && stage!=story::Lag::Stage::AfterMove && stage!=story::Lag::Stage::Reload) ||
+      !s->hints.Passed(s->run,index)) return false;
+  Note("native flag wait converged",Event(*s,StoryPhase::Advance,index),
+      "host passed same activation; single-target read-only 0x100 wait stalled >20 seconds");
+  return true;
+}
 } // namespace kk::coop
 
 REX_HOOK_RAW(sub_82476848) {
   if (!kk::coop::StoryDetect(ctx,base)) __imp__sub_82476848(ctx,base);
+}
+REX_HOOK_RAW(sub_82501A30) {
+  const auto payload=ctx.r3.u32;
+  __imp__sub_82501A30(ctx,base);
+  if (!ctx.r3.u32 && kk::coop::ConvergeFlagWait(base,payload)) ctx.r3.u32=1;
 }
 REX_HOOK_RAW(sub_8244F0E8) {
   const auto rec=ctx.r3.u32,lr=uint32_t(ctx.lr);
