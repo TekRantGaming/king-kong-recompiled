@@ -85,6 +85,7 @@ bool HoldWorld() {
 }
 bool StatusScreen() { return screen.load(); }
 bool Active() { return observing.load(); }
+bool InCutscene(const uint8_t* base) { return local_scripted || together_scene.Active() || Movie(base); }
 const char* Status() { return status.load(); }
 bool SuppressLook() { return REXCVAR_GET(kk_coop_enabled) && observing.load(); }
 // The native screen list also contains credits text, not just first-person UI.

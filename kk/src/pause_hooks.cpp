@@ -57,6 +57,7 @@
 #include "photo_mode_logic.h"
 #include "play_internal.h"
 #include "coop_runtime.h"
+#include "coop_pose.h"
 #include "coop_observer.h"
 #include "settings.h"
 #include "backend/picture_adjust.h"  // brightness and gamma on the kept frame
@@ -922,15 +923,28 @@ void CreatePauseStandIn(rex::ui::ImGuiDrawer* drawer) {
 
 #endif
 
-// Log and replicate each checkpoint (ES_CheckPoint: G+0xC = its start point, then the
-// universe snapshot that Load last checkpoint and a death go back to).
+// Replicate only an actual ES_CheckPoint snapshot. The outer predicate runs
+// every frame even when no checkpoint fires, and G+0xC may contain the host's
+// mirrored retry point. G.60:826438A4 writes the authored point, then calls
+// 82413190 at LR 82643928. Direct __imp__ calls used to mirror the host's retry
+// save bypass this hook and must not advance the guest's live world checkpoint.
+REX_EXTERN(__imp__sub_82413190);
+REX_HOOK_RAW(sub_82413190) {
+  const bool checkpoint=uint32_t(ctx.lr)==0x82643928;
+  __imp__sub_82413190(ctx,base);
+  const auto g=kk::play::Load32(base,kk::play::kGamePtr);
+  if (checkpoint && kk::coop::PoseAddress(g,28)) {
+    const auto point=kk::play::Load32(base,g+12);
+    kk::coop::SessionCheckpoint(kk::play::Load32(base,g+24),point);
+  }
+}
+// Retain developer diagnostics around the checkpoint predicate.
 REX_EXTERN(__imp__sub_826437D0);
 REX_HOOK_RAW(sub_826437D0) {
   const uint32_t g = kk::play::Load32(base, kk::play::kGamePtr);
   const int32_t before = g ? int32_t(kk::play::Load32(base, g + 0xC)) : -1;
   __imp__sub_826437D0(ctx, base);
   const int32_t after = g ? int32_t(kk::play::Load32(base, g + 0xC)) : -1;
-  if (g && after>=0) kk::coop::SessionCheckpoint(kk::play::Load32(base,g+0x18),uint32_t(after));
 #if defined(KK_DEV_TOOLS)
   static int calls = 0;
   if (before != after || ++calls <= 2)

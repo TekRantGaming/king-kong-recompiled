@@ -1905,6 +1905,23 @@ bool EnemyCombatReference(const uint8_t* b, uint32_t owner, uint32_t ai, uint32_
       binding->second.ai == ai && binding->second.vars == vars && ValidBinding(b, binding->second) &&
       combat::CandidateReference(offset, Load32(b, vars+5236));
 }
+bool EnemyNearPlayer(const uint8_t* b,const PlayerPose& player,float radius) {
+  uint32_t begin=0,end=0;
+  if (!Table(b,Load32(b,0x828E8388),begin,end)) return true;
+  for (auto p=begin;p<end;p+=8) {
+    Binding binding; EnemyState enemy;
+    if (Read(b,Load32(b,p),binding,enemy) && enemy.life>0 &&
+        std::hypot(enemy.x-player.x,enemy.y-player.y,enemy.z-player.z)<=radius) return true;
+  }
+  // Include the other owner's current replicas, including a briefly unscheduled
+  // local actor. Missing native identity cannot make a known nearby foe safe.
+  for (const auto& record : EnemyLinkSnapshot().remote.records) {
+    const auto& enemy=record.enemy;
+    if (record.kind!=EnemyEventKind::Removed && enemy.life>0 &&
+        std::hypot(enemy.x-player.x,enemy.y-player.y,enemy.z-player.z)<=radius) return true;
+  }
+  return false;
+}
 bool EnemyPartnerCombatReady() {
   const auto& s = Get(); const auto& p = s.status_replay.Status();
   const auto flow=SessionFlowSnapshot();

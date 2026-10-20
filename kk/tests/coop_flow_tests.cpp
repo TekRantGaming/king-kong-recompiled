@@ -391,7 +391,45 @@ void WorkerHandoff() {
   Check(h.Snapshot().phase==FlowPhase::Failed,"disconnect cannot leave game waiting forever");
 }
 }
+void CheckpointCatchupTests() {
+  CheckpointCatchup catchup;
+  catchup.Reset(1,1);
+  Check(!catchup.Available() && !catchup.Offer(true,true,0),"initial checkpoint cannot trigger catch-up");
+  catchup.Observe(1,3,10);
+  Check(catchup.WorldCheckpoint()==1 && catchup.Target()==3,
+      "host retry checkpoint never advances the guest's actual world checkpoint");
+  Check(catchup.Offer(true,true,10) && catchup.Offer(true,true,16),"checkpoint offer has no twenty-second wait");
+  Check(!catchup.Offer(false,true,11) && !catchup.Offer(true,false,11),"matching scripts, combat and cutscenes suppress early offers");
+  Check(!catchup.Offer(true,true,16.01) && catchup.Available(),"expired early offer still permits persistent-lag catch-up");
+  catchup.Observe(1,3,17);
+  Check(!catchup.Offer(true,true,17),"duplicate checkpoint does not renew the offer window");
+  Check(catchup.Begin() && !catchup.Begin() && !catchup.Available(),"private reload attempt is consumed once per newer checkpoint");
+  catchup.NativeCheckpoint(3);
+  Check(!catchup.Available(),"loaded guest cannot loop at the same host checkpoint");
+  catchup.Observe(1,4,30); catchup.NativeCheckpoint(4);
+  Check(!catchup.Available(),"guest reaching checkpoint naturally also suppresses reload");
+  catchup.NativeCheckpoint(5); catchup.Observe(1,2,31);
+  Check(!catchup.Available(),"guest ahead of the host never reloads backwards");
+  catchup.Observe(2,1,32);
+  Check(catchup.WorldCheckpoint()==1 && !catchup.Available(),"new generation drops private attempts and old offers");
+  // Catch-up is entirely local. Only a real both-dead fallback submits the
+  // existing ReloadRequest; its controller semantics remain unchanged.
+  Flows f(8); f.Loaded();
+  auto checkpoint=f.host.View().world; checkpoint.start=3;
+  f.host.Local(Event(MessageType::Checkpoint,checkpoint),3); Transfer(f.host,f.guest,3);
+  catchup.Reset(1,1); catchup.Observe(1,f.guest.View().checkpoint,4);
+  Check(catchup.Begin(),"real host checkpoint notification supplies private target");
+  catchup.NativeCheckpoint(catchup.Target());
+  Check(f.host.View().world.generation==1 && f.guest.View().world.generation==1 &&
+      f.host.View().phase==FlowPhase::Playing && f.host.Outgoing().empty() && f.guest.Outgoing().empty(),
+      "private catch-up does not enter the shared load barrier or emit a reload request");
+  f.guest.Local(Event(MessageType::ReloadRequest,f.guest.View().world),5);
+  Transfer(f.guest,f.host,5); Transfer(f.host,f.guest,5);
+  Check(f.host.View().world.generation==2 && f.guest.View().world.generation==2 && f.host.View().world.start==3,
+      "both-dead recovery still reloads both at the host checkpoint");
+}
 int main() {
+  CheckpointCatchupTests();
   Codecs(); LifeObservations(); SaveTransfer(); BarriersAndFollow(); SoloAndObserver(); DeathRouting(); PoliciesAndBehind(); PersonalProgress(); WorkerHandoff();
 #if defined(KK_DEV_TOOLS)
   {

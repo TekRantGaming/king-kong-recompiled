@@ -41,12 +41,15 @@ void SessionReloadFrame(uint8_t* base);
 bool SessionDevChapterEnd();  // same finish messages as a native chapter exit, no hero dependency
 bool SessionDevFollowPad(uint32_t user, uint8_t* state);
 #endif
-// Private death reload does not advance the shared load barrier or enemy visit.
+// Private death/catch-up reload does not advance the shared load barrier or enemy visit.
 bool SessionPrivateReload();
+bool SessionCheckpointCatchup();  // game thread, newer-checkpoint private load/placement
 void SessionReviveBeforeAi(PPCContext& ctx, uint8_t* base);
 int SessionCheats();  // -1 outside a C24 launch, otherwise immutable host settings
 void StopSessionFlow();
 bool MoveToPartnerOffered();
+bool PrivateCatchupOffered();
+bool CatchupNotice();
 void MoveToPartner(bool checkpoint_recovery=false);
 struct EnemyLink {
   bool connected = false;

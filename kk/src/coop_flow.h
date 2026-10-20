@@ -132,6 +132,33 @@ class BehindRule {
   std::optional<double> since_;
 };
 
+// Host checkpoint notifications update the retry save, not the guest's live
+// world. Track actual native checkpoints/loads separately and try each newer
+// host checkpoint at most once. A failed private catch-up must never loop.
+class CheckpointCatchup {
+ public:
+  void Reset(uint32_t generation,uint32_t checkpoint) {
+    *this={}; generation_=generation; world_=host_=checkpoint;
+  }
+  void Observe(uint32_t generation,uint32_t checkpoint,double now) {
+    if (generation!=generation_) { Reset(generation,checkpoint); return; }
+    if (checkpoint!=host_) { host_=checkpoint; offered_until_=now+6; attempted_=false; }
+  }
+  void NativeCheckpoint(uint32_t checkpoint) { world_=checkpoint; }
+  bool Available() const { return host_>world_ && !attempted_; }
+  bool Offer(bool script_behind,bool safe,double now) const {
+    return Available() && script_behind && safe && std::isfinite(now) &&
+        now>=offered_until_-6 && now<=offered_until_;
+  }
+  bool Begin() { if (!Available()) return false; attempted_=true; return true; }
+  uint32_t Target() const { return host_; }
+  uint32_t WorldCheckpoint() const { return world_; }
+ private:
+  uint32_t generation_=0,world_=0,host_=0;
+  double offered_until_=-1;
+  bool attempted_=false;
+};
+
 // Deterministic controller, owned by one worker through FlowMailbox. No game API,
 // guest memory, filesystem, Steam calls or UI callbacks in this state machine.
 class SessionFlow {

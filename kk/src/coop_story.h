@@ -81,7 +81,10 @@ class Lag {
     const bool progressed=guest.run>local_.run || (guest.run==local_.run && guest.record>local_.record);
     if (stage_==Stage::Clear || progressed || guest.run<local_.run ||
         (guest.run==local_.run && guest.record<local_.record) || now<sampled_ || now-sampled_>10) {
-      stage_=Stage::Waiting; since_=now;
+      // A move can advance a few native records then hit another NPC wait.
+      // Progress renews the grace period but does not forget that soft fix.
+      if (guest.run!=local_.run || guest.record<local_.record || now<sampled_ || now-sampled_>10) moved_=false;
+      stage_=moved_ ? Stage::AfterMove : Stage::Waiting; since_=now;
     }
     local_=guest; sampled_=now;
     if (stage_==Stage::Waiting && now-since_>20) stage_=Stage::Move;
@@ -89,7 +92,7 @@ class Lag {
     return stage_;
   }
   void Moved(double now) {
-    if (stage_==Stage::Move && std::isfinite(now) && now>=sampled_) { stage_=Stage::AfterMove; since_=now; }
+    if (stage_==Stage::Move && std::isfinite(now) && now>=sampled_) { moved_=true; stage_=Stage::AfterMove; since_=now; }
   }
   Stage State(double now) const {
     return std::isfinite(now) && now>=sampled_ && now-sampled_<=10 ? stage_ : Stage::Clear;
@@ -98,6 +101,7 @@ class Lag {
   Stage stage_=Stage::Clear;
   Cursor local_;
   double since_=0, sampled_=0;
+  bool moved_=false;
 };
 // A reliable request is sent once per activation, including while it is pending
 // or after authority refuses it. Only a new run or a new world permits another.
@@ -145,6 +149,19 @@ struct Binding { uint64_t source=0, script=0; uint32_t actor=0, ai=0, vars=0; };
 inline bool CanReplaySnapshotPrefix(bool looping,uint32_t native_index,const StoryEvent& target) {
   return (target.phase==StoryPhase::SnapshotLoop || target.phase==StoryPhase::SnapshotFinished) &&
       target.record<=kStoryRecords && native_index<=target.record && (looping || native_index==0);
+}
+// A newer native checkpoint can omit a completed prefix from scheduled AI,
+// resetting its record to zero. This covers history, never executes/skips a
+// callback. Active or subsequently scheduled programs cannot use this baseline.
+inline bool CanCoverCheckpointPrefix(bool omitted_at_load,bool omitted_now,bool scheduled,
+    bool looping,uint32_t native_index,uint32_t local_run,bool terminator,const StoryEvent& end) {
+  return omitted_at_load && omitted_now && !scheduled && !looping &&
+      native_index==0 && local_run<=end.run && terminator && ValidStoryEvent(end) &&
+      (end.phase==StoryPhase::Finished || end.phase==StoryPhase::SnapshotFinished);
+}
+inline bool CheckpointPrefixCovers(const StoryEvent& end,const StoryEvent& event) {
+  return end.generation==event.generation && end.level==event.level && end.source==event.source &&
+      end.script==event.script && end.run==event.run && event.record<=end.record;
 }
 // A private reload accepts one complete, token-scoped host cursor census.
 // Partial/duplicate/mixed censuses never modify native scripts.

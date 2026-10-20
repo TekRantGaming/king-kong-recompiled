@@ -35,6 +35,14 @@ std::atomic<int> session_cheats{-1};
 std::atomic<bool> stopping{false};
 std::atomic<bool> move_offer{false};
 std::atomic<uint32_t> move_request{0};
+std::atomic<bool> catchup_offer{false};
+std::atomic<uint32_t> catchup_request{0};
+std::atomic<double> catchup_notice_until{0};
+CheckpointCatchup catchup;
+enum class CatchupPhase { None, Requested, Loading, Placing };
+CatchupPhase catchup_phase=CatchupPhase::None;
+uint32_t catchup_target=0;
+double catchup_deadline=0;
 uint32_t pending_move=0;
 double move_until=0;
 uint32_t loaded_generation=0, loading_generation=0, recorded_checkpoint=0;
@@ -90,6 +98,26 @@ bool PartnerAliveHere(const FlowView& v, const EnemyLink& link, double now) {
   return link.connected && v.partner_life.Fresh(now) && !v.partner_life.downed &&
       link.partner && link.partner->level==v.world.level;
 }
+bool CatchupSafe(uint8_t* base,double now) {
+  if (observer::Active() || observer::InCutscene(base) || play::StartLevelLoading() ||
+      play::CoverScreen() || play::PauseMenuOpen() || play::GamePausePageUp()) return false;
+  const auto local=ReadJackPose([base](uint32_t a){return hfr::Load32(base,a);},
+      [base](uint32_t a){return hfr::Load16(base,a);},[base](uint32_t a){return hfr::LoadF(base,a);},now);
+  return local.pose && !EnemyNearPlayer(base,*local.pose,15);
+}
+void CancelCatchup() {
+  catchup_phase=CatchupPhase::None; catchup_offer=false; catchup_request=0;
+  private_load=private_request=false; catchup_notice_until=0;
+}
+void BeginCatchup(const FlowView& v,double now,const char* reason) {
+  if (!catchup.Begin()) return;
+  catchup_target=catchup.Target(); catchup_phase=CatchupPhase::Requested;
+  catchup_deadline=now+revive::kLoadTimeout; private_request=true;
+  catchup_offer=move_offer=false; move_request=0; pending_move=0;
+  catchup_notice_until=now+6;
+  REXLOG_INFO("KK co-op catch-up: private reload queued reason={} generation {} level {} guest checkpoint {} host checkpoint {}; host continues",
+      reason,v.world.generation,v.world.level,catchup.WorldCheckpoint(),catchup_target);
+}
 void RecordProgress(const FlowView& v) {
   if (v.host || v.completed==applied_progress) return;
   if (play::ApplyTogetherProgress(personal,progress_slot,v.completed)) applied_progress=v.completed;
@@ -132,28 +160,34 @@ void AskLoad(uint8_t* base,uint32_t g,const FlowView& v) {
   loading_generation=v.world.generation;
   move_offer=false;
   move_request=0; pending_move=0;
+  CancelCatchup(); catchup_notice_until=0;
+  catchup.Reset(v.world.generation,v.world.start);
   behind=BehindRule{};
   recorded_checkpoint=v.world.start;
   REXLOG_INFO("KK co-op flow: load generation {} level {} start {}",v.world.generation,v.world.level,v.world.start);
 }
 }
 int SessionCheats() { return session_cheats.load(); }
-bool MoveToPartnerOffered() { return move_offer.load(); }
+bool MoveToPartnerOffered() { return move_offer.load() || catchup_offer.load(); }
+bool PrivateCatchupOffered() { return catchup_offer.load(); }
+bool CatchupNotice() { return Now()<catchup_notice_until.load(); }
 void MoveToPartner(bool checkpoint_recovery) {
   const auto v=SessionFlowSnapshot();
+  if (checkpoint_recovery) {
+    if (catchup_offer.exchange(false) && !v.host && v.phase==FlowPhase::Playing && v.policy==ChapterPolicy::Together)
+      catchup_request=v.world.generation;
+    return;
+  }
   if (move_offer.exchange(false) && !v.host && v.phase==FlowPhase::Playing && v.policy==ChapterPolicy::Together) {
-    if (checkpoint_recovery && StoryBehind()) {
-      if (Send(MessageType::ReloadRequest,v.world)) REXLOG_INFO("KK co-op story: checkpoint recovery accepted after catch-up offer");
-    } else {
-      // UI submits a generation only. Native memory/teleport stays on the AI thread.
-      move_request=v.world.generation;
-      REXLOG_INFO("KK co-op story: soft fix requested, move to partner without reload");
-    }
+    // UI submits a generation only. Native memory/teleport stays on the AI thread.
+    move_request=v.world.generation;
+    REXLOG_INFO("KK co-op story: soft fix requested, move to partner without reload");
   }
 }
-void StopSessionFlow() { stopping=true; move_request=0; observer::SetPartnerSpectating(false); }
+void StopSessionFlow() { stopping=true; move_request=catchup_request=0; catchup_offer=false; catchup_notice_until=0; observer::SetPartnerSpectating(false); }
 bool SessionInProcess() { return launched; }
 bool SessionPrivateReload() { return private_load; }
+bool SessionCheckpointCatchup() { return catchup_phase==CatchupPhase::Loading || catchup_phase==CatchupPhase::Placing; }
 void ApplySessionSettings() {
   if (!launched) return;
   const auto v=SessionFlowSnapshot();
@@ -265,7 +299,19 @@ bool SessionBeforeGo(PPCContext& ctx,uint8_t* base,uint32_t g) {
   if (private_request && Load32(base,g+4)==0) {
     private_request=false;
     const auto link=EnemyLinkSnapshot();
+    if (catchup_phase==CatchupPhase::Requested) {
+      const auto condition=LocalPlayerCondition(base);
+      if ((condition && *condition==PlayerCondition::Dead) || v.checkpoint<=catchup.WorldCheckpoint()) {
+        CancelCatchup(); return false; // The normal death route wins this race.
+      }
+    }
     if (!PartnerAliveHere(v,link,Now())) {
+      if (catchup_phase!=CatchupPhase::None) {
+        // A stale pose or a host private revive can recover. Keep the bounded
+        // local request pending; its frame deadline never reloads the host.
+        private_request=true;
+        return false;
+      }
       recovery.phase=revive::Phase::ReloadBoth;
       return true; // frame hook queues C24 reload; do not run a stale private request
     }
@@ -274,6 +320,12 @@ bool SessionBeforeGo(PPCContext& ctx,uint8_t* base,uint32_t g) {
     // The host's Checkpoint message is newer than an older heartbeat. If the
     // host is dead, use the living guest's latest observed checkpoint instead.
     local_checkpoint=v.host ? v.partner_life.life.checkpoint : v.checkpoint;
+    if (catchup_phase==CatchupPhase::Requested) {
+      catchup.Observe(v.world.generation,v.checkpoint,Now());
+      catchup.Begin(); // Also consume a checkpoint that advanced after queuing.
+      catchup_target=local_checkpoint; catchup_phase=CatchupPhase::Loading;
+      REXLOG_INFO("KK co-op catch-up: loading guest only generation {} level {} checkpoint {}",v.world.generation,v.world.level,catchup_target);
+    }
     Store32(base,g+8,v.world.level); Store32(base,g+12,local_checkpoint);
     Store32(base,g+4,1); Store32(base,g+0x5F1C,0); Store32(base,g+0x5668,0);
     Store32(base,0x828E3B48,1);
@@ -329,8 +381,8 @@ bool SessionBeforeGo(PPCContext& ctx,uint8_t* base,uint32_t g) {
     const auto local=ReadJackPose([base](uint32_t a){return Load32(base,a);},[base](uint32_t a){return Load16(base,a);},[base](uint32_t a){return LoadF(base,a);},Now());
     if (!link.connected) behind.Tick(Now(),{},{});
     else if (behind.Tick(Now(),local.pose,link.partner)) move_offer=true;
-    if (StoryBehind() || StoryNeedsMove()) move_offer=true;
-    if (!StoryBehind() && !StoryNeedsMove() && local.pose && link.partner && local.pose->level==link.partner->level &&
+    if (StoryNeedsMove()) move_offer=true;
+    if (!StoryNeedsMove() && local.pose && link.partner && local.pose->level==link.partner->level &&
         PartnerDistance(*local.pose,*link.partner)<=100) move_offer=false;
   }
   return false;
@@ -354,8 +406,17 @@ void SessionAfterGo(uint8_t* base,uint32_t g,bool loaded) {
 #if defined(KK_DEV_TOOLS)
     benchmark::DevCoopLoaded(hfr::Load32(base,g+0x18));
 #endif
-    if (hfr::Load32(base,g+0x18)==SessionFlowSnapshot().world.level) recovery.Loaded();
-    else recovery.phase=revive::Phase::ReloadBoth;
+    if (catchup_phase==CatchupPhase::Loading) {
+      if (hfr::Load32(base,g+0x18)!=SessionFlowSnapshot().world.level) {
+        CancelCatchup(); Send(MessageType::FlowAbort,SessionFlowSnapshot().world);
+        REXLOG_WARN("KK co-op catch-up: private load failed level validation; session stopped, host not reloaded");
+      } else {
+        catchup.NativeCheckpoint(catchup_target); catchup_phase=CatchupPhase::Placing;
+        observer::LevelLoaded();
+      }
+    } else if (hfr::Load32(base,g+0x18)==SessionFlowSnapshot().world.level) {
+      catchup.NativeCheckpoint(local_checkpoint); recovery.Loaded();
+    } else recovery.phase=revive::Phase::ReloadBoth;
     return; // living partner keeps simulating; no Loaded or LoadRelease
   }
   if (!launched || !loaded || !loading_generation) return;
@@ -379,9 +440,17 @@ void SessionCheckpoint(uint32_t level,uint32_t checkpoint) {
   if (!launched) return;
   observer::Checkpoint(level,checkpoint);
   const auto v=SessionFlowSnapshot();
-  if (v.phase==FlowPhase::Playing && v.world.level==level && checkpoint<=10000) local_checkpoint=checkpoint;
-  if (v.host && v.phase==FlowPhase::Playing && v.world.level==level && checkpoint<=10000)
+  if (v.phase==FlowPhase::Playing && v.world.level==level && checkpoint<=10000) {
+    local_checkpoint=checkpoint;
+    if (catchup.WorldCheckpoint()!=checkpoint)
+      REXLOG_INFO("KK co-op catch-up: native checkpoint role={} generation {} level {} checkpoint {} -> {}",
+          v.host ? "host" : "guest",v.world.generation,level,catchup.WorldCheckpoint(),checkpoint);
+    catchup.NativeCheckpoint(checkpoint);
+  }
+  if (v.host && v.phase==FlowPhase::Playing && v.world.level==level && checkpoint<=10000) {
     Send(MessageType::Checkpoint,{v.world.generation,level,checkpoint,v.completed});
+    if (v.checkpoint!=checkpoint) StoryHostCheckpoint();
+  }
 }
 void SessionReloadFrame(uint8_t* base) {
 #if defined(KK_DEV_TOOLS)
@@ -410,15 +479,21 @@ void SessionReloadFrame(uint8_t* base) {
   // Never creates an offer or escalates a move into a checkpoint reload.
   static const bool dev_catchup=[] {
     const char* value=std::getenv("KK_DEV_CATCHUP");
-    return value && std::string_view(value)=="1";
+    return value && (std::string_view(value)=="1" || std::string_view(value)=="move");
+  }();
+  // "move" exercises the automatic post-soft-fix path without accepting an
+  // early private checkpoint offer. "1" still accepts either visible button.
+  static const bool dev_move_only=[] {
+    const char* value=std::getenv("KK_DEV_CATCHUP");
+    return value && std::string_view(value)=="move";
   }();
   static bool dev_moved=false, dev_recovered=false;
   if (dev_catchup && !v.host && v.policy==ChapterPolicy::Together && MoveToPartnerOffered()) {
-    const bool checkpoint=StoryBehind();
+    const bool checkpoint=PrivateCatchupOffered();
     bool& accepted=checkpoint ? dev_recovered : dev_moved;
-    if (!accepted) {
+    if (!accepted && !(checkpoint && dev_move_only)) {
       accepted=true;
-      REXLOG_INFO("KK dev catch-up: accepting existing {} offer once",checkpoint ? "checkpoint recovery" : "move");
+      REXLOG_INFO("KK dev catch-up: accepting existing {} offer once",checkpoint ? "private checkpoint catch-up" : "move");
       MoveToPartner(checkpoint);
     }
   }
@@ -426,6 +501,7 @@ void SessionReloadFrame(uint8_t* base) {
   observer::SetPartnerSpectating(false);
   if (recovery_generation!=v.world.generation) {
     recovery_generation=v.world.generation; recovery={}; private_load=private_request=reload_sent=false;
+    CancelCatchup(); catchup_notice_until=0; catchup.Reset(v.world.generation,v.world.start);
     local_checkpoint=v.checkpoint;
     ++life_incarnation; life_number=0; life_sent=false; next_life=0;
   }
@@ -443,6 +519,19 @@ void SessionReloadFrame(uint8_t* base) {
     const auto condition=LocalPlayerCondition(base);
     const bool dead=condition && *condition==PlayerCondition::Dead;
     const auto link=EnemyLinkSnapshot();
+    catchup.Observe(v.world.generation,v.checkpoint,now);
+    if (catchup_phase!=CatchupPhase::None) {
+      if (dead) CancelCatchup(); // Actual death still owns the both-dead path.
+      else {
+        hfr::Store32(base,0x82CCAA80,0); hfr::Store32(base,0x82CCBFD4,0);
+        if (now>catchup_deadline) {
+          CancelCatchup(); Send(MessageType::FlowAbort,v.world);
+          REXLOG_WARN("KK co-op catch-up: placement timed out; session stopped, host not reloaded");
+        }
+        if (condition) PublishLife(v,false,now);
+        return;
+      }
+    }
     const auto action=recovery.Step(dead,PartnerAliveHere(v,link,now),v.partner_life.downed,reset,now);
     observer::SetPartnerSpectating(!v.host && recovery.Downed() && action!=revive::Action::ReloadBoth);
     if (condition || recovery.Downed()) PublishLife(v,dead || recovery.Downed(),now);
@@ -456,9 +545,26 @@ void SessionReloadFrame(uint8_t* base) {
       return;
     }
     if (recovery.Downed()) {
+      catchup_offer=false; catchup_request=0;
       // The original death track still runs/fades. Suppress every repeated
       // native reset until the private load or coordinated recovery owns it.
       hfr::Store32(base,0x82CCAA80,0); hfr::Store32(base,0x82CCBFD4,0);
+      return;
+    }
+    const bool eligible=!v.host && condition && !dead && PartnerAliveHere(v,link,now) &&
+        !reset && !private_load && !private_request && !pending_move && !move_request.load() &&
+        !observer::Active() && !observer::InCutscene(base) && !play::StartLevelLoading() &&
+        !play::CoverScreen() && !play::PauseMenuOpen() && !play::GamePausePageUp();
+    const uint32_t accepted=catchup_request.exchange(0);
+    const bool immediate=eligible && catchup.Available() &&
+        (catchup.Offer(StoryAnyBehind(),true,now) || StoryBehind()) && CatchupSafe(base,now);
+    if (immediate && !catchup_offer.load())
+      REXLOG_INFO("KK co-op catch-up: checkpoint offer generation {} guest checkpoint {} host checkpoint {}; no nearby enemy or cutscene",
+          v.world.generation,catchup.WorldCheckpoint(),catchup.Target());
+    catchup_offer=immediate;
+    if (eligible && catchup.Available() &&
+        (StoryCatchupReady() || (accepted==v.world.generation && immediate))) {
+      BeginCatchup(v,now,StoryCatchupReady() ? "persistent lag after soft move" : "checkpoint offer accepted");
       return;
     }
   }
@@ -530,6 +636,17 @@ bool SessionDevChapterEnd() {
 }
 #endif
 void SessionReviveBeforeAi(PPCContext& ctx,uint8_t* base) {
+  if (catchup_phase==CatchupPhase::Placing) {
+    const auto v=SessionFlowSnapshot(); const auto link=EnemyLinkSnapshot();
+    if (!REXCVAR_GET(kk_coop_enabled) || stopping || !v.active || v.host || v.phase!=FlowPhase::Playing ||
+        v.world.generation!=recovery_generation) { CancelCatchup(); return; }
+    if (!PartnerAliveHere(v,link,Now()) || !ReviveTeleport(ctx,base,*link.partner)) return;
+    catchup_phase=CatchupPhase::None; private_load=false;
+    move_offer=false; behind=BehindRule{}; catchup_notice_until=Now()+4;
+    ++life_incarnation; life_number=0; life_sent=false; PublishLife(v,false,Now());
+    REXLOG_INFO("KK co-op catch-up: guest placed beside host generation {} level {} checkpoint {}; host never entered a load barrier",
+        v.world.generation,v.world.level,catchup_target);
+  }
   const uint32_t requested_move=move_request.exchange(0);
   if (requested_move) { pending_move=requested_move; move_until=Now()+5; }
   if (pending_move) {

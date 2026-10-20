@@ -17,6 +17,9 @@ bool EnemyCombatReference(const uint8_t* base, uint32_t owner, uint32_t ai,
                           uint32_t vars, uint32_t offset);
 bool PartnerBodyGrabRefusal(const uint8_t* base, uint32_t victim);
 bool EnemyPartnerCombatReady();
+// Conservative checkpoint-offer guard: any living scheduled shared enemy
+// within the radius counts, regardless of which peer owns its AI.
+bool EnemyNearPlayer(const uint8_t* base,const PlayerPose& player,float radius);
 #if defined(KK_DEV_TOOLS)
 void EnemyDevGameFrame(PPCContext& ctx, uint8_t* base);
 std::optional<ShotVector> EnemyAimTarget(const uint8_t* base, ShotVector origin);

@@ -47,6 +47,8 @@ struct Script : story::Progress {
   story::Lag lag;
   bool exact=false;
   bool saw_detect=false, saw_loop=false;
+  bool checkpoint_omitted=false;
+  std::optional<StoryEvent> checkpoint_finished,checkpoint_covered;
   std::deque<StoryEvent> restore;
 };
 std::map<uint32_t,Script> scripts;
@@ -73,6 +75,7 @@ std::atomic<bool> behind{false};
 std::atomic<bool> needs_move{false};
 uint32_t waiting_number=0;
 double waiting_since=0;
+double checkpoint_loaded_at=0;
 bool SafeRequest(const uint8_t* b,const Script& s);
 // Only wraps the exact safe native predicate call. No hero/global pointer swap.
 thread_local uint32_t forced_pivot=0;
@@ -161,6 +164,19 @@ bool LoopProgram(const uint8_t* b) {
   const auto block=Load32(b,0x82CCBF5C);
   return PoseAddress(block,24) && Load32(b,block+20)==kLoop;
 }
+std::optional<bool> Scheduled(const uint8_t* b,uint32_t actor) {
+  const auto world=Load32(b,0x828E8388);
+  if (!PoseAddress(world,308)) return {};
+  const auto begin=Load32(b,world+304),end=Load32(b,world+292);
+  if (!PoseAddress(begin) || !PoseAddress(end) || end<=begin || (end-begin)%8 || end-begin>8*20000) return {};
+  bool hero=false,found=false;
+  for (auto p=begin;p<end;p+=8) {
+    const auto entry=Load32(b,p);
+    hero|=entry==Load32(b,0x82CCBF7C); found|=entry==actor;
+  }
+  // An empty/partially populated loader table is not evidence of omission.
+  return hero ? std::optional<bool>{found} : std::nullopt;
+}
 uint64_t Shape(const uint8_t* b,uint32_t vars) {
   if (!PoseAddress(vars,19824)) return 0;
   uint64_t hash=enemies::Mix(14695981039346656037ull,Load32(b,vars+20));
@@ -221,7 +237,7 @@ void World(const FlowView& v,uint64_t session_epoch) {
     request_count=0; request_window=next_census=0;
     checksums={}; next_checksum=Now()+3; checksum_actor=0; checksum_sweep=false;
     snapshot={}; snapshot_out.clear(); snapshot_unresolved.clear(); snapshot_token=0;
-    snapshot_waiting=false; snapshot_deadline=snapshot_recovery_time=0; last_snapshot_request=-10;
+    snapshot_waiting=false; snapshot_deadline=snapshot_recovery_time=0; last_snapshot_request=-10; checkpoint_loaded_at=0;
   }
 }
 bool Ensure(uint8_t* b) {
@@ -343,7 +359,7 @@ bool ReplaySafe(const uint8_t* b,const Script& s,uint32_t index) {
 }
 void Native(Script& s,const StoryEvent& e,const char* reason) {
   s.exact=false;
-  if (!e.number) s.restore.clear(); // A failed bounded restore retains the C24 recovery offer.
+  if (!e.number) s.restore.clear(); // A failed bounded restore waits for a newer private checkpoint.
   Note("native fallback",e,reason);
 }
 void Converge(Script& s) {
@@ -384,7 +400,30 @@ void PumpSnapshot() {
     snapshot_out.pop_front();
   }
 }
+bool CheckpointCovers(const uint8_t* b,const Script& s,const StoryEvent& e) {
+  return s.checkpoint_covered && s.checkpoint_omitted && !s.saw_detect && !s.saw_loop &&
+      Load32(b,s.binding.vars+19812)==0 &&
+      (Load32(b,s.binding.actor+4)&0x400000) && Scheduled(b,s.binding.actor)==false && !Tracks(b,s.binding.ai,kLoop) &&
+      story::CheckpointPrefixCovers(*s.checkpoint_covered,e);
+}
+void CoverCheckpointPrefix(const uint8_t* b,Script& s) {
+  if (!s.checkpoint_omitted || !s.checkpoint_finished || s.checkpoint_covered) return;
+  const auto& e=*s.checkpoint_finished;
+  const auto* bind=story::Match(e.source,e.script,bindings);
+  if (!bind || bind->actor!=s.binding.actor || Vars(b,bind->ai,19824)!=bind->vars || Shape(b,bind->vars)!=bind->script) return;
+  if (!story::CanCoverCheckpointPrefix(s.checkpoint_omitted,
+      (Load32(b,s.binding.actor+4)&0x400000) && Scheduled(b,s.binding.actor)==false,
+      s.saw_detect || s.saw_loop,Tracks(b,s.binding.ai,kLoop),Load32(b,s.binding.vars+19812),s.run,
+      e.record<=kStoryRecords && !Load32(b,s.binding.vars+924+180*e.record),e)) return;
+  // The loader, not a received callback, omitted this pre-checkpoint program.
+  // Align only our activation metadata for a possible future native activation.
+  // Keep the raw native record and all callback/actor state untouched.
+  s.run=e.run; runs[e.source]=e.run; s.lag={}; s.checkpoint_covered=e;
+  REXLOG_INFO("KK co-op story: checkpoint prefix covered source={:016X} host={}/{} native={}/{} flags={:08X}; omitted from populated native AI table at newer checkpoint load and still unscheduled, no callbacks replayed",
+      e.source,e.run,e.record,s.run,Load32(b,s.binding.vars+19812),Load32(b,s.binding.actor+4));
+}
 bool SnapshotReached(const uint8_t* b,const Script& s,const StoryEvent& e) {
+  if (CheckpointCovers(b,s,e)) return true;
   if (s.run>e.run) return true;
   if (s.run!=e.run || Load32(b,s.binding.vars+19812)<e.record) return false;
   if (e.phase==StoryPhase::SnapshotFinished) return s.finished>=e.run;
@@ -404,6 +443,7 @@ void RestoreSnapshot(uint8_t* b) {
     const auto index=Load32(b,bind->vars+19812);
     if (index>kStoryRecords) { snapshot_unresolved.push_back(e); continue; }
     const bool looping=Tracks(b,bind->ai,kLoop);
+    if (e.phase==StoryPhase::SnapshotFinished) { s.checkpoint_finished=e; CoverCheckpointPrefix(b,s); }
     if (e.phase==StoryPhase::SnapshotIdle) {
       if (!looping) { s.run=e.run; runs[e.source]=e.run; s.record=index; }
       continue;
@@ -415,6 +455,9 @@ void RestoreSnapshot(uint8_t* b) {
       if (!looping) s.finished=e.run;
     }
     if (SnapshotReached(b,s,e)) continue;
+    REXLOG_INFO("KK co-op story: private snapshot gap source={:016X} host={}/{} phase={} local={}/{} actor-kind={:08X} actor-flags={:08X} schedule-byte={:02X} detect-track={} loop-track={} omitted-at-load={} scheduled-now={} vars0={:08X} vars4={:08X} vars8={:08X} vars12={:08X} vars16={:08X}",
+        e.source,e.run,e.record,unsigned(e.phase),s.run,index,Load32(b,bind->actor),Load32(b,bind->actor+4),b[bind->actor+31],Tracks(b,bind->ai,kDetect),looping,s.checkpoint_omitted,Scheduled(b,bind->actor).value_or(true),
+        Load32(b,bind->vars),Load32(b,bind->vars+4),Load32(b,bind->vars+8),Load32(b,bind->vars+12),Load32(b,bind->vars+16));
     snapshot_unresolved.push_back(e);
     s.hints.Remember(e);
     // Only the existing all-safe Jack/door/activation chain can be replayed.
@@ -432,12 +475,13 @@ void RestoreSnapshot(uint8_t* b) {
     if (e.phase==StoryPhase::SnapshotFinished) add(StoryPhase::Finished,e.record);
     if (!s.restore.empty()) ++restored;
   }
-  REXLOG_INFO("KK co-op story: private snapshot complete scripts={} matched={} safe-replays={} unresolved={} token={}; native gaps retain Recover checkpoint",
+  REXLOG_INFO("KK co-op story: private snapshot complete scripts={} matched={} safe-replays={} unresolved={} token={}; native gaps await a newer host checkpoint",
       snapshot.Entries().size(),matched,restored,snapshot_unresolved.size(),snapshot_token);
   // Give ordinary native execution/replay the same twenty-second grace as
-  // checksum convergence before offering a shared checkpoint to the player.
+  // checksum convergence before considering another private catch-up.
 }
 void SnapshotProgress(uint8_t* b) {
+  for (auto& [actor,s] : scripts) CoverCheckpointPrefix(b,s);
   const auto before=snapshot_unresolved.size();
   std::erase_if(snapshot_unresolved,[&](const auto& e) {
     const auto* bind=story::Match(e.source,e.script,bindings);
@@ -535,6 +579,7 @@ void ChecksumFrame(uint8_t* b,double now) {
         ordered.Applied(now); continue;
       }
       if (e.phase!=StoryPhase::Checksum) {
+        if (e.phase==StoryPhase::Finished) { s.checkpoint_finished=e; CoverCheckpointPrefix(b,s); }
         if (s.exact && !snapshot_waiting) {
           if (waiting_number!=e.number) { waiting_number=e.number; waiting_since=now; }
           if (now-waiting_since<=5) break;
@@ -550,11 +595,15 @@ void ChecksumFrame(uint8_t* b,double now) {
       Message m; m.type=MessageType::TriggerRequest; m.epoch=epoch; m.story=reply;
       outgoing.push_back(m); ordered.Applied(now);
       const auto before=s.lag.State(now);
-      const auto stage=s.lag.Sample({e.run,e.record},{reply.run,reply.record},now);
+      const bool checkpoint_covered=CheckpointCovers(b,s,e);
+      if (checkpoint_covered) s.lag={};
+      const auto stage=checkpoint_covered ? story::Lag::Stage::Clear :
+          s.lag.Sample({e.run,e.record},{reply.run,reply.record},now);
       if (stage!=before) {
-        const char* what=stage==story::Lag::Stage::Clear ? "native checksum converged" :
+        const char* what=checkpoint_covered ? "checksum history covered by checkpoint" :
+            stage==story::Lag::Stage::Clear ? "native checksum converged" :
             stage==story::Lag::Stage::Move ? "persistent lag: move offered" :
-            stage==story::Lag::Stage::Reload ? "lag after soft fix: checkpoint recovery offered" : "checksum lag grace started";
+            stage==story::Lag::Stage::Reload ? "lag after soft fix: private catch-up ready" : "checksum lag grace started";
         Note(what,e,"guest must remain behind without advancing for more than 20 seconds");
         if (stage!=story::Lag::Stage::Clear) TraceLag(b,s,e);
       }
@@ -588,6 +637,23 @@ void ChecksumFrame(uint8_t* b,double now) {
 
 bool StoryBehind() { return behind.load(); }
 bool StoryNeedsMove() { return needs_move.load(); }
+bool StoryAnyBehind() {
+  const double now=Now();
+  if (host || snapshot_waiting) return false;
+  for (const auto& [actor,s] : scripts) if (s.lag.State(now)!=story::Lag::Stage::Clear) return true;
+  return !snapshot_unresolved.empty();
+}
+bool StoryCatchupReady() {
+  const double now=Now();
+  if (host || snapshot_waiting) return false;
+  for (const auto& [actor,s] : scripts) if (s.lag.State(now)==story::Lag::Stage::Reload) return true;
+  return false;
+}
+void StoryHostCheckpoint() {
+  // Supply a current comparison during the checkpoint offer window, even if
+  // the previous sweep happened just before the checkpoint fired.
+  next_checksum=0;
+}
 void StoryPartnerMoved() {
   const double now=Now();
   for (auto& [actor,s] : scripts) if (s.lag.State(now)==story::Lag::Stage::Move) {
@@ -602,10 +668,14 @@ void StoryLoaded(uint8_t* b) {
   const auto session_epoch=StorySessionEpoch();
   if (!session_epoch) return;
   World(v,session_epoch);
+  checkpoint_loaded_at=SessionCheckpointCatchup() ? Now() : 0;
   for (auto& [actor,s] : scripts) FinishRequest(s,"request refused","level load invalidated request");
   if (last_loaded==v.world.generation) {
     scripts.clear(); bindings.clear(); next_census=0;
-    if (!host) { runs.clear(); Census(b); RequestSnapshot(); }
+    if (!host) {
+      runs.clear(); Census(b);
+      RequestSnapshot();
+    }
     else recovery_pending=true;
     return;
   }
@@ -626,12 +696,25 @@ void StoryGameFrame(uint8_t* b) {
     return;
   }
   const double now=Now();
+  // uni_go returns before the first native AI initialization pass. Capture
+  // authored checkpoint omissions only during its short settling window, and
+  // only from a populated table plus the dispatcher's explicit disabled bit
+  // (G.32:8271D610). No detector/loop may have scheduled since this load.
+  if (checkpoint_loaded_at>0 && now>=checkpoint_loaded_at && now-checkpoint_loaded_at<=2) {
+    for (auto& [actor,s] : scripts) if (!s.checkpoint_omitted && !s.saw_detect && !s.saw_loop &&
+        (Load32(b,actor+4)&0x400000) && Load32(b,s.binding.vars+19812)==0 && !Tracks(b,s.binding.ai,kLoop) &&
+        Scheduled(b,actor)==false && Vars(b,s.binding.ai,19824)==s.binding.vars && Shape(b,s.binding.vars)==s.binding.script) {
+      s.checkpoint_omitted=true;
+      REXLOG_INFO("KK co-op story: native checkpoint baseline source={:016X} flags={:08X} record=0 omitted from populated AI table after initialization; no detect/loop scheduled",
+          s.binding.source,Load32(b,actor+4));
+    }
+  }
   if (snapshot_waiting && now>snapshot_deadline) {
-    snapshot_waiting=false; Refuse("private snapshot timed out; Recover checkpoint required");
+    snapshot_waiting=false; Refuse("private snapshot timed out; awaiting private catch-up");
   }
   if (recovery_pending) {
     recovery_pending=false;
-    Refuse("private load or reconnect requires shared checkpoint recovery");
+    Refuse("private load or reconnect requires checkpoint catch-up");
   }
   for (const auto& m : TakeStory()) {
     const auto& e=m.story;
@@ -705,6 +788,7 @@ bool StoryDetect(PPCContext& ctx,uint8_t* b) {
   if (!host && snapshot_waiting) return false;
   auto* s=ObservedScript(b);
   if (!s) return false; // Unknown scripts retain native behavior.
+  s->checkpoint_omitted=false; s->checkpoint_covered.reset(); s->checkpoint_finished.reset();
   if (!s->saw_detect) { s->saw_detect=true; Note("native detect scheduled",Event(*s,StoryPhase::Armed,kDetectRecord)); }
   const auto flag=Load32(b,0x82CCBF60),vars=s->binding.vars;
   if (!PoseAddress(flag)) return false;
@@ -772,6 +856,7 @@ bool StoryLoop(PPCContext& ctx,uint8_t* b) {
   if (!host && snapshot_waiting) return false;
   auto* s=ObservedScript(b);
   if (!s) return false;
+  s->checkpoint_omitted=false; s->checkpoint_covered.reset(); s->checkpoint_finished.reset();
   if (!s->saw_loop) { s->saw_loop=true; Note("native loop scheduled",Event(*s,StoryPhase::Advance,Load32(b,s->binding.vars+19812))); }
   const auto vars=s->binding.vars,before=Load32(b,vars+19812);
   if (host || !s->exact) {

@@ -285,9 +285,12 @@ void PersistentLagAndSoftFix() {
     Check(lag.Sample(authority,guest,t)==Stage::AfterMove,"native teleport grants a second full convergence interval");
   Check(lag.Sample(authority,guest,141)==Stage::Reload,"only stationary lag after completed soft fix offers checkpoint recovery");
   guest.record=2;
-  Check(lag.Sample(authority,guest,144)==Stage::Waiting,"any guest record progress resets recovery stages even while behind");
+  Check(lag.Sample(authority,guest,144)==Stage::AfterMove,"partial progress renews grace but retains the completed soft fix");
+  for (double t : {147.,150.,153.,156.,159.,162.,164.})
+    Check(lag.Sample(authority,guest,t)==Stage::AfterMove,"another NPC wait after partial progress gets a full twenty-second grace");
+  Check(lag.Sample(authority,guest,165)==Stage::Reload,"partial soft-fix progress cannot strand the guest in another manual move cycle");
   guest=authority;
-  Check(lag.Sample(authority,guest,147)==Stage::Clear,"natural convergence clears all recovery state");
+  Check(lag.Sample(authority,guest,166)==Stage::Clear,"natural convergence clears all recovery state");
   ++guest.record;
   Check(lag.Sample(authority,guest,150)==Stage::Clear,"guest ahead of captured host boundary never counts as divergence");
   guest={1,100}; authority={2,0};
@@ -369,6 +372,25 @@ void PrivateSnapshots() {
       "safe restore can advance an active prefix or start a fresh local program");
   Check(!story::CanReplaySnapshotPrefix(true,5,a) && !story::CanReplaySnapshotPrefix(false,4,a) &&
       !story::CanReplaySnapshotPrefix(false,9,a),"restore cannot rewind a native cursor or restart an already advanced program");
+  auto finished=a; finished.phase=StoryPhase::SnapshotFinished;
+  const auto can_cover=[&](bool loaded,bool omitted,bool scheduled,bool looping,uint32_t index,uint32_t run,bool terminator,const StoryEvent& end) {
+    return story::CanCoverCheckpointPrefix(loaded,omitted,scheduled,looping,index,run,terminator,end);
+  };
+  Check(can_cover(true,true,false,false,0,1,true,finished),"new checkpoint may cover a loader-omitted completed prefix without replay");
+  Check(!can_cover(false,true,false,false,0,1,true,finished) &&
+      !can_cover(true,false,false,false,0,1,true,finished),"ordinary loads and programs present in scheduled AI cannot cover missing native work");
+  Check(!can_cover(true,true,true,false,0,1,true,finished) &&
+      !can_cover(true,true,false,true,0,1,true,finished),"scheduled detectors and active loops retain native convergence checks");
+  Check(!can_cover(true,true,false,false,1,1,true,finished) &&
+      !can_cover(true,true,false,false,0,finished.run+1,true,finished),"checkpoint coverage cannot swallow partially executed work or rewind a newer activation");
+  Check(!can_cover(true,true,false,false,0,1,false,finished) &&
+      !can_cover(true,true,false,false,0,1,true,a),"local terminator and explicit host completion are both mandatory");
+  Check(story::CheckpointPrefixCovers(finished,a),"completed checkpoint history covers the captured prefix of the same activation");
+  auto later=a; ++later.record;
+  Check(!story::CheckpointPrefixCovers(finished,later),"coverage cannot extend beyond proved host completion");
+  later=a; ++later.run; Check(!story::CheckpointPrefixCovers(finished,later),"new native activation retires checkpoint coverage");
+  later=a; ++later.generation; Check(!story::CheckpointPrefixCovers(finished,later),"checkpoint history cannot cross shared generations");
+  later=a; ++later.source; Check(!story::CheckpointPrefixCovers(finished,later),"checkpoint coverage never substitutes another actor identity");
 }
 struct Transport final : ICoopTransport {
   Transport* peer=nullptr;

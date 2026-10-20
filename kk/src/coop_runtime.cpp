@@ -361,13 +361,18 @@ class PartnerOverlay final : public rex::ui::ImGuiDialog {
         ImGui::SetNextWindowPos(ImVec2(24,190),ImGuiCond_Always);
         ImGui::SetNextWindowBgAlpha(.9f);
         if (ImGui::Begin("##coop-catchup",nullptr,ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoDecoration)) {
-          const bool checkpoint_recovery=StoryBehind();
+          const bool checkpoint_recovery=PrivateCatchupOffered();
           ImGui::TextUnformatted(checkpoint_recovery || StoryNeedsMove() ? "Your world needs to catch up with the host." : "Your partner is far ahead.");
-          ImGui::TextUnformatted(checkpoint_recovery ? "Recovery reloads both players at the host's last checkpoint." :
+          ImGui::TextUnformatted(checkpoint_recovery ? "Catch up at the host's checkpoint and rejoin your partner." :
               "Move beside the host and let your story catch up.");
-          if (ImGui::Button(checkpoint_recovery ? "Recover checkpoint" : "Move to partner")) MoveToPartner(checkpoint_recovery);
+          if (ImGui::Button(checkpoint_recovery ? "Catch up with partner" : "Move to partner")) MoveToPartner(checkpoint_recovery);
         }
         ImGui::End();
+      }
+      if (CatchupNotice() && flow.active && !flow.host && flow.phase==FlowPhase::Playing) {
+        const auto view=CurrentView();
+        const std::string notice="Catching up with "+(view.partner_name.empty() ? std::string("Partner") : view.partner_name);
+        ImGui::GetForegroundDrawList()->AddText(ImVec2(36,72),IM_COL32(240,240,240,255),notice.c_str());
       }
     }
     if (!REXCVAR_GET(kk_coop_enabled) || photo::Active() || freecam::HideHud() ||
