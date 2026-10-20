@@ -424,6 +424,22 @@ void Shuffle() {
         "tiny lists");
 }
 
+// Task 334: the SteamGridDB artwork table: direct CDN links for listed projects only, one each.
+void ArtworkTable() {
+  std::set<std::string> repos;
+  for (const kk::workshop::Artwork& a : kArtwork) {
+    bool listed = false;
+    for (const Project& p : kProjects) listed = listed || std::string(p.repo) == a.repo;
+    Check(listed, "artwork only for listed projects");
+    Check(repos.insert(a.repo).second, "one artwork per project");
+    Check(StartsWith(a.url, "https://cdn2.steamgriddb.com/grid/") && UrlHost(a.url) == "cdn2.steamgriddb.com",
+          "artwork is a direct SteamGridDB CDN link");
+  }
+  Check(ArtworkUrl(Pb()) == "https://cdn2.steamgriddb.com/grid/24f5d2bc2e14744b5bfd41a47c9d25f3.png",
+        "Point Blank artwork");
+  Check(ArtworkUrl(kProjects[3]).empty(), "Outpost Kaloki X has no SteamGridDB entry: keeps its GitHub picture");
+}
+
 }  // namespace
 
 int main(int argc, char** argv) {
@@ -437,6 +453,7 @@ int main(int argc, char** argv) {
   Markdown();
   Pictures();
   Shuffle();
+  ArtworkTable();
   if (failures) {
     std::printf("%d workshop check(s) failed\n", failures);
     return 1;
