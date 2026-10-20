@@ -11,6 +11,9 @@
 //
 // The page builders add rows in this order (conditional rows may be missing); the developer build checks
 // each built page against this table (InLayoutOrder) and tests check the table itself.
+// Task 332 (owner, 20 Oct): the first-time setup shows the FULL Display, Graphics and Controls pages, built by the
+// same code (launcher.cpp SettingsPageItems, launcher_setup_pages.inc): a row added to kDisplayRows, kGraphicsRows
+// or kControlsRows (and its page builder) shows in the setup by itself.
 #pragma once
 
 #include <cstddef>
@@ -28,6 +31,7 @@ struct Row {
   const char* label;    // the row's label; "*" stands for rows made from a list (the cheats)
 };
 
+// Also the first-time setup's Display page (task 332).
 inline constexpr Row kDisplayRows[] = {
     {"Screen", "Window mode"},       {"Screen", "Monitor"},
     {"Screen", "Window size"},       {"Screen", "Resolution"},
@@ -42,6 +46,7 @@ inline constexpr Row kDisplayRows[] = {
     {"Camera", "Camera shake"},      {"Camera", "Camera shake strength"},
 };
 
+// Also the first-time setup's Graphics page (task 332).
 inline constexpr Row kGraphicsRows[] = {
     {"Preset", "Look"},
     {"Preset", "Preset"},
@@ -88,6 +93,7 @@ inline constexpr Row kAudioRows[] = {
     {"Reset", "Reset page"},
 };
 
+// Also the first-time setup's Controls page (task 332).
 inline constexpr Row kControlsRows[] = {
     {"Input", "Input"},
     {"Input", "Button prompts"},

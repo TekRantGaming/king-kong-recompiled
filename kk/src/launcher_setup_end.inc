@@ -1,7 +1,7 @@
   // --------------------------------------------------------------- setup: the last steps ---
-  // Setup steps 9 and 10 (codex/state/setup-flow.md, job J5), after the graphics pages, in the launcher's
-  // game-asset look (AssetSetup): "Choose your button prompts" (SetupStage 12) and "You're all set"
-  // (SetupStage 13). Included inside class Launcher (launcher.cpp).
+  // Setup steps 6 and 10 (codex/state/setup-flow.md, job J5; task 332 order), in the launcher's game-asset look
+  // (AssetSetup): "Choose your button prompts" (SetupStage 12, after the Settings pages) and "You're all set"
+  // (SetupStage 13, after the Workshop page). Included inside class Launcher (launcher.cpp).
   //
   // Both pages are a column on the left (the logo, a heading, cards, then the page's menu) and a panel on the
   // right. Arrows move between the cards, Down from the last row goes to the menu and Up from its first entry
@@ -315,6 +315,7 @@
     float y = DrawEndHeader(dl, "Button prompts", "Choose your button prompts",
                             T(std::string("Pick which buttons the game and this launcher show in menus and hints.")),
                             x0, list_w);
+    DrawSkipAll(dl);
 
     const std::string chosen = ChosenPromptStyle(), automatic = AutoPromptStyle();
     std::vector<EndCard> cards;
@@ -388,8 +389,9 @@
     float dy = p1.y + 22 * s;
     dl->AddText(f.text, 15 * s, ImVec2(rx0, dy), color::kTextDim, about.c_str(), nullptr, pw);
     dy += ui::TextSize(f.text, 15 * s, about, pw).y + 14 * s;
+    // Task 332 (owner): where they can be changed later.
     const std::string remap =
-        T(std::string("Controller buttons and keyboard keys can be remapped any time in Settings > Controls."));
+        T(std::string("You can change these any time in Settings > Controls on the main menu."));
     dl->AddText(f.text, 14.5f * s, ImVec2(rx0, dy), color::kTextFaint, remap.c_str(), nullptr, pw);
 
 #if defined(KK_DEV_TOOLS)
@@ -407,21 +409,19 @@
   }
 
   void BackFromPrompts() {
-    setup_prompts_ = false;
     end_page_ = -1;  // the focus set up again when the page comes back
-    setup_graphics_ = true;
-    GfxGo(kGfxPages - 1);
-    REXLOG_INFO("KK: setup: back from the button prompts to the graphics pages");
+    SetupSettingsGo(kSettingsSetupPages - 1);  // task 332: Controls (the prompts page stays next)
+    REXLOG_INFO("KK: setup: back from the button prompts to the Controls page");
   }
 
   void FinishSetupPrompts() {
-    setup_prompts_ = false;
+    setup_prompts_ = false;  // task 332: then the texture pack, the PS2 cutscenes, the Workshop and the last page
+    end_page_ = -1;
 #if defined(KK_DEV_TOOLS)
-    if (dev_setup_ == kPromptsStage) dev_setup_ = kAllSetStage;
+    if (dev_setup_ == kPromptsStage) dev_setup_ = 6;
 #endif
     REXLOG_INFO("KK: setup: button prompts done: kk_button_prompts={} mnk_mode={}", Get("kk_button_prompts"),
                 Get("mnk_mode"));
-    setup_all_set_ = true;  // then the last page
   }
 
   // ------------------------------------------------------------------- step 10: you're all set ---
@@ -512,6 +512,7 @@
                                 "in Settings on the main menu. Enjoy the game.");
     float y = DrawEndHeader(dl, "You're all set", "You're all set", intro, x0, list_w);
     y += 6 * s;
+    DrawSkipAll(dl);
 
     std::vector<EndCard> cards;
     {
@@ -551,6 +552,24 @@
     const float rx0 = x0 + list_w + 56 * s, rx1 = right;
     float ry = top;
     if (DrawContentStrip(dl, 1.0f, true)) ry = o_.y + std::max(84 * s, h_ * 0.12f) + 66 * s + 18 * s;
+    DrawSetupStill(dl, rx0, rx1, ry);
+#if defined(KK_DEV_TOOLS)
+    {
+      static std::string logged;
+      const std::string now = (end_on_cards_ ? "card " + std::to_string(end_card_focus_)
+                                             : "menu " + std::to_string(end_menu_focus_)) +
+                              " steam " + SteamCardText();
+      if (now != logged) {
+        logged = now;
+        REXLOG_INFO("KK dev: setup step 10 focus {}", now);
+      }
+    }
+#endif
+  }
+
+  // One of the game's stills, framed, from rx0 to rx1 at ry (the last setup pages' right side).
+  void DrawSetupStill(ImDrawList* dl, float rx0, float rx1, float ry) {
+    const float s = S();
     if (!slides_.empty() && slides_[0].sharp) {
       const float pw = rx1 - rx0, ph = std::min(pw * 9.0f / 16.0f, o_.y + h_ - 120 * s - ry);
       const float aspect = slides_[0].aspect > 0 ? slides_[0].aspect : 16.0f / 9.0f, want = pw / std::max(ph, 1.0f);
@@ -567,30 +586,20 @@
       dl->AddImageRounded(ui::Tex(slides_[0].sharp), p0, p1, ImVec2(u0, v0), ImVec2(u1, v1), IM_COL32_WHITE, 10 * s);
       dl->AddRect(p0, p1, ui::WithAlpha(color::kText, 0.12f), 10 * s, 0, 1.0f * s);
     }
-#if defined(KK_DEV_TOOLS)
-    {
-      static std::string logged;
-      const std::string now = (end_on_cards_ ? "card " + std::to_string(end_card_focus_)
-                                             : "menu " + std::to_string(end_menu_focus_)) +
-                              " steam " + SteamCardText();
-      if (now != logged) {
-        logged = now;
-        REXLOG_INFO("KK dev: setup step 10 focus {}", now);
-      }
-    }
-#endif
   }
 
   void BackFromAllSet() {
-    setup_all_set_ = false;
-    setup_prompts_ = true;
-    REXLOG_INFO("KK: setup: back to the button prompts");
+    end_page_ = -1;
+    setup_workshop_ = true;  // task 332: the Workshop page (the last page stays next)
+    REXLOG_INFO("KK: setup: back to the Workshop page");
   }
 
-  // Finish setup: the main menu, and What's new once on it (a new install has no notes pending otherwise; never
-  // a second time in one launcher session, e.g. after Reinstall game from About once it was shown).
+  // Finish setup (and Skip all, task 332): the main menu, and What's new once on it (a new install has no notes
+  // pending otherwise; never a second time in one launcher session, e.g. after Reinstall game from About once it
+  // was shown). Task 332: first the startup movies, always this once, then the save notice loop over the scene's start.
   void FinishSetup() {
     setup_all_set_ = false;
+    setup_settings_ = setup_prompts_ = setup_workshop_ = false;
     end_page_ = -1;
 #if defined(KK_DEV_TOOLS)
     if (EndSetupStage(dev_setup_)) dev_setup_ = -1;
@@ -606,4 +615,5 @@
     }
     REXLOG_INFO("KK: setup: finished; main menu{}", open_whats_new_ ? ", What's new opens on it" : "");
     if (!InSetup()) Status(InstalledMessage());
+    StartMoviesAfterSetup();
   }

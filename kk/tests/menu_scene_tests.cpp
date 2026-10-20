@@ -4,6 +4,7 @@
 
 #include "menu_scene_logic.h"
 #include "loading_loop_logic.h"
+#include "startup_movies_logic.h"
 
 using namespace kk::menu_scene;
 
@@ -102,6 +103,25 @@ int main() {
     // The tips go round: 0 first, the one after the last, back to 0 after the last one; junk starts again.
     CHECK(NextTip("", 12) == 0 && NextTip("0", 12) == 1 && NextTip("11", 12) == 0 && NextTip("5", 12) == 6);
     CHECK(NextTip("x", 12) == 0 && NextTip("-3", 12) == 0 && NextTip("40", 12) == 5 && NextTip("3", 0) == 0);
+  }
+
+  // Task 332: the startup movies. After the setup they always play (a pop-up first with skip on); later only from
+  // the desktop, with the game files and no setup screen first, and not with kk_skip_intros on.
+  {
+    using namespace kk::startup_movies;
+    CHECK(Play(true, true) && Play(true, false) && Play(false, false) && !Play(false, true));
+    CHECK(AskFirst(true, true) && !AskFirst(true, false) && !AskFirst(false, true) && !AskFirst(false, false));
+    CHECK(AtLauncherStart("", true, false, false));
+    CHECK(!AtLauncherStart("", true, false, true));    // skip intros on
+    CHECK(!AtLauncherStart("play", true, false, false) && !AtLauncherStart("rebuild", true, false, false));
+    CHECK(!AtLauncherStart("", false, false, false));  // no game files yet
+    CHECK(!AtLauncherStart("", true, true, false));    // a setup or update screen comes first
+    const auto files = Files("G", "P");
+    CHECK(files.size() == 4);
+    CHECK(files[0].filename() == "Ubisoft.wmv" && files[1].filename() == "Universal.wmv" &&
+          files[2].filename() == "Wingnut.wmv" && files[3].filename() == "trg-startup.mp4");
+    CHECK(files[0].parent_path().filename() == "Video" && files[3].parent_path().filename() == "video");
+    CHECK(Clock(1.0, 2.0, true) == 2.0 && Clock(1.0, 2.0, false) == 1.0);
   }
 
   if (failures) return 1;

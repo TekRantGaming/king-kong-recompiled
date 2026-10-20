@@ -35,6 +35,8 @@ struct LoadingLoop::Shared {
   std::deque<Decoded> queue;
   bool stop = false;
   std::atomic<bool> failed{false};
+  bool once = false;       // task 332: play the file once
+  double end_at = -1;      // once: the time just after its last frame, when the decoder has finished
   uint32_t width = 0, height = 0;
   float aspect = 16.0f / 9.0f;
 };
@@ -82,6 +84,11 @@ void Decode(std::shared_ptr<LoadingLoop::Shared> shared, std::filesystem::path f
       }
       if (frames == 0) throw std::runtime_error("no video frames");
       loop_start += double(last - first + step) / 1e7;  // seamless: the next repeat starts one frame after the last
+      if (s.once) {
+        std::lock_guard lock(s.mutex);
+        s.end_at = loop_start;
+        return;
+      }
     }
   } catch (const std::exception& e) {
     REXLOG_WARN("KK loading loop: {} cannot be played ({}); not shown", file.filename().string(), e.what());
@@ -91,8 +98,9 @@ void Decode(std::shared_ptr<LoadingLoop::Shared> shared, std::filesystem::path f
 }
 }  // namespace
 
-LoadingLoop::LoadingLoop(rex::ui::ImmediateDrawer* drawer, std::filesystem::path file)
+LoadingLoop::LoadingLoop(rex::ui::ImmediateDrawer* drawer, std::filesystem::path file, bool once)
     : drawer_(drawer), shared_(std::make_shared<Shared>()) {
+  shared_->once = once;
   std::error_code ec;
   if (!drawer_ || !std::filesystem::is_regular_file(file, ec)) {
     REXLOG_WARN("KK loading loop: {} is missing; not shown", file.string());
@@ -120,7 +128,19 @@ float LoadingLoop::Aspect() const {
   return shared_->aspect;
 }
 
-rex::ui::ImmediateTexture* LoadingLoop::Frame(float dt) {
+bool LoadingLoop::Ended() const {
+  if (shared_->failed) return true;
+  std::lock_guard lock(shared_->mutex);
+  return shared_->end_at >= 0 && shared_->queue.empty() && position_ >= shared_->end_at;
+}
+
+bool LoadingLoop::HasFirstFrame() const {
+  if (texture_) return true;
+  std::lock_guard lock(shared_->mutex);
+  return !shared_->queue.empty();
+}
+
+rex::ui::ImmediateTexture* LoadingLoop::Frame(float dt, double clock) {
   if (shared_->failed) return texture_.get();
   Decoded due;
   bool have = false;
@@ -139,10 +159,16 @@ rex::ui::ImmediateTexture* LoadingLoop::Frame(float dt) {
     h = shared_->height;
     auto& q = shared_->queue;
     // Not before the first frame is there: the loop starts from its first frame.
-    if (!q.empty() || texture_) position_ += std::clamp(double(dt), 0.0, 0.1);
-    if (!q.empty() && !texture_) position_ = std::max(position_, q.front().at);
-    // The decoder fell behind (a long frame or a busy PC): go on from its next frame instead of rushing through.
-    if (!q.empty() && q.front().at < position_ - 0.25) position_ = q.front().at;
+    if (!q.empty() && first_at_ < 0) first_at_ = q.front().at;
+    if (clock >= 0 && first_at_ >= 0) {
+      // Task 332: another clock (the movie's sound) says where the picture is; late frames are dropped below.
+      position_ = first_at_ + clock;
+    } else {
+      if (!q.empty() || texture_) position_ += std::clamp(double(dt), 0.0, 0.1);
+      if (!q.empty() && !texture_) position_ = std::max(position_, q.front().at);
+      // The decoder fell behind (a long frame or a busy PC): go on from its next frame instead of rushing through.
+      if (!q.empty() && q.front().at < position_ - 0.25) position_ = q.front().at;
+    }
     while (!q.empty() && q.front().at <= position_) {
       due = std::move(q.front());
       q.pop_front();

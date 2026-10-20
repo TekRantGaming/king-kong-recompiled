@@ -17,6 +17,8 @@
 #include "launcher_ui.h"
 #include "menu_scene.h"
 #include "loading_loop.h"
+#include "startup_movies.h"
+#include "startup_movies_logic.h"
 #include "notify_logic.h"
 #include "system_notify.h"
 #include "ps2_movies.h"
@@ -1867,6 +1869,7 @@ class SettingsPages {
   std::function<std::string()> texture_pack_active_;
   std::function<void(const std::string&)> texture_pack_enable_;
   std::function<void()> open_workshop_;
+  bool in_setup_pages_ = false;  // task 332: the rows are built for a first-time setup page (launcher_setup_pages.inc)
   static void ChooseTexturePackFolder() {
     {
       std::lock_guard lock(texture_pack_folder_choice.mutex);
@@ -1913,10 +1916,14 @@ class SettingsPages {
       };
       items.push_back(std::move(it));
     }
-    items.push_back(ActionItem("Texture packs in the Workshop",
-                               "Download the HD and UHD texture packs, import your own from a ZIP file, see what each "
-                               "one is and remove the ones you no longer want.",
-                               "Open Workshop", [this] { if (open_workshop_) open_workshop_(); }));
+    {
+      Item it = ActionItem("Texture packs in the Workshop",
+                           "Download the HD and UHD texture packs, import your own from a ZIP file, see what each "
+                           "one is and remove the ones you no longer want.",
+                           "Open Workshop", [this] { if (open_workshop_) open_workshop_(); });
+      // Task 332: the first-time setup shows this page; the Workshop opens from the main menu once it is done.
+      items.push_back(std::move(Disable(it, in_setup_pages_, "The Workshop opens from the main menu once the setup is done.")));
+    }
     {
       const std::string folder = Get("kk_texture_pack_own_folder");
       Item it = ActionItem("Texture pack folder",
@@ -2775,8 +2782,18 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
       rebuild_shaders_screen_ = true;
       REXLOG_INFO("KK: rebuilding the native renderer's shaders (asked for, launcher restarted for it)");
     }
-    // Task 331: the owner's loading loop from the first frame (decoding starts now, while the scene starts).
-    StartLoadingLoop(open_on);
+    // Task 332: opened from the desktop with the setup done, the startup movies first (unless kk_skip_intros), then
+    // the save notice loop; task 331: otherwise the owner's loading loop from the first frame (decoding starts now,
+    // while the scene starts).
+    if (startup_movies::AtLauncherStart(open_on, files_ok_, InSetup(), GetBool("kk_skip_intros"))) {
+      StartStartupMovies("the launcher opened");
+    } else {
+      if (open_on.empty())
+        REXLOG_INFO("KK startup movies: not at this start ({})", !files_ok_ ? "no game files"
+                                                                : InSetup() ? "a setup or update screen first"
+                                                                            : "kk_skip_intros is on");
+      StartLoadingLoop(open_on);
+    }
     MaybeStartScene(!open_on.empty());  // back from the game (or a restart): before the first frame
     saved_changes_ = seen_changes_ = g_changes;
     StartHeartbeat();
@@ -3006,16 +3023,29 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
       const float v = on ? GetInt("kk_launcher_music_volume", 50) / 100.0f : 0.0f;
       // Task 330 (owner, 20 Oct): with the live menu scene its own sound plays (the same music, with the sea),
       // at this volume (FadeSceneSound); the launcher's copy of the music then stays silent.
-      music_->Update(SceneSoundPlays() ? 0.0f : v * v, io.DeltaTime);  // a gentler curve than linear
+      // Task 332: silent under the startup movies (they have their own sound).
+      music_->Update(SceneSoundPlays() || movies_ ? 0.0f : v * v, io.DeltaTime);  // a gentler curve than linear
     }
     if (menu_scene::Active()) {
       const bool on = GetBool("kk_launcher_music") && !native_pack_.Working();
       const float v = on ? GetInt("kk_launcher_music_volume", 50) / 100.0f : 0.0f;
-      FadeSceneSound(SceneSoundPlays() ? v * v : 0.0f, io.DeltaTime);
+      FadeSceneSound(SceneSoundPlays() && !movies_ ? v * v : 0.0f, io.DeltaTime);
     }
     if (files_ok_ && GetBool("kk_launcher_sounds") && !ui_sounds_)
       ui_sounds_ = std::make_unique<LauncherSounds>(paths_.game_dir);
 
+    // Task 332: the startup movies over the whole window first (only their pop-up is drawn and answered over them).
+    if (DrawStartupMovies(dl, io.DeltaTime)) {
+      if (modal_.open) {  // the pop-up and its button prompts (no status line over the movie)
+        ui::DrawModal(dl, modal_, o_, ImVec2(o_.x + w_, o_.y + h_), m_, input_);
+        const Action clicked = ui::DrawPrompts(dl, glyphs_, PromptSet(), Prompts(), o_.x + w_ - Margin(),
+                                               o_.y + h_ - 42 * S(), m_, true);
+        if (clicked != Action::kCount) pending_click_ = clicked;
+      }
+      ImGui::End();
+      NoteActivity(io);
+      return;
+    }
     // Task 331: the loading loop over the whole window: nothing else is drawn or answered until it fades.
     if (DrawLoadingLoop(dl, io.DeltaTime)) {
       ImGui::End();
@@ -3063,7 +3093,8 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
     const int view = int(page_) * 16 + int(play_) * 4 + int(sub_) + (modal_.open ? 1000 : 0) + SetupStage() * 10000 +
                      (ShaderScreen() ? 100000 : 0) + (leaving_ ? 1000000 : 0);
     active = active || view != last_view_ || (toast_ && toast_->NeedsContinuousPaint()) || native_pack_.Working() ||
-             installing_ || art_progress_.busy || (update_ && update_->busy) || status_focus_ != last_status_focus_;
+             installing_ || art_progress_.busy || (update_ && update_->busy) || status_focus_ != last_status_focus_ ||
+             movies_ != nullptr;  // task 332: the movies at their own frame rate
     last_view_ = view;
     last_status_focus_ = status_focus_;
     if (active) last_activity_ = ImGui::GetTime();
@@ -3479,6 +3510,10 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
         case 1: return {{Action::kBack, "Cancel"}};
         case 6:
         case 7: return {{Action::kAccept, "Select"}};
+        case kWorkshopStage: return EndPrompts();
+        case kSettingsFirstStage:
+        case kSettingsFirstStage + 1:
+        case kSettingsFirstStage + 2: return SetupSettingsPrompts();
         case 8:
         case 9:
         case 10:
@@ -4565,7 +4600,8 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
     if (dev_setup_ >= 0) return true;
 #endif
     return !files_ok_ || installing_ || setup_art_ || setup_shaders_ || setup_textures_ || setup_cutscenes_ ||
-           setup_graphics_ || setup_prompts_ || setup_all_set_ || update_new_ || installing_update_ || update_shaders_;
+           setup_graphics_ || setup_prompts_ || setup_all_set_ || update_new_ || installing_update_ || update_shaders_ ||
+           setup_settings_ || setup_workshop_;
   }
 
   // A version this launcher has not run before, on an installation that has run one (What's new uses
@@ -4595,7 +4631,7 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
   bool AssetSetup() const {
     if (!InSetup() || slides_.empty()) return false;
     const int stage = SetupStage();
-    return stage == 6 || stage == 7 || GraphicsSetupStage(stage) || EndSetupStage(stage) || stage == kNewStage;
+    return AskingSetupStage(stage);
   }
 
   // Home's look (the stills, blurred; the game's logo; the music), with a centred panel: what is
@@ -4699,6 +4735,7 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
       input_.Consume(Action::kAccept);
       ContinueShadersInBackground();
     }
+    DrawSkipAll(dl);  // task 332: the first-time setup's shader screen
   }
 
   void ContinueShadersInBackground() {
@@ -4715,6 +4752,8 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
     home_focus_ = 0;
   }
 
+  // Task 332: 15 the Workshop page, 16 to 18 the Settings pages Display, Graphics, Controls (launcher_setup_pages.inc);
+  // the graphics pages 8 to 11 only come up from the New in this update screen now.
   // 0: asking for the disc image, 1: installing, 2: taking the artwork,
   // 3: updating the port, 4: preparing the native renderer's shaders, 6: the HD texture pack, 7: restore
   // the PS2 cutscenes?, 8 to 11: the graphics pages (setup-flow.md steps 5 to 8), 12: the button prompts
@@ -4726,9 +4765,14 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
 #if defined(KK_DEV_TOOLS)
     if (dev_setup_ >= 0) return dev_setup_;
 #endif
-    return installing_update_ ? 3 : installing_ ? 1 : setup_art_ ? 2 : setup_shaders_ ? 4 : setup_textures_ ? 6
-           : setup_cutscenes_ ? 7 : setup_graphics_ ? kGfxFirstStage + std::clamp(gfx_page_, 0, kGfxPages - 1)
-           : setup_prompts_ ? kPromptsStage : setup_all_set_ ? kAllSetStage : update_new_ ? kNewStage : 0;
+    // Task 332: the first-time setup's pages in the owner's order (each page clears its own flag; Back sets the
+    // one before again): shaders, the Settings pages, button prompts, texture pack, PS2 cutscenes, Workshop, all set.
+    return installing_update_ ? 3 : installing_ ? 1 : setup_art_ ? 2 : setup_shaders_ ? 4
+           : setup_settings_ ? kSettingsFirstStage + std::clamp(setup_settings_page_, 0, kSettingsSetupPages - 1)
+           : setup_prompts_ ? kPromptsStage : setup_textures_ ? 6 : setup_cutscenes_ ? 7
+           : setup_workshop_ ? kWorkshopStage : setup_all_set_ ? kAllSetStage
+           : setup_graphics_ ? kGfxFirstStage + std::clamp(gfx_page_, 0, kGfxPages - 1)
+           : update_new_ ? kNewStage : 0;
   }
 
   // The first-time setup after the game files are there (a fresh install, or game files given to a fresh
@@ -4757,14 +4801,17 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
 
   // The first-time setup's content steps (setup-flow.md 3 and 4): the cutscene page only where the PS2
   // movies can play (Windows, and Linux builds with FFmpeg); TickSetupContent skips a page whose content is already there.
+  // Task 332: every page of the owner's order is set now; SetupStage shows them in that order and each page's
+  // Next clears its own (the Settings pages, button prompts, texture pack, PS2 cutscenes, Workshop, all set).
   void AskContentInSetup() {
+    setup_settings_ = true;
+    setup_settings_page_ = 0;
+    setup_prompts_ = true;
     setup_textures_ = true;
     setup_cutscenes_ = movies::PlaybackAvailable();
-    // ... and then the graphics pages (job J4).
-    setup_graphics_ = true;
-    gfx_page_ = 0;
-    gfx_entered_ = false;
-    gfx_cards_page_ = -1;
+    setup_workshop_ = true;
+    setup_all_set_ = true;
+    sub_ = kNoSubPage;
     if (!setup_cutscenes_) REXLOG_INFO("KK: setup: no PS2 cutscene page (PS2 movies do not play on this system)");
   }
 
@@ -4774,7 +4821,9 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
     const float x = o_.x + Margin();
     float y = o_.y + std::max(84 * s, h_ * 0.12f);
     const int stage = SetupStage();
-    if (GraphicsSetupStage(stage)) return DrawSetupGraphics(dl);  // setup steps 5 to 8: a layout of their own
+    if (SettingsSetupStage(stage)) return DrawSetupSettings(dl);  // task 332: the Settings pages (launcher_setup_pages.inc)
+    if (stage == kWorkshopStage) return DrawSetupWorkshop(dl);
+    if (GraphicsSetupStage(stage)) return DrawSetupGraphics(dl);  // from New in this update: a layout of their own
     if (stage == kPromptsStage) return DrawSetupPrompts(dl);       // setup step 9 (launcher_setup_end.inc)
     if (stage == kAllSetStage) return DrawSetupAllSet(dl);         // setup step 10
     if (stage == kNewStage) return DrawUpdateNew(dl);              // New in this update (launcher_setup_new.inc)
@@ -4898,7 +4947,8 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
       bar(art_fraction);
       y += 30 * s;
     } else if (stage == 6 || stage == 7) {
-      // Setup steps 3 and 4 (setup-flow.md): the HD texture pack, and the restored PS2 cutscenes.
+      // Setup steps 7 and 8 (setup-flow.md, task 332): the HD texture pack, and the restored PS2 cutscenes.
+      DrawSkipAll(dl);
       const auto kind = stage == 6 ? content::Kind::kTexturePack : content::Kind::kCutscenes;
       const content::Info& info = content::InfoFor(kind);
       auto para = [&](const std::string& text, float size, ImU32 col) {
@@ -4991,6 +5041,7 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
 #include "launcher_setup_graphics.inc"
 #include "launcher_setup_end.inc"
 #include "launcher_setup_new.inc"
+#include "launcher_setup_pages.inc"
 
   // The status line once the setup is over.
   const char* InstalledMessage() {
@@ -5338,23 +5389,26 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
     focused_ = nullptr;
   }
 
+  // A Settings page's rows (and Controls' sub-pages), as Settings shows them. Task 332: the first-time setup's
+  // Display, Graphics and Controls pages are built here too (launcher_setup_pages.inc), so they are always the same.
+  std::vector<Item> SettingsPageItems(Page page) {
+    switch (page) {
+      case kDisplay: return DisplayItems();
+      case kGraphics: return GraphicsItems();
+      case kGameplay: return GameplayItems();
+      case kCheats: return CheatItems();
+      case kAudio: return AudioItems();
+      case kControls: return sub_ == kRemapPage ? RemapItems() : sub_ == kKeysPage ? KeyItems() : ControlsItems();
+      case kAdvanced: return AdvancedPageItems();
+      case kAchievements: return AchievementItems();
+      case kAbout: return AboutItems();
+      default: return {};
+    }
+  }
+
   void DrawSettings(ImDrawList* dl) {
     const float s = S();
-    std::vector<Item> items;
-    switch (page_) {
-      case kDisplay: items = DisplayItems(); break;
-      case kGraphics: items = GraphicsItems(); break;
-      case kGameplay: items = GameplayItems(); break;
-      case kCheats: items = CheatItems(); break;
-      case kAudio: items = AudioItems(); break;
-      case kControls:
-        items = sub_ == kRemapPage ? RemapItems() : sub_ == kKeysPage ? KeyItems() : ControlsItems();
-        break;
-      case kAdvanced: items = AdvancedPageItems(); break;
-      case kAchievements: items = AchievementItems(); break;
-      case kAbout: items = AboutItems(); break;
-      default: break;
-    }
+    std::vector<Item> items = SettingsPageItems(page_);
 #if defined(KK_DEV_TOOLS)
     if (IsSettingsPage(page_) && sub_ == kNoSubPage) DevCheckLayout(page_ - kFirstSettingsPage, items, "launcher");
 #endif
@@ -6313,6 +6367,71 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
                 tip + 1);
   }
 
+  // Task 332 (owner, 20 Oct, DECISIONS row B): the startup movies (startup_movies_logic.h), then the save notice
+  // loop until the live menu scene is ready (as at a start from the desktop). `why` is for the log.
+  void StartStartupMovies(const char* why) {
+    movies_ = std::make_unique<StartupMovies>(immediate_, startup_movies::Files(paths_.game_dir,
+                                                                              rex::filesystem::GetExecutableFolder()));
+    movies_wait_ = 0.0f;
+    REXLOG_INFO("KK startup movies: start ({}; kk_skip_intros {})", why, GetBool("kk_skip_intros") ? "on" : "off");
+    // The save notice loop that follows them starts decoding now, so its first picture is ready when they end.
+    loop_.reset();
+    loop_first_ = -1;
+    loop_end_ = -1.0f;
+    loop_wait_ = 0.0f;
+    loop_shown_ = 0.0f;
+    loop_saved_ = false;
+    loop_tip_.clear();
+    loop_kind_ = loading_loop::Kind::kNotice;
+    loop_ = std::make_unique<LoadingLoop>(immediate_, LoadingLoopFile(loop_kind_));
+  }
+
+  // After Finish setup or Skip all: the movies always play this once; with kk_skip_intros on, a pop-up first says
+  // so. The live menu scene starts behind them (if it can run now; else TickSceneStart starts it later).
+  void StartMoviesAfterSetup() {
+    const bool skip = GetBool("kk_skip_intros");
+    StartStartupMovies("after the setup");
+    if (startup_movies::AskFirst(true, skip)) {
+      OpenModal("Startup movies",
+                T(std::string("The startup movies play this first time. From the next start, your choice to skip them is used.")),
+                {"OK"}, -1, [this](int) {
+                  REXLOG_INFO("KK startup movies: the first time pop-up closed");
+                  if (!menu_scene::Active()) MaybeStartScene(false);
+                });
+    } else if (!menu_scene::Active()) {
+      MaybeStartScene(false);
+    }
+  }
+
+  // Each frame, before the loading loop: true while the movies cover the whole window (nothing else is drawn or
+  // answered then, but their pop-up). The first one waits for the scene's start (it pauses the launcher once),
+  // at most 5 s.
+  bool DrawStartupMovies(ImDrawList* dl, float dt) {
+    if (!movies_) return false;
+    const bool scene_starting = loop_scene_ && !menu_scene::Active();
+    if (!modal_.open && scene_starting) movies_wait_ += std::clamp(dt, 0.0f, 0.1f);
+    const bool go = !modal_.open && (!scene_starting || movies_wait_ > 5.0f);
+    rex::ui::ImmediateTexture* frame = movies_->Frame(dt, go);
+    const ImVec2 p1(o_.x + w_, o_.y + h_);
+    dl->AddRectFilled(o_, p1, IM_COL32(0, 0, 0, 255));
+    if (frame) {  // the picture's whole frame, its aspect kept (black bars on other window shapes)
+      const float aspect = movies_->Aspect();
+      float vw = w_, vh = w_ / aspect;
+      if (vh > h_) {
+        vh = h_;
+        vw = h_ * aspect;
+      }
+      const ImVec2 v0(std::round(o_.x + (w_ - vw) * 0.5f), std::round(o_.y + (h_ - vh) * 0.5f));
+      dl->AddImage(ui::Tex(frame), v0, ImVec2(v0.x + vw, v0.y + vh));
+    }
+    if (movies_->Done()) {
+      movies_.reset();
+      REXLOG_INFO("KK startup movies: done; the save notice loop next{}",
+                  loop_scene_ ? (menu_scene::Ready() ? " (the scene is up)" : " (until the scene is up)") : "");
+    }
+    return true;
+  }
+
   // Each frame, before the pages: true while the loop covers the whole window (the launcher draws nothing else
   // and takes no input then). While it fades it is drawn over everything.
   bool DrawLoadingLoop(ImDrawList* dl, float dt) {
@@ -6431,7 +6550,8 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
   // Back on Home after the setup, an install, the New in this update screen or a shader preparation: the scene
   // starts now (checked about once a second; the runtime's start pauses the launcher about 1.5 s once).
   void TickSceneStart() {
-    if (!scene_retry_ || menu_scene::Active() || leaving_ || played_ || modal_.open || page_ != kHome) return;
+    // Task 332: not while the startup movies play (the scene's start pauses the launcher): it waits for them.
+    if (!scene_retry_ || menu_scene::Active() || leaving_ || played_ || modal_.open || page_ != kHome || movies_) return;
     if (ImGui::GetTime() < scene_retry_at_) return;
     scene_retry_at_ = ImGui::GetTime() + 1.0;
     const menu_scene::Reason r = menu_scene::Decide(SceneFacts());
@@ -6636,8 +6756,8 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
     setup_focus_ = 0;
     if (content_watch_ >= 0 && content_watch_setup_ == stage) content_watch_setup_ = 0;
 #if defined(KK_DEV_TOOLS)
-    if (dev_setup_ == 6) dev_setup_ = movies::PlaybackAvailable() ? 7 : kGfxFirstStage;
-    else if (dev_setup_ == 7) dev_setup_ = kGfxFirstStage;
+    if (dev_setup_ == 6) dev_setup_ = movies::PlaybackAvailable() ? 7 : kWorkshopStage;
+    else if (dev_setup_ == 7) dev_setup_ = kWorkshopStage;
 #endif
   }
 
@@ -7496,7 +7616,7 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
     // New in this update screen (job J6), nor while shaders are prepared (that loads every processor core and the
     // launcher answers slowly meanwhile). launcher_policy.h.
     if (open_whats_new_ &&
-        ShowWhatsNewNow({open_whats_new_, modal_.open, files_ok_, InSetup(), update_new_, ShaderScreen(), native_pack_.Busy(),
+        ShowWhatsNewNow({open_whats_new_, modal_.open, files_ok_, InSetup() || movies_ != nullptr, update_new_, ShaderScreen(), native_pack_.Busy(),
                          NativeShaderPack::Wanted(), native_pack_.Finished() || ShadersPreparedForThisVersion()})) {
       open_whats_new_ = false;
       whats_new_shown_ = true;
@@ -7702,8 +7822,7 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
     ImGuiIO& io = ImGui::GetIO();
     // Scripted runs wait for the setup's work (only captures go on); the pages that ask something take input.
     const bool waiting = std::getenv("KK_DEV_LAUNCHER_INPUT_FILE") && (InSetup() || ShaderScreen()) &&
-                         (ShaderScreen() || (SetupStage() != 6 && SetupStage() != 7 && !GraphicsSetupStage(SetupStage()) &&
-                                             !EndSetupStage(SetupStage()) && SetupStage() != kNewStage));
+                         (ShaderScreen() || !AskingSetupStage(SetupStage()));
     static bool release = false;
     if (release) {
       io.AddMouseButtonEvent(0, false);
@@ -7737,7 +7856,8 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
     if (const std::string& w = steps[next]; w.rfind("wait-", 0) == 0) {
       bool met = true;
       if (w.rfind("wait-setup:", 0) == 0) met = InSetup() && SetupStage() == std::atoi(w.c_str() + 11);
-      else if (w == "wait-home") met = !InSetup() && !ShaderScreen() && !loop_;  // task 331: the loop gone
+      else if (w == "wait-home") met = !InSetup() && !ShaderScreen() && !loop_ && !movies_;  // task 331/332: the loop and movies gone
+      else if (w == "wait-movies") met = movies_ != nullptr;  // task 332: the startup movies are up
       else if (w == "wait-modal") met = modal_.open;  // a pop-up is up (logged with its title)
       else if (w == "wait-artbook") {  // Beta 7: the artbook installed, or its download failed
         const auto st = content::Service::Get().Get(content::Kind::kArtbook);
@@ -7823,9 +7943,11 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
     }
     if (t.rfind("focus:", 0) == 0) {
       const bool gfx = InSetup() && GraphicsSetupStage(SetupStage());
+      const bool setup_settings = InSetup() && SettingsSetupStage(SetupStage());  // task 332
       for (size_t i = 0; i < focused_items_.size(); ++i)
         if (focused_items_[i].label == t.substr(6) && focused_items_[i].type != ItemType::kSection) {
-        auto& state = gfx ? gfx_lists_[GfxPage()] : play_ != PlayView::kNone ? play_lists_[int(play_)] : lists_[page_ * 4 + sub_];
+        auto& state = gfx ? gfx_lists_[GfxPage()] : setup_settings ? setup_lists_[SetupSettingsPage() * 4 + sub_]
+                      : play_ != PlayView::kNone ? play_lists_[int(play_)] : lists_[page_ * 4 + sub_];
         if (gfx) gfx_on_cards_ = false;
         state.focus = int(i);
         state.focus_label = focused_items_[i].label;
@@ -7846,7 +7968,11 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
       for (const auto& row : focused_items_) {
         const bool choice = row.index >= 0 && row.index < int(row.options.size());
         REXLOG_INFO("KK dev: launcher page {} row {} = {}",
-                    play_ != PlayView::kNone ? PlayViewName(play_) : kPageNames[page_], row.label,
+                    play_ != PlayView::kNone ? PlayViewName(play_)
+                    : InSetup() && SettingsSetupStage(SetupStage())
+                        ? (std::string("setup ") + kPageNames[kSetupSettingsPages[SetupSettingsPage()]]).c_str()
+                        : kPageNames[page_],
+                    row.label,
                     choice ? row.options[size_t(row.index)] : row.value_text);
       }
       return;
@@ -8025,6 +8151,9 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
   std::vector<float> home_offset_;
   float home_mix_ = 1.0f;
   float scene_mix_ = 0.0f;  // task 330: the live menu scene over the stills (0 .. 1)
+  // Task 332: the startup movies (StartStartupMovies / DrawStartupMovies).
+  std::unique_ptr<StartupMovies> movies_;
+  float movies_wait_ = 0.0f;  // seconds the first movie has waited for the scene's start
   // Task 331: the loading loop (StartLoadingLoop / DrawLoadingLoop).
   std::unique_ptr<LoadingLoop> loop_;
   loading_loop::Kind loop_kind_ = loading_loop::Kind::kNone;
