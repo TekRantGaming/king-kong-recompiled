@@ -115,15 +115,23 @@ class Service {
     addresses_ = direct && options.host && options.address=="::" ? DirectLocalAddresses() : options.address;
     compatibility_ = config.compatibility;
     { std::lock_guard lock(mutex_); local_cheats_ = config.cheats;
-      view_ = {}; view_.role = config.role; view_.state = SessionState::Connecting; view_.updated = Now(); }
+      view_ = {}; view_.role = config.role; view_.state = SessionState::Connecting; view_.updated = Now();
+      state_events_.clear();
+#if defined(KK_DEV_TOOLS)
+      wait_events_.clear(); wait_count_ = 0; next_pose_log_ = Now()+10;
+#endif
+    }
     worker_ = std::thread([this, config = std::move(config), options = std::move(options)] {
       auto transport = CreateDirectUdp(options);
       { std::lock_guard lock(mutex_); open_failed_ = transport->State()!=TransportState::Ready; }
-      CoopSession session(config, *transport, [](SessionState s) {
-        REXLOG_INFO("KK co-op: {}", StateName(s));
+      CoopSession session(config, *transport, [this](SessionState s) {
+        // A synchronous log sink can stall on disk or another producer. Never
+        // call it from the heartbeat worker. UI drains bounded copied events.
+        std::lock_guard lock(mutex_);
+        if (state_events_.size()==32) state_events_.erase(state_events_.begin());
+        state_events_.push_back(s);
       });
       SessionState shown = SessionState::Idle;
-      double next_pose_log = Now() + 10;
 #if defined(KK_DEV_TOOLS)
       double previous_poll = Now();
 #endif
@@ -162,10 +170,9 @@ class Service {
         view.partner_name = session.PartnerName();
         view.epoch = session.Epoch();
 #if defined(KK_DEV_TOOLS)
-        LogPoses(view, now, next_pose_log);
-        if (now-copy_started>.5 || poll_gap>.5) {
-          static unsigned logged=0;
-          if (logged++<8) REXLOG_INFO("KK co-op worker: shared snapshot waited {:.3f}s; poll gap {:.3f}s; packet clock sampled after wait",now-copy_started,poll_gap);
+        if ((now-copy_started>.5 || poll_gap>.5) && wait_count_<8) {
+          std::lock_guard lock(mutex_);
+          wait_events_.push_back({now-copy_started,poll_gap}); ++wait_count_;
         }
 #endif
         bool lobby_changed;
@@ -201,6 +208,29 @@ class Service {
     flow_.Disconnect();
   }
   bool Running() const { return running_; }
+  // UI-thread only, including while the launcher or a cover screen is up.
+  // Release every shared lock before formatting or writing any log message.
+  void LogDiagnostics() {
+    std::vector<SessionState> states;
+#if defined(KK_DEV_TOOLS)
+    View view;
+    std::vector<std::pair<double,double>> waits;
+    const double now=Now();
+    const bool pose_due=now>=next_pose_log_;
+#endif
+    {
+      std::lock_guard lock(mutex_); states.swap(state_events_);
+#if defined(KK_DEV_TOOLS)
+      waits.swap(wait_events_); if (pose_due) view=view_;
+#endif
+    }
+    for (const auto s : states) REXLOG_INFO("KK co-op: {}",StateName(s));
+#if defined(KK_DEV_TOOLS)
+    if (pose_due) LogPoses(view,now,next_pose_log_);
+    for (const auto& [snapshot,gap] : waits)
+      REXLOG_INFO("KK co-op worker: shared snapshot waited {:.3f}s; poll gap {:.3f}s; packet clock sampled after wait",snapshot,gap);
+#endif
+  }
   bool Direct() const { return running_ && direct_; }
   SocialModel SocialSnapshot() {
     std::lock_guard lock(mutex_);
@@ -262,6 +292,12 @@ class Service {
   std::atomic<bool> running_{false}, stop_{false};
   std::thread worker_;
   std::mutex mutex_;
+  std::vector<SessionState> state_events_; // 32 diagnostic transitions, never gameplay messages.
+#if defined(KK_DEV_TOOLS)
+  std::vector<std::pair<double,double>> wait_events_; // At most 8 per session.
+  unsigned wait_count_ = 0;
+  double next_pose_log_ = 0; // UI-thread log cadence.
+#endif
   bool direct_ = false, local_ready_ = false, remote_ready_ = false, starting_ = false, code_rejected_ = false, open_failed_ = false;
   Compatibility compatibility_;
   DirectUdpOptions options_;
@@ -300,6 +336,7 @@ class PartnerOverlay final : public rex::ui::ImGuiDialog {
   explicit PartnerOverlay(rex::ui::ImGuiDrawer* drawer) : ImGuiDialog(drawer) {}
  protected:
   void OnDraw(ImGuiIO& io) override {
+    service.LogDiagnostics();
     if (REXCVAR_GET(kk_coop_enabled)) {
       const auto flow=SessionFlowSnapshot();
       if (flow.active && (*flow.status || observer::Active())) {
