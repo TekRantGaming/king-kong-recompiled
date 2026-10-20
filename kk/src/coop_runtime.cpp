@@ -31,6 +31,7 @@
 #include "mods.h"
 #include "photo_mode.h"
 #include "play_internal.h"
+#include "ps2_movies.h"
 #include "ui_paint.h"
 #include "coop_enemies_game.h"
 #include "coop_partner_body.h"
@@ -355,25 +356,32 @@ class PartnerOverlay final : public rex::ui::ImGuiDialog {
   void OnDraw(ImGuiIO& io) override {
     service.LogDiagnostics();
     if (REXCVAR_GET(kk_coop_enabled)) {
+      // Movies can run inside the synchronous loader, before Loaded/LoadRelease
+      // or another GameFrame. Never put session UI over their presenter.
+      if (movies::LoaderWaiting()) return;
       const auto flow=SessionFlowSnapshot();
       if (flow.active && (*flow.status || observer::Active())) {
         auto* draw=ImGui::GetForegroundDrawList();
         const bool waiting=flow.phase!=FlowPhase::Playing ||
             (!flow.host && (flow.policy==ChapterPolicy::Observer || observer::Active()) && observer::StatusScreen());
-        if (waiting && !play::PauseMenuOpen() && !play::GamePausePageUp())
-          draw->AddRectFilled(ImVec2(0,0),ImGui::GetIO().DisplaySize,IM_COL32(10,12,16,255));
-        char status[256];
+        // Flow phase describes peer synchronization, not what is on screen.
+        // Native intro movies also play inside uni_go while phase is Loading.
+        // Keep every wait/fallback non-occluding, even without a camera tick.
         std::string line=flow.phase==FlowPhase::Playing && !flow.host &&
             (flow.policy==ChapterPolicy::Observer || observer::Active()) ? observer::Status() : flow.status;
         if (flow.phase==FlowPhase::Waiting) {
           const auto social=Social().Snapshot();
           for (const auto& member : social.members) if (member.id!=social.self) { line="Waiting for "+member.name+" to finish this chapter..."; break; }
         }
-        std::snprintf(status,sizeof(status),"%s\nHost chapter %d | level %u | checkpoint %u",line.c_str(),
-            FlowChapter(flow.world.level)+1,flow.world.level,flow.checkpoint);
-        draw->AddText(ImVec2(36,40),IM_COL32(240,240,240,255),status);
+        const auto* vp=ImGui::GetMainViewport();
+        const float size=std::clamp(io.DisplaySize.y/720.f,.65f,1.5f)*16.f;
+        const ImVec2 pos(vp->Pos.x+12,vp->Pos.y+12);
+        draw->PushClipRect(pos,ImVec2(vp->Pos.x+io.DisplaySize.x-12,pos.y+size+2),true);
+        draw->AddText(ImGui::GetFont(),size,pos,IM_COL32(240,240,240,110),line.c_str());
+        draw->PopClipRect();
         if (waiting || observer::Active() || flow.policy!=ChapterPolicy::Together) return;
       }
+      if (observer::CutsceneActive()) return;
       if (MoveToPartnerOffered()) {
         ImGui::SetNextWindowPos(ImVec2(24,190),ImGuiCond_Always);
         ImGui::SetNextWindowBgAlpha(.9f);

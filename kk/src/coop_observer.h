@@ -18,6 +18,8 @@ bool StatusScreen();
 bool Active();
 // Game-thread guard covers native movies and both local/host script cameras.
 bool InCutscene(const uint8_t* base);
+// UI-thread snapshot. Never reads guest memory from a drawing callback.
+bool CutsceneActive();
 const char* Status();
 void Fallback(const char* static_reason);
 // C37 integration: guest only, same loaded generation. Caller clears on revive.
