@@ -67,11 +67,13 @@ set(KINGKONG_SOURCES
     src/hfr_follow.cpp
     src/hfr_frame_time.cpp
     src/hfr_rowing.cpp
+    src/hfr_kong_lift.cpp
     src/hfr_splash.cpp
     src/hfr_fish.cpp
     src/hfr_sway.cpp
     src/hfr_cam_ground.cpp
     src/fix_raptor_path.cpp
+    src/prompt_anim.cpp
     src/online.cpp
     src/telemetry.cpp
     src/telemetry_upload.cpp
@@ -159,6 +161,7 @@ if(KK_DEV_TOOLS)
     list(APPEND KINGKONG_SOURCES src/dev_puppet_mesh.cpp)
     list(APPEND KINGKONG_SOURCES src/dev_puppet_variant.cpp)
     list(APPEND KINGKONG_SOURCES src/dev_tools.cpp src/dev_watch.cpp src/dev_ae.cpp src/dev_sound_trace.cpp src/dev_load_trace.cpp src/dev_frame_log.cpp src/dev_sample.cpp src/dev_venture.cpp src/dev_chapter_jump.cpp src/dev_pause.cpp src/dev_fish.cpp src/dev_clock_trace.cpp src/dev_camera_start.cpp src/dev_game_watch.cpp src/dev_teleport.cpp src/dev_trig_trace.cpp)
+    list(APPEND KINGKONG_SOURCES src/dev_kong_lift.cpp)
 endif()
 
 if(WIN32)

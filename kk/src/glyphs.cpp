@@ -17,6 +17,7 @@
 #include <atomic>
 #include <chrono>
 #include <cmath>
+#include <cstdlib>
 #include <cstring>
 #include <fstream>
 #include <optional>
@@ -82,6 +83,9 @@ constexpr Slot kSlots[] = {
     {"bumper_l", 196, 65, 255, 90}, {"bumper_r", 197, 36, 256, 61}, {"trigger_l", 6, 4, 32, 47},
     {"trigger_r", 38, 4, 64, 47}, {"lt", 70, 4, 96, 47},           {"rt", 102, 4, 128, 47},
     {"lb", 134, 6, 193, 31},      {"rb", 197, 6, 256, 31},
+    // Keyboard only: the game's "R" (the right stick) beside L at the top right, the animated stick pictures'
+    // frame 9; the mouse there is what prompt_anim.cpp shows for "Right stick to aim".
+    {"mouse_move", 237, 104, 251, 119},
 };
 
 uint64_t Fnv1a(const uint8_t* p, size_t n) {
@@ -314,15 +318,19 @@ std::filesystem::path SlotImage(const std::filesystem::path& dir, bool keyboard,
   std::string name = slot;
   for (auto& [from, to] : kAliases)
     if (name == from) name = to;
+  if (name == "mouse_move" && !keyboard) return {};  // controllers keep the game's R
   if (!keyboard) return dir / (name + ".png");
   static constexpr std::pair<const char*, const char*> kKeys[] = {
       {"a", "keybind_a"}, {"b", "keybind_b"}, {"x", "keybind_x"}, {"y", "keybind_y"},
       {"back", "keybind_back"}, {"start", "keybind_start"}, {"lt", "keybind_left_trigger"},
       {"rt", "keybind_right_trigger"}, {"lb", "keybind_left_shoulder"}, {"rb", "keybind_right_shoulder"},
       {"dpad", "keybind_dpad_up"}, {"dpad_up", "keybind_dpad_up"}, {"stick", "keybind_lstick_up"},
-      {"stick_click", "keybind_lstick_press"}, {"stick_move", "keybind_lstick_up"}};
+      {"stick_click", "keybind_lstick_press"}};
   for (auto& [s, bind] : kKeys)
     if (name == s) return KeyImage(dir, bind);
+  // The stick pictures prompt_anim.cpp keeps still: the left stick moves (W A S D) and the mouse aims.
+  if (name == "stick_move") return dir / "WASD.png";
+  if (name == "mouse_move") return dir / (std::string(key_glyphs::kMouseMove) + ".png");
   return {};
 }
 
@@ -331,14 +339,40 @@ std::vector<uint8_t> BuildSheet(const uint8_t* original, const std::string& styl
   const bool keyboard = style == "keyboard";
   Canvas c = DecodeSheet(original);
   int drawn = 0;
+#if defined(KK_DEV_TOOLS)
+  // KK_DEV_GLYPH_PROBE=1 (keyboard style): slot i shows keyboard/<i>.png, to see which cells a prompt uses.
+  static const bool probe = std::getenv("KK_DEV_GLYPH_PROBE") != nullptr;
+#endif
   for (const Slot& s : kSlots) {
-    const auto path = SlotImage(dir, keyboard, s.name);
+    auto path = SlotImage(dir, keyboard, s.name);
+#if defined(KK_DEV_TOOLS)
+    if (probe && keyboard) {
+      // Letters that read differently upside down or mirrored, for the stick and pad cells.
+      static constexpr std::pair<const char*, const char*> kProbe[] = {
+          {"dpad", "G"}, {"dpad_up", "J"}, {"stick", "F"}, {"stick_click", "P"}, {"stick_move", "R"}};
+      path = dir / (std::to_string(&s - kSlots) + ".png");
+      for (auto& [slot, letter] : kProbe)
+        if (std::string_view(s.name) == slot) path = dir / (std::string(letter) + ".png");
+    }
+#endif
     if (path.empty()) continue;
     if (auto pic = LoadPng(path)) {
       DrawInto(c, s, *pic);
       ++drawn;
     }
   }
+#if defined(KK_DEV_TOOLS)
+  // KK_DEV_GLYPH_PROBE=2: also paint the sheet's empty parts with their position (red = x / 8 * 8,
+  // green = stored y / 4 * 8), to see where a picture that draws nothing reads from.
+  if (probe && keyboard && std::string_view(std::getenv("KK_DEV_GLYPH_PROBE")) == "2")
+    for (uint32_t y = 0; y < kHeight; ++y)
+      for (uint32_t x = 0; x < kWidth; ++x)
+        if (Rgba& p = c[y * kWidth + x]; p.a < 8) {
+          // Each 4x4 block: its top two rows show x / 4, its bottom two stored y / 4 (bits 0-2 as red, green, blue).
+          const uint32_t v = (y % 4 < 2 ? x : y) / 4;
+          p = {uint8_t(v & 1 ? 255 : 0), uint8_t(v & 2 ? 255 : 0), uint8_t(v & 4 ? 255 : 0), 255};
+        }
+#endif
   if (!drawn) {
     REXLOG_WARN("KK: no button images found in {}", dir.string());
     return {};
@@ -375,8 +409,11 @@ std::vector<uint32_t> FindOriginals(rex::memory::Memory* memory, const uint8_t* 
 }
 
 std::atomic<bool> g_running{false};
+std::atomic<bool> g_keyboard{false};  // the keyboard sheet is the one written
 
 }  // namespace
+
+bool KeyboardPromptsShown() { return g_keyboard.load(std::memory_order_relaxed); }
 
 std::string PadPromptsFor(int sdl_gamepad_type, const char* name) {
   if (name && std::string_view(name).find("Steam Deck") != std::string_view::npos) return "steam_deck";
@@ -451,6 +488,7 @@ void StartButtonPrompts(rex::memory::Memory* memory) {
           sheet = style == "xbox360" ? std::vector<uint8_t>() : std::move(next_sheet);
         }
       }
+      g_keyboard = style == "keyboard";
       if (style.empty() || style == "xbox360") {
         std::this_thread::sleep_for(std::chrono::seconds(1));
         continue;

@@ -13,6 +13,9 @@ namespace kk {
 // kk_button_prompts, and follows changes to it while the game runs.
 void StartButtonPrompts(rex::memory::Memory* memory);
 
+// Whether the keyboard prompts are the ones drawn now (prompt_anim.cpp).
+bool KeyboardPromptsShown();
+
 // The prompt style for a kind of controller (an SDL_GamepadType and the
 // controller's name): xbox360, xbox_series, ps2 (also the PS3's), ps5 or
 // steam_deck. Anything else gets the game's own Xbox 360 prompts.
