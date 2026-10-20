@@ -3,6 +3,9 @@
 #include <rex/filesystem.h>
 #include "ps2_movie_decoder.h"
 #include "ps2_movies_logic.h"
+#if defined(KK_DEV_TOOLS)
+#include "dev_chapter_prepare.h"
+#endif
 
 // The restored PS2 cutscenes' player, the same on Windows and Linux: the decoder is Media Foundation on
 // Windows and the bundled LGPL FFmpeg on Linux (ps2_movie_decoder.h).
@@ -460,6 +463,9 @@ void WaitForClip(const std::shared_ptr<Job>& job, std::thread& worker, std::chro
 
 
 bool BeforeLoad(const uint8_t* base, uint32_t g, bool starting, bool leaving) {
+#if defined(KK_DEV_TOOLS)
+  DevStartPreparationTrace();
+#endif
   std::vector<std::filesystem::path> overrides;
   {
     std::lock_guard lock(override_mutex);
@@ -532,6 +538,9 @@ void AfterLoad() {
 }
 
 void Shutdown() {
+#if defined(KK_DEV_TOOLS)
+  DevStopPreparationTrace();
+#endif
   shutting_down = true;
   std::shared_ptr<Job> job;
   { std::lock_guard lock(job_mutex); job = current_job; }
