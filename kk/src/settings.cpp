@@ -35,6 +35,8 @@ REXCVAR_DEFINE_STRING(kk_last_version, "", "KK",
                       "Last port version the launcher has shown (it shows What's new once after an update)");
 REXCVAR_DEFINE_INT32(kk_frame_rate, 30, "KK/Video",
                      "Frame-rate cap: 30, 60, 90, 120, 144, 165, 240, or 0 for unlimited");
+REXCVAR_DEFINE_BOOL(kk_cutscenes_16_9, true, "KK/Video",
+                    "Keep pre-rendered cutscenes at 16:9 instead of stretching them to fill the display");
 REXCVAR_DEFINE_STRING(kk_render_quality, "quality", "KK/Video",
                       "Render resolution relative to the output: native, quality, balanced, performance, "
                       "ultra_performance, supersample, or custom (use resolution_scale)");
@@ -274,16 +276,17 @@ void MigrateSettings(const std::filesystem::path& config_path) {
   // older one that has no upscaler setting meant the old default: keep it, so
   // an update doesn't change a player's picture (or turn their High, Ultra or
   // Steam Deck preset into Custom). New installs get the new defaults.
-  constexpr int32_t kVersion = 2;
-  if (REXCVAR_GET(kk_settings_version) >= kVersion) return;
+  // 3: Added a setting for keeping pre-rendered cutscenes at 16:9.
+  constexpr int32_t kVersion = 3;
+  const int32_t old_version = REXCVAR_GET(kk_settings_version);
+  if (old_version >= kVersion) return;
   std::error_code ec;
   if (std::filesystem::exists(config_path, ec)) {
-    // A file this version wrote already has the version in it: if it still
-    // reads as older, the file couldn't be read, and saving now would put the
-    // defaults over every setting in it (issue #37). Keep a copy and leave it.
+    // If a versioned config still reads as version 0, parsing failed. Saving
+    // now would replace its settings with defaults (issue #37), so keep a copy.
     std::ifstream file(config_path, std::ios::binary);
     const std::string text((std::istreambuf_iterator<char>(file)), std::istreambuf_iterator<char>());
-    if (text.find("kk_settings_version") != std::string::npos) {
+    if (old_version == 0 && text.find("kk_settings_version") != std::string::npos) {
       auto backup = config_path;
       backup += ".bak";
       std::filesystem::copy_file(config_path, backup, std::filesystem::copy_options::overwrite_existing, ec);
@@ -291,13 +294,17 @@ void MigrateSettings(const std::filesystem::path& config_path) {
                    config_path.filename().string(), backup.filename().string());
       return;
     }
-    static constexpr std::pair<const char*, const char*> kOldDefaults[] = {{"present_effect", "bilinear"},
-                                                                           {"kk_render_quality", "native"}};
-    for (const auto& [name, value] : kOldDefaults)
-      for (const auto& e : rex::cvar::GetRegistry())
-        if (e.name == name && e.source == rex::cvar::Source::kDefault) rex::cvar::SetFlagByName(name, value);
-    REXLOG_INFO("KK: settings from an older version: kept its upscaler settings ({}, {})",
-                rex::cvar::GetFlagByName("present_effect"), rex::cvar::GetFlagByName("kk_render_quality"));
+    // Versions before 2 used bilinear at native resolution by default. Keep
+    // that picture for those installs; version 2 already has the newer defaults.
+    if (old_version < 2) {
+      static constexpr std::pair<const char*, const char*> kOldDefaults[] = {{"present_effect", "bilinear"},
+                                                                             {"kk_render_quality", "native"}};
+      for (const auto& [name, value] : kOldDefaults)
+        for (const auto& e : rex::cvar::GetRegistry())
+          if (e.name == name && e.source == rex::cvar::Source::kDefault) rex::cvar::SetFlagByName(name, value);
+      REXLOG_INFO("KK: settings from an older version: kept its upscaler settings ({}, {})",
+                  rex::cvar::GetFlagByName("present_effect"), rex::cvar::GetFlagByName("kk_render_quality"));
+    }
     rex::cvar::SetFlagByName("kk_settings_version", std::to_string(kVersion));
     SaveSettings(config_path);
     return;

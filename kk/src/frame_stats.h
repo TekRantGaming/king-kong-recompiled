@@ -9,6 +9,10 @@ namespace kk {
 // Measured guest (game) frame rate, updated once per second.
 rex::ui::FrameStats GetGuestFrameStats();
 
+// Called by guest video reads and the XMV player's synchronization wait.
+void NotifyMovieActivity();
+void NotifyGameplayCamera();
+
 // Runs `fn` once, on the game thread, `seconds` after the first guest frame
 // (several may be scheduled).
 void RunAfterFirstFrame(double seconds, std::function<void()> fn);

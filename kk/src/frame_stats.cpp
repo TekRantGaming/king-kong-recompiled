@@ -31,6 +31,7 @@
 #include <rex/logging.h>
 
 #include "crash_dump.h"
+#include "presentation.h"
 #include "settings.h"
 
 namespace kk {
@@ -39,11 +40,93 @@ namespace {
 using Clock = std::chrono::steady_clock;
 
 std::atomic<uint64_t> g_frames{0};
+std::atomic<int64_t> g_last_movie_video_read_ns{0};
+std::atomic<int64_t> g_last_gameplay_camera_ns{0};
 std::mutex g_mutex;
+std::mutex g_presentation_mutex;
 Clock::time_point g_window_start = Clock::now();
 uint64_t g_window_frames = 0;
 double g_window_swap_ms = 0;  // time spent inside the swap call this window
 rex::ui::FrameStats g_stats;
+
+// The user's display choice stays fixed while this temporarily letterboxes
+// menus and (optionally) cutscenes.
+bool g_presentation_initialized = false;
+bool g_display_letterbox = false;
+PresentationMode g_presentation_mode = PresentationMode::kUnknown;
+
+uint32_t GuestU32(const uint8_t* base, uint32_t address) {
+  uint32_t value;
+  std::memcpy(&value, base + address, sizeof(value));
+  return std::byteswap(value);
+}
+
+struct MoviePlayerState {
+  uint32_t player;
+  uint32_t state_268;
+  uint32_t state_272;
+
+  bool playing() const { return player && (state_268 || state_272); }
+};
+
+MoviePlayerState GetMoviePlayerState(const uint8_t* base) {
+  const uint32_t player = GuestU32(base, 0x82CCAE80);
+  if (!player) return {};
+  return {player, GuestU32(base, player + 268), GuestU32(base, player + 272)};
+}
+
+int64_t MovieVideoReadAgeMs() {
+  const int64_t last = g_last_movie_video_read_ns.load(std::memory_order_relaxed);
+  if (!last) return -1;
+  const auto now = std::chrono::duration_cast<std::chrono::nanoseconds>(Clock::now().time_since_epoch()).count();
+  return (now - last) / 1'000'000;
+}
+
+bool MovieVideoReadRecently(int64_t age_ms) {
+  // XMV playback can stop issuing reads for several seconds while the decoder
+  // catches up. Keep the cutscene framing through those stalls; the menu script
+  // below provides an immediate, reliable exit when playback returns to menus.
+  return age_ms >= 0 && age_ms < std::chrono::seconds(120).count() * 1000;
+}
+
+bool GameplayCameraActive() {
+  const int64_t last = g_last_gameplay_camera_ns.load(std::memory_order_relaxed);
+  if (!last) return false;
+  const auto now = std::chrono::duration_cast<std::chrono::nanoseconds>(Clock::now().time_since_epoch()).count();
+  return now - last < std::chrono::milliseconds(500).count() * 1'000'000LL;
+}
+
+void UpdatePresentation(const uint8_t* base) {
+  // The game's XMV player is at 0x82CCAE80. The menu script is detected by the
+  // camera hook's recent-view counter, shared with the ultrawide FOV correction.
+  const bool menu_script_active = kk::IsMenuActive();
+  const auto movie_player = GetMoviePlayerState(base);
+  const int64_t movie_read_age_ms = MovieVideoReadAgeMs();
+  const bool recent_video_activity = !menu_script_active && MovieVideoReadRecently(movie_read_age_ms);
+  const bool gameplay_camera = GameplayCameraActive();
+  const bool movie = kk::KeepCutsceneFraming(movie_player.playing(), recent_video_activity, gameplay_camera);
+  const bool menu = kk::KeepMenuFraming(menu_script_active);
+  std::lock_guard lock(g_presentation_mutex);
+  if (!g_presentation_initialized) {
+    g_display_letterbox = REXCVAR_QUERY(bool, present_letterbox);
+    g_presentation_initialized = true;
+  }
+  // Cutscenes and active menu scripts use 16:9; gameplay follows the selected
+  // display aspect as soon as the menu script stops running.
+  const auto choice = kk::ChoosePresentation(movie, menu, REXCVAR_QUERY(bool, kk_cutscenes_16_9), g_display_letterbox);
+  const bool letterbox = choice.letterbox_16_9;
+  if (REXCVAR_QUERY(bool, present_letterbox) != letterbox) {
+    rex::cvar::SetFlagByName("present_letterbox", letterbox ? "true" : "false");
+  }
+  if (choice.mode == g_presentation_mode) return;
+  g_presentation_mode = choice.mode;
+  const char* mode_name = choice.mode == PresentationMode::kCutscene
+                              ? "cutscene"
+                              : choice.mode == PresentationMode::kMenu ? "menu" : "gameplay";
+  REXLOG_INFO("KK: presentation mode is {} ({}; movie_player={:08X} state={:08X}/{:08X} video_read_age={}ms menu={} gameplay_camera={})",
+              mode_name, letterbox ? "16:9" : "ultrawide", movie_player.player, movie_player.state_268,
+              movie_player.state_272, movie_read_age_ms, menu_script_active, gameplay_camera);
+}
 
 struct Deferred {
   double after;
@@ -133,6 +216,16 @@ rex::ui::FrameStats GetGuestFrameStats() {
   return g_stats;
 }
 
+void NotifyMovieActivity() {
+  const auto now = std::chrono::duration_cast<std::chrono::nanoseconds>(Clock::now().time_since_epoch()).count();
+  g_last_movie_video_read_ns.store(now, std::memory_order_relaxed);
+}
+
+void NotifyGameplayCamera() {
+  const auto now = std::chrono::duration_cast<std::chrono::nanoseconds>(Clock::now().time_since_epoch()).count();
+  g_last_gameplay_camera_ns.store(now, std::memory_order_relaxed);
+}
+
 void RunAfterFirstFrame(double seconds, std::function<void()> fn) {
   std::lock_guard lock(g_mutex);
   g_deferred.push_back({seconds, std::move(fn)});
@@ -190,9 +283,19 @@ void LimitFrameRate() {
 
 REX_EXTERN(__imp__sub_821141D8);
 REX_HOOK_RAW(sub_821141D8) {
+  kk::UpdatePresentation(base);
   kk::LimitFrameRate();
   kk::OnGuestSwap();
   const auto start = kk::Clock::now();
   __imp__sub_821141D8(ctx, base);
   kk::AddSwapTime(std::chrono::duration<double, std::milli>(kk::Clock::now() - start).count());
+}
+
+// Story movies are queued through sub_82723AF0. Sample immediately after it
+// updates the XMV player so the presentation mode can switch on the first
+// frame, even if the swap hook runs before the player state is updated.
+REX_EXTERN(__imp__sub_82723AF0);
+REX_HOOK_RAW(sub_82723AF0) {
+  __imp__sub_82723AF0(ctx, base);
+  kk::UpdatePresentation(base);
 }

@@ -1,8 +1,10 @@
 @echo off
-rem Usage: build.bat [kk-debug|kk-release|kk-relwithdebinfo|kk-dev]
+rem Usage: build.bat [kk-debug|kk-release|kk-relwithdebinfo|kk-dev] [avx2]
 setlocal EnableDelayedExpansion
 set PRESET=%1
 if "%PRESET%"=="" set PRESET=kk-relwithdebinfo
+set KK_AVX2=OFF
+if /I "%~2"=="avx2" set KK_AVX2=ON
 for /f "usebackq delims=" %%i in (`"%ProgramFiles(x86)%\Microsoft Visual Studio\Installer\vswhere.exe" -latest -products * -property installationPath`) do set VSPATH=%%i
 call "%VSPATH%\VC\Auxiliary\Build\vcvars64.bat" >nul || exit /b 1
 set PATH=%VSPATH%\VC\Tools\Llvm\x64\bin;%PATH%
@@ -19,5 +21,5 @@ if not errorlevel 1 (
   set "SRC=!LINK!\kk\"
 )
 cd /d "%SRC%"
-cmake --preset %PRESET% || exit /b 1
+cmake --preset %PRESET% -DKK_AVX2=%KK_AVX2% || exit /b 1
 cmake --build --preset %PRESET% || exit /b 1

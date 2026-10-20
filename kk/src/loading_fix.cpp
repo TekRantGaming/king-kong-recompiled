@@ -48,7 +48,8 @@ bool LoadingScreenUp(const uint8_t* base) {
 
 REX_EXTERN(__imp__sub_8278D0C8);
 REX_HOOK_RAW(sub_8278D0C8) {
-  if (kk::LoadingScreenUp(base)) {
+  const bool loading = kk::LoadingScreenUp(base);
+  if (loading) {
     kk::Store32(base, kk::kDevice + 712, 0);  // what the present does last
     return;
   }

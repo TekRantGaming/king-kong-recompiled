@@ -19,6 +19,7 @@
 REXCVAR_DECLARE(bool, kk_launcher);
 REXCVAR_DECLARE(bool, kk_skip_launcher);
 REXCVAR_DECLARE(int32_t, kk_frame_rate);
+REXCVAR_DECLARE(bool, kk_cutscenes_16_9);
 REXCVAR_DECLARE(std::string, kk_render_quality);
 REXCVAR_DECLARE(std::string, kk_button_prompts);
 REXCVAR_DECLARE(bool, kk_check_updates);
@@ -125,6 +126,12 @@ void ApplyFixedSettings();
 
 // Forces the ReXGlue settings the port depends on (see settings.cpp).
 void ApplyRuntimeOverrides();
+
+// Tells the camera hook the aspect ratio the game will be presented at.
+// Letterboxed output remains 16:9; fill mode uses the display's actual ratio.
+void SetOutputAspectRatio(int width, int height);
+// Whether the title flow or an in-game menu should keep its 16:9 framing.
+bool IsMenuActive();
 
 // The Original look (launcher: Graphics > Look): the Xbox 360's own settings,
 // as cvar name and value.

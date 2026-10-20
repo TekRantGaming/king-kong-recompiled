@@ -8,6 +8,14 @@ project(king_kong LANGUAGES CXX)
 set(CMAKE_CXX_STANDARD 23)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
+option(KK_BUILD_TESTS "Build small automated tests for port-specific logic" OFF)
+if(KK_BUILD_TESTS)
+    enable_testing()
+    add_executable(kk_presentation_test tests/presentation_test.cpp)
+    target_include_directories(kk_presentation_test PRIVATE src)
+    add_test(NAME presentation_policy COMMAND kk_presentation_test)
+endif()
+
 include(generated/rexglue.cmake)
 
 # Sources
@@ -65,6 +73,31 @@ else()
 endif()
 
 rexglue_setup_target(king_kong GPU_PLUGINS xenos)
+
+# AVX2 improved CPU-bound XMV playback on supported PCs, but the resulting
+# executable requires an AVX2-capable processor. Keep it opt-in for compatible
+# binaries distributed to a wider range of PCs.
+option(KK_AVX2 "Build with AVX2 instructions (requires an AVX2-capable x86-64 CPU)" OFF)
+if(KK_AVX2)
+    string(TOLOWER "${CMAKE_SYSTEM_PROCESSOR}" KK_SYSTEM_PROCESSOR_LOWER)
+    if(NOT KK_SYSTEM_PROCESSOR_LOWER MATCHES "^(x86_64|amd64|x64)$")
+        message(FATAL_ERROR "KK_AVX2 requires an x86-64 target, got ${CMAKE_SYSTEM_PROCESSOR}")
+    endif()
+    if(MSVC)
+        set(KK_AVX2_COMPILE_OPTION /arch:AVX2)
+    elseif(CMAKE_CXX_COMPILER_ID MATCHES "Clang|GNU")
+        set(KK_AVX2_COMPILE_OPTION -mavx2)
+    else()
+        message(FATAL_ERROR "KK_AVX2 is not supported by ${CMAKE_CXX_COMPILER_ID}")
+    endif()
+    target_compile_options(king_kong PRIVATE ${KK_AVX2_COMPILE_OPTION})
+    if(TARGET king_kong_recomp)
+        target_compile_options(king_kong_recomp PRIVATE ${KK_AVX2_COMPILE_OPTION})
+    else()
+        message(FATAL_ERROR "KK_AVX2 requires the generated king_kong_recomp target")
+    endif()
+endif()
+
 if(WIN32)
     # UTF-8 as the program's code page (src/king_kong.manifest, issue #37).
     target_link_options(king_kong PRIVATE "LINKER:/MANIFEST:EMBED" "LINKER:/MANIFESTUAC:NO"

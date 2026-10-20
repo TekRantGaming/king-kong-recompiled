@@ -18,6 +18,8 @@
 #include <rex/hook.h>
 #include <rex/logging.h>
 
+#include "frame_stats.h"
+
 namespace kk {
 namespace {
 
@@ -40,11 +42,21 @@ bool IsVideoPlayer(uint32_t caller) { return caller >= 0x82300000 && caller < 0x
 }  // namespace
 }  // namespace kk
 
+// The video player's synchronization wait is another reliable signal that an
+// XMV is active, including the short gaps between its disc reads.
+REX_EXTERN(__imp__sub_82313408);
+REX_HOOK_RAW(sub_82313408) {
+  kk::NotifyMovieActivity();
+  __imp__sub_82313408(ctx, base);
+}
+
 REX_EXTERN(__imp__sub_82106DE0);
 REX_HOOK_RAW(sub_82106DE0) {
   const uint32_t bytes_read = ctx.r6.u32;
   const uint32_t overlapped = ctx.r7.u32;
   const uint32_t caller = static_cast<uint32_t>(ctx.lr);
+  const bool video_player = kk::IsVideoPlayer(caller);
+  if (video_player) kk::NotifyMovieActivity();
 #if defined(KK_DEV_TOOLS)
   // Developer aid: KK_DEV_LOG_READS=1 logs overlapped reads (the sound
   // streamer's), to find which part of Sound_Common.bf is playing.

@@ -195,7 +195,8 @@ Everything is set up before the game starts, with a controller, the keyboard or 
 - **Window size** that fits your screen
 - **Choose the monitor**
 - **VSync** on or off (off by default, and great with G-Sync and FreeSync)
-- **Keep 16:9** with borders, or **stretch** to fill
+- **Keep 16:9** with borders, or use the display's full ultrawide ratio with a wider, aspect-correct 3D camera view
+- **Pre-rendered cutscenes** can keep their original 16:9 framing or stretch to fill the display
 
 </td>
 <td><img src="docs/images/launcher-display.jpg" alt="Display page"></td>
@@ -449,6 +450,8 @@ kk\build.bat kk-release                      # compiles
 ```
 
 The finished game is in `kk\out\build\kk-release`. `Build King Kong.bat` does all of this in one go and puts the result in a `KingKong` folder. Point the game at your files with `--game_data_root`, or keep them in a `game` folder next to the exe.
+
+On a CPU that supports AVX2, `kk\build.bat kk-release avx2` builds with AVX2 enabled, which can improve the CPU-bound pre-rendered video playback. That executable will not run on CPUs without AVX2.
 
 For testing, `kk\build.bat kk-dev` builds a version with developer aids that release builds leave out. Set `KK_DEV_AUTOSKIP=1` and it presses through the intros, menus and story videos into gameplay on its own, logging `KK dev: gameplay reached`. Add `KK_DEV_WANDER=1` to keep walking and looking around after that. The shader pack is built by running every chapter this way with its own `--cache_root`, then `python tools/make_shader_pack.py <version> <out> <cache folders...>`.
 

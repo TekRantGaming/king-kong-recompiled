@@ -97,6 +97,8 @@ class KingKongApp : public rex::ReXApp {
     const bool show = !files_ok || kk::IsShiftHeld() || (REXCVAR_GET(kk_launcher) && !skip_once);
     if (!show) {
       kk::EnforceOriginalLook();
+      const auto [output_width, output_height] = OutputSize();
+      kk::SetOutputAspectRatio(output_width, output_height);
       kk::ApplyRenderPreset(OutputSize().second);
       kk::online::SetPlaying(true);
       kk::online::Start();
@@ -106,6 +108,8 @@ class KingKongApp : public rex::ReXApp {
     kk::LauncherCallbacks cb;
     cb.play = [this, resume, defaults] {
       app_context().CallInUIThreadDeferred([this, resume, defaults] {
+        const auto [output_width, output_height] = OutputSize();
+        kk::SetOutputAspectRatio(output_width, output_height);
         kk::ApplyRenderPreset(OutputSize().second);
         kk::online::SetPlaying(true);
         resume(defaults);
