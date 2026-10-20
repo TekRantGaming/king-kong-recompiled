@@ -3,6 +3,7 @@
 #include <cstdlib>
 
 #include "menu_scene_logic.h"
+#include "loading_loop_logic.h"
 
 using namespace kk::menu_scene;
 
@@ -84,6 +85,24 @@ int main() {
   CHECK(m > 0.8f);
   for (int i = 0; i < 40; ++i) m = StepMix(m, false, 1.0f / 60);
   CHECK(m == 0.0f);
+
+  // Task 331: the loading loops. Which one: the notice from the desktop, Returning back from the game, none for a
+  // launcher restarted for a shader rebuild.
+  {
+    using namespace kk::loading_loop;
+    CHECK(KindForStart("") == Kind::kNotice);
+    CHECK(KindForStart("play") == Kind::kReturning && KindForStart("chapters") == Kind::kReturning);
+    CHECK(KindForStart("extras") == Kind::kReturning && KindForStart("benchmark") == Kind::kReturning);
+    CHECK(KindForStart("rebuild") == Kind::kNone);
+    // At least 3 s; then the scene (when one was started) or, without one, at once; a scene not up in 20 s: go on.
+    CHECK(!MayEnd(2.9f, false, false) && MayEnd(3.0f, false, false));
+    CHECK(!MayEnd(2.9f, true, true) && MayEnd(3.1f, true, true));
+    CHECK(!MayEnd(10.0f, true, false) && MayEnd(20.0f, true, false));
+    CHECK(Cover(-1.0f) == 1.0f && Cover(0.0f) == 1.0f && Cover(0.25f) > 0.4f && Cover(0.25f) < 0.6f && Cover(0.5f) == 0.0f);
+    // The tips go round: 0 first, the one after the last, back to 0 after the last one; junk starts again.
+    CHECK(NextTip("", 12) == 0 && NextTip("0", 12) == 1 && NextTip("11", 12) == 0 && NextTip("5", 12) == 6);
+    CHECK(NextTip("x", 12) == 0 && NextTip("-3", 12) == 0 && NextTip("40", 12) == 5 && NextTip("3", 0) == 0);
+  }
 
   if (failures) return 1;
   std::printf("menu scene tests passed\n");

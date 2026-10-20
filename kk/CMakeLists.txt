@@ -78,6 +78,7 @@ set(KINGKONG_SOURCES
     src/changelog.cpp
     src/menu_hook.cpp
     src/menu_scene.cpp
+    src/loading_loop.cpp
     src/glyphs.cpp
     src/crash_dump.cpp
     src/exit_evidence.cpp
@@ -218,7 +219,7 @@ endif()
 # The port's version: shown in the launcher and compared with GitHub releases by the updater.
 # (-DKK_VERSION=x.y.z overrides it, to test the updater with an "older" build.)
 if(NOT DEFINED KK_VERSION)
-    set(KK_VERSION "2.0.0-beta.12")
+    set(KK_VERSION "2.0.0-beta.13")
 endif()
 target_compile_definitions(king_kong PRIVATE KK_VERSION="${KK_VERSION}" KK_VERSION_W=L"${KK_VERSION}")
 execute_process(COMMAND git describe --always --dirty --abbrev=12 WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}"
@@ -378,7 +379,8 @@ if(KK_DEV_TOOLS)
     target_include_directories(kk-cheat-rules-tests PRIVATE src)
     target_compile_features(kk-cheat-rules-tests PRIVATE cxx_std_20)
     add_test(NAME cheat-rules COMMAND kk-cheat-rules-tests)
-    # Task 330: the live main menu scene (when it runs, the failure marker, Start on the title, readiness).
+    # Task 330: the live main menu scene (when it runs, the failure marker, Start on the title, readiness); task 331:
+    # the loading loops' rules (loading_loop_logic.h).
     add_executable(kk-menu-scene-tests tests/menu_scene_tests.cpp)
     target_include_directories(kk-menu-scene-tests PRIVATE src)
     target_compile_features(kk-menu-scene-tests PRIVATE cxx_std_20)
@@ -406,6 +408,9 @@ endif()
 add_custom_command(TARGET king_kong POST_BUILD
     COMMAND ${CMAKE_COMMAND} -E copy_directory ${CMAKE_CURRENT_SOURCE_DIR}/mods-builtin $<TARGET_FILE_DIR:king_kong>/mods-builtin
     COMMAND ${CMAKE_COMMAND} -E copy_if_different ${CMAKE_CURRENT_SOURCE_DIR}/../MODDING.md $<TARGET_FILE_DIR:king_kong>/MODDING.md)
+# Task 331: the owner's two loading loops (the launcher plays them from launcher/video beside the program).
+add_custom_command(TARGET king_kong POST_BUILD
+    COMMAND ${CMAKE_COMMAND} -E copy_directory ${CMAKE_CURRENT_SOURCE_DIR}/launcher-video $<TARGET_FILE_DIR:king_kong>/launcher/video)
 add_custom_command(TARGET king_kong POST_BUILD
     COMMAND ${CMAKE_COMMAND} -E copy_directory ${CMAKE_CURRENT_SOURCE_DIR}/glyphs $<TARGET_FILE_DIR:king_kong>/glyphs
     COMMAND ${CMAKE_COMMAND} -E copy_if_different ${CMAKE_CURRENT_SOURCE_DIR}/THIRD-PARTY-NOTICES.txt

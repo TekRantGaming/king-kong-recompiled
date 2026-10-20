@@ -390,3 +390,30 @@ moving light) runs live behind the launcher instead of the stills. Code: `kk/src
 - **Dev aids:** `KK_DEV_SCENE_TRACE=1` (levels, Start presses, movie flag), `KK_DEV_FRAME_LOG=1` (launcher frame
   intervals and the scene's sound gain every 5 s). Test kit: `kk/out/task330` (run330.ps1, steps*.txt,
   perf330.ps1, sheet.py).
+
+## The loading loops over the launcher (task 331, Beta 13)
+
+Owner, 20 Oct: two short videos he made (1920x1080 H.264, 4.6 s seamless loops, no sound, English text in the
+picture) cover the launcher while the live menu scene starts. Code: `kk/src/loading_loop.*` (decoder thread and
+texture), `loading_loop_logic.h` (rules, tested in `menu-scene`), `launcher.cpp` StartLoadingLoop / DrawLoadingLoop.
+Files: `kk/launcher-video/` in git, copied beside the program as `launcher/video/` (build, AppImage).
+
+- **Which:** opening the game from the desktop plays `save-notice-loop.mp4`; any launcher started by the game
+  (`--kk_launcher_open` play, chapters, extras, benchmark) plays `returning-loop.mp4`; a launcher restarted for a
+  shader rebuild (`rebuild`) plays none.
+- **How long:** from the launcher's first frame (that frame waits up to 0.4 s for the first picture), at least 3 s
+  of real time, then until the scene is Ready (scene started for this launcher); without a scene (low tier, shaders
+  not prepared, setup, failed before) it ends after the 3 s. A scene not up after 20 s: the loop ends anyway and the
+  pictures show until the scene comes. Then a 0.5 s fade into the launcher over the scene (the stills' crossfade is
+  skipped under the loop). While it covers the window the launcher draws nothing else and takes no input.
+- **Our lines** (Returning only), in the launcher's font and the loop's greys, below its title (rows 520-561 of 1080):
+  "Game saved at your last checkpoint." when the game passed `--kk_launcher_saved=true` (a story run, New game /
+  Continue / Load game, quit from the pause menu, and the save job after that choice changed the slot's file:
+  play_session.cpp's sub_82722620 hook); then one of 12 tips (launcher.cpp kTips, 5 languages), the next one each
+  time, remembered in `<user data>\loading-tip.txt` (not the settings file).
+- **Decoder:** the PS2 cutscenes' `movies::VideoReader` (Media Foundation on Windows, the shipped FFmpeg libraries on
+  Linux) on a worker thread, 4 frames ahead, the file reopened for each repeat; each new frame becomes a new launcher
+  texture (the drawers free the old one once its frames are done). No decoder or no file: no loop (logged).
+- **Test kit:** `kk/out/task331/run331.ps1` (player layout: package copy, game files beside the exe, settings beside
+  the exe, no --game_data_root; `-Start continue:0` / `chapter:0:8` starts the game as Play does, shots count from
+  the launcher the game starts on its way back; `-LowTier`, `-NotPrepared`, `-StepsFile`).

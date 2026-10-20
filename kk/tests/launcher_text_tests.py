@@ -682,6 +682,21 @@ if 'kk::MigrateFrameCounter();' not in (src / 'king_kong_app.h').read_text(encod
 _pt = (src / 'picture_text_table.inc').read_text(encoding='utf-8')
 if '\u2014' in _pt or '\u2013' in _pt:
     fail('dash in picture_text_table.inc')
+# Task 331: the Returning to the main menu loop's lines: every tip and the saved line in launcher.cpp are
+# translated (checked above with the rest), and none has a dash (owner: plain words, no dashes).
+_l331 = (src / 'launcher.cpp').read_text(encoding='utf-8')
+_tips331 = re.search(r'kTips\[kTipCount\] = \{(.*?)\};', _l331, re.S)
+if not _tips331:
+    fail('331: the tips list is missing')
+else:
+    _t331 = re.findall(r'"((?:[^"\\]|\\.)*)"', _tips331.group(1))
+    if len(_t331) != 12:
+        fail(f'331: {len(_t331)} tips, not 12')
+    strings |= set(_t331)
+    for _s in _t331 + [x for e in _t331 for x in entries.get(e, [])]:
+        if '-' in _s or '\u2014' in _s or '\u2013' in _s:
+            fail(f'331: dash in a tip: {_s!r}')
+strings |= {'Game saved at your last checkpoint.'}
 for s in sorted(strings):
     if s == 'Home':
         continue  # never drawn as text

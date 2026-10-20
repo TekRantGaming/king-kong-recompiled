@@ -16,6 +16,7 @@
 #include "launcher_text.h"
 #include "launcher_ui.h"
 #include "menu_scene.h"
+#include "loading_loop.h"
 #include "notify_logic.h"
 #include "system_notify.h"
 #include "ps2_movies.h"
@@ -110,6 +111,9 @@
 REXCVAR_DEFINE_STRING(kk_launcher_open, "", "KK",
                       "Internal: the screen the launcher opens on, set by the game when it goes back to the "
                       "launcher: play (the Play menu) or chapters (Chapter select). Never saved.");
+REXCVAR_DEFINE_BOOL(kk_launcher_saved, false, "KK",
+                    "Internal (task 331): set by the game when a story run quit from the pause menu and the save was "
+                    "written; the Returning to the main menu loop then says so. Never saved.");
 
 namespace kk {
 namespace {
@@ -2771,6 +2775,8 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
       rebuild_shaders_screen_ = true;
       REXLOG_INFO("KK: rebuilding the native renderer's shaders (asked for, launcher restarted for it)");
     }
+    // Task 331: the owner's loading loop from the first frame (decoding starts now, while the scene starts).
+    StartLoadingLoop(open_on);
     MaybeStartScene(!open_on.empty());  // back from the game (or a restart): before the first frame
     saved_changes_ = seen_changes_ = g_changes;
     StartHeartbeat();
@@ -3010,6 +3016,11 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
     if (files_ok_ && GetBool("kk_launcher_sounds") && !ui_sounds_)
       ui_sounds_ = std::make_unique<LauncherSounds>(paths_.game_dir);
 
+    // Task 331: the loading loop over the whole window: nothing else is drawn or answered until it fades.
+    if (DrawLoadingLoop(dl, io.DeltaTime)) {
+      ImGui::End();
+      return;
+    }
     DrawBackdrop(dl);
     if (ShaderScreen()) {
       DrawShaderScreen(dl);
@@ -6253,6 +6264,140 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
     if (cb_.quit) cb_.quit();
   }
 
+  // Task 331 (owner, 20 Oct): the owner's loading loops (loading_loop.h). Opening the game: the save notice;
+  // back from the game: "Returning to the main menu" with our own lines over it (the save, a tip). It plays from
+  // the first frame for at least 3 s and until the live menu scene is up, then fades into the launcher; without a
+  // scene the launcher's pictures (or the setup / shader screen) show after the 3 s.
+  static constexpr int kTipCount = 12;
+  static const char* Tip(int i) {
+    static const char* const kTips[kTipCount] = {
+        "Press F8 while you play to change graphics settings live.",
+        "Press F2 while you play to show the frame rate. Press it again for more details.",
+        "Press F9 while you play for a free camera, and F10 to hide the HUD.",
+        "Photo mode is in the pause menu: the game stops, and you can move the camera and save a picture.",
+        "Load last checkpoint in the pause menu takes you back to your last checkpoint.",
+        "Quit from the pause menu or choose Save game, and the game saves your progress.",
+        "Chapter select in the Play menu lets you play any chapter again.",
+        "Every bonus is unlocked in Play > Extras, with the artbook from the PS2 bonus disc.",
+        "The Workshop has texture packs and mods, such as Cel shading for a cartoon look.",
+        "Too dark or too bright? Change Brightness and Gamma in Settings > Display.",
+        "Benchmark on the main menu shows how well your PC runs the game.",
+        "Cheats are in Settings > Cheats, and you can change them in the pause menu while you play.",
+    };
+    return kTips[std::clamp(i, 0, kTipCount - 1)];
+  }
+
+  void StartLoadingLoop(const std::string& open_on) {
+    loop_kind_ = loading_loop::KindForStart(open_on);
+    const bool saved = REXCVAR_GET(kk_launcher_saved);
+    rex::cvar::ResetToDefault("kk_launcher_saved");  // never saved
+    if (loop_kind_ == loading_loop::Kind::kNone) {
+      REXLOG_INFO("KK loading loop: none (the launcher restarted for a shader rebuild)");
+      return;
+    }
+    loop_ = std::make_unique<LoadingLoop>(immediate_, LoadingLoopFile(loop_kind_));
+    if (loop_kind_ != loading_loop::Kind::kReturning) return;
+    // Back from a story run that quit from the pause menu with the save written (play_session.cpp).
+    loop_saved_ = saved && open_on == "play";
+    // A different tip each time: the one after the last shown (remembered in the user data, not the settings).
+    const auto file = paths_.user_dir / "loading-tip.txt";
+    std::string last;
+    {
+      std::ifstream in(file, std::ios::binary);
+      std::getline(in, last);
+    }
+    const int tip = loading_loop::NextTip(last, kTipCount);
+    std::ofstream(file, std::ios::binary | std::ios::trunc) << tip << "\n";
+    loop_tip_ = T(Tip(tip));
+    REXLOG_INFO("KK loading loop: back from the game ({}); saved line {}, tip {}", open_on, loop_saved_ ? "shown" : "not shown",
+                tip + 1);
+  }
+
+  // Each frame, before the pages: true while the loop covers the whole window (the launcher draws nothing else
+  // and takes no input then). While it fades it is drawn over everything.
+  bool DrawLoadingLoop(ImDrawList* dl, float dt) {
+    if (!loop_) return false;
+    rex::ui::ImmediateTexture* frame = loop_->Frame(dt);
+    loop_wait_ += std::clamp(dt, 0.0f, 0.1f);
+    if (!frame && (loop_->Failed() || loop_wait_ > loading_loop::kMinSeconds)) {
+      REXLOG_INFO("KK loading loop: not shown ({})", loop_->Failed() ? "it cannot be played" : "no picture in time");
+      loop_.reset();
+      return false;
+    }
+    // On screen since its first picture, in real time (the scene's start holds the UI thread with it on screen).
+    if (frame && loop_first_ < 0) {
+      loop_first_ = ImGui::GetTime();
+      REXLOG_INFO("KK loading loop: its first picture is on screen");
+    }
+    loop_shown_ = loop_first_ < 0 ? 0.0f : float(ImGui::GetTime() - loop_first_);
+    const bool scene_ready = menu_scene::Active() && menu_scene::Ready();
+    if (loop_end_ < 0 && loading_loop::MayEnd(loop_shown_, loop_scene_, scene_ready)) {
+      loop_end_ = 0;
+      REXLOG_INFO("KK loading loop: fading into the launcher after {:.1f} s ({})", loop_shown_,
+                  !loop_scene_ ? "no live scene: the pictures" : scene_ready ? "the scene is up" : "the scene is not up yet");
+    } else if (loop_end_ >= 0) {
+      loop_end_ += std::clamp(dt, 0.0f, 0.1f);
+    }
+    const float cover = loading_loop::Cover(loop_end_);
+    if (cover <= 0.0f) {
+      loop_.reset();
+      return false;
+    }
+    if (scene_ready) scene_mix_ = 1.0f;  // under the loop the scene replaces the pictures at once
+    ImDrawList* target = cover >= 1.0f ? dl : ImGui::GetForegroundDrawList();
+    const ImVec2 p1(o_.x + w_, o_.y + h_);
+    target->AddRectFilled(o_, p1, IM_COL32(0, 0, 0, int(255 * cover)));
+    // The picture's whole frame, its aspect kept (black bars on other window shapes).
+    const float aspect = loop_->Aspect();
+    float vw = w_, vh = w_ / aspect;
+    if (vh > h_) {
+      vh = h_;
+      vw = h_ * aspect;
+    }
+    const ImVec2 v0(std::round(o_.x + (w_ - vw) * 0.5f), std::round(o_.y + (h_ - vh) * 0.5f));
+    if (frame) target->AddImage(ui::Tex(frame), v0, ImVec2(v0.x + vw, v0.y + vh), ImVec2(0, 0), ImVec2(1, 1),
+                                ui::WithAlpha(IM_COL32_WHITE, cover));
+    if (loop_kind_ == loading_loop::Kind::kReturning && frame) {
+      // Our lines in the empty space below the loop's "Returning to the main menu" (rows 520-561 of 1080), in the
+      // launcher's font and the loop's own greys.
+      const ui::Fonts f = ui::GetFonts();
+      const float k = vh / 1080.0f;
+      float y = v0.y + 618 * k;
+      auto centred = [&](const std::string& text, float size, ImU32 col) {
+        // Word-wrapped to the middle of the picture, each line centred.
+        const float max_w = 1240 * k;
+        std::vector<std::string> lines;
+        std::string line;
+        for (size_t at = 0; at <= text.size();) {
+          size_t sp = text.find(' ', at);
+          if (sp == std::string::npos) sp = text.size();
+          const std::string word = text.substr(at, sp - at);
+          const std::string tryline = line.empty() ? word : line + " " + word;
+          if (!line.empty() && ui::TextSize(f.text, size, tryline).x > max_w) {
+            lines.push_back(line);
+            line = word;
+          } else {
+            line = tryline;
+          }
+          at = sp + 1;
+        }
+        if (!line.empty()) lines.push_back(line);
+        for (const auto& l : lines) {
+          const float lw = ui::TextSize(f.text, size, l).x;
+          target->AddText(f.text, size, ImVec2(std::round(v0.x + (vw - lw) * 0.5f), std::round(y)),
+                          ui::WithAlpha(col, cover), l.c_str());
+          y += size * 1.3f;
+        }
+      };
+      if (loop_saved_) {
+        centred(T("Game saved at your last checkpoint."), 34 * k, IM_COL32(180, 181, 174, 255));
+        y += 22 * k;
+      }
+      if (!loop_tip_.empty()) centred(loop_tip_, 28 * k, IM_COL32(146, 146, 144, 255));
+    }
+    return cover >= 1.0f;
+  }
+
   // Task 330: the live menu scene's own sound replaces the launcher's music while the scene runs.
   bool SceneSoundPlays() const { return menu_scene::Active(); }
   // Its volume: the launcher's music volume, faded over about a second and a half as the music is.
@@ -6280,6 +6425,7 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
     // Such a launcher tries again once the setup and the shaders are done (TickSceneStart).
     scene_retry_ = r != menu_scene::Reason::kLive && menu_scene::MayStartLater(r);
     if (r != menu_scene::Reason::kLive || !cb_.start_scene) return;
+    loop_scene_ = true;  // task 331: a loading loop on screen waits for it (loading_loop_logic.h)
     cb_.start_scene(before_first_frame);
   }
   // Back on Home after the setup, an install, the New in this update screen or a shader preparation: the scene
@@ -7591,7 +7737,7 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
     if (const std::string& w = steps[next]; w.rfind("wait-", 0) == 0) {
       bool met = true;
       if (w.rfind("wait-setup:", 0) == 0) met = InSetup() && SetupStage() == std::atoi(w.c_str() + 11);
-      else if (w == "wait-home") met = !InSetup() && !ShaderScreen();
+      else if (w == "wait-home") met = !InSetup() && !ShaderScreen() && !loop_;  // task 331: the loop gone
       else if (w == "wait-modal") met = modal_.open;  // a pop-up is up (logged with its title)
       else if (w == "wait-artbook") {  // Beta 7: the artbook installed, or its download failed
         const auto st = content::Service::Get().Get(content::Kind::kArtbook);
@@ -7879,6 +8025,16 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
   std::vector<float> home_offset_;
   float home_mix_ = 1.0f;
   float scene_mix_ = 0.0f;  // task 330: the live menu scene over the stills (0 .. 1)
+  // Task 331: the loading loop (StartLoadingLoop / DrawLoadingLoop).
+  std::unique_ptr<LoadingLoop> loop_;
+  loading_loop::Kind loop_kind_ = loading_loop::Kind::kNone;
+  bool loop_scene_ = false;   // the live menu scene was started for this launcher: the loop waits for it
+  bool loop_saved_ = false;   // "Game saved at your last checkpoint."
+  std::string loop_tip_;      // this time's tip (translated)
+  float loop_shown_ = 0.0f;   // seconds on screen (from its first picture)
+  double loop_first_ = -1;   // ImGui time of its first picture
+  float loop_end_ = -1.0f;    // seconds since it started fading (< 0: not yet)
+  float loop_wait_ = 0.0f;   // seconds since the launcher's first frame
   float scene_gain_ = 0.0f;  // task 330: the live menu scene's sound (0 .. 1)
   bool scene_retry_ = false;    // task 330: the scene may start later in this launcher (TickSceneStart)
   double scene_retry_at_ = 0;

@@ -142,6 +142,8 @@ std::atomic<bool> g_leaving{false};   // going back to the launcher
 std::atomic<bool> g_cover{false};
 std::atomic<int> g_save_jobs{0};
 std::atomic<bool> g_chapter_session{false};  // the session is a chapter-select run      // save jobs (sub_82722620) running now
+std::atomic<bool> g_story_session{false};    // task 331: a story run (New game, Continue, Load game)
+std::atomic<bool> g_saved_on_quit{false};    // task 331: a save job wrote the save after the pause menu's quit
 
 std::string Upper(std::string s) {
   for (char& c : s) c = char(std::toupper(static_cast<unsigned char>(c)));
@@ -562,6 +564,7 @@ void LoadStartRequestFromSettings() {
 
 bool RelaunchWith(const std::wstring& extra) {
   static constexpr const wchar_t* kDropped[] = {L"--kk_skip_launcher", L"--kk_start", L"--kk_launcher_open", L"--kk_menu_scene_off",
+                                               L"--kk_launcher_saved",
                                                L"--kk_startup_child", L"--kk_benchmark", L"--kk_benchmark_record",
                                                L"--kk_benchmark_route", L"--kk_benchmark_passes",
                                                L"--kk_benchmark_settle", L"--kk_benchmark_from"};
@@ -962,6 +965,7 @@ void CarryOut(PPCContext& ctx, uint8_t* base, uint32_t g) {
   g_session = true;
   g_chapter_session = r.kind == StartKind::kChapter;
   g_extra_session = r.kind == StartKind::kExtra;
+  g_story_session = r.kind == StartKind::kContinue || r.kind == StartKind::kNewGame;
   CheckChapterTable(base, g);
   if (!BackupSaves(g_user_dir, fmt::format("before play ({})", KindName(r.kind)))) {
     REXLOG_ERROR("KK play: the saves could not be backed up before play");
@@ -1143,9 +1147,24 @@ REX_HOOK_RAW(sub_82722620) {
                   int32_t(BE32(data.data() + 0x2C)));
     }
   }
+  // Task 331: whether this job really wrote the save (its file changed), once the pause menu's quit was chosen:
+  // the launcher then says "Game saved at your last checkpoint." (kk_launcher_saved).
+  const bool after_quit = g_story_session && LeftByQuit() && !QuitToDesktop() && slot < uint32_t(kSlotCount);
+  std::error_code ec;
+  const auto file = after_quit ? SlotFile(g_user_dir, int(slot)) : std::filesystem::path{};
+  const auto before = after_quit ? std::filesystem::last_write_time(file, ec) : std::filesystem::file_time_type{};
+  const bool existed = after_quit && !ec;
   ++g_save_jobs;
   __imp__sub_82722620(ctx, base);
   --g_save_jobs;
+  if (after_quit) {
+    ec.clear();
+    const auto now = std::filesystem::last_write_time(file, ec);
+    const bool wrote = !ec && (!existed || now != before);
+    if (wrote) g_saved_on_quit = true;
+    REXLOG_INFO("KK play: the save job after the pause menu's quit {} slot {}", wrote ? "wrote" : "did not write",
+                slot + 1);
+  }
 }
 
 // uni_go (sub_8253DB80): the universe's script function that performs a requested level change, every
@@ -1277,7 +1296,8 @@ REX_HOOK_RAW(sub_8253DB80) {
       if (QuitToDesktop()) {
         REXLOG_INFO("KK play: Quit game: the program exits");
         if (g_quit) g_quit();
-      } else if (RelaunchWith(L"--kk_launcher_open=" + page) && g_quit) {
+      } else if (RelaunchWith(L"--kk_launcher_open=" + page + (g_saved_on_quit ? L" --kk_launcher_saved=true" : L"")) &&
+                 g_quit) {
         // The game's black cover stays up until the launcher has drawn its first frame (handoff.h).
         kk::handoff::QuitWhenChildShown(g_quit);
       }
