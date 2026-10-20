@@ -59,6 +59,21 @@ void InputPolicy() {
   Check(!trigger.Update(true), "holding RT while leaving Artbook cannot open Social");
 }
 void FocusAndActions() {
+  SocialModel dormant;
+  auto dormant_rows=SocialRows(dormant);
+  Check(std::string_view(SocialStatusKey(dormant))=="Choose Steam or Direct IP","dormant status does not pretend to connect");
+  const auto connect=Find(dormant_rows,SocialRowKind::ConnectSteam);
+  Check(SocialRowCommand(connect,dormant)->action==SocialAction::Open,"explicit Steam opt-in command");
+  Check(Find(dormant_rows,SocialRowKind::DirectChooseHost).enabled &&
+        Find(dormant_rows,SocialRowKind::DirectChooseJoin).enabled,"both IP roles available before Steam init");
+  dormant.pending_invites={{1234,0}}; dormant_rows=SocialRows(dormant);
+  Check(SocialRowCommand(Find(dormant_rows,SocialRowKind::Accept,1234),dormant)->action==SocialAction::Accept,
+        "cold Steam invite can explicitly connect and accept");
+  Check(SocialRowCommand(Find(dormant_rows,SocialRowKind::Decline,1234),dormant)->action==SocialAction::Decline,
+        "cold Steam invite can be declined without connecting");
+  dormant.status_text="Connecting to Steam";
+  Check(!SocialRowCommand(connect,dormant) && std::string_view(SocialStatusKey(dormant))=="Connecting to Steam",
+        "pending connection revokes stale opt-in row");
   auto fake = MakeSocialPreview();
   auto m = fake->Snapshot(); auto rows = SocialRows(m);
   Check(Find(rows, SocialRowKind::Accept, m.pending_invites.front().lobby).enabled, "idle may accept invite");

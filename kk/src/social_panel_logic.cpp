@@ -44,7 +44,7 @@ const char* SocialStatusKey(const SocialModel& m) {
   }
   switch (m.status) {
     case SocialStatus::Disabled: return "Local dev link selected";
-    case SocialStatus::Dormant: return "Connecting to Steam";
+    case SocialStatus::Dormant: return m.status_text == "Connecting to Steam" ? "Connecting to Steam" : "Choose Steam or Direct IP";
     case SocialStatus::Unavailable:
       return m.status_text == "Steam not available in this build" ? "Steam not available in this build" : "Steam is needed for co-op";
     case SocialStatus::Creating: return "Creating lobby";
@@ -65,16 +65,19 @@ std::vector<SocialRow> SocialRows(const SocialModel& m, int direct_mode) {
   const bool idle = m.status == SocialStatus::Idle || m.status == SocialStatus::Ended;
   const bool lobby = m.status == SocialStatus::Lobby && m.lobby != 0;
   const bool free = idle && !m.lobby;
-  const bool show_steam=!m.direct && m.status!=SocialStatus::Unavailable && m.status!=SocialStatus::Disabled;
-  if (show_steam) {
+  const bool dormant=m.status==SocialStatus::Dormant && m.status_text!="Connecting to Steam";
+  const bool show_steam=!m.direct && m.status!=SocialStatus::Unavailable && m.status!=SocialStatus::Disabled &&
+      m.status!=SocialStatus::Dormant;
+  if (dormant && !m.direct) add(SocialRowKind::ConnectSteam,0,"Connect to Steam","",true);
+  if (show_steam || (dormant && !m.pending_invites.empty())) {
   add(SocialRowKind::Section, 1, "Invites");
   if (m.pending_invites.empty()) add(SocialRowKind::Text, 2, "No invites");
   for (const auto& invite : m.pending_invites) {
     auto f = std::find_if(m.friends.begin(), m.friends.end(), [&](const auto& f) { return f.id == invite.inviter; });
     const std::string name = f == m.friends.end() ? "" : f->name;
-    add(SocialRowKind::Accept, invite.lobby, "Accept invite", name, free);
+    add(SocialRowKind::Accept, invite.lobby, "Accept invite", name, free || dormant);
     add(SocialRowKind::Decline, invite.lobby, "Decline invite", name,
-        m.status != SocialStatus::Unavailable && m.status != SocialStatus::Disabled && m.status != SocialStatus::Dormant);
+        m.status != SocialStatus::Unavailable && m.status != SocialStatus::Disabled);
   }
   }
   if (m.direct && m.lobby) {
@@ -156,6 +159,7 @@ std::optional<SocialCommand> SocialRowCommand(const SocialRow& r, const SocialMo
   auto found = std::find_if(current.begin(), current.end(), [&](const auto& row) { return row.key == r.key; });
   if (found == current.end() || !found->enabled) return {};
   switch (r.key.kind) {
+    case SocialRowKind::ConnectSteam: return SocialCommand{SocialAction::Open};
     case SocialRowKind::Accept: return SocialCommand{SocialAction::Accept, r.key.id};
     case SocialRowKind::Decline: return SocialCommand{SocialAction::Decline, r.key.id};
     case SocialRowKind::Create: return SocialCommand{SocialAction::CreateLobby};

@@ -51,7 +51,10 @@ void SocialPanel::Update(bool enabled, SocialPage page, Input& in, ISocialServic
   const bool was = state_.open();
   if (chapter_screen_ && in.Pressed(Action::kBack)) { chapter_screen_=false; in.Consume(Action::kBack); Cue(Sound::kBack); }
   just_opened_ = state_.Update(enabled, page, !editing() && in.Pressed(Action::kSocial), !editing() && in.Pressed(Action::kBack), ImGui::GetIO().DeltaTime);
-  if (just_opened_) { service.Act({SocialAction::Open}); Cue(Sound::kSelect); }
+  // Opening the drawer must have the same input behavior as any launcher page.
+  // Steam init installs process-wide overlay/input hooks that survive shutdown;
+  // only the explicit Steam row (or accepting a Steam invite) may request it.
+  if (just_opened_) Cue(Sound::kSelect);
   if (was && !state_.open()) Cue(Sound::kBack);
   // The closing press cannot reach the page, including a zero-duration closing animation.
   if (was || state_.blocking()) {

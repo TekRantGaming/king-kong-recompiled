@@ -1,4 +1,6 @@
     // Private co-op Social drawer. Included in the existing five-language table.
+    {"Connect to Steam", "Mit Steam verbinden", "Conectar a Steam", "Se connecter à Steam", "Connetti a Steam"},
+    {"Choose Steam or Direct IP", "Steam oder direkte IP wählen", "Elige Steam o conexión IP directa", "Choisissez Steam ou une connexion IP directe", "Scegli Steam o IP diretto"},
     {"Confirm", "Bestätigen", "Confirmar", "Confirmer", "Conferma"},
     {"Delete", "Löschen", "Borrar", "Effacer", "Elimina"},
     {"1. Host or Join by IP", "1. Per IP hosten oder beitreten", "1. Crear o unirse por IP", "1. Héberger ou rejoindre par IP", "1. Ospita o unisciti tramite IP"},

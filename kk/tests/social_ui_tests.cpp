@@ -17,9 +17,10 @@ void Check(bool value,const char* what) { if (!value) throw std::runtime_error(w
 struct Service : ISocialService {
   SocialModel model;
   SocialCommand last;
-  Service() { model.status=SocialStatus::Unavailable; }
+  int calls=0;
+  Service() { model.status=SocialStatus::Dormant; }
   SocialModel Snapshot() const override { return model; }
-  bool Act(SocialCommand c) override { last=c; return true; }
+  bool Act(SocialCommand c) override { ++calls; last=c; return true; }
 } service;
 int joined=0, hosted=0, selected=-1, starts=0;
 std::string joined_code, joined_address;
@@ -93,9 +94,11 @@ int main() {
       SDL_SetJoystickVirtualAxis(joystick,SDL_GAMEPAD_AXIS_RIGHT_TRIGGER,32767); frame();
       SDL_SetJoystickVirtualAxis(joystick,SDL_GAMEPAD_AXIS_RIGHT_TRIGGER,-32768); frame(); frame();
       Check(panel.blocking(),"real SDL RT opens Social");
+      Check(service.calls==0,"RT opens a dormant drawer without requesting Steam or installing its input hooks");
+      Check(panel.focused_row() && panel.focused_row()->kind==SocialRowKind::ConnectSteam,"Steam connection is an explicit row");
       SDL_SetJoystickVirtualAxis(joystick,SDL_GAMEPAD_AXIS_LEFTY,32767); frame();
       SDL_SetJoystickVirtualAxis(joystick,SDL_GAMEPAD_AXIS_LEFTY,0); frame();
-      Check(panel.focused_row() && panel.focused_row()->kind==SocialRowKind::DirectChooseHost,"left stick moves Social focus");
+      Check(panel.focused_row() && panel.focused_row()->kind==SocialRowKind::AddSteam,"left stick moves Social focus through the ordinary launcher input");
       focus(SocialRowKind::DirectChooseJoin); button(SDL_GAMEPAD_BUTTON_SOUTH);
       focus(SocialRowKind::DirectAddress); button(SDL_GAMEPAD_BUTTON_SOUTH); Check(panel.editing(),"A opens IP keyboard");
       button(SDL_GAMEPAD_BUTTON_EAST); Check(!panel.editing() && panel.blocking(),"B cancels editor without closing Social");
@@ -140,6 +143,7 @@ int main() {
       Check(!panel.editing() && joined==3 && hosted==0,"host code confirmation keeps text without joining");
       focus(SocialRowKind::DirectHost); button(SDL_GAMEPAD_BUTTON_SOUTH);
       Check(hosted==1,"pad Host confirmation is reachable after role selection");
+      Check(service.calls==0,"Direct IP editors, Join and Host never request Steam");
       service.model.direct=true; service.model.status=SocialStatus::Lobby;
       service.model.self=service.model.owner=1; service.model.lobby=55;
       service.model.members={{1,"Host",false},{2,"Guest",false}}; frame();
@@ -168,6 +172,13 @@ int main() {
       focus(SocialRowKind::Friend); button(SDL_GAMEPAD_BUTTON_WEST);
       Check(service.last.action==SocialAction::Invite && service.last.id==2,"X invites focused Steam friend");
       button(SDL_GAMEPAD_BUTTON_SOUTH); Check(service.last.action==SocialAction::Invite,"A also selects friend invite");
+      button(SDL_GAMEPAD_BUTTON_EAST); frame(); frame(); frame();
+      service.model={}; service.calls=0; panel.ResetPreview();
+      SDL_SetJoystickVirtualAxis(joystick,SDL_GAMEPAD_AXIS_RIGHT_TRIGGER,32767); frame();
+      SDL_SetJoystickVirtualAxis(joystick,SDL_GAMEPAD_AXIS_RIGHT_TRIGGER,-32768); frame();
+      Check(service.calls==0,"reopening dormant Social still leaves Steam alone");
+      focus(SocialRowKind::ConnectSteam); button(SDL_GAMEPAD_BUTTON_SOUTH);
+      Check(service.calls==1 && service.last.action==SocialAction::Open,"only explicit Connect to Steam requests initialization");
     }
     SDL_CloseJoystick(joystick); SDL_DetachVirtualJoystick(id); SDL_QuitSubSystem(SDL_INIT_GAMEPAD);
     ImGui::DestroyContext(); std::cout<<"Social SDL pad: RT, rows, keyboard, join, chapters, Ready, Start, Leave and B passed\n";

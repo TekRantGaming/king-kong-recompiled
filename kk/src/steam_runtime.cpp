@@ -1,9 +1,11 @@
 #include "steam_runtime.h"
 #include "steam_transport.h"
 #include "coop_pose.h"
-#if defined(KK_DEV_TOOLS) && KK_HAS_STEAM
+#if KK_HAS_STEAM
 #include <rex/logging.h>
+#if defined(KK_DEV_TOOLS)
 #include "steam_loopback_test.h"
+#endif
 #endif
 
 #include <algorithm>
@@ -174,7 +176,7 @@ struct SteamRuntime::Impl
   std::function<void(const std::string&)> test_log;
   explicit Impl(SteamRuntimeOptions o) : options(std::move(o)) {
     published.status = options.enabled ? SocialStatus::Dormant : SocialStatus::Disabled;
-    published.status_text = options.enabled ? "Open Social to connect to Steam" : "Co-op is disabled";
+    published.status_text = options.enabled ? "Choose Steam or Direct IP" : "Co-op is disabled";
     if (options.startup_lobby) published.pending_invites.push_back({options.startup_lobby, 0});
   }
   ~Impl() { Shutdown(); }
@@ -200,7 +202,11 @@ struct SteamRuntime::Impl
     if (used && published.status == SocialStatus::Unavailable) return false;
     if (!used && c.action != SocialAction::Open && c.action != SocialAction::CreateLobby && c.action != SocialAction::Accept) return false;
     commands.push_back({c, std::move(compatibility)});
-    if (!used) { used = true; worker = std::thread([this] { Run(); }); }
+    if (!used) {
+      used = true;
+      published.status_text = "Connecting to Steam";
+      worker = std::thread([this] { Run(); });
+    }
     lock.unlock(); wake.notify_all(); return true;
 #endif
   }
@@ -232,6 +238,7 @@ struct SteamRuntime::Impl
   void Status(SocialStatus status, const char* text) { model.status = status; model.status_text = text; Publish(); }
   bool Friend(uint64_t id) { return id && api.SteamAPI_ISteamFriends_GetFriendRelationship(friends, id) == k_EFriendRelationshipFriend; }
   bool Init() {
+    REXLOG_INFO("KK co-op: initializing Steam after an explicit Steam request (app 480)");
 #ifdef _WIN32
     if (!SetEnvironmentVariableW(L"SteamAppId", L"480") || !SetEnvironmentVariableW(L"SteamGameId", L"480")) return false;
 #else

@@ -110,10 +110,13 @@ class Diagnostics final : public rex::ui::ImGuiDialog, public KeyProbe, public r
     for (int i=0;i<int(std::size(codes));++i) if (keys[codes[i]]) sdl_keys|=1u<<i;
     uintptr_t own=reinterpret_cast<uintptr_t>(window_->GetNativeWindowHandle()),foreground=0;
     unsigned long own_pid=0,window_pid=0,front_pid=0; bool native_focus=window_->HasFocus(); std::string xinput;
+    bool steam_api_loaded=false,steam_overlay_loaded=false;
 #if defined(_WIN32)
     own_pid=GetCurrentProcessId(); auto front=GetForegroundWindow(); foreground=reinterpret_cast<uintptr_t>(front);
     GetWindowThreadProcessId(reinterpret_cast<HWND>(own),&window_pid);
     GetWindowThreadProcessId(front,&front_pid); native_focus=front==reinterpret_cast<HWND>(own);
+    steam_api_loaded=GetModuleHandleW(L"steam_api64.dll")!=nullptr;
+    steam_overlay_loaded=GetModuleHandleW(L"gameoverlayrenderer64.dll")!=nullptr;
     // System DLL only; no SDK or third-party service. XInput is shared across instances.
     using Read=DWORD(WINAPI*)(DWORD,XINPUT_STATE*);
     static auto module=LoadLibraryExW(L"xinput1_4.dll",nullptr,LOAD_LIBRARY_SEARCH_SYSTEM32);
@@ -129,11 +132,11 @@ class Diagnostics final : public rex::ui::ImGuiDialog, public KeyProbe, public r
       for (const auto& [name,times] : zeroed) blocked+=fmt::format(" {}:{}",name,times);
       zeroed.clear(); n=reads; reads=0; active=launcher_active; social=social_open; editing=editor_open; lp=launcher_pads;
       title_pad=title_active_pad; title_block=title_native_block; }
-    REXLOG_INFO("KK input diag: own={:X}/window-pid={} process={} startup-child={} foreground={:X}/pid={} window-focus={} native-focus={} launcher-active={} launcher-pads={} social={} editor={} capture-k/m/text={}/{}/{} backend={} mnk={}/{} cover={} pause={} debug={} observer={}",
+    REXLOG_INFO("KK input diag: own={:X}/window-pid={} process={} startup-child={} foreground={:X}/pid={} window-focus={} native-focus={} launcher-active={} launcher-pads={} social={} editor={} capture-k/m/text={}/{}/{} backend={} mnk={}/{} cover={} pause={} debug={} observer={} steam-api-loaded={} steam-overlay-loaded={}",
         own,window_pid,own_pid,rex::cvar::GetFlagByName("kk_startup_child"),foreground,front_pid,window_->HasFocus(),native_focus,active,lp,social,editing,
         io.WantCaptureKeyboard,io.WantCaptureMouse,io.WantTextInput,rex::cvar::GetFlagByName("input_backend"),
         rex::cvar::GetFlagByName("mnk_mode"),rex::cvar::GetFlagByName("mnk_mouse"),
-        play::CoverScreen(),play::PauseMenuOpen(),DebugOverlayOpen(),coop::observer::Active());
+        play::CoverScreen(),play::PauseMenuOpen(),DebugOverlayOpen(),coop::observer::Active(),steam_api_loaded,steam_overlay_loaded);
     REXLOG_INFO("KK input diag: app-SDL-pads={}{} XInput={}{} keys app-SDL={:03X} runtime-window={:03X}/{:03X} game-events={:03X}/{:03X} (held/seen) title-active-pad={} title-block={} game-native/filters reads={} zeroed={} sample={}",
         count,raw,xinput.empty() ? "none" : "",xinput,sdl_keys,held,seen,game_keys_.held,game_keys_.seen,title_pad,title_block,n,blocked.empty() ? "none" : blocked,
         n ? trace : "no game pad read this second");

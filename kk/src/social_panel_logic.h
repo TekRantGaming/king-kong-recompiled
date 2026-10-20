@@ -34,7 +34,7 @@ class SocialPanelState {
 };
 enum class SocialRowKind { Section, Member, Accept, Decline, Create, Ready, Start, OverlayInvite, Leave, Friend, Text,
                            AddSteam, DirectAddress, DirectPort, DirectCode, DirectHost, DirectJoin, ChapterSelect,
-                           DirectChooseHost, DirectChooseJoin };
+                           DirectChooseHost, DirectChooseJoin, ConnectSteam };
 struct SocialRowKey {
   SocialRowKind kind = SocialRowKind::Section;
   SocialId id = 0;
