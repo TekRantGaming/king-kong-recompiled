@@ -46,6 +46,9 @@ struct SocialModel {
   std::vector<SocialMember> members;
   std::vector<SocialInvite> pending_invites;
   bool can_start = false, start_requested = false, overlay_available = false;
+  bool direct = false;
+  std::string direct_addresses, direct_code;
+  uint16_t direct_port = 27080;
 };
 bool CanStartLobby(const SocialModel& model);
 enum class SocialAction { Open, CreateLobby, Invite, OverlayInvite, Accept, Decline, SetReady, Start, Leave };

@@ -34,6 +34,8 @@ struct SessionConfig {
   Compatibility compatibility;
   CheatSet cheats;
   std::string display_name = "Partner";
+  std::string join_code;
+  bool wait_for_peer = false;  // Direct IP host may wait in its lobby until a guest arrives.
 };
 struct PoseCounters {
   uint64_t sent = 0, received = 0;

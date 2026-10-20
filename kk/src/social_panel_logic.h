@@ -32,7 +32,8 @@ class SocialPanelState {
   bool open_ = false;
   float progress_ = 0;
 };
-enum class SocialRowKind { Section, Member, Accept, Decline, Create, Ready, Start, OverlayInvite, Leave, Friend, Text };
+enum class SocialRowKind { Section, Member, Accept, Decline, Create, Ready, Start, OverlayInvite, Leave, Friend, Text,
+                           AddSteam, DirectAddress, DirectPort, DirectCode, DirectHost, DirectJoin };
 struct SocialRowKey {
   SocialRowKind kind = SocialRowKind::Section;
   SocialId id = 0;

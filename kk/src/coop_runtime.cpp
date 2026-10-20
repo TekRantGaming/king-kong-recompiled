@@ -1,6 +1,7 @@
 #include "coop_runtime.h"
 #include "cheats.h"
 #include "coop_session.h"
+#include "coop_direct_udp.h"
 #include "coop_pose.h"
 #include "coop_nametag.h"
 #include "coop_observer.h"
@@ -45,6 +46,8 @@ REXCVAR_DEFINE_BOOL(kk_steam_selftest, false, "KK/Debug", "Test Steam services a
 REXCVAR_DEFINE_BOOL(kk_steam_loopback_test, false, "KK/Debug", "Probe Steam self-send for every co-op message and exit")
     .debug_only().lifecycle(rex::cvar::Lifecycle::kInitOnly);
 REXCVAR_DEFINE_BOOL(kk_social_fake, false, "KK/Debug", "Use an offline Social panel preview")
+    .debug_only().lifecycle(rex::cvar::Lifecycle::kInitOnly);
+REXCVAR_DEFINE_BOOL(kk_direct_loopback, false, "KK/Debug", "Direct IP UI tests: loopback host and no Steam initialization")
     .debug_only().lifecycle(rex::cvar::Lifecycle::kInitOnly);
 #endif
 REXCVAR_DECLARE(bool, kk_hide_hud);
@@ -100,16 +103,22 @@ void LogPoses(const View& v, double now, double& next) {
       v.local ? "yes" : "no", v.local_failure, v.poses.sent, v.poses.received,
       v.poses.remote_level ? std::to_string(*v.poses.remote_level) : "none", distance);
 }
+#endif
 class Service {
  public:
   ~Service() { Stop(); }
-  void Start(SessionConfig config, uint16_t port) {
+  void Start(SessionConfig config, DirectUdpOptions options, bool direct = false) {
     if (running_.exchange(true)) return;
     stop_ = false;
+    direct_ = direct; local_ready_ = remote_ready_ = starting_ = code_rejected_ = open_failed_ = false;
+    options_ = options;
+    addresses_ = direct && options.host && options.address=="::" ? DirectLocalAddresses() : options.address;
+    compatibility_ = config.compatibility;
     { std::lock_guard lock(mutex_); local_cheats_ = config.cheats;
       view_ = {}; view_.role = config.role; view_.state = SessionState::Connecting; view_.updated = Now(); }
-    worker_ = std::thread([this, config = std::move(config), port] {
-      auto transport = CreateDevUdp(config.role == Role::Host, port);
+    worker_ = std::thread([this, config = std::move(config), options = std::move(options)] {
+      auto transport = CreateDirectUdp(options);
+      { std::lock_guard lock(mutex_); open_failed_ = transport->State()!=TransportState::Ready; }
       CoopSession session(config, *transport, [](SessionState s) {
         REXLOG_INFO("KK co-op: {}", StateName(s));
       });
@@ -127,6 +136,9 @@ class Service {
         // received packets with the time we actually poll, not before that wait.
         const double now = Now();
         if (local && now - local->time > .25) { local.reset(); failure = "publish-expired"; }
+        bool ready;
+        { std::lock_guard lock(mutex_); ready = local_ready_; }
+        if (direct_ && session.State() == SessionState::Connected) transport->SetReady(ready);
         session.Tick(now, local, &frame, &cheats);
         shots_.Exchange(session);
         combat_.Exchange(session, now);
@@ -134,6 +146,7 @@ class Service {
         story_.Exchange(session);
         camera_.Exchange(session, now);
         flow_.Exchange(session, now);
+        const bool flow_active=flow_.Snapshot().active;
         View view{config.role, session.State(), session.Rejection(), session.Stats(), local, session.Partner(now), now};
         view.local_failure = failure; view.poses = session.Poses();
         view.enemies = session.Enemies(now); view.enemies_sent = session.EnemiesSent();
@@ -141,13 +154,20 @@ class Service {
         view.host_cheats = session.HostCheats();
         view.partner_name = session.PartnerName();
         view.epoch = session.Epoch();
+#if defined(KK_DEV_TOOLS)
         LogPoses(view, now, next_pose_log);
-        { std::lock_guard lock(mutex_); view_ = std::move(view); }
         if (now-copy_started>.5) {
           static unsigned logged=0;
           if (logged++<8) REXLOG_INFO("KK co-op worker: shared snapshot waited {:.3f}s; packet clock sampled after wait",now-copy_started);
         }
-        if (shown != session.State()) { shown = session.State(); RequestUiPaint(); }
+#endif
+        bool lobby_changed;
+        { std::lock_guard lock(mutex_);
+          lobby_changed=remote_ready_!=transport->PeerReady() || (!starting_ && flow_active);
+          view_=std::move(view); remote_ready_=transport->PeerReady();
+          code_rejected_=transport->CodeRejected(); starting_=starting_ || flow_active;
+        }
+        if (shown != session.State() || lobby_changed) { shown = session.State(); RequestUiPaint(); }
         if (session.State() == SessionState::Ended) break;
         std::this_thread::sleep_for(std::chrono::milliseconds(5));
       }
@@ -171,8 +191,39 @@ class Service {
     ownership_.Clear();
     story_.Clear();
     camera_.Clear();
+    flow_.Disconnect();
   }
   bool Running() const { return running_; }
+  bool Direct() const { return running_ && direct_; }
+  SocialModel SocialSnapshot() {
+    std::lock_guard lock(mutex_);
+    SocialModel m; m.direct=true; m.self=view_.role==Role::Host ? 1 : 2; m.owner=1;
+    m.direct_port=options_.port; m.direct_code=options_.join_code; m.direct_addresses=addresses_;
+    const bool connected=view_.state==SessionState::Connected;
+    const bool ended=view_.state==SessionState::Ended;
+    m.lobby=ended ? 0 : (view_.epoch ? view_.epoch : 1);
+    m.status=ended ? SocialStatus::Ended : connected ? (starting_ ? SocialStatus::Starting : SocialStatus::Lobby) : SocialStatus::Joining;
+    m.status_text=ended ? "Direct connection ended" : connected ? "Direct partner connected" : "Waiting for Direct IP partner";
+    if (code_rejected_) m.last_error="Wrong join code";
+    else if (open_failed_) m.last_error="Could not open Direct connection. Check the IP and UDP port.";
+    else if (view_.rejection!=RejectReason::None) m.last_error="Lobby is not compatible";
+    m.members.push_back({m.self,m.self==1 ? "Host" : "Guest",local_ready_});
+    if (connected) m.members.push_back({m.self==1 ? 2ull : 1ull,view_.partner_name,remote_ready_});
+    m.can_start=CanStartLobby(m); return m;
+  }
+  bool SocialAct(SocialCommand command) {
+    if (command.action==SocialAction::Open) return true;
+    if (command.action==SocialAction::Leave) { Stop(); return true; }
+    if (command.action==SocialAction::SetReady || command.action==SocialAction::Start) {
+      const Compatibility current{kProtocolVersion,KK_VERSION,KK_COOP_BUILD,mods::GameplayDigest(play::UserDir())};
+      if (CheckCompatibility(compatibility_,current)!=RejectReason::None) { Stop(); return false; }
+    }
+    const auto m=SocialSnapshot();
+    std::lock_guard lock(mutex_);
+    if (command.action==SocialAction::SetReady && m.status==SocialStatus::Lobby) { local_ready_=command.ready; return true; }
+    if (command.action==SocialAction::Start && m.can_start && view_.state==SessionState::Connected && local_ready_ && remote_ready_) return true;
+    return false;
+  }
   void Publish(PoseRead p) { std::lock_guard lock(mutex_); local_ = p; }
   View Snapshot() { std::lock_guard lock(mutex_); return view_; }
   bool EnemyReady(double now) {
@@ -194,13 +245,20 @@ class Service {
   void PublishCamera(std::optional<CameraPose> camera) { camera_.Publish(std::move(camera)); }
   std::optional<CameraPose> HostCamera(double now) const { return camera_.Sample(now); }
   CameraDiagnostics CameraInfo() const { return camera_.Info(); }
-  bool BeginFlow(SessionStart start, std::vector<uint8_t> save) { return flow_.Begin(start, std::move(save)); }
+  bool BeginFlow(SessionStart start, std::vector<uint8_t> save) {
+    if (!flow_.Begin(start,std::move(save))) return false;
+    std::lock_guard lock(mutex_); starting_=true; return true;
+  }
   bool SubmitFlow(Message m) { return flow_.Submit(std::move(m)); }
   FlowView FlowSnapshot() const { return flow_.Snapshot(); }
  private:
   std::atomic<bool> running_{false}, stop_{false};
   std::thread worker_;
   std::mutex mutex_;
+  bool direct_ = false, local_ready_ = false, remote_ready_ = false, starting_ = false, code_rejected_ = false, open_failed_ = false;
+  Compatibility compatibility_;
+  DirectUdpOptions options_;
+  std::string addresses_;
   PoseRead local_;
   View view_;
   enemies::Frame enemies_;
@@ -212,8 +270,7 @@ class Service {
   std::optional<CheatSet> local_cheats_;
   FlowMailbox flow_;
 };
-Service service;  // No thread, socket, guest reads, file access or allocation until explicitly started.
-#endif
+Service service;  // No thread or socket until explicitly started.
 
 #if defined(KK_DEV_TOOLS)
 bool DevRunning() {
@@ -225,9 +282,7 @@ bool DevSelected() {
 }
 #endif
 View CurrentView() {
-#if defined(KK_DEV_TOOLS)
   if (service.Running()) return service.Snapshot();
-#endif
   if (!steam) return {};
   const auto v = steam->SessionSnapshot();
   return {v.role, v.state, v.rejection, v.stats, v.local, v.partner, v.updated, v.local_failure, v.poses, v.enemies, v.enemies_sent, v.shots_sent, v.host_cheats, v.partner_name, v.epoch};
@@ -450,13 +505,22 @@ void Start(const std::filesystem::path& user_data) {
   }
   config.compatibility = {kProtocolVersion, KK_VERSION, KK_COOP_BUILD, mods::GameplayDigest(user_data)};
   REXLOG_INFO("KK co-op: dev link {} on 127.0.0.1:{}", role, port);
-  service.Start(std::move(config), uint16_t(port));
+  config.join_code = "LocalDev";
+  service.Start(std::move(config), {role == "host", "127.0.0.1", uint16_t(port), "LocalDev"});
 #endif
 }
 ISocialService& Social() {
   // A pre-configuration caller can show disabled state, but cannot initialize Steam early.
   static SteamRuntime disabled(SteamRuntimeOptions{});
+  class DirectSocial final : public ISocialService {
+   public:
+    SocialModel Snapshot() const override { return service.SocialSnapshot(); }
+    bool Act(SocialCommand c) override { return service.SocialAct(c); }
+  };
+  static DirectSocial direct;
+  if (service.Direct()) return direct;
 #if defined(KK_DEV_TOOLS)
+  if (REXCVAR_GET(kk_direct_loopback)) return disabled;
   class DevSocial final : public ISocialService {
    public:
     SocialModel Snapshot() const override {
@@ -480,29 +544,54 @@ ISocialService& Social() {
 #endif
   return steam ? static_cast<ISocialService&>(*steam) : static_cast<ISocialService&>(disabled);
 }
-FlowView SessionFlowSnapshot() {
+namespace {
+bool OpenDirect(DirectUdpOptions options) {
+  if (!REXCVAR_GET(kk_coop_enabled) || SessionInProcess() || !ValidJoinCode(options.join_code)) return false;
+  if (steam && steam->Snapshot().lobby) return false;
 #if defined(KK_DEV_TOOLS)
-  if (service.Running()) return service.FlowSnapshot();
+  if (DevSelected() || social_preview) return false;
+  if (REXCVAR_GET(kk_direct_loopback)) {
+    if (options.host) options.address="127.0.0.1";
+    else if (options.address!="127.0.0.1" && options.address!="::1") return false;
+  }
 #endif
+  // Cancel queued Steam creation/join work before switching. Leave cannot initialize Steam.
+  if (steam) steam->Act({SocialAction::Leave});
+  service.Stop();
+  SessionConfig config;
+  config.enabled=true; config.role=options.host ? Role::Host : Role::Guest;
+  config.display_name=options.host ? "Host" : "Guest";
+  config.cheats=kk::OwnCheats(); config.join_code=options.join_code;
+  config.wait_for_peer=options.host;
+  config.compatibility={kProtocolVersion,KK_VERSION,KK_COOP_BUILD,mods::GameplayDigest(play::UserDir())};
+  if (options.host) {
+    std::random_device random; config.epoch=(uint64_t(random())<<32)^random();
+    if (!config.epoch) config.epoch=1;
+  }
+  REXLOG_INFO("KK co-op: Direct IP {} selected",options.host ? "host" : "join");
+  service.Start(std::move(config),std::move(options),true);
+  return true;
+}
+}
+bool HostDirect(uint16_t port,std::string code) { return OpenDirect({true,"::",port,std::move(code)}); }
+bool JoinDirect(std::string address,uint16_t port,std::string code) {
+  return OpenDirect({false,std::move(address),port,std::move(code)});
+}
+FlowView SessionFlowSnapshot() {
+  if (service.Running()) return service.FlowSnapshot();
   return steam ? steam->FlowSnapshot() : FlowView{};
 }
 bool BeginSessionFlow(SessionStart start, std::vector<uint8_t> save) {
-#if defined(KK_DEV_TOOLS)
   if (service.Running()) return service.BeginFlow(start, std::move(save));
-#endif
   return steam && steam->BeginFlow(start, std::move(save));
 }
 bool SubmitFlowMessage(Message m) {
-#if defined(KK_DEV_TOOLS)
   if (service.Running()) return service.SubmitFlow(std::move(m));
-#endif
   return steam && steam->SubmitFlow(std::move(m));
 }
 void Shutdown() {
   StopSessionFlow();
-#if defined(KK_DEV_TOOLS)
   service.Stop();
-#endif
   if (steam) steam->Shutdown();
   kk::SetSessionCheats({});
 }
@@ -521,26 +610,20 @@ void GameFrame(uint8_t* base) {
   SessionReloadFrame(base);
   observer::GameFrame(base);
   EnemyGameFrame();
-#if defined(KK_DEV_TOOLS)
   if (service.Running()) service.Publish(ReadJack(base));
   else
-#endif
   if (steam && steam->SessionSnapshot().state != SessionState::Idle) {
     const auto read = ReadJack(base);
     steam->PublishPose(read.pose, read.failure);
   }
 }
 void PublishHostCamera(std::optional<CameraPose> camera) {
-#if defined(KK_DEV_TOOLS)
   if (service.Running()) { service.PublishCamera(std::move(camera)); return; }
-#endif
   if (steam) steam->PublishCamera(std::move(camera));
 }
 std::optional<CameraPose> HostCameraSnapshot(double now) {
   if (!REXCVAR_GET(kk_coop_enabled)) return {};
-#if defined(KK_DEV_TOOLS)
   if (service.Running()) return service.HostCamera(now);
-#endif
   return steam ? steam->HostCamera(now) : std::nullopt;
 }
 bool CameraConnectionReady() {
@@ -550,9 +633,7 @@ bool CameraConnectionReady() {
 }
 CameraDiagnostics HostCameraDiagnostics() {
   if (!REXCVAR_GET(kk_coop_enabled)) return {};
-#if defined(KK_DEV_TOOLS)
   if (service.Running()) return service.CameraInfo();
-#endif
   return steam ? steam->CameraInfo() : CameraDiagnostics{};
 }
 void CreateOverlay(rex::ui::ImGuiDrawer* drawer) {
@@ -569,15 +650,11 @@ bool EnemyConnectionReady() {
   if (!REXCVAR_GET(kk_coop_enabled)) return false;
   const auto flow=SessionFlowSnapshot();
   if (flow.active && (flow.phase!=FlowPhase::Playing || flow.policy!=ChapterPolicy::Together)) return false;
-#if defined(KK_DEV_TOOLS)
   if (service.Running()) return service.EnemyReady(Now());
-#endif
   return steam && steam->EnemyConnectionReady(Now());
 }
 void PublishEnemyFrame(const enemies::Frame& frame) {
-#if defined(KK_DEV_TOOLS)
   if (service.Running()) { service.PublishEnemies(frame); return; }
-#endif
   if (steam) steam->PublishEnemies(frame);
 }
 void SetEnemyCounters(enemies::Counters counts) {
@@ -586,10 +663,8 @@ void SetEnemyCounters(enemies::Counters counts) {
 void RefreshSessionCheats() {
   if (!REXCVAR_GET(kk_coop_enabled)) { kk::SetSessionCheats({}); return; }
   const auto own = kk::OwnCheats();
-#if defined(KK_DEV_TOOLS)
   if (service.Running()) service.PublishCheats(own);
   else
-#endif
   if (steam) steam->PublishCheats(own);
   const auto view = CurrentView();
   const bool guest_session = view.role == Role::Guest && (view.state == SessionState::Connecting ||
@@ -598,75 +673,53 @@ void RefreshSessionCheats() {
 }
 bool SubmitShotIntent(const ShotIntent& shot, const InventoryState& inventory) {
   if (!EnemyConnectionReady()) return false;
-#if defined(KK_DEV_TOOLS)
   if (service.Running()) return service.SubmitShot({shot, inventory});
-#endif
   return steam && steam->SubmitShot({shot, inventory});
 }
 void PublishInventoryState(const InventoryState& inventory) {
   if (!EnemyConnectionReady()) return;
-#if defined(KK_DEV_TOOLS)
   if (service.Running()) { service.PublishInventory(inventory); return; }
-#endif
   if (steam) steam->PublishInventory(inventory);
 }
 std::vector<ReceivedShot> TakeShotIntents() {
-#if defined(KK_DEV_TOOLS)
   if (service.Running()) return service.TakeShots();
-#endif
   return steam ? steam->TakeShots() : std::vector<ReceivedShot>{};
 }
 void SetShotCounters(ShotCounters counts) { std::lock_guard lock(enemy_status_mutex); shot_status = counts; }
 bool SubmitCombat(Message message, double now) {
   if (!EnemyConnectionReady()) return false;
-#if defined(KK_DEV_TOOLS)
   if (service.Running()) return service.SubmitCombat(std::move(message), now);
-#endif
   return steam && steam->SubmitCombat(std::move(message), now);
 }
 std::vector<ReceivedCombat> TakeCombat() {
-#if defined(KK_DEV_TOOLS)
   if (service.Running()) return service.TakeCombat();
-#endif
   return steam ? steam->TakeCombat() : std::vector<ReceivedCombat>{};
 }
 void ClearCombat() {
-#if defined(KK_DEV_TOOLS)
   if (service.Running()) { service.ClearCombat(); return; }
-#endif
   if (steam) steam->ClearCombat();
 }
 bool SubmitOwnership(Message message) {
   if (!EnemyConnectionReady()) return false;
-#if defined(KK_DEV_TOOLS)
   if (service.Running()) return service.SubmitOwnership(std::move(message));
-#endif
   return steam && steam->SubmitOwnership(std::move(message));
 }
 std::vector<Message> TakeOwnership() {
-#if defined(KK_DEV_TOOLS)
   if (service.Running()) return service.TakeOwnership();
-#endif
   return steam ? steam->TakeOwnership() : std::vector<Message>{};
 }
 void ClearOwnership() {
-#if defined(KK_DEV_TOOLS)
   if (service.Running()) { service.ClearOwnership(); return; }
-#endif
   if (steam) steam->ClearOwnership();
 }
 bool SubmitStory(Message message) {
   if (!EnemyConnectionReady()) return false;
-#if defined(KK_DEV_TOOLS)
   if (service.Running()) return service.SubmitStory(std::move(message));
-#endif
   return steam && steam->SubmitStory(std::move(message));
 }
 uint64_t StorySessionEpoch() { return CurrentView().epoch; }
 std::vector<Message> TakeStory() {
-#if defined(KK_DEV_TOOLS)
   if (service.Running()) return service.TakeStory();
-#endif
   return steam ? steam->TakeStory() : std::vector<Message>{};
 }
 PuppetSnapshot PartnerBodySnapshot() {
