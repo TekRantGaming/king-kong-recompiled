@@ -14,7 +14,6 @@ version's notes the first time you start it.
 - **Startup movies**: the Ubisoft, Universal and WingNut logo movies from your copy of the game, then a TRG Studios movie, play once after the setup, and then each time you open the game unless Settings > Gameplay > Startup logos is set to Skip (it skips the TRG Studios movie too). The loading screen follows them until the main menu is ready.
 - **Extras > Original main menu**: the game's own Xbox 360 main menu, as it was, with its pages, options and saves. Start a game from it, then pause and quit to come back to the launcher. The next time you open the game, the launcher's menu is back.
 - **Extras > User manual**: the game's Xbox 360 manual, page by page, with zoom. It downloads in the background (about 2 MB) the first time the launcher runs.
-
 - **Workshop**: the other TRG Studios projects show their proper artwork, downloaded the first time you open the Workshop.
 
 ### Changed
