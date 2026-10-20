@@ -72,6 +72,11 @@ int main() {
   t.Step({1, false, 0});  // the universe level (boot): no presses, not ready
   CHECK(!t.start_pressed && !t.Ready());
 
+  // The scene's frame rate: the player's cap up to 60, unlimited as 60, 10 while throttled.
+  CHECK(SceneFrameCap(30, false) == 30 && SceneFrameCap(60, false) == 60 && SceneFrameCap(144, false) == 60);
+  CHECK(SceneFrameCap(0, false) == 60 && SceneFrameCap(-1, false) == 60);
+  CHECK(SceneFrameCap(30, true) == 10 && SceneFrameCap(0, true) == 10);
+
   // The mix: 0.6 s each way, frame times clamped.
   float m = 0;
   for (int i = 0; i < 36; ++i) m = StepMix(m, true, 1.0f / 60);

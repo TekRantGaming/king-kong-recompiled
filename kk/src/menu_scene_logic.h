@@ -116,6 +116,15 @@ struct Tracker {
   }
 };
 
+// The scene's frame rate cap (frame_stats.cpp's limiter; kk_frame_rate itself is never changed): the player's cap
+// up to 60 (unlimited counts as 60: a menu needs no more), and 10 while the launcher's window is minimised or the
+// launcher is handing over to the game's new process (the scene then costs next to nothing).
+constexpr int kSceneMaxFps = 60, kSceneThrottledFps = 10;
+inline int SceneFrameCap(int player_cap, bool throttled) {
+  if (throttled) return kSceneThrottledFps;
+  return player_cap <= 0 || player_cap > kSceneMaxFps ? kSceneMaxFps : player_cap;
+}
+
 // The launcher's mix of the scene over the stills (0 stills .. 1 scene): about 0.6 s either way.
 inline float StepMix(float mix, bool show, float dt) {
   const float step = std::clamp(dt, 0.0f, 0.1f) / 0.6f;

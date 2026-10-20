@@ -2800,6 +2800,11 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
     KeepTextureAlive(std::move(steam_icon_));
   }
 
+ public:
+  // Task 330: over the live menu scene the game's frames already repaint the window (60 a second at most,
+  // menu_scene.h); painting on top of them as well drew the launcher about 180 times a second.
+  bool NeedsContinuousPaint() override { return !(menu_scene::Active() && menu_scene::Ready()); }
+
  protected:
   void OnDraw(ImGuiIO& io) override {
     NoteDrawn();
@@ -2819,7 +2824,7 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
 #endif
       // Task 330: with the live menu scene the game's frames set the pace (its frame rate cap); a wait here
       // would hold its presentation.
-      if (menu_scene::Active()) frame = std::chrono::microseconds(0);
+      if (menu_scene::Active() && menu_scene::Ready()) frame = std::chrono::microseconds(0);
       if (frame.count() > 0) {
         if (next_frame_ > clock::now()) std::this_thread::sleep_until(next_frame_);
         next_frame_ = std::max(next_frame_, clock::now() - frame) + frame;

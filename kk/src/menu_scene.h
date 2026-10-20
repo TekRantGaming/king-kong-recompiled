@@ -42,6 +42,10 @@ void SetHidden(bool hidden);
 void NoteUniverse(uint32_t g);
 // Game thread, each controller read (input_remap.cpp): the state the game sees. Returns the XInput result.
 uint32_t GuestPad(uint32_t user, uint8_t* base, uint8_t* state);
+// Minimised window or the launcher handing over to the game: the scene runs at 10 frames a second.
+void SetThrottled(bool throttled, const char* why);
+// The frame rate cap the game's limiter uses (frame_stats.cpp): player_cap (kk_frame_rate) outside the scene.
+int FrameCap(int player_cap);
 // The game's menus are left out (ultrawide.cpp tags the HUD pass).
 inline bool HideGameScreen() { return Active(); }
 

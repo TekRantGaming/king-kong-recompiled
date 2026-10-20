@@ -108,9 +108,13 @@ class KingKongApp : public rex::ReXApp {
   // found zero-sized (minimised) only at a size change: reconnect it here, as a resize would.
   void OnWindowRestored() override {
     REXLOG_INFO("KK: window restored");
+    kk::menu_scene::SetThrottled(false, "window restored");  // task 330
     RecoverPresentation("window restored");
   }
-  void OnWindowMinimized() override { REXLOG_INFO("KK: window minimised"); }
+  void OnWindowMinimized() override {
+    REXLOG_INFO("KK: window minimised");
+    kk::menu_scene::SetThrottled(true, "window minimised");  // task 330: nothing of the scene is seen
+  }
 
   void OnConfigurePaths(rex::PathConfig& paths) override {
     // Register the GPU plugin's cvars before the config is read so the
@@ -252,6 +256,7 @@ class KingKongApp : public rex::ReXApp {
       kk::play::QuiescePipelines();
       // Task 330: the live menu scene's renderer has written pipelines too: on disk before the game reads them.
       if (kk::menu_scene::Active()) kk::play::FlushRendererFiles();
+      kk::menu_scene::SetThrottled(true, "handing over to the game");  // its GPU time to the new process
       // The start request chosen on the Play menu goes with it (kk::play::SetStartRequest).
       const std::wstring start = kk::play::StartRequestArg();
       kk::startup::CleanExit();
@@ -284,6 +289,8 @@ class KingKongApp : public rex::ReXApp {
                                  (from_settings ? L" --kk_benchmark_from=settings" : L"") +
                                  L" --kk_skip_launcher=true")) {
         kk::play::QuiescePipelines();  // task 233, as Play (only when this process is going)
+        if (kk::menu_scene::Active()) kk::play::FlushRendererFiles();  // task 330, as Play
+        kk::menu_scene::SetThrottled(true, "handing over to the benchmark");
         kk::startup::CleanExit();
         kk::handoff::QuitWhenChildShown([this] { CloseLauncherProcess(); });
       }
@@ -309,6 +316,7 @@ class KingKongApp : public rex::ReXApp {
     // A launcher that starts again (task 330: a shader rebuild while the scene runs, which holds the pack open).
     cb.restart_launcher = [this](const std::wstring& args) {
       nr::kk::StopLauncherPrewarm();
+      kk::menu_scene::SetThrottled(true, "handing over to the new launcher");
       kk::play::FlushRendererFiles();
       if (!config_path_.empty()) kk::SaveSettings(config_path_);
       if (kk::play::RelaunchWith(args)) kk::handoff::QuitWhenChildShown([this] { CloseLauncherProcess(); });

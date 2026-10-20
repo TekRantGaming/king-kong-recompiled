@@ -12,6 +12,7 @@
 #include <string>
 
 #include <rex/cvar.h>
+#include <rex/hook.h>
 #include <rex/logging.h>
 
 #include "ui_paint.h"
@@ -112,6 +113,18 @@ void SetHidden(bool hidden) {
     REXLOG_INFO("KK menu scene: {}", hidden ? "hidden (the stills again)" : "shown again");
 }
 
+namespace {
+std::atomic<bool> g_throttled{false};
+}  // namespace
+void SetThrottled(bool throttled, const char* why) {
+  if (!Active()) return;
+  if (g_throttled.exchange(throttled) != throttled)
+    REXLOG_INFO("KK menu scene: {} frames a second ({})", SceneFrameCap(60, throttled), why);
+}
+int FrameCap(int player_cap) {
+  return Active() ? SceneFrameCap(player_cap, g_throttled.load(std::memory_order_relaxed)) : player_cap;
+}
+
 void NoteClosing() {
   if (!Active() || g_shown_once) return;
   // Closed before the scene came up (a quick Play or Quit): not a failure.
@@ -141,6 +154,15 @@ uint32_t GuestPad(uint32_t user, uint8_t* base, uint8_t* state) {
                   g_tracker.start_pressed);
 #endif
     if (g_tracker.start_pressed) state[4] = 0x00, state[5] = 0x10;  // XINPUT_GAMEPAD_START (big-endian word)
+#if defined(KK_DEV_TOOLS)
+    if (std::getenv("KK_DEV_SCENE_TRACE")) {
+      static uint32_t movie = 0;
+      const uint32_t player = Load32(base, 0x82CCAE80);
+      const uint32_t now = player ? (Load32(base, player + 0x10C) | Load32(base, player + 0x110)) : 0;
+      if (now != movie) REXLOG_INFO("KK dev scene: movie playing {} -> {}", movie, now);
+      movie = now;
+    }
+#endif
     if (g_tracker.Ready() != was_ready) {
       g_ready = g_tracker.Ready();
       if (g_ready) NoteShown();
@@ -152,3 +174,18 @@ uint32_t GuestPad(uint32_t user, uint8_t* base, uint8_t* state) {
 }
 
 }  // namespace kk::menu_scene
+
+// The start menu's attract movie (task 330): left alone for about two minutes, the start menu plays
+// Video/Attract.wmv (gameplay footage) over itself: sub_8272EED8, which runs every frame, calls the movie player
+// sub_82723AF0(player, name, 0, 0) with "Attract" once the pad has been idle long enough (it also plays the
+// startup logos with it, intros.cpp). The scene never plays it: the start menu stays on the sea.
+REX_EXTERN(__imp__sub_82723AF0);
+REX_HOOK_RAW(sub_82723AF0) {
+  constexpr uint32_t kAttractName = 0x820A43A8;  // "Attract" in the game's image
+  if (kk::menu_scene::Active() && ctx.r4.u32 == kAttractName) {
+    static std::atomic<bool> logged{false};
+    if (!logged.exchange(true)) REXLOG_INFO("KK menu scene: the start menu's attract movie is not played");
+    return;
+  }
+  __imp__sub_82723AF0(ctx, base);
+}
