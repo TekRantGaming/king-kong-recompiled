@@ -5,7 +5,7 @@ version's notes the first time you start it.
 
 ## v2.0.0-beta.13 (unreleased)
 
-**Beta 13**: a live main menu, from the beta channel (**About** > **Change version**). Your saves and settings are kept.
+**Beta 13**: a live main menu, from the beta channel (**About** > **Change version**). Your saves and settings are kept. Windows only for this beta.
 
 ### What's new
 - **The main menu is the game's own start menu scene, live**: the Venture rolls on the stormy sea under Skull Island behind the launcher, moving, with the menu's own music and the sound of the sea (Settings > Audio > Menu music and its volume apply to it). It replaces the slideshow of pictures. The pictures still show during setup, on the first start after an update, while shaders are prepared, on low-end PCs such as the Steam Deck, and if the scene could not start last time.
@@ -14,6 +14,11 @@ version's notes the first time you start it.
 - **Startup movies**: the Ubisoft, Universal and WingNut logo movies from your copy of the game, then a TRG Studios movie, play once after the setup, and then each time you open the game unless Settings > Gameplay > Startup logos is set to Skip (it skips the TRG Studios movie too). The loading screen follows them until the main menu is ready.
 - **Extras > Original main menu**: the game's own Xbox 360 main menu, as it was, with its pages, options and saves. Start a game from it, then pause and quit to come back to the launcher. The next time you open the game, the launcher's menu is back.
 - **Extras > User manual**: the game's Xbox 360 manual, page by page, with zoom. It downloads in the background (about 2 MB) the first time the launcher runs.
+
+- **Workshop**: the other TRG Studios projects show their proper artwork, downloaded the first time you open the Workshop.
+
+### Changed
+- **More graphics prepared ahead of time**: the shipped list now has 14,697 graphics pipelines (59 more), from players who share them with Online players on.
 
 ### Fixed
 - **After the first-time setup, the old pictures showed before the live main menu.** The startup movies and the loading screen now cover the main menu while it gets ready.
