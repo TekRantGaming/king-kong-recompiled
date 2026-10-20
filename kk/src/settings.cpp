@@ -763,6 +763,17 @@ void InitializeHardwareRecommendation(const std::filesystem::path& config_path, 
   // A pre-existing config, including one predating this feature, never gets a new tier automatically.
   const bool first_setup = !exists && !ec && REXCVAR_GET(kk_hardware_tier).empty();
   ApplyHardwareRecommendation(first_setup, width, height, first_setup);
+#if !defined(_WIN32)
+  // Later Linux launches keep the old GI-only policy. Persist a new Deck's
+  // initial render choices so they survive that path; overrides still win.
+  if (first_setup && DetectHardware().steam_deck) {
+    for (const char* name : {"kk_render_quality", "native_upscaler_quality", "native_gi_distance",
+                             "native_ao_quality", "native_ao_samples", "ao_mode"}) {
+      if (rex::cvar::GetFlagSource(name) == rex::cvar::Source::kDefault)
+        rex::cvar::SetFlagByName(name, rex::cvar::GetFlagByName(name));
+    }
+  }
+#endif
 }
 
 void SetOfferedUpscalers(const std::string& offered) {
