@@ -1,13 +1,75 @@
 #pragma once
 #include "coop_enemies.h"
+#include "coop_pose.h"
 #include <map>
+#include <set>
 
 namespace kk::coop::objects {
 constexpr size_t kQueue=kObjectQueue, kCensus=kObjectCensus;
+// Same native loaded-file join used by dev_sample.cpp: key -> file index ->
+// loaded address. Authored actor keys survive heap relocation and moving doors.
+// Refuse aliases instead of accepting the last row for a duplicated address.
+template<class Read> std::map<uint32_t,uint32_t> FileKeys(Read read) {
+  std::map<uint32_t,uint32_t> indices,out;
+  std::set<uint32_t> duplicate_indices,duplicate_addresses;
+  size_t total=0;
+  for (uint32_t bucket=0;bucket<256;++bucket) {
+    const auto list=read(0x82C4EDC0+bucket*16),count=read(0x82C4EDC4+bucket*16);
+    if (!count) continue;
+    if (count>100000 || total+count>100000 || !PoseAddress(list,count*8)) return {};
+    total+=count;
+    for (uint32_t i=0;i<count;++i) {
+      const auto index=read(list+8*i),address=read(list+8*i+4);
+      if (!PoseAddress(address)) continue;
+      const auto [it,added]=indices.emplace(index,address);
+      if (!added && it->second!=address) duplicate_indices.insert(index);
+    }
+  }
+  const auto list=read(0x82C4ED94),count=read(0x82C4ED98);
+  if (!count || count>1000000 || !PoseAddress(list,count*8)) return {};
+  for (uint32_t i=0;i<count;++i) {
+    const auto key=read(list+8*i),index=read(list+8*i+4);
+    const auto it=indices.find(index);
+    if (!key || it==indices.end() || duplicate_indices.contains(index)) continue;
+    const auto [entry,added]=out.emplace(it->second,key);
+    if (!added && entry->second!=key) duplicate_addresses.insert(it->second);
+  }
+  for (const auto address : duplicate_addresses) out.erase(address);
+  return out;
+}
+inline uint64_t AssetSource(ObjectKind kind,uint32_t key) {
+  if (!key || (kind!=ObjectKind::Breakable && kind!=ObjectKind::Door)) return 0;
+  const auto hash=enemies::Mix(enemies::Mix(14695981039346656037ull,0x4f424a4b),uint64_t(kind)<<32|key);
+  return hash ? hash : 1;
+}
 struct Binding {
   uint32_t actor=0,ai=0,vars=0,matrix=0;
   uint64_t source=0;
   ObjectKind kind=ObjectKind::Breakable;
+  auto operator<=>(const Binding&) const = default;
+};
+// Ambiguity does not disappear when one duplicate leaves the registry. Never
+// recycle its authored ID into the survivor or a later actor at that position.
+// A private native load clears local addresses before rebinding host outcomes.
+class Identities {
+ public:
+  bool Record(const Binding& b) {
+    if (!b.source || !b.actor || !b.ai || !b.vars || !b.matrix) return false;
+    const auto it=first_.find(b.source);
+    if (it==first_.end()) {
+      if (first_.size()>=kCensus) return false;
+      first_.emplace(b.source,b);
+    } else if (it->second!=b) ambiguous_.insert(b.source);
+    return Allows(b.kind,b.source);
+  }
+  bool Allows(ObjectKind kind,uint64_t source) const {
+    const auto it=first_.find(source);
+    return it!=first_.end() && it->second.kind==kind && !ambiguous_.contains(source);
+  }
+  void Clear() { first_.clear(); ambiguous_.clear(); }
+ private:
+  std::map<uint64_t,Binding> first_;
+  std::set<uint64_t> ambiguous_;
 };
 template<class T> T* Match(uint64_t source,ObjectKind kind,std::map<uint32_t,T>& bindings) {
   T* found=nullptr;

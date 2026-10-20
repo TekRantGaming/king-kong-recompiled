@@ -32,6 +32,17 @@ void Codec() {
   Check(!Encode(m,bytes),"request cannot choose door progress");
 }
 void Policies() {
+  std::map<uint32_t,uint32_t> memory{{0x82C4EDC0,0x43000000},{0x82C4EDC4,2},
+      {0x43000000,7},{0x43000004,0x42000000},{0x43000008,8},{0x4300000c,0x42001000},
+      {0x82C4ED94,0x44000000},{0x82C4ED98,3},{0x44000000,0xabcd1234},{0x44000004,7},
+      {0x44000008,0xabcd5678},{0x4400000c,8},{0x44000010,0xabcd5679},{0x44000014,8}};
+  auto read=[&](uint32_t address){ const auto it=memory.find(address); return it==memory.end() ? 0u : it->second; };
+  auto keys=objects::FileKeys(read);
+  Check(keys.size()==1 && keys[0x42000000]==0xabcd1234,"native file key join refuses address aliases");
+  const auto asset=objects::AssetSource(ObjectKind::Door,keys[0x42000000]);
+  Check(asset && asset!=objects::AssetSource(ObjectKind::Breakable,keys[0x42000000]),"asset identity is family scoped and independent of heap address or live pose");
+  memory[0x82C4EDC4]=100001;
+  Check(objects::FileKeys(read).empty(),"malformed native file table is bounded before reading entries");
   const auto id=objects::Source(ObjectKind::Breakable,-0.f,2,3,1);
   Check(id && id==objects::Source(ObjectKind::Breakable,0.f,2,3,1),"identity canonicalizes signed zero");
   Check(id!=objects::Source(ObjectKind::Door,0,2,3,1),"families do not alias");
@@ -44,6 +55,13 @@ void Policies() {
   Check(!objects::Match(id,ObjectKind::Breakable,bindings),"aliased mutable component refuses drive");
   bindings.erase(2);
   Check(!objects::Match(id,ObjectKind::Door,bindings),"same numeric source cannot select another family");
+  objects::Identities identities; const auto original=bindings[1];
+  Check(identities.Record(original),"first authored object claims local identity");
+  auto reused=original; reused.actor=5; reused.ai=6; reused.vars=7; reused.matrix=8;
+  Check(!identities.Record(reused) && !identities.Allows(original.kind,id),"same authored ID cannot migrate to another allocation");
+  Check(!identities.Record(original),"retiring a duplicate cannot make its survivor unambiguous again");
+  identities.Clear();
+  Check(identities.Record(reused),"private native reload rebinds addresses in a fresh local identity ledger");
   objects::Replica replica; auto s=Packet().object; s.value=100;
   Check(replica.Observe(s) && !replica.Observe(s),"absolute snapshot duplicate idempotent");
   auto old=s; old.number=2; old.generation=1;
