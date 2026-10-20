@@ -13,6 +13,8 @@
 
 #include <algorithm>
 #include <bit>
+#include <array>
+#include <chrono>
 #include <cmath>
 #include <cstdint>
 #include <cstdlib>
@@ -36,6 +38,35 @@
 namespace {
 
 #if defined(KK_DEV_TOOLS)
+// Opt-in evidence for real and virtual input, on both sides of every filter.
+struct DevInputTrace {
+  uint32_t user, native_status;
+  const uint8_t* state;
+  const uint8_t* base;
+  PPCContext& ctx;
+  std::array<uint8_t,16> native{};
+  DevInputTrace(uint32_t u,const uint8_t* s,const uint8_t* b,PPCContext& c) : user(u),native_status(c.r3.u32),state(s),base(b),ctx(c) {
+    if (s && !native_status) std::memcpy(native.data(),s,native.size());
+  }
+  ~DevInputTrace() {
+    static const bool enabled=std::getenv("KK_DEV_INPUT_TRACE")!=nullptr;
+    static auto next=std::chrono::steady_clock::time_point{};
+    static unsigned lines=0;
+    if (!enabled || user || !state || lines>=240) return;
+    const auto now=std::chrono::steady_clock::now();
+    if (now<next) return;
+    next=now+std::chrono::seconds(1); ++lines;
+    auto word=[](const uint8_t* s,int at) { return uint16_t(uint16_t(s[at])<<8|s[at+1]); };
+    auto value=[&](uint32_t at) { uint32_t v; std::memcpy(&v,base+at,4); return std::byteswap(v); };
+    REXLOG_INFO("KK dev input: native-status={} game-status={} native={:04X}/{}/{}/{}/{}/{}/{} game={:04X}/{}/{}/{}/{}/{}/{} cover={} menu={} observer={} phase={} active-pad={} native-block={} pos={:.3f}/{:.3f}/{:.3f}",
+        native_status,ctx.r3.u32,word(native.data(),4),native[6],native[7],int16_t(word(native.data(),8)),
+        int16_t(word(native.data(),10)),int16_t(word(native.data(),12)),int16_t(word(native.data(),14)),
+        word(state,4),state[6],state[7],int16_t(word(state,8)),int16_t(word(state,10)),int16_t(word(state,12)),
+        int16_t(word(state,14)),kk::play::CoverScreen(),kk::play::PauseMenuOpen(),kk::coop::observer::Active(),
+        int(kk::coop::SessionFlowSnapshot().phase),int32_t(value(0x82C63704)),value(0x82CCAE2C),
+        std::bit_cast<float>(value(0x82D64250)),std::bit_cast<float>(value(0x82D64254)),std::bit_cast<float>(value(0x82D64258)));
+  }
+};
 // Log both sides of the filters, including background virtual-pad reads. One
 // line per RT edge or change in delivery, capped for the lifetime of the process.
 struct DevFirePadTrace {
@@ -182,6 +213,9 @@ REX_HOOK_RAW(sub_821074E8) {
   const uint32_t user = ctx.r3.u32;
   const uint32_t state_ptr = ctx.r4.u32;
   __imp__sub_821074E8(ctx, base);
+#if defined(KK_DEV_TOOLS)
+  DevInputTrace input_trace{user,state_ptr ? base+state_ptr : nullptr,base,ctx};
+#endif
   struct RecordRead {
     uint32_t user; const uint8_t* state; PPCContext& ctx; const uint8_t* base;
     ~RecordRead() { kk::benchmark::PadRead(user, state, ctx.r3.u32, base); }
@@ -299,6 +333,7 @@ REX_HOOK_RAW(sub_821074F8) {
 // Original leaves the stick as the game reads it.
 namespace {
 constexpr uint32_t kCamStickReturn = 0x824703A8;  // CM_Cam's right-stick read
+constexpr uint32_t kVentureTutorialReturn = 0x82432D0C;  // Chaloupe_CineD1's vertical sighting choice
 constexpr float kCamDeadzone = 0.15f;             // CM_Cam's own, per axis
 
 template <typename F>
@@ -322,7 +357,15 @@ REX_EXTERN(__imp__sub_8272C610);
 REX_HOOK_RAW(sub_8272C610) {
   const uint32_t out = ctx.r3.u32, stick = ctx.r4.u32, from = uint32_t(ctx.lr);
   __imp__sub_8272C610(ctx, base);
-  if (stick != 1 || !out || from != kCamStickReturn) return;
+  if (stick != 1 || !out) return;
+  if (from==kVentureTutorialReturn) {
+    if (kk::play::CoverScreen() || kk::play::PauseMenuOpen() || kk::coop::observer::SuppressLook()) return;
+    float y=LoadF(base+out+4);
+    kk::mouse_look::OnVentureTutorialStick(y);
+    StoreF(base+out+4,y);
+    return;
+  }
+  if (from != kCamStickReturn) return;
   if (REXCVAR_GET(kk_camera_modern)) EvenCameraStick(base, out);
   // Keyboard & mouse: the mouse's turn this frame (mouse_look.cpp).
   float x = LoadF(base + out), y = LoadF(base + out + 4);

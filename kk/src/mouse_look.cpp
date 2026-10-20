@@ -50,6 +50,7 @@ std::atomic<bool> g_on{false};  // Keyboard & mouse with the mouse camera, as of
 
 std::mutex g_mutex;
 double g_dx = 0, g_dy = 0;  // counts since CM_Cam last read the stick
+double g_tutorial_dy = 0;  // Venture's separate vertical-look intent read
 
 // This frame (game thread): the turns still to give CM_Cam, in radians
 // (yaw positive right, pitch positive up), and whether the stick was nudged.
@@ -67,6 +68,7 @@ class Listener : public rex::ui::WindowInputListener {
     std::lock_guard lock(g_mutex);
     g_dx += e.dx();
     g_dy += e.dy();
+    g_tutorial_dy += e.dy();
   }
 };
 Listener g_listener;
@@ -95,7 +97,7 @@ double Density() {
 #if defined(KK_DEV_TOOLS)
 // Developer test aid: KK_DEV_MOUSE="<counts/s across>,<counts/s down>" moves
 // the mouse that fast whenever the mouse camera is on.
-void AddDevMouse(double seconds) {
+const std::pair<double,double>& DevMouseSpeed() {
   static const auto speed = [] {
     std::pair<double, double> s{0, 0};
     if (const char* v = std::getenv("KK_DEV_MOUSE"); v && *v) {
@@ -104,6 +106,10 @@ void AddDevMouse(double seconds) {
     }
     return s;
   }();
+  return speed;
+}
+void AddDevMouse(double seconds) {
+  const auto& speed=DevMouseSpeed();
   g_dx += speed.first * seconds * Density();
   g_dy += speed.second * seconds * Density();
 }
@@ -150,6 +156,29 @@ void OnCameraStick(float& x, float& y) {
     y = g_pitch > 0 ? kNudge : -kNudge;
     g_nudged_y = true;
   }
+}
+
+void OnVentureTutorialStick(float& y) {
+  const bool on=MouseCamera();
+  g_on.store(on,std::memory_order_relaxed);
+  static Clock::time_point last{};
+  const auto now=Clock::now();
+  const double since=std::chrono::duration<double>(now-last).count();
+  last=now;
+  double dy;
+  {
+    std::lock_guard lock(g_mutex);
+    dy=g_tutorial_dy; g_tutorial_dy=0;
+  }
+  if (!on || since>.25) return;
+#if defined(KK_DEV_TOOLS)
+  dy+=DevMouseSpeed().second*since*Density();
+#endif
+  // The native tutorial requires >half-stick vertical intent to choose the
+  // sighting direction. The runtime's deliberately tiny mouse-to-stick gain
+  // cannot reach it, even though CM_Cam already receives direct mouse turns.
+  if (dy!=0 && std::fabs(y)<.5f)
+    y=std::copysign(1.0f,float(-dy*(REXCVAR_GET(kk_mouse_invert_y) ? -1 : 1)));
 }
 
 namespace {

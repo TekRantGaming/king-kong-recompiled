@@ -16,6 +16,10 @@ void Install(rex::ui::Window* window);
 // just past the camera's deadzone so CM_Cam turns that axis this frame.
 void OnCameraStick(float& x, float& y);
 
+// Venture checks vertical stick intent separately from CM_Cam's turn. Give
+// that tutorial its own mouse sample without consuming the camera's movement.
+void OnVentureTutorialStick(float& y);
+
 // CM_Cam's yaw and pitch turns this frame (radians, the stick's part in):
 // the mouse's part added.
 double Yaw(double angle);

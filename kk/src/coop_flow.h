@@ -197,12 +197,12 @@ class SessionFlow {
   void Setup(SessionStart s, double now) {
     view_.active=true; view_.start=s; view_.world={1,s.level,s.start,0};
     view_.checkpoint=s.start; view_.policy=PolicyFor(s.level); view_.phase=FlowPhase::Loading;
-    view_.status="Loading co-op. Waiting for partner..."; deadline_=now;
+    view_.status="Loading..."; deadline_=now;
   }
   void World(FlowEvent f, double now) {
     view_.world=f; view_.completed=f.completed; view_.checkpoint=f.start;
     view_.policy=PolicyFor(f.level); view_.phase=FlowPhase::Loading;
-    view_.status="Loading co-op. Waiting for partner..."; deadline_=now;
+    view_.status="Loading..."; deadline_=now;
     local_loaded_=remote_loaded_=local_finished_=remote_finished_=false;
     view_.partner_life = {};
   }
@@ -272,7 +272,10 @@ class SessionFlow {
     switch (m.type) {
       case MessageType::Loaded:
         if (m.flow.start!=view_.world.start || view_.phase!=FlowPhase::Loading || !view_.start_ready) return;
-        if (local) { if (local_loaded_) return; local_loaded_=true; Emit(m.type,view_.world); }
+        if (local) {
+          if (local_loaded_) return;
+          local_loaded_=true; view_.status="Waiting for partner..."; Emit(m.type,view_.world);
+        }
         else remote_loaded_=true;
         if (view_.host && local_loaded_ && remote_loaded_) { Emit(MessageType::LoadRelease,view_.world); Release(); }
         break;
@@ -298,7 +301,6 @@ class SessionFlow {
         if (view_.host && (view_.phase==FlowPhase::Playing || view_.phase==FlowPhase::Waiting)) {
           auto f=view_.world; ++f.generation; f.start=view_.checkpoint;
           World(f,now); Emit(MessageType::LevelChange,f);
-          view_.status="Co-op recovery: both players reload the host checkpoint.";
         }
         break;
       case MessageType::FlowAbort:

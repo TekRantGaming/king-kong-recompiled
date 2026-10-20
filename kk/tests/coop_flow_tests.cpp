@@ -34,8 +34,12 @@ struct Flows {
     Check(guest.View().start_ready,"empty-save session ready");
   }
   void Loaded(double now=2) {
+    Check(std::string_view(host.View().status)=="Loading..." &&
+        std::string_view(guest.View().status)=="Loading...","both show their own native load first");
     host.Local(Event(MessageType::Loaded,host.View().world),now); Transfer(host,guest,now);
     Check(host.View().phase==FlowPhase::Loading && guest.View().phase==FlowPhase::Loading,"one loaded is insufficient");
+    Check(std::string_view(host.View().status)=="Waiting for partner..." &&
+        std::string_view(guest.View().status)=="Loading...","only locally loaded player shows partner wait");
     guest.Local(Event(MessageType::Loaded,guest.View().world),now+.1); Transfer(guest,host,now+.1); Transfer(host,guest,now+.1);
     Check(host.View().phase==FlowPhase::Playing && guest.View().phase==FlowPhase::Playing,"host releases both loaded");
   }
