@@ -2792,7 +2792,12 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
         REXLOG_INFO("KK startup movies: not at this start ({})", !files_ok_ ? "no game files"
                                                                 : InSetup() ? "a setup or update screen first"
                                                                             : "kk_skip_intros is on");
-      StartLoadingLoop(open_on);
+      // Owner (20 Oct): a first start goes straight to the setup; the save notice comes after the setup and the
+      // movies (StartMoviesAfterSetup).
+      if (open_on.empty() && (!files_ok_ || InSetup()))
+        REXLOG_INFO("KK loading loop: none before the setup");
+      else
+        StartLoadingLoop(open_on);
     }
     MaybeStartScene(!open_on.empty());  // back from the game (or a restart): before the first frame
     saved_changes_ = seen_changes_ = g_changes;
