@@ -92,6 +92,7 @@ struct PuppetSnapshot {
 };
 PuppetSnapshot PartnerBodySnapshot();
 void SetPartnerBodyDriven(bool driven);
+void PartnerAnimationShot(uint8_t weapon); // Game thread, confirmed local native shot only.
 // Game-thread copied head anchor; cleared whenever body driving stops.
 void SetPartnerHead(std::optional<ShotVector> head, uint32_t level);
 #if defined(KK_DEV_TOOLS)

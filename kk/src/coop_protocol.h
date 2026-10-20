@@ -11,7 +11,7 @@
 
 namespace kk::coop {
 constexpr uint32_t kMagic = 0x4B4B4331;  // KKC1, network byte order throughout
-constexpr uint16_t kProtocolVersion = 14; // C61 six-character codes and revision-scoped Direct IP lobby choices.
+constexpr uint16_t kProtocolVersion = 15; // C70 partner movement, stance and confirmed firing animation.
 constexpr size_t kMaxDisplayNameBytes = 32;
 // Valid UTF-8, no controls or invisible direction/line formatting, bounded at a codepoint.
 // Empty or wholly invalid input becomes "Partner". Never log the input or result.
@@ -102,6 +102,10 @@ struct PlayerPose {
   float x = 0, y = 0, z = 0, facing = 0, speed = 0;
   uint16_t action = 0;
   uint8_t item = 0;  // Diagnostic only: first-person IDs are not body animation IDs.
+  float vx = 0, vy = 0, pitch = 0;
+  uint8_t weapon = 0, crouched = 0;
+  uint32_t fire = 0; // Cumulative confirmed native shots; survives unreliable pose loss.
+  uint8_t fire_weapon = 0;
 };
 // Native scene camera with the host lens, before aspect widening. Quaternion rotates the
 // guest right/forward/up basis. No native pointer or script address is on wire.

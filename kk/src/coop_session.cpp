@@ -18,7 +18,7 @@ const char* StateName(SessionState s) {
 const char* RejectName(RejectReason r) {
   switch (r) {
     case RejectReason::None: return "";
-    case RejectReason::Protocol: return "different protocol";
+    case RejectReason::Protocol: return "different co-op version; both players need the same build";
     case RejectReason::Version: return "different game version";
     case RejectReason::Build: return "different build";
     case RejectReason::GameplayMods: return "different gameplay mods";
@@ -48,8 +48,12 @@ std::optional<PlayerPose> PoseBuffer::Sample(double now) const {
     p.time = target;
     p.x += (b.x - a.x) * t; p.y += (b.y - a.y) * t; p.z += (b.z - a.z) * t;
     p.speed += (b.speed - a.speed) * t;
+    p.vx += (b.vx - a.vx) * t; p.vy += (b.vy - a.vy) * t;
+    p.pitch += (b.pitch - a.pitch) * t;
     p.facing += std::remainder(b.facing - a.facing, 6.28318530718f) * t;
-    if (t >= .5f) { p.action = b.action; p.item = b.item; }
+    // Discrete events use the same delayed timeline as the rendered body.
+    if (t >= .5f) { p.action = b.action; p.item = b.item; p.weapon = b.weapon; p.crouched = b.crouched; }
+    if (t >= 1.f) { p.fire = b.fire; p.fire_weapon = b.fire_weapon; }
     return p;
   }
   return poses_.back().pose;  // hold, never extrapolate through a wall

@@ -62,13 +62,22 @@ std::unique_ptr<ISocialPreview> social_preview;
 bool configured = false;
 using Clock = std::chrono::steady_clock;
 double Now() { return std::chrono::duration<double>(Clock::now().time_since_epoch()).count(); }
+uint32_t animation_fire = 0;
+uint8_t animation_weapon = 0;
 // Same validated reader in runtime and sparse-memory unit tests.
 PoseRead ReadJack(const uint8_t* base) {
   if (!base) return {{}, "no-base"};
   if (play::CoverScreen()) return {{}, "cover"};
-  return ReadJackPose([base](uint32_t a) { return hfr::Load32(base, a); },
+  auto read = ReadJackPose([base](uint32_t a) { return hfr::Load32(base, a); },
       [base](uint32_t a) { return hfr::Load16(base, a); },
       [base](uint32_t a) { return hfr::LoadF(base, a); }, Now());
+  static PoseVelocity velocity;
+  if (!read.pose) { velocity.Clear(); return read; }
+  auto& p = *read.pose;
+  velocity.Apply(p);
+  if (const auto pitch = nametag::ViewPitch(base,p.level)) p.pitch = *pitch;
+  p.fire = animation_fire; p.fire_weapon = animation_weapon;
+  return read;
 }
 struct View {
   Role role = Role::Host;
@@ -798,6 +807,10 @@ PuppetSnapshot PartnerBodySnapshot() {
   const auto flow=SessionFlowSnapshot();
   if (flow.active && (flow.phase!=FlowPhase::Playing || flow.policy!=ChapterPolicy::Together)) return {};
   return {true, Now() - v.updated <= .5, v.state, v.local, v.partner};
+}
+void PartnerAnimationShot(uint8_t weapon) {
+  if (weapon < 1 || weapon > 4) return;
+  ++animation_fire; animation_weapon = weapon;
 }
 void SetPartnerBodyDriven(bool driven) {
   partner_body_driven.store(driven);

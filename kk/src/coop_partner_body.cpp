@@ -268,6 +268,35 @@ bool LegalAction(const uint8_t* b, const Rig& r, uint32_t action) {
   if (action >= 0x8000 || action >= Load16(b, r.table)) return false;
   return action == 0 || Ptr(b, r.table, 4 * (action + 4), 4) != 0;
 }
+bool LoadedAction(const uint8_t* b, const Rig& r, uint32_t action, uint32_t variant = 0) {
+  if (!LegalAction(b,r,action)) return false;
+  const auto items = Ptr(b,r.table,4*(action+4),20);
+  return coop::puppet::AnimationItemHeader(items,variant,[&](uint32_t p) { return b[p]; },
+      [&](uint32_t p,uint32_t off,uint32_t size) { return Ptr(b,p,off,size); }) != 0;
+}
+std::optional<uint8_t> LoadedItem(const uint8_t* b,const Rig& r,uint32_t action) {
+  if (!LegalAction(b,r,action)) return {};
+  const auto items=Ptr(b,r.table,4*(action+4),20);
+  if (!items) return {};
+  for (unsigned item=0;item<b[items];++item)
+    if (LoadedAction(b,r,action,item)) return uint8_t(item);
+  return {};
+}
+uint32_t BodyWeapon(const uint8_t* b,const Rig& r) {
+  const auto game=Load32(b,0x82CC97C0), slot=Load32(b,r.vars+4);
+  // H_callback_tir indexes the same G+13124 table by the human's slot.
+  return slot>=1 && slot<=12 && Range(game,13176) ? Load32(b,game+13124+4*slot) : 0;
+}
+uint8_t AnimationSupport(const uint8_t* b, const Rig& r, uint8_t weapon) {
+  if (Load32(b,r.vars) != 0) return 0;
+  const auto held=BodyWeapon(b,r);
+  const bool gun=held>=1 && held<=4;
+  if (gun) weapon=uint8_t(held);
+  const bool gait = LoadedItem(b,r,0).has_value() && LoadedItem(b,r,10).has_value();
+  const bool fire = weapon ? LoadedItem(b,r,coop::puppet::HumanAction(weapon,false,false,true)).has_value() :
+      LoadedItem(b,r,14).has_value() || LoadedItem(b,r,164).has_value() || LoadedItem(b,r,162).has_value();
+  return 4*uint8_t(gait) + 2*uint8_t(fire) + uint8_t(gun);
+}
 bool Active(const uint8_t* b, const Rig& r) {
   // Plain transform path only. Scheduler flags at object+4: disabled/deferred AI.
   const uint32_t ext = Ptr(b, r.actor, 24, 48);
@@ -375,6 +404,12 @@ struct State {
   bool selected_copy = false;
   int selected_tier = -1;
   unsigned missing_action_kind = 0;
+  coop::puppet::AnimationDrive animation;
+  uint32_t rate_layer = 0;
+  uint8_t* rate_base = nullptr; // game thread only; restored before relinquishing the exact rig
+  uint8_t saved_rate = 60, playback_rate = 60;
+  uint32_t requested_tuple = UINT32_MAX;
+  uint32_t animation_shots = 0;
   std::set<uint32_t> retired;
   std::map<uint32_t, std::pair<uint32_t, uint32_t>> deferred_prg;
   std::map<uint32_t, Clock::time_point> story_cooldown;
@@ -403,6 +438,10 @@ struct State {
 
   void Abort(const char* reason) {
     if (terminal) return;
+    Rig current;
+    if (rate_base && rate_layer && ReadRig(rate_base,selected.actor,current) &&
+        Same(current,selected) && current.layer == rate_layer) rate_base[rate_layer+2] = saved_rate;
+    rate_base = nullptr; rate_layer = 0;
     driving = false; finish_pending = false; measure = false; terminal = true;
     if (Opt().partner) {
       coop::SetPartnerBodyDriven(false);
@@ -1128,9 +1167,11 @@ void CensusAndSelect(PPCContext& ctx, uint8_t* b, uint32_t w) {
     for (const auto& c : candidates) {
       auto f = AutoFacts(b, c.rig, !*c.reason && !s.retired.count(c.rig.actor),
           s.humans.at(c.rig.actor).stable >= 1, Distance(c.rig.pos, jack.pos));
+      f.animation_support = f.other_human ? 0 : AnimationSupport(b,c.rig,s.partner.partner->weapon);
       facts.push_back(f);
-      if (log) REXLOG_INFO("PUPPET auto candidate epoch={} index={} actor={:08X} score={} tier={} scheduled={} registry-unclaimed={} movement-and-draw-confirmed={} kind={} distance={:.3f} external-ref={:08X} reason={}",
+      if (log) REXLOG_INFO("PUPPET auto candidate epoch={} index={} actor={:08X} score={} tier={} animations={} scheduled={} registry-unclaimed={} movement-and-draw-confirmed={} kind={} distance={:.3f} external-ref={:08X} reason={}",
           s.epoch, c.index, f.actor, coop::puppet::BodyScore(f), coop::puppet::BodyTier(f),
+          f.animation_support,
           f.scheduled, f.registry_unclaimed, f.unscheduled_setters_and_draw_confirmed,
           f.kind == coop::puppet::HumanKind::Ally ? "observed-ally" : "unknown", f.distance,
           script_evidence.references.count(f.actor) ? script_evidence.references.at(f.actor) : 0,
@@ -1145,7 +1186,10 @@ void CensusAndSelect(PPCContext& ctx, uint8_t* b, uint32_t w) {
         const auto& o = s.humans.at(c.rig.actor);
         if (*c.reason || o.other_human || AutoFacts(b, c.rig, true, true, 0).ann || c.rig.dead_track || c.rig.grabbed ||
             o.stable < 1 || s.retired.count(c.rig.actor)) continue;
-        if (!pick || Distance(c.rig.pos, jack.pos) > Distance(pick->rig.pos, jack.pos)) pick = &c;
+        const auto support=AnimationSupport(b,c.rig,s.partner.partner->weapon);
+        const auto previous=pick ? AnimationSupport(b,pick->rig,s.partner.partner->weapon) : 0;
+        if (!pick || support>previous || (support==previous &&
+            Distance(c.rig.pos, jack.pos) > Distance(pick->rig.pos, jack.pos))) pick = &c;
       }
       // The one-second retry may precede a full second of simulation samples
       // by one or two frames. Give a level-human copy source a bounded grace
@@ -1239,6 +1283,10 @@ void CensusAndSelect(PPCContext& ctx, uint8_t* b, uint32_t w) {
     return;
   }
   s.selected = selected; s.selected_generation = s.humans.at(selected.actor).generation;
+  s.animation = {};
+  s.requested_tuple = UINT32_MAX;
+  s.animation_shots = 0;
+  s.rate_base = b; s.rate_layer = selected.layer; s.saved_rate = b[selected.layer+2]; s.playback_rate = s.saved_rate;
   if (s.selected_copy) { s.action = selected.action; s.item = selected.item; }
   if (Opt().partner) {
     s.observed_motion.clear();
@@ -1376,18 +1424,46 @@ void PartnerBodyAfterAi(PPCContext& ctx, uint8_t* b, uint32_t w) {
         s.epoch, XYZ(rig.pos), XYZ({p.x, p.y, p.z}));
     s.desired = {step->target.x, step->target.y, step->target.z};
     s.facing = {std::cos(p.facing), std::sin(p.facing), 0};
-    const auto choice = coop::puppet::ChooseAction(p.speed, s.observed_motion, s.selected_copy);
+    s.animation.Update(p,s.dt);
+    if (s.animation.new_shot) ++s.animation_shots;
+    const bool log_shot = s.animation_shots <= 8 || s.animation_shots%60 == 0;
+    auto choice = coop::puppet::ChooseAction(s.animation.moving ? s.animation.speed : 0, s.observed_motion);
+    const bool human = !s.humans.at(rig.actor).other_human && Load32(b,rig.vars) == 0;
+    const auto held=human ? BodyWeapon(b,rig) : 0;
+    const auto weapon=held>=1 && held<=4 ? uint8_t(held) : s.animation.fire_left>0 ? p.fire_weapon : p.weapon;
+    const auto native = coop::puppet::HumanAction(weapon,
+        s.animation.moving,p.crouched,s.animation.fire_left > 0);
+    const auto native_item = human ? LoadedItem(b,rig,native) : std::nullopt;
+    if (human && s.animation.new_shot && log_shot && !native_item)
+      REXLOG_INFO("PUPPET firing unavailable actor={:08X} weapon={} fire={} requested-action={} reason=clip-not-loaded-on-this-rig",
+          rig.actor,p.fire_weapon,p.fire,native);
+    if (native_item)
+      choice = coop::puppet::Action{native,*native_item,s.animation.moving && s.animation.fire_left <= 0 ? 2.f : 0.f};
+    // Tier C may be a copy of Jack's first-person rig. Its loaded bank can
+    // replay the peer's arms actions, but it cannot acquire missing leg clips.
+    Rig jack_bank;
+    if (s.selected_copy && !human && p.item == 0 && ReadRig(b,s.hero,jack_bank) &&
+        rig.table == jack_bank.table && LoadedAction(b,rig,p.action))
+      choice = coop::puppet::Action{p.action,0,0};
+    if (choice && !LoadedAction(b,rig,choice->action,choice->item)) choice.reset();
     if (choice) {
       s.action = choice->action; s.item = choice->item;
-      s.transition_pending = rig.action != s.action || rig.item != s.item;
+      const uint32_t tuple = (s.action<<8)|s.item;
+      const bool changed = tuple != s.requested_tuple;
+      s.transition_pending = changed;
+      s.requested_tuple = tuple;
       s.missing_action_kind = 0;
-      if (s.transition_pending) REXLOG_INFO("PUPPET partner action={} item={} speed={:.3f} restart=0",
-          s.action, s.item, p.speed);
+      // The engine stores frames/second in layer+2 (826A9338, 826A93BC).
+      // Scale a proven gait instead of restarting it for every pose packet.
+      s.playback_rate = s.animation.moving && choice->speed > .1f ?
+          uint8_t(std::clamp(std::lround(60*s.animation.speed/choice->speed),15l,150l)) : 60;
+      if (s.transition_pending) REXLOG_INFO("PUPPET partner action={} item={} speed={:.3f} moving={} weapon={} body-weapon={} crouch={} fire={} restart=0 copy={} pitch={:.3f}",
+          s.action, s.item, s.animation.speed,s.animation.moving,p.weapon,held,p.crouched,p.fire,s.selected_copy,p.pitch);
     } else {
-      s.action = rig.action; s.item = rig.item; s.transition_pending = false;
+      s.action = rig.action; s.item = rig.item; s.transition_pending = false; s.requested_tuple = UINT32_MAX;
       const unsigned kind = std::abs(p.speed) < coop::puppet::kIdleSpeed ? 1 : 2;
       if (s.missing_action_kind != kind) REXLOG_INFO("PUPPET partner keep-current reason={} motion={} action={} item={}",
-          s.selected_copy ? "native-copy-tuple-not-requalified" : "no-observed-action",
+          "no-loaded-native-or-observed-action",
           std::abs(p.speed) < coop::puppet::kIdleSpeed ? "idle" : "moving", s.action, s.item);
       s.missing_action_kind = kind;
     }
@@ -1420,14 +1496,17 @@ void PartnerBodyAfterAi(PPCContext& ctx, uint8_t* b, uint32_t w) {
     if (!s.Validate(b, w, rig)) return;
     set(__imp__sub_82401AA8, xyz);
     if (!s.Validate(b, w, rig)) return;
-    // No forced restart. Request only an actual transition; keep normal skinning.
+    // Native H shooting keeps its state playing (826F4C88). Repeated network
+    // rounds extend that state, never reset the clip to its first frame.
     if (s.transition_pending) {
-      ctx.r3.u64 = rig.actor; ctx.r4.u64 = s.action; ctx.r5.u64 = s.item; ctx.r6.u64 = 0;
+      ctx.r3.u64 = rig.actor; ctx.r4.u64 = s.action; ctx.r5.u64 = s.item;
+      ctx.r6.u64 = 0;
       __imp__sub_82850100(ctx, b);
       s.transition_pending = false;
     }
   }
   if (!s.Validate(b, w, rig)) return;
+  if (Opt().partner && rig.layer == s.rate_layer) b[rig.layer+2] = s.playback_rate;
   // A requested action can take a few frames to show, and the rig may refuse one: never drop the body for it
   // (Claude, run c08 14:49: released after 1 update). Log, then follow what the rig really plays.
   if (rig.action != s.action || rig.item != s.item) {
@@ -1493,8 +1572,9 @@ void PartnerBodyLateWorld(PPCContext& ctx, uint8_t* b, uint32_t w) {
                 Distance(s.desired, rig.pos), s.max_late_error, s.max_forward_error);
     if (OffsetSpawn()) REXLOG_INFO("PUPPET spawn offset driving epoch={} updates={} game-frame={} target={} late-error={:.6f}",
         s.epoch, s.updates, s.frame, XYZ(s.desired), Distance(s.desired, rig.pos));
-    else if (Opt().partner) REXLOG_INFO("PUPPET partner driving epoch={} updates={} game-frame={} speed={:.3f} remote-action={} remote-item={} late-error={:.6f} late-z-error={:.6f} large-late-error={}",
+    else if (Opt().partner) REXLOG_INFO("PUPPET partner driving epoch={} updates={} game-frame={} speed={:.3f} remote-action={} remote-item={} vx={:.3f} vy={:.3f} gait-speed={:.3f} rate={} weapon={} fire={} late-error={:.6f} late-z-error={:.6f} large-late-error={}",
         s.epoch, s.updates, s.frame, s.partner.partner->speed, s.partner.partner->action, s.partner.partner->item,
+        s.partner.partner->vx,s.partner.partner->vy,s.animation.speed,s.playback_rate,s.partner.partner->weapon,s.partner.partner->fire,
         Distance(s.desired, rig.pos), std::abs(s.desired.z-rig.pos.z), Distance(s.desired, rig.pos) > .25f);
   }
   if (s.finish_pending) {
@@ -1609,6 +1689,16 @@ void PartnerBodyTriggerReference(const uint8_t* b, uint32_t record) {
     s.story_cooldown[s.selected.actor] = Clock::now() + std::chrono::seconds(3);
     s.Abort("live-trigger-or-stimulus-reference");
   }
+}
+bool PartnerBodySuppressShot(const uint8_t* b) {
+  const auto& s=Get();
+  const auto actor=Load32(b,0x82CCBF6C), ai=Load32(b,0x82CCBF64);
+  for (const auto& copy:s.spawned)
+    if (actor==copy.rig.actor && ai==copy.rig.ai && SpawnIdentity(b,copy)) return true;
+  return Opt().partner && s.driving && s.Environment(b,s.world) &&
+      actor==s.selected.actor && ai==s.selected.ai &&
+      Ptr(b,ai,64,8)==s.selected.vars && Ptr(b,actor,20,16)==s.selected.rig &&
+      Ptr(b,s.selected.rig,0,176)==s.selected.anim;
 }
 uint32_t PartnerBodyCombatActor(const uint8_t* b) {
   const auto& s = Get();
