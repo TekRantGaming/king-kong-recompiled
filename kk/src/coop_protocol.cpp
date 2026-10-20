@@ -125,6 +125,13 @@ uint64_t SessionSaveHash(std::span<const uint8_t> bytes) {
 }
 bool IsFlowMessage(MessageType t) { return (t >= MessageType::SessionStart && t <= MessageType::FlowAbort) || IsLifeMessage(t); }
 bool ValidStoryEvent(const StoryEvent& e) {
+  if (e.phase>=StoryPhase::SnapshotRequest && e.phase<=StoryPhase::SnapshotEnd) {
+    if (!e.generation || !e.level || e.level>100000 || !e.number || !e.source || !e.script ||
+        !e.run || e.record>kStoryRecords) return false;
+    if (StorySnapshotEntry(e.phase)) return true;
+    return e.run==1 && e.record==0 && e.script<=kStorySnapshotScripts+1 &&
+        (e.phase!=StoryPhase::SnapshotRequest || e.script==1);
+  }
   return e.generation && e.level && e.level <= 100000 && e.number && e.source && e.script &&
       e.run && e.record <= kStoryRecords && e.phase >= StoryPhase::Armed && e.phase <= StoryPhase::Checksum &&
       ((e.phase == StoryPhase::Armed || e.phase == StoryPhase::Started) ? e.record == kStoryRecords : true) &&
@@ -205,7 +212,8 @@ bool Encode(const Message& m, std::vector<uint8_t>& out) {
   Writer payload;
   switch (m.type) {
     case MessageType::StoryEvent: case MessageType::TriggerRequest:
-      if (!ValidStoryEvent(m.story) || (m.type == MessageType::TriggerRequest && !ValidStoryRequest(m.story.phase))) return false;
+      if (!ValidStoryEvent(m.story) || (m.type == MessageType::TriggerRequest && !ValidStoryRequest(m.story.phase)) ||
+          (m.type == MessageType::StoryEvent && m.story.phase==StoryPhase::SnapshotRequest)) return false;
       payload.U(m.story.generation,4); payload.U(m.story.level,4); payload.U(m.story.number,4);
       payload.U(m.story.source,8); payload.U(m.story.script,8);
       payload.U(m.story.run,4); payload.U(m.story.record,4); payload.U(uint8_t(m.story.phase),1); break;
@@ -352,7 +360,8 @@ bool Decode(std::span<const uint8_t> bytes, Message& out) {
       m.story.generation=uint32_t(r.U(4)); m.story.level=uint32_t(r.U(4)); m.story.number=uint32_t(r.U(4));
       m.story.source=r.U(8); m.story.script=r.U(8);
       m.story.run=uint32_t(r.U(4)); m.story.record=uint32_t(r.U(4)); m.story.phase=StoryPhase(r.U(1));
-      if (!ValidStoryEvent(m.story) || (m.type == MessageType::TriggerRequest && !ValidStoryRequest(m.story.phase))) return false;
+      if (!ValidStoryEvent(m.story) || (m.type == MessageType::TriggerRequest && !ValidStoryRequest(m.story.phase)) ||
+          (m.type == MessageType::StoryEvent && m.story.phase==StoryPhase::SnapshotRequest)) return false;
       break;
     case MessageType::OwnershipChange:
       m.ownership.world = ReadWorld(r); m.ownership.phase = OwnershipPhase(r.U(1));

@@ -47,6 +47,7 @@ struct Script : story::Progress {
   story::Lag lag;
   bool exact=false;
   bool saw_detect=false, saw_loop=false;
+  std::deque<StoryEvent> restore;
 };
 std::map<uint32_t,Script> scripts;
 std::map<uint64_t,uint32_t> runs;
@@ -62,6 +63,12 @@ uint32_t checksum_actor=0;
 bool checksum_sweep=false;
 unsigned request_count=0;
 bool host=false, failed=false, disconnected=false, recovery_pending=false;
+story::Snapshot snapshot;
+std::deque<StoryEvent> snapshot_out;
+std::vector<StoryEvent> snapshot_unresolved;
+uint64_t snapshot_token=0;
+double snapshot_deadline=0,last_snapshot_request=-10,snapshot_recovery_time=0;
+bool snapshot_waiting=false;
 std::atomic<bool> behind{false};
 std::atomic<bool> needs_move{false};
 uint32_t waiting_number=0;
@@ -213,6 +220,8 @@ void World(const FlowView& v,uint64_t session_epoch) {
     waiting_number=0; waiting_since=0;
     request_count=0; request_window=next_census=0;
     checksums={}; next_checksum=Now()+3; checksum_actor=0; checksum_sweep=false;
+    snapshot={}; snapshot_out.clear(); snapshot_unresolved.clear(); snapshot_token=0;
+    snapshot_waiting=false; snapshot_deadline=snapshot_recovery_time=0; last_snapshot_request=-10;
   }
 }
 bool Ensure(uint8_t* b) {
@@ -225,7 +234,7 @@ bool Ensure(uint8_t* b) {
   const auto link=EnemyLinkSnapshot();
   if (!link.epoch) return false;
   World(v,link.epoch);
-  if (SessionPrivateReload() && !failed) Refuse("private reload has no story snapshot");
+  if (SessionPrivateReload() && host && !failed) Refuse("host private reload has no authority snapshot");
   if (!link.connected && link.SessionConnected()) {
     static unsigned logged=0;
     if (logged++<4) REXLOG_INFO("KK co-op story: stale enemy snapshot, session connected; retaining continuity generation {} level {}",
@@ -334,10 +343,107 @@ bool ReplaySafe(const uint8_t* b,const Script& s,uint32_t index) {
 }
 void Native(Script& s,const StoryEvent& e,const char* reason) {
   s.exact=false;
+  if (!e.number) s.restore.clear(); // A failed bounded restore retains the C24 recovery offer.
   Note("native fallback",e,reason);
 }
 void Converge(Script& s) {
   s.hints.Converge(s,[](const StoryEvent& e){ Note("native hint converged",e); });
+}
+void RequestSnapshot() {
+  if (host || request_number==UINT32_MAX || snapshot_token==UINT64_MAX || outgoing.size()>=kStoryQueue) {
+    Refuse("private snapshot request unavailable"); return;
+  }
+  ++snapshot_token; snapshot.Request(generation,level,snapshot_token);
+  snapshot_unresolved.clear();
+  snapshot_waiting=true; snapshot_deadline=Now()+30;
+  failed=false; behind=needs_move=false; ordered.Reset(generation,level);
+  StoryEvent e{generation,level,++request_number,snapshot_token,1,1,0,StoryPhase::SnapshotRequest};
+  Message m; m.type=MessageType::TriggerRequest; m.epoch=epoch; m.story=e;
+  outgoing.push_back(m); Flush();
+  REXLOG_INFO("KK co-op story: private snapshot requested generation {} level {} token {}",generation,level,snapshot_token);
+}
+void CaptureSnapshot(const uint8_t* b,const StoryEvent& request) {
+  unsigned safe=0;
+  for (const auto& [actor,s] : scripts) {
+    const auto* bind=story::Match(s.binding.source,s.binding.script,bindings);
+    if (!bind || bind->actor!=actor || Vars(b,bind->ai,19824)!=bind->vars || Shape(b,bind->vars)!=bind->script) continue;
+    const auto index=Load32(b,bind->vars+19812);
+    if (index>kStoryRecords || !s.run) continue;
+    const auto phase=Tracks(b,bind->ai,kLoop) ? StoryPhase::SnapshotLoop :
+        s.finished>=s.run ? StoryPhase::SnapshotFinished : StoryPhase::SnapshotIdle;
+    snapshot_out.push_back(Event(s,phase,index));
+    if (s.exact && SafeRequest(b,s)) ++safe;
+  }
+  StoryEvent marker{generation,level,0,request.source,snapshot_out.size()+1,1,0,StoryPhase::SnapshotBegin};
+  snapshot_out.push_front(marker); marker.phase=StoryPhase::SnapshotEnd; snapshot_out.push_back(marker);
+  REXLOG_INFO("KK co-op story: snapshot captured scripts={} replay-safe={} token={} generation={} level={}",marker.script-1,safe,request.source,generation,level);
+}
+void PumpSnapshot() {
+  for (unsigned budget=0;host && !snapshot_out.empty() && budget<16 && outgoing.size()<kStoryQueue/2;++budget) {
+    if (!Emit(snapshot_out.front())) break;
+    snapshot_out.pop_front();
+  }
+}
+bool SnapshotReached(const uint8_t* b,const Script& s,const StoryEvent& e) {
+  if (s.run>e.run) return true;
+  if (s.run!=e.run || Load32(b,s.binding.vars+19812)<e.record) return false;
+  if (e.phase==StoryPhase::SnapshotFinished) return s.finished>=e.run;
+  return s.started>=e.run || s.finished>=e.run;
+}
+void RestoreSnapshot(uint8_t* b) {
+  snapshot_waiting=false; failed=false; behind=needs_move=false;
+  snapshot_recovery_time=Now()+20;
+  unsigned restored=0,matched=0;
+  for (const auto& [identity,e] : snapshot.Entries()) {
+    const auto* bind=story::Match(e.source,e.script,bindings);
+    if (!bind || Vars(b,bind->ai,19824)!=bind->vars || Shape(b,bind->vars)!=e.script) {
+      snapshot_unresolved.push_back(e); continue;
+    }
+    ++matched;
+    auto& s=scripts.at(bind->actor); s.restore.clear(); s.lag={};
+    const auto index=Load32(b,bind->vars+19812);
+    if (index>kStoryRecords) { snapshot_unresolved.push_back(e); continue; }
+    const bool looping=Tracks(b,bind->ai,kLoop);
+    if (e.phase==StoryPhase::SnapshotIdle) {
+      if (!looping) { s.run=e.run; runs[e.source]=e.run; s.record=index; }
+      continue;
+    }
+    // Metadata activation counters restart on a private native load. Align
+    // the currently running local program, never rewind its native record.
+    if (looping || (e.phase==StoryPhase::SnapshotFinished && index==e.record && !Load32(b,bind->vars+924+180*index))) {
+      s.run=e.run; s.started=e.run; s.record=index; runs[e.source]=s.run;
+      if (!looping) s.finished=e.run;
+    }
+    if (SnapshotReached(b,s,e)) continue;
+    snapshot_unresolved.push_back(e);
+    s.hints.Remember(e);
+    // Only the existing all-safe Jack/door/activation chain can be replayed.
+    // Mixed actions, NPC messages, inventory, combat and cinematics stay native.
+    if (!s.exact || !SafeRequest(b,s) || (looping && index>e.record)) continue;
+    const auto add=[&](StoryPhase phase,uint32_t record) {
+      auto replay=e; replay.number=0; replay.phase=phase; replay.record=record; s.restore.push_back(replay);
+    };
+    uint32_t first=index;
+    if (!looping) {
+      s.run=e.run-1; s.record=0; runs[e.source]=s.run; first=0;
+      add(StoryPhase::Armed,kDetectRecord); add(StoryPhase::Started,kDetectRecord);
+    }
+    for (auto i=first;i<e.record;++i) add(StoryPhase::Advance,i);
+    if (e.phase==StoryPhase::SnapshotFinished) add(StoryPhase::Finished,e.record);
+    if (!s.restore.empty()) ++restored;
+  }
+  REXLOG_INFO("KK co-op story: private snapshot complete scripts={} matched={} safe-replays={} unresolved={} token={}; native gaps retain Recover checkpoint",
+      snapshot.Entries().size(),matched,restored,snapshot_unresolved.size(),snapshot_token);
+  // Give ordinary native execution/replay the same twenty-second grace as
+  // checksum convergence before offering a shared checkpoint to the player.
+}
+void SnapshotProgress(uint8_t* b) {
+  const auto before=snapshot_unresolved.size();
+  std::erase_if(snapshot_unresolved,[&](const auto& e) {
+    const auto* bind=story::Match(e.source,e.script,bindings);
+    return bind && Vars(b,bind->ai,19824)==bind->vars && Shape(b,bind->vars)==bind->script && SnapshotReached(b,scripts.at(bind->actor),e);
+  });
+  if (before && snapshot_unresolved.empty()) REXLOG_INFO("KK co-op story: private snapshot fully converged token={} generation={} level={}",snapshot_token,generation,level);
 }
 bool NativeInside(PPCContext& ctx,uint8_t* b,uint32_t volume,const PlayerPose& pose) {
   // 82847478 only reads volume flags, bound data, and the second object's XYZ.
@@ -376,6 +482,13 @@ bool For(const StoryEvent* e,const Script& s,StoryPhase phase) {
 }
 void Applied(const StoryEvent& e) {
   if (e.phase!=StoryPhase::Checksum) Note("applied",e);
+  if (!e.number) {
+    if (const auto* bind=story::Match(e.source,e.script,bindings)) {
+      auto& replay=scripts.at(bind->actor).restore;
+      if (!replay.empty() && replay.front()==e) replay.pop_front();
+    }
+    return;
+  }
   ordered.Applied(Now());
 }
 void OrderedFailure(uint8_t* b) {
@@ -403,6 +516,14 @@ void ChecksumFrame(uint8_t* b,double now) {
       const auto* front=ordered.Front();
       if (!front) break;
       const auto e=*front;
+      if (StorySnapshotEntry(e.phase)) {
+        if (!snapshot_waiting || !snapshot.Add(e)) { Refuse("invalid private snapshot entry",e); break; }
+        ordered.Applied(now); continue;
+      }
+      if (e.phase==StoryPhase::SnapshotEnd) {
+        if (!snapshot_waiting || !snapshot.End(e)) { Refuse("incomplete private snapshot",e); break; }
+        ordered.Applied(now); RestoreSnapshot(b); continue;
+      }
       const auto* bind=story::Match(e.source,e.script,bindings);
       if (!bind || Vars(b,bind->ai,19824)!=bind->vars || Shape(b,bind->vars)!=bind->script) {
         Note("hint identity unavailable",e,"native continues; no comparable checksum");
@@ -414,7 +535,7 @@ void ChecksumFrame(uint8_t* b,double now) {
         ordered.Applied(now); continue;
       }
       if (e.phase!=StoryPhase::Checksum) {
-        if (s.exact) {
+        if (s.exact && !snapshot_waiting) {
           if (waiting_number!=e.number) { waiting_number=e.number; waiting_since=now; }
           if (now-waiting_since<=5) break;
           Native(s,e,"exact hook did not progress; allow native scheduling before comparing checksums");
@@ -423,6 +544,7 @@ void ChecksumFrame(uint8_t* b,double now) {
         s.hints.Remember(e); Converge(s);
         ordered.Applied(now); continue;
       }
+      if (snapshot_waiting) { ordered.Applied(now); continue; }
       auto reply=e; reply.run=s.run; reply.record=Load32(b,bind->vars+19812);
       if (!ValidStoryEvent(reply) || outgoing.size()>=kStoryQueue) break;
       Message m; m.type=MessageType::TriggerRequest; m.epoch=epoch; m.story=reply;
@@ -482,8 +604,9 @@ void StoryLoaded(uint8_t* b) {
   World(v,session_epoch);
   for (auto& [actor,s] : scripts) FinishRequest(s,"request refused","level load invalidated request");
   if (last_loaded==v.world.generation) {
-    recovery_pending=true;
     scripts.clear(); bindings.clear(); next_census=0;
+    if (!host) { runs.clear(); Census(b); RequestSnapshot(); }
+    else recovery_pending=true;
     return;
   }
   last_loaded=v.world.generation;
@@ -503,6 +626,9 @@ void StoryGameFrame(uint8_t* b) {
     return;
   }
   const double now=Now();
+  if (snapshot_waiting && now>snapshot_deadline) {
+    snapshot_waiting=false; Refuse("private snapshot timed out; Recover checkpoint required");
+  }
   if (recovery_pending) {
     recovery_pending=false;
     Refuse("private load or reconnect requires shared checkpoint recovery");
@@ -516,7 +642,22 @@ void StoryGameFrame(uint8_t* b) {
     if ((host && m.type!=MessageType::TriggerRequest) || (!host && m.type!=MessageType::StoryEvent)) {
       Note(host ? "request refused" : "refused",e,"wrong direction"); continue;
     }
-    if (!host) { if (ordered.Push(e,now)) Note("received",e); continue; }
+    if (!host) {
+      if (e.phase==StoryPhase::SnapshotBegin) {
+        if (snapshot_waiting && snapshot.Begin(e) && ordered.ResumeAfter(e)) Note("private snapshot begin",e);
+        else Note("private snapshot ignored",e,"unsolicited, duplicate or stale token");
+        continue;
+      }
+      if (snapshot_waiting && !snapshot.Receiving()) continue;
+      if (ordered.Push(e,now)) Note("received",e);
+      continue;
+    }
+    if (e.phase==StoryPhase::SnapshotRequest) {
+      if (e.number<=last_request || now-last_snapshot_request<3 || !snapshot_out.empty()) {
+        Note("request refused",e,"duplicate, rate-limited or snapshot already pending"); continue;
+      }
+      last_request=e.number; last_snapshot_request=now; CaptureSnapshot(b,e); continue;
+    }
     if (e.phase==StoryPhase::Checksum) {
       const auto result=checksums.Compare(e);
       if (result==story::Checksums::Result::Mismatch) {
@@ -539,7 +680,7 @@ void StoryGameFrame(uint8_t* b) {
   }
   if (host) for (auto& [actor,s] : scripts) if (s.request && now>s.request_until)
     FinishRequest(s,"request refused","script not scheduled before request deadline");
-  ChecksumFrame(b,now);
+  PumpSnapshot(); ChecksumFrame(b,now);
   if (!host && SessionFlowSnapshot().phase==FlowPhase::Playing) {
     // Present heads are consumed as hints or given a native fallback above.
     // Only a genuine reliable-delivery gap uses Ordered's short deadline.
@@ -552,7 +693,8 @@ void StoryGameFrame(uint8_t* b) {
       move|=stage==story::Lag::Stage::Move;
       reload|=stage==story::Lag::Stage::Reload;
     }
-    needs_move=move; behind=failed || reload;
+    SnapshotProgress(b);
+    needs_move=move; behind=failed || reload || (!snapshot_unresolved.empty() && now>snapshot_recovery_time);
   }
   Flush();
 }
@@ -560,6 +702,7 @@ void StoryGameFrame(uint8_t* b) {
 // Return true when co-op handled this call, including a suppressed local advance.
 bool StoryDetect(PPCContext& ctx,uint8_t* b) {
   if (!Ensure(b)) return false;
+  if (!host && snapshot_waiting) return false;
   auto* s=ObservedScript(b);
   if (!s) return false; // Unknown scripts retain native behavior.
   if (!s->saw_detect) { s->saw_detect=true; Note("native detect scheduled",Event(*s,StoryPhase::Armed,kDetectRecord)); }
@@ -602,7 +745,7 @@ bool StoryDetect(PPCContext& ctx,uint8_t* b) {
   }
   ctx.r3.u32=0;
   if (failed || ordered.Behind()) return true;
-  const auto* front=ordered.Front();
+  const auto* front=s->restore.empty() ? ordered.Front() : &s->restore.front();
   if (For(front,*s,StoryPhase::Armed)) {
     const auto e=*front;
     if (!story::DetectIdle(before) || e.run!=s->run+1 || Load32(b,vars+20)!=kPivot || !HeroPivot(b,vars+88) || Load32(b,vars+8)) {
@@ -626,6 +769,7 @@ bool StoryDetect(PPCContext& ctx,uint8_t* b) {
 
 bool StoryLoop(PPCContext& ctx,uint8_t* b) {
   if (!Ensure(b)) return false;
+  if (!host && snapshot_waiting) return false;
   auto* s=ObservedScript(b);
   if (!s) return false;
   if (!s->saw_loop) { s->saw_loop=true; Note("native loop scheduled",Event(*s,StoryPhase::Advance,Load32(b,s->binding.vars+19812))); }
@@ -652,7 +796,7 @@ bool StoryLoop(PPCContext& ctx,uint8_t* b) {
   // Reproduce only the documented SSLoop record bookkeeping. Never invoke an
   // address from the packet; all calls below are fixed, locally validated natives.
   for (unsigned budget=0;budget<kStoryRecords;++budget) {
-    const auto* front=ordered.Front();
+    const auto* front=s->restore.empty() ? ordered.Front() : &s->restore.front();
     if (!front || front->source!=s->binding.source || front->script!=s->binding.script || !story::LoopEvent(*front)) break;
     const auto e=*front;
     const auto index=Load32(b,vars+19812);

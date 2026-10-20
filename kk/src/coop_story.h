@@ -41,6 +41,8 @@ struct Progress : Cursor {
       case StoryPhase::Started: return started>=e.run;
       case StoryPhase::Advance: return record>e.record;
       case StoryPhase::Finished: return finished>=e.run;
+      case StoryPhase::SnapshotLoop: return started>=e.run && record>=e.record;
+      case StoryPhase::SnapshotFinished: return finished>=e.run;
       default: return false;
     }
   }
@@ -60,7 +62,7 @@ class Hints {
   bool Passed(uint32_t run,uint32_t record) const {
     for (const auto& e : pending_) if (e.run==run &&
         ((e.phase==StoryPhase::Advance && e.record==record) ||
-         (e.phase==StoryPhase::Finished && e.record>record))) return true;
+         ((e.phase==StoryPhase::Finished || StorySnapshotEntry(e.phase)) && e.record>record))) return true;
     return false;
   }
  private:
@@ -140,6 +142,37 @@ inline uint64_t Source(uint64_t script, float x, float y, float z) {
   return script && position ? enemies::Mix(position, script) : 0;
 }
 struct Binding { uint64_t source=0, script=0; uint32_t actor=0, ai=0, vars=0; };
+// A private reload accepts one complete, token-scoped host cursor census.
+// Partial/duplicate/mixed censuses never modify native scripts.
+class Snapshot {
+ public:
+  void Request(uint32_t generation,uint32_t level,uint64_t token) {
+    *this={}; generation_=generation; level_=level; token_=token;
+  }
+  bool Begin(const StoryEvent& e) {
+    if (!Marker(e,StoryPhase::SnapshotBegin) || begun_) return false;
+    expected_=uint32_t(e.script-1); begun_=true; return true;
+  }
+  bool Add(const StoryEvent& e) {
+    if (!begun_ || complete_ || !Scope(e) || !StorySnapshotEntry(e.phase) || entries_.size()>=expected_) return false;
+    return entries_.emplace(std::pair(e.source,e.script),e).second;
+  }
+  bool End(const StoryEvent& e) {
+    if (!begun_ || complete_ || !Marker(e,StoryPhase::SnapshotEnd) ||
+        e.script!=uint64_t(expected_)+1 || entries_.size()!=expected_) return false;
+    complete_=true; return true;
+  }
+  bool Complete() const { return complete_; }
+  bool Receiving() const { return begun_ && !complete_; }
+  const auto& Entries() const { return entries_; }
+ private:
+  bool Scope(const StoryEvent& e) const { return ValidStoryEvent(e) && e.generation==generation_ && e.level==level_; }
+  bool Marker(const StoryEvent& e,StoryPhase phase) const { return Scope(e) && token_ && e.phase==phase && e.source==token_; }
+  uint32_t generation_=0,level_=0,expected_=0;
+  uint64_t token_=0;
+  bool begun_=false,complete_=false;
+  std::map<std::pair<uint64_t,uint64_t>,StoryEvent> entries_;
+};
 inline const Binding* Match(uint64_t source, uint64_t script, std::span<const Binding> bindings) {
   const Binding* found=nullptr;
   for (const auto& b : bindings) if (b.source==source && b.script==script) {
@@ -173,6 +206,10 @@ class Ordered {
     }
   }
   void Reset(uint32_t generation, uint32_t level) { *this={}; generation_=generation; level_=level; }
+  bool ResumeAfter(const StoryEvent& boundary) {
+    if (!ValidStoryEvent(boundary) || boundary.phase!=StoryPhase::SnapshotBegin || boundary.number==UINT32_MAX) return false;
+    Reset(boundary.generation,boundary.level); next_=boundary.number+1; return true;
+  }
   bool Push(const StoryEvent& e, double now) {
     if (!ValidStoryEvent(e) || !std::isfinite(now) || now<0) return false;
     if (e.generation!=generation_ || e.level!=level_ || e.number<next_) return false;

@@ -238,7 +238,7 @@ void StoryOverMessages() {
   CoopSession host({true,Role::Host,12345,Compatible()},at),guest({true,Role::Guest,0,Compatible()},bt);
   for (unsigned i=0;i<20;++i) { host.Tick(i*.01); guest.Tick(i*.01); }
   Check(host.State()==SessionState::Connected && guest.State()==SessionState::Connected,
-      "protocol 12 story session handshakes over Steam adapter");
+      "protocol 13 story session handshakes over Steam adapter");
   StoryMailbox h,g;
   uint32_t number=0;
   double now=.2;

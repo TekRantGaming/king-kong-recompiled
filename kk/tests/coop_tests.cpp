@@ -172,7 +172,7 @@ void Protocol() {
 void IntegratedMessageRouting() {
   Pair pair; pair.Pump(0,.2);
   Check(pair.host.State()==SessionState::Connected && pair.guest.State()==SessionState::Connected,
-      "protocol 12 integration handshake");
+      "protocol 13 integration handshake");
   const EnemyState enemy{{123,0,EnemyFamily::Raptor},1,2,3,0,50};
   Message ownership; ownership.type=MessageType::OwnershipChange; ownership.epoch=pair.host.Epoch();
   ownership.ownership={{101,1,1},OwnershipPhase::Prepare,1,EnemyOwner::Guest,enemy};

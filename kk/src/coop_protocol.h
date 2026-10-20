@@ -11,7 +11,7 @@
 
 namespace kk::coop {
 constexpr uint32_t kMagic = 0x4B4B4331;  // KKC1, network byte order throughout
-constexpr uint16_t kProtocolVersion = 13; // C54 preserves both native scorpion damage pools.
+constexpr uint16_t kProtocolVersion = 13; // C54 scorpion damage pools and private story cursor snapshots.
 constexpr size_t kMaxDisplayNameBytes = 32;
 // Valid UTF-8, no controls or invisible direction/line formatting, bounded at a codepoint.
 // Empty or wholly invalid input becomes "Partner". Never log the input or result.
@@ -34,8 +34,13 @@ enum class MessageType : uint16_t {
 // run/record on receipt. Native scripts may lag or lead that host boundary.
 // It never executes a native callback. Recovery is retained for old v11 codecs;
 // C46 uses persistent local checksum evidence and soft catch-up instead.
-enum class StoryPhase : uint8_t { Armed = 1, Started, Advance, Finished, Recovery, Checksum };
-constexpr uint32_t kStoryRecords = 104, kStoryQueue = 256;
+enum class StoryPhase : uint8_t { Armed = 1, Started, Advance, Finished, Recovery, Checksum,
+  SnapshotRequest, SnapshotBegin, SnapshotIdle, SnapshotLoop, SnapshotFinished, SnapshotEnd };
+// Snapshot markers reuse source as a private-load token and script as count+1
+// (Request uses script=1). Entries use the existing script identity/run/cursor.
+// Begin/entries/End share the host's ordered reliable stream, including any
+// native events emitted between bounded census batches. No callback is on wire.
+constexpr uint32_t kStoryRecords = 104, kStoryQueue = 256, kStorySnapshotScripts = 4096;
 struct StoryEvent {
   uint32_t generation = 0, level = 0, number = 0;
   uint64_t source = 0, script = 0;
@@ -45,7 +50,10 @@ struct StoryEvent {
 };
 bool ValidStoryEvent(const StoryEvent& event);
 inline bool ValidStoryRequest(StoryPhase phase) {
-  return phase == StoryPhase::Armed || phase == StoryPhase::Checksum;
+  return phase == StoryPhase::Armed || phase == StoryPhase::Checksum || phase == StoryPhase::SnapshotRequest;
+}
+inline bool StorySnapshotEntry(StoryPhase phase) {
+  return phase==StoryPhase::SnapshotIdle || phase==StoryPhase::SnapshotLoop || phase==StoryPhase::SnapshotFinished;
 }
 inline bool IsStoryMessage(MessageType t) {
   return t == MessageType::StoryEvent || t == MessageType::TriggerRequest;

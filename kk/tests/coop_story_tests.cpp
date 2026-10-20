@@ -308,6 +308,64 @@ void PersistentLagAndSoftFix() {
   Check(lag.Sample(authority,guest,std::numeric_limits<double>::quiet_NaN())==Stage::Waiting,
       "invalid timing evidence never escalates recovery");
 }
+StoryEvent Marker(StoryPhase phase,uint32_t number=100,uint64_t token=99,uint32_t count=2) {
+  return {2,203,number,token,phase==StoryPhase::SnapshotRequest ? 1ull : uint64_t(count)+1,1,0,phase};
+}
+void PrivateSnapshots() {
+  const auto begin=Marker(StoryPhase::SnapshotBegin);
+  auto a=Event(101,StoryPhase::SnapshotLoop); a.record=4;
+  auto b=a; b.number=102; ++b.source; b.phase=StoryPhase::SnapshotFinished; b.record=9;
+  auto idle=a; idle.phase=StoryPhase::SnapshotIdle;
+  const auto end=Marker(StoryPhase::SnapshotEnd,103);
+  for (const auto& e : {Marker(StoryPhase::SnapshotRequest),begin,idle,a,b,end}) {
+    auto m=Packet(e.phase==StoryPhase::SnapshotRequest ? MessageType::TriggerRequest : MessageType::StoryEvent);
+    m.story=e; const auto wire=Wire(m); Message decoded;
+    Check(wire.size()==kHeaderBytes+37 && Decode(wire,decoded) && decoded.story==e,"bounded snapshot phases preserve exact cursors and token");
+    for (size_t n=0;n<wire.size();++n) Check(!Decode(std::span(wire).first(n),decoded),"snapshot truncation refused");
+    m.type=m.type==MessageType::TriggerRequest ? MessageType::StoryEvent : MessageType::TriggerRequest;
+    std::vector<uint8_t> invalid; Check(!Encode(m,invalid),"snapshot requests and responses cannot reverse direction");
+  }
+  story::Snapshot snapshot; snapshot.Request(2,203,99);
+  auto wrong=begin; wrong.source=98;
+  Check(!snapshot.Begin(wrong) && !snapshot.Complete(),"stale private-load token cannot begin a snapshot");
+  Check(snapshot.Begin(begin) && !snapshot.Begin(begin),"one token accepts exactly one census begin");
+  Check(snapshot.Add(a) && !snapshot.Add(a) && !snapshot.End(end) && !snapshot.Complete(),"duplicate or partial census never commits");
+  wrong=b; wrong.level=204;
+  Check(!snapshot.Add(wrong) && snapshot.Add(b),"snapshot entries cannot cross levels");
+  wrong=end; wrong.script=2;
+  Check(!snapshot.End(wrong) && snapshot.End(end) && snapshot.Complete() && !snapshot.Add(b),"only exact complete count commits once");
+  snapshot.Request(2,203,100);
+  Check(!snapshot.Complete() && !snapshot.Begin(begin),"another private reload drops previous partial/native cursor evidence");
+  auto empty=Marker(StoryPhase::SnapshotBegin,200,100,0);
+  Check(snapshot.Begin(empty),"bounded empty census has explicit framing");
+  empty.phase=StoryPhase::SnapshotEnd; ++empty.number;
+  Check(snapshot.End(empty),"empty census still requires End");
+  wrong=begin; wrong.script=kStorySnapshotScripts+2;
+  Check(!ValidStoryEvent(wrong),"oversized script census refused by codec");
+  snapshot.Request(2,203,101);
+  const auto maximum=Marker(StoryPhase::SnapshotBegin,300,101,kStorySnapshotScripts);
+  Check(snapshot.Begin(maximum),"maximum census count is bounded explicitly");
+  for (uint32_t i=0;i<kStorySnapshotScripts;++i) {
+    auto entry=a; entry.source=i+1;
+    Check(snapshot.Add(entry),"maximum census stores each unique identity");
+  }
+  auto extra=a; extra.source=kStorySnapshotScripts+1;
+  Check(!snapshot.Add(extra),"census never exceeds declared storage bound");
+  auto maximum_end=maximum; maximum_end.phase=StoryPhase::SnapshotEnd;
+  Check(snapshot.End(maximum_end),"maximum census commits completely");
+  story::Ordered ordered; ordered.Reset(2,203);
+  Check(ordered.ResumeAfter(begin) && ordered.Next()==101 && !ordered.Push(Event(99),1),"snapshot boundary skips only pre-reload ordered history");
+  Check(ordered.Push(a,1) && ordered.Push(b,1) && ordered.Push(end,1),"new snapshot stream resumes contiguously");
+  for (unsigned n=0;n<3;++n) ordered.Applied(1.1);
+  Check(ordered.Next()==104 && !ordered.Behind(),"live hints continue after snapshot end without sequence gaps");
+  auto overflow=begin; overflow.number=UINT32_MAX;
+  Check(!ordered.ResumeAfter(overflow),"snapshot cannot wrap ordered event numbers");
+  story::Hints hints; hints.Remember(a);
+  Check(hints.Passed(a.run,3) && !hints.Passed(a.run,4) && !hints.Passed(a.run+1,3),"snapshot authorizes only passed records in the same activation");
+  story::Progress progress; progress.run=a.run; progress.started=a.run; progress.record=3;
+  Check(!progress.Reached(a),"cursor snapshot does not claim local callbacks already ran");
+  progress.record=4; Check(progress.Reached(a),"native or safe replay progress reaches the captured cursor");
+}
 struct Transport final : ICoopTransport {
   Transport* peer=nullptr;
   std::deque<std::vector<uint8_t>> incoming;
@@ -335,7 +393,7 @@ void TransportAndMailbox() {
   auto gc=hc; gc.role=Role::Guest; gc.epoch=0;
   CoopSession host(hc,ht),guest(gc,gt);
   for (int i=0;i<20;++i) { host.Tick(i*.01); guest.Tick(i*.01); }
-  Check(host.State()==SessionState::Connected && guest.State()==SessionState::Connected,"real v12 session handshake");
+  Check(host.State()==SessionState::Connected && guest.State()==SessionState::Connected,"real v13 session handshake");
   StoryMailbox hm,gm;
   Check(hm.Submit(Packet()),"host game-thread submits copied event");
   hm.Exchange(host); ht.blocked=true; host.Tick(.21); guest.Tick(.21); gm.Exchange(guest);
@@ -359,6 +417,14 @@ void TransportAndMailbox() {
   gm.Exchange(guest); guest.Tick(.233); host.Tick(.233); hm.Exchange(host);
   received=hm.Take(); Check(received.size()==1 && received[0].story.phase==StoryPhase::Armed && received[0].story.number==2,
       "host receives actual Armed request separately from phase-six diagnostic replies");
+  auto snapshot_request=Packet(MessageType::TriggerRequest); snapshot_request.story=Marker(StoryPhase::SnapshotRequest);
+  Check(gm.Submit(snapshot_request),"private snapshot request enters existing game-thread mailbox");
+  gm.Exchange(guest); guest.Tick(.234); host.Tick(.234); hm.Exchange(host);
+  received=hm.Take(); Check(received.size()==1 && received[0].story==snapshot_request.story,"host receives the private-load token reliably");
+  auto snapshot_begin=Packet(); snapshot_begin.story=Marker(StoryPhase::SnapshotBegin);
+  Check(hm.Submit(snapshot_begin),"host snapshot response uses normal authoritative stream");
+  hm.Exchange(host); host.Tick(.235); guest.Tick(.235); gm.Exchange(guest);
+  received=gm.Take(); Check(received.size()==1 && received[0].story==snapshot_begin.story,"snapshot boundary returns through real session and mailbox");
   Check(!host.QueueStory(request) && !guest.QueueStory(Packet()),"outgoing authority inversion rejected");
   auto wrong=Packet(); wrong.epoch=18; Check(!host.QueueStory(wrong),"outgoing stale epoch rejected");
   // Inject packets directly to ensure receive checks are independent of sender checks.
@@ -371,7 +437,7 @@ void TransportAndMailbox() {
   hm.Clear(); Check(hm.Submit(Packet()),"clear removes stale pending events");
   guest.End(.3); gm.Exchange(guest); Check(gm.Take().empty(),"disconnect clears mailbox");
   auto old=hc.compatibility; --old.protocol;
-  Check(CheckCompatibility(hc.compatibility,old)==RejectReason::Protocol,"v11 peers rejected at handshake");
+  Check(CheckCompatibility(hc.compatibility,old)==RejectReason::Protocol,"v12 peers rejected at handshake");
 }
 }
-int main() { Codec(); Ordering(); Requests(); Identity(); LoadBaselineAndChecksums(); LenientConvergence(); PersistentLagAndSoftFix(); TransportAndMailbox(); std::puts("co-op story tests passed"); }
+int main() { Codec(); Ordering(); Requests(); Identity(); LoadBaselineAndChecksums(); LenientConvergence(); PersistentLagAndSoftFix(); PrivateSnapshots(); TransportAndMailbox(); std::puts("co-op story tests passed"); }
