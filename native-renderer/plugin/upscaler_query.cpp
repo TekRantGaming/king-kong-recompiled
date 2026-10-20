@@ -5,6 +5,7 @@
 
 #include <algorithm>
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #include <mutex>
 #include <string>
@@ -35,6 +36,15 @@
 
 REXCVAR_DECLARE(std::string, native_backend);
 
+#if NR_GAME_RENDERER && NR_HAS_D3D12
+// Task 335: two players' launchers (Vulkan, NVIDIA) crashed in NVIDIA's Direct3D driver while this question's
+// Direct3D 12 device was being made beside the launcher's own presentation. The answer is kept, with the graphics
+// card, driver and renderer build it is for, and asked again only when one of them changes.
+REXCVAR_DEFINE_STRING(native_upscaler_query_saved, "", "Native renderer",
+                      "Internal: the last answer to the launcher's upscaler question and the graphics card, driver "
+                      "and renderer build it is for; asked again when one of them changes. Empty: asked again.");
+#endif
+
 namespace nr {
 
 namespace {
@@ -46,6 +56,63 @@ NrUpscalerSupport g_result = {};
 // Never destroyed: the process may end while it runs (the launcher's Quit); the game's start and
 // the launcher's restart wait for it (WaitUpscalerQuery).
 std::thread* g_thread = nullptr;
+
+#if NR_GAME_RENDERER && NR_HAS_D3D12
+std::string g_key;          // the card, driver and build of this question (SavedKey)
+bool g_save_pending = false;  // the thread's answer is still to go into native_upscaler_query_saved
+
+// What the answer depends on: the adapter the question uses (name, vendor and device id), its driver version
+// and this renderer's build (its own file's link time stamp: a new build asks again). Empty when unknown.
+std::string SavedKey() {
+  std::string name;
+  IDXGIAdapter1* adapter = ChosenD3D12Adapter(&name);
+  if (!adapter) return {};
+  DXGI_ADAPTER_DESC1 desc{};
+  LARGE_INTEGER driver{};
+  const bool have_desc = SUCCEEDED(adapter->GetDesc1(&desc));
+  const bool have_driver = SUCCEEDED(adapter->CheckInterfaceSupport(__uuidof(IDXGIDevice), &driver));
+  adapter->Release();
+  if (!have_desc || !have_driver) return {};
+  uint32_t stamp = 0;
+  HMODULE self = nullptr;
+  if (GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
+                         reinterpret_cast<LPCWSTR>(&SavedKey), &self) && self) {
+    const auto* dos = reinterpret_cast<const IMAGE_DOS_HEADER*>(self);
+    const auto* nt = reinterpret_cast<const IMAGE_NT_HEADERS*>(reinterpret_cast<const uint8_t*>(self) + dos->e_lfanew);
+    stamp = nt->FileHeader.TimeDateStamp;
+  }
+  for (char& c : name)
+    if (c == '|') c = ' ';
+  const auto n = static_cast<unsigned long long>(driver.QuadPart);
+  char key[512];
+  std::snprintf(key, sizeof(key), "%s/%04x:%04x/%llu.%llu.%llu.%llu/%08x", name.c_str(), desc.VendorId, desc.DeviceId,
+                n >> 48, (n >> 32) & 65535, (n >> 16) & 65535, n & 65535, stamp);
+  return key;
+}
+
+// native_upscaler_query_saved: "1|key|vendor|fsr3 fsr4 dlss xess (four 0/1 digits)|notes".
+std::string SavedText(const std::string& key, const NrUpscalerSupport& r) {
+  char head[64];
+  std::snprintf(head, sizeof(head), "|%x|%d%d%d%d|", r.vendor, r.fsr3 ? 1 : 0, r.fsr4 ? 1 : 0, r.dlss ? 1 : 0,
+                r.xess ? 1 : 0);
+  return "1|" + key + head + r.notes;
+}
+
+bool ReadSaved(const std::string& text, const std::string& key, NrUpscalerSupport* out) {
+  if (key.empty() || text.rfind("1|" + key + "|", 0) != 0) return false;
+  const size_t vendor_at = 3 + key.size();
+  const size_t flags_at = text.find('|', vendor_at);
+  if (flags_at == std::string::npos || text.size() < flags_at + 6 || text[flags_at + 5] != '|') return false;
+  const std::string flags = text.substr(flags_at + 1, 4);
+  if (flags.find_first_not_of("01") != std::string::npos) return false;
+  *out = {};
+  out->size = sizeof(*out);
+  out->vendor = uint32_t(std::strtoul(text.substr(vendor_at, flags_at - vendor_at).c_str(), nullptr, 16));
+  out->fsr3 = flags[0] == '1', out->fsr4 = flags[1] == '1', out->dlss = flags[2] == '1', out->xess = flags[3] == '1';
+  std::snprintf(out->notes, sizeof(out->notes), "%s", text.c_str() + flags_at + 6);
+  return true;
+}
+#endif
 
 #if NR_GAME_RENDERER && NR_HAS_D3D12
 
@@ -131,6 +198,10 @@ void Run() {
   REXLOG_INFO("rexgpu-native: upscalers this PC offers ({}, {}): FSR 3.1 {}, FSR 4 {}, DLSS {}, XeSS {}{}{}",
               adapter_name, "Direct3D 12", out.fsr3 ? "yes" : "no", out.fsr4 ? "yes" : "no",
               out.dlss ? "yes" : "no", out.xess ? "yes" : "no", notes.empty() ? "" : "; ", notes);
+  {
+    std::lock_guard lock(g_mutex);
+    g_save_pending = !g_key.empty();  // saved by the next caller (the settings are not this thread's)
+  }
   Finish(NR_UPSCALER_QUERY_DONE, out);
 }
 
@@ -147,13 +218,31 @@ uint32_t UpscalerQueryAnswer(NrUpscalerSupport* out, bool start) {
   if (!g_started && start) {
     g_started = true;
 #if NR_GAME_RENDERER && NR_HAS_D3D12
-    g_state = NR_UPSCALER_QUERY_RUNNING;
-    g_thread = new std::thread([] { Run(); });
+    g_key = SavedKey();
+    NrUpscalerSupport saved;
+    if (ReadSaved(REXCVAR_GET(native_upscaler_query_saved), g_key, &saved)) {
+      // Task 335: the same card, driver and build as the saved answer: no Direct3D 12 device in this process.
+      g_result = saved;
+      g_result.state = g_state = NR_UPSCALER_QUERY_DONE;
+      REXLOG_INFO("rexgpu-native: upscalers this PC offers ({}, Direct3D 12, saved answer for this graphics card, "
+                  "driver and build): FSR 3.1 {}, FSR 4 {}, DLSS {}, XeSS {}{}{}",
+                  g_key.substr(0, g_key.find('/')), saved.fsr3 ? "yes" : "no", saved.fsr4 ? "yes" : "no",
+                  saved.dlss ? "yes" : "no", saved.xess ? "yes" : "no", saved.notes[0] ? "; " : "", saved.notes);
+    } else {
+      g_state = NR_UPSCALER_QUERY_RUNNING;
+      g_thread = new std::thread([] { Run(); });
+    }
 #else
     REXLOG_INFO("rexgpu-native: upscaler query: this build has no temporal upscalers to offer");
     g_state = NR_UPSCALER_QUERY_OFF;
 #endif
   }
+#if NR_GAME_RENDERER && NR_HAS_D3D12
+  if (g_save_pending && g_state == NR_UPSCALER_QUERY_DONE) {
+    g_save_pending = false;
+    rex::cvar::SetFlagByName("native_upscaler_query_saved", SavedText(g_key, g_result));
+  }
+#endif
   if (out && out->size >= sizeof(NrUpscalerSupport)) {
     if (g_state == NR_UPSCALER_QUERY_DONE) {
       *out = g_result;

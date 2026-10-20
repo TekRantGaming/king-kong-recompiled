@@ -78,6 +78,11 @@ bool NativeRendererAvailable();
 // Selects the native plugin, normalizes legacy config, then applies startup recovery.
 std::string ApplyRendererChoice();
 
+// Task 335: the launcher's upscaler question (Display > Upscaling) answered before the launcher's window and
+// presentation exist, so its Direct3D 12 device is never made beside them. At once when the renderer kept the
+// answer for this graphics card, driver and build.
+void AskUpscalersBeforeWindow();
+
 // Creates the launcher dialog; it deletes itself when closed.
 void ShowLauncher(rex::ui::ImGuiDrawer* drawer, rex::ui::ImmediateDrawer* immediate,
                   LauncherPaths paths, LauncherCallbacks callbacks);

@@ -109,6 +109,10 @@ UpscalerChoices AskUpscalers(const char* entry) {
 }  // namespace
 
 UpscalerChoices QueryUpscalers() { return AskUpscalers("nr_upscaler_query"); }
+void WaitForUpscalers() {
+  using Wait = void (*)();
+  if (auto wait = reinterpret_cast<Wait>(FindExport("nr_upscaler_query_wait"))) wait();
+}
 UpscalerChoices PeekUpscalers() { return AskUpscalers("nr_upscaler_query_peek"); }
 
 std::string StutterLine() {

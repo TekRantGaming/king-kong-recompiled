@@ -35,6 +35,9 @@ struct UpscalerChoices {
   bool fsr3 = false, fsr4 = false, dlss = false, xess = false;
 };
 UpscalerChoices QueryUpscalers();
+// Returns once the question started by QueryUpscalers is answered (at once when it was never started or the
+// plugin kept the answer): task 335, the launcher asks before its window and presentation exist.
+void WaitForUpscalers();
 // The same answer without asking the question (the graphics panel, while the game's device exists): state 0
 // when the launcher did not ask it in this process.
 UpscalerChoices PeekUpscalers();

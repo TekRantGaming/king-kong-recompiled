@@ -218,20 +218,28 @@ void WriteThreadList(FILE* f, bool stacks = false) {
   struct Seen {
     DWORD id;
     DWORD64 rip;
+    DWORD64 start;  // task 335: where the thread began (which module made it), as Windows records it
     wchar_t name[64];
     std::vector<uint64_t> stack;
   };
   std::vector<Seen> threads;
   std::vector<uint64_t> copy(kStackBytes / 8);
+  using QueryThread = LONG(WINAPI*)(HANDLE, int, PVOID, ULONG, PULONG);
+  static const auto query_thread = reinterpret_cast<QueryThread>(
+      GetProcAddress(GetModuleHandleW(L"ntdll.dll"), "NtQueryInformationThread"));
   HANDLE snap = CreateToolhelp32Snapshot(TH32CS_SNAPTHREAD, 0);
   if (snap == INVALID_HANDLE_VALUE) return;
   THREADENTRY32 te{sizeof(te)};
   for (BOOL ok = Thread32First(snap, &te); ok; ok = Thread32Next(snap, &te)) {
     if (te.th32OwnerProcessID != GetCurrentProcessId() || te.th32ThreadID == GetCurrentThreadId()) continue;
-    HANDLE h = OpenThread(THREAD_SUSPEND_RESUME | THREAD_GET_CONTEXT | THREAD_QUERY_LIMITED_INFORMATION, FALSE,
-                          te.th32ThreadID);
+    HANDLE h = OpenThread(THREAD_SUSPEND_RESUME | THREAD_GET_CONTEXT | THREAD_QUERY_INFORMATION |
+                              THREAD_QUERY_LIMITED_INFORMATION, FALSE, te.th32ThreadID);
     if (!h) continue;
-    Seen s{te.th32ThreadID, 0, L"", {}};
+    Seen s{te.th32ThreadID, 0, 0, L"", {}};
+    if (query_thread) {
+      PVOID start = nullptr;  // ThreadQuerySetWin32StartAddress
+      if (query_thread(h, 9, &start, sizeof(start), nullptr) >= 0) s.start = reinterpret_cast<DWORD64>(start);
+    }
     size_t copied = 0;
     if (SuspendThread(h) != DWORD(-1)) {
       CONTEXT ctx{};
@@ -260,7 +268,12 @@ void WriteThreadList(FILE* f, bool stacks = false) {
   for (const Seen& s : threads) {
     wchar_t where[MAX_PATH + 64];
     DescribeAddress(reinterpret_cast<const void*>(s.rip), where, std::size(where));
-    std::fwprintf(f, L"  thread %5lu %-32ls %ls\n", s.id, s.name[0] ? s.name : L"", where);
+    wchar_t began[MAX_PATH + 64] = L"";
+    if (s.start) DescribeAddress(reinterpret_cast<const void*>(s.start), began, std::size(began));
+    if (began[0])
+      std::fwprintf(f, L"  thread %5lu %-32ls %ls (started at %ls)\n", s.id, s.name[0] ? s.name : L"", where, began);
+    else
+      std::fwprintf(f, L"  thread %5lu %-32ls %ls\n", s.id, s.name[0] ? s.name : L"", where);
     int shown = 0;
     for (uint64_t v : s.stack) {
       if (shown >= 12) break;
@@ -307,7 +320,8 @@ void WriteHangReport(ULONGLONG stalled_ms, bool startup = false) {
                      L"Please attach this file, the .dmp file next to it and logs\\king_kong.log to a bug report.\n\n"
                      L"Threads:\n");
     if (const char* api = ApiName()) std::fwprintf(f, L"Graphics API: %hs\n", api);
-    WriteThreadList(f, startup);
+    // Task 335: likely callers in every hang report (a Beta 13 freeze report had only each thread's wait call).
+    WriteThreadList(f, true);
     std::fputs("\n", f);
     WriteLogTail(f);
     std::fclose(f);
