@@ -6264,16 +6264,38 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
   }
 
   // Task 330: the game's start menu scene behind the launcher, when nothing needs the stills (menu_scene_logic.h).
-  void MaybeStartScene(bool before_first_frame) {
+  menu_scene::StartFacts SceneFacts() {
     menu_scene::StartFacts f;
     f.files_ok = files_ok_;
     f.native_renderer = NativeShaderPack::Wanted();
     f.shaders_prepared = ShadersPreparedForThisVersion();
     f.shader_job = native_pack_.Busy() || update_shaders_ || setup_shaders_ || rebuild_shaders_screen_;
-    f.setup = InSetup() || update_new_;
+    f.setup = InSetup() || update_new_ || ShaderScreen();
     f.low_end = Get("kk_hardware_tier") == "low";
-    if (menu_scene::DecideAtLauncherStart(f, paths_.user_dir) != menu_scene::Reason::kLive || !cb_.start_scene) return;
+    return f;
+  }
+  void MaybeStartScene(bool before_first_frame) {
+    const menu_scene::Reason r = menu_scene::DecideAtLauncherStart(SceneFacts(), paths_.user_dir);
+    // Owner's fresh install (20 Oct): no game files yet as the launcher opened, so no scene after the setup either.
+    // Such a launcher tries again once the setup and the shaders are done (TickSceneStart).
+    scene_retry_ = r != menu_scene::Reason::kLive && menu_scene::MayStartLater(r);
+    if (r != menu_scene::Reason::kLive || !cb_.start_scene) return;
     cb_.start_scene(before_first_frame);
+  }
+  // Back on Home after the setup, an install, the New in this update screen or a shader preparation: the scene
+  // starts now (checked about once a second; the runtime's start pauses the launcher about 1.5 s once).
+  void TickSceneStart() {
+    if (!scene_retry_ || menu_scene::Active() || leaving_ || played_ || modal_.open || page_ != kHome) return;
+    if (ImGui::GetTime() < scene_retry_at_) return;
+    scene_retry_at_ = ImGui::GetTime() + 1.0;
+    const menu_scene::Reason r = menu_scene::Decide(SceneFacts());
+    if (r == menu_scene::Reason::kLive) {
+      REXLOG_INFO("KK menu scene: the setup and the shaders are done; starting the scene now");
+      MaybeStartScene(false);
+    } else if (!menu_scene::MayStartLater(r)) {
+      scene_retry_ = false;
+      REXLOG_INFO("KK menu scene: {}", menu_scene::ReasonText(r));
+    }
   }
 
   void StartGame() {
@@ -7335,6 +7357,7 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
       OpenWhatsNew();
     }
     TickNativeShaders();
+    TickSceneStart();  // task 330
     TickUpscalerQuery();
     if (waiting_for_pack_ && !pack_.busy) {
       waiting_for_pack_ = false;
@@ -7857,6 +7880,8 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
   float home_mix_ = 1.0f;
   float scene_mix_ = 0.0f;  // task 330: the live menu scene over the stills (0 .. 1)
   float scene_gain_ = 0.0f;  // task 330: the live menu scene's sound (0 .. 1)
+  bool scene_retry_ = false;    // task 330: the scene may start later in this launcher (TickSceneStart)
+  double scene_retry_at_ = 0;
   float tab_x_ = -1, tab_w_ = 0;
 
   std::vector<std::string> restart_baseline_;

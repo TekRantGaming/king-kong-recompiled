@@ -28,6 +28,11 @@ int main() {
   { StartFacts g = f; g.off_this_session = true; CHECK(Decide(g) == Reason::kOffThisSession); }
   { StartFacts g = f; g.failed_this_version = true; CHECK(Decide(g) == Reason::kFailedBefore); }
   { StartFacts g = f; g.files_ok = false; g.shaders_prepared = false; CHECK(Decide(g) == Reason::kNoFiles); }
+  // A fresh install or an update: the scene may start later in the same launcher; the rest keep the stills.
+  CHECK(MayStartLater(Reason::kNoFiles) && MayStartLater(Reason::kShadersNotPrepared) &&
+        MayStartLater(Reason::kShaderJob) && MayStartLater(Reason::kSetup));
+  CHECK(!MayStartLater(Reason::kLive) && !MayStartLater(Reason::kNotNative) && !MayStartLater(Reason::kLowEnd) &&
+        !MayStartLater(Reason::kOffThisSession) && !MayStartLater(Reason::kFailedBefore));
   for (int r = 0; r <= int(Reason::kFailedBefore); ++r) CHECK(ReasonText(Reason(r))[0] != '?');
 
   // The failure marker: only this version's "starting" or "failed" keeps the stills.

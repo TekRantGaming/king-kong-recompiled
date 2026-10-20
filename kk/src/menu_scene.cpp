@@ -21,6 +21,18 @@
 
 #include <SDL3/SDL.h>
 
+#if defined(_WIN32)
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN
+#endif
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#include <windows.h>
+#else
+#include <dlfcn.h>
+#endif
+
 
 REXCVAR_DEFINE_BOOL(kk_menu_scene_off, false, "KK",
                     "Internal: no live menu scene in this launcher (passed on the command line by a launcher that "
@@ -69,6 +81,30 @@ void NoteShown() {
   REXLOG_INFO("KK menu scene: the start menu scene is up behind the launcher");
 }
 
+// Owner, 20 Oct: the scene draws lighter than play (native-renderer/backend/menu_scene_light.h), through the
+// native renderer's nr_set_menu_scene_light; the player's settings are not changed.
+void SetRendererLight(bool on) {
+  using Fn = void (*)(uint32_t);
+  Fn fn = nullptr;
+#if defined(_WIN32)
+  for (const wchar_t* module : {L"rexgpu-nativerd.dll", L"rexgpu-native.dll", L"rexgpu-natived.dll"})
+    if (HMODULE m = GetModuleHandleW(module))
+      if ((fn = reinterpret_cast<Fn>(GetProcAddress(m, "nr_set_menu_scene_light")))) break;
+#else
+  for (const char* module : {"librexgpu-nativerd.so", "librexgpu-native.so", "librexgpu-natived.so"})
+    if (void* m = dlopen(module, RTLD_NOW | RTLD_NOLOAD)) {
+      fn = reinterpret_cast<Fn>(dlsym(m, "nr_set_menu_scene_light"));
+      dlclose(m);  // still loaded by the runtime
+      if (fn) break;
+    }
+#endif
+  if (fn) fn(on ? 1u : 0u);
+  REXLOG_INFO("KK menu scene: {}", fn ? (on ? "lighter effects for the scene (GI off, AO half, volumetrics off, original "
+                                              "shadows and water, no tessellation, upscaler at most Performance)"
+                                           : "the player's own effects for the scene")
+                                     : "the renderer has no lighter scene mode");
+}
+
 }  // namespace
 
 Reason DecideAtLauncherStart(StartFacts facts, const std::filesystem::path& user_dir) {
@@ -103,6 +139,11 @@ void Begin(const std::filesystem::path& user_dir) {
   }
   g_active = true;
   REXLOG_INFO("KK menu scene: starting the game behind the launcher");
+  bool light = true;
+#if defined(KK_DEV_TOOLS)
+  if (const char* full = std::getenv("KK_DEV_SCENE_FULL"); full && *full == '1') light = false;  // measurements
+#endif
+  SetRendererLight(light);
 }
 
 bool Active() { return g_active.load(std::memory_order_relaxed); }

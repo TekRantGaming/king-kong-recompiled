@@ -60,6 +60,12 @@ inline const char* ReasonText(Reason r) {
   return "?";
 }
 
+// The stills only for now: a fresh install's game files, its setup and shader preparation (or an update's) are
+// still to come in this launcher. Once they are done (the launcher is back on Home) the scene starts after all.
+inline bool MayStartLater(Reason r) {
+  return r == Reason::kNoFiles || r == Reason::kShadersNotPrepared || r == Reason::kShaderJob || r == Reason::kSetup;
+}
+
 // The failure marker (<user data>/menu-scene.txt) holds "starting <version>" from the scene's start until it has
 // been shown, then nothing. A launcher that finds "starting" of its own version did not survive the scene's
 // start: the stills for the rest of this version ("failed <version>").
