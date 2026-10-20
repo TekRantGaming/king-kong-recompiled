@@ -41,20 +41,22 @@ void WanShots() {
   auto b=CreateDirectUdp({false,"127.0.0.1",a->LocalPort(),"TEST23",{250,80,5,69}});
   CoopSession host(Config(Role::Host),*a),guest(Config(Role::Guest),*b);
   double now=100;
-  for(int i=0;i<1000;++i,now+=.01) {host.Tick(now);guest.Tick(now);}
+  constexpr double guest_clock_offset=12345;
+  for(int i=0;i<1000;++i,now+=.01) {host.Tick(now);guest.Tick(now+guest_clock_offset);}
   Check(host.State()==SessionState::Connected && guest.State()==SessionState::Connected,"WAN handshake with delay jitter and loss");
   unsigned received=0,confirmed=0; ShotValidator validator;
   for(int i=0;i<1000;++i,now+=.01) {
-    PlayerPose peer{now,101};
+    const double guest_now=now+guest_clock_offset;
+    PlayerPose peer{guest_now,101,float(i)*.32f};
     if(i<200 && i%20==0) {
-      ShotIntent shot{{101,1,1},uint32_t(i/20+1),1,now,{0,0,1},{1,0,0},{}};
-      InventoryState inventory{shot.world,now,1}; inventory.ammo[0]=50;
+      ShotIntent shot{{101,1,1},uint32_t(i/20+1),1,guest_now,{peer.x,0,1},{1,0,0},{}};
+      InventoryState inventory{shot.world,guest_now,1}; inventory.ammo[0]=50;
       Check(guest.QueueShot({shot,inventory}),"queue actual WAN shot");
     }
-    host.Tick(now);guest.Tick(now,peer);
+    host.Tick(now);guest.Tick(guest_now,peer);
     for(const auto& shot:host.TakeShots()) {
       Check(shot.peer && validator.Validate(shot,{101,1,1},shot.peer,now)==ShotReject::None,
-          "WAN shot and ordered pre-fire inventory accepted once at owner"); ++received;
+          "moving WAN shooter and inventory accepted with independent PC clocks"); ++received;
       Check(host.QueueShotReceipt({shot.intent.world,shot.intent.number,ShotReject::None,false}),"host queues WAN verdict");
     }
     for(const auto& receipt:guest.TakeShotReceipts()) {
