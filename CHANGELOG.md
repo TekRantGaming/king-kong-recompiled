@@ -3,6 +3,16 @@
 Every release of the King Kong PC port, newest first. The launcher shows this on its About page, and a
 version's notes the first time you start it.
 
+## v2.0.0-beta.14 (unreleased)
+
+**Beta 14**: fixes and performance, from the beta channel (**About** > **Change version**). Your saves and settings are kept. Windows only for this beta.
+
+### Fixed
+- **A rare crash at the start on some NVIDIA graphics cards**: the launcher now checks which upscalers your PC offers before it opens its window, and remembers the answer until your graphics card, driver or the game changes. The first start after such a change opens a second or two later.
+
+### Changed
+- **More graphics prepared ahead of time**: the shipped list now has 16,235 graphics pipelines (1,538 more), from players who share them with Online players on, so fewer things hitch the first time you see them.
+
 ## v2.0.0-beta.13 (20 October 2026)
 
 **Beta 13**: a live main menu, from the beta channel (**About** > **Change version**). Your saves and settings are kept. Windows only for this beta.
