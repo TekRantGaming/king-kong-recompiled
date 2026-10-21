@@ -54,7 +54,8 @@ void Policies() {
   Check(!timer.Step(2,.05f,.1f),"release resets partial progress");
   Check(!timer.Step(3,.05f,.1f),"lost heartbeat cannot open a door");
   timer.Touch(true,4);
-  Check(!timer.Step(4,1,.1f) && !timer.Step(4,.05f,0),"bad delta or duration cannot force endpoint");
+  Check(!timer.Step(4,1,.1f) && !timer.Step(4,.05f,-1),"bad delta or duration cannot force endpoint");
+  Check(timer.Step(4,.05f,0) && !timer.Step(4,.05f,0),"native zero-duration opening completes once after a valid hold");
   std::map<uint32_t,uint32_t> pool{{stimulus_debug::kPools+64,0x45000000},
       {stimulus_debug::kPools+72,1},{stimulus_debug::kPools+76,4},
       {0x45000000,0},{0x45000008,0x42000000},{0x4500000c,0x42001000},

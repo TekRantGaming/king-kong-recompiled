@@ -152,7 +152,8 @@ class LeverHold {
   bool Step(double now,float dt,float duration) {
     if (!std::isfinite(now) || last_<0 || now<last_ || now-last_>.75) { *this={}; return false; }
     if (done_ || !std::isfinite(dt) || dt<=0 || dt>.1f ||
-        !std::isfinite(duration) || duration<=0 || duration>3600) return false;
+        !std::isfinite(duration) || duration<0 || duration>3600) return false;
+    // Native 8256D088 completes immediately for an authored zero duration.
     elapsed_+=dt;
     if (elapsed_+1e-6<duration) return false;
     done_=true; return true;
