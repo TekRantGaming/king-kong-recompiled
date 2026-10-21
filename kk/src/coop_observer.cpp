@@ -19,6 +19,7 @@ namespace kk::coop::observer {
 namespace {
 double Now() { return std::chrono::duration<double>(std::chrono::steady_clock::now().time_since_epoch()).count(); }
 std::atomic<bool> temporary{false}, observing{false}, screen{true}, failed{false}, native_credits{false};
+std::atomic<bool> cutscene_active{false};
 std::atomic<const char*> status{"Observer: waiting for host camera."};
 uint32_t generation=0, normal_matrix=0, normal_actor=0, parked_actor=0, parked_matrix=0;
 uint32_t local_checkpoint=0;
@@ -55,7 +56,7 @@ void Reset() {
   start_down=false; local_scripted=false; mismatch_since=skip_until=0; failed=false; observing=false; screen=true;
   began=Now(); last_camera=0; checkpoint_mismatch=0; status="Observer: waiting for host camera.";
   camera_timeout_since=host_capture_time=0; host_capture_reason="no scene view";
-  together_scene={};
+  together_scene={}; cutscene_active=false;
 }
 }
 void SetPartnerSpectating(bool enabled) {
@@ -86,6 +87,7 @@ bool HoldWorld() {
 bool StatusScreen() { return screen.load(); }
 bool Active() { return observing.load(); }
 bool InCutscene(const uint8_t* base) { return local_scripted || together_scene.Active() || Movie(base); }
+bool CutsceneActive() { return cutscene_active.load(); }
 const char* Status() { return status.load(); }
 bool SuppressLook() { return REXCVAR_GET(kk_coop_enabled) && observing.load(); }
 // The native screen list also contains credits text, not just first-person UI.
@@ -104,7 +106,7 @@ void Fallback(const char* why) {
 void GameFrame(uint8_t* b) {
   const auto v=SessionFlowSnapshot();
   if (!REXCVAR_GET(kk_coop_enabled) || !v.active || v.phase!=FlowPhase::Playing || !play::SessionActive()) {
-    observing=false; temporary=false; native_credits=false; together_scene={}; PublishHostCamera({}); return;
+    observing=false; temporary=false; native_credits=false; together_scene={}; cutscene_active=false; PublishHostCamera({}); return;
   }
   // The flow generation resets local actor identities even on a same-level checkpoint reload.
   if (generation!=v.world.generation) {
@@ -119,6 +121,7 @@ void GameFrame(uint8_t* b) {
   together_scene.Update(!v.host && v.policy==ChapterPolicy::Together && CameraConnectionReady() ?
       HostCameraSnapshot(Now()) : std::optional<CameraPose>{},v.world.generation,v.world.level,Now());
   const bool cinematic=together_scene.Active();
+  cutscene_active=cinematic || (b && InCutscene(b));
   if (was_cinematic!=cinematic)
     REXLOG_INFO("KK co-op story: host cinematic view {} generation {} level {}; native guest scripts continue",
         cinematic ? "started" : "ended",generation,v.world.level);
@@ -190,6 +193,7 @@ bool View(uint8_t* b,uint32_t view,uint32_t caller,std::array<uint8_t,68>& saved
   if (!v.active || v.phase!=FlowPhase::Playing || !World(b,v)) return false;
   if (play::PauseMenuOpen() || play::GamePausePageUp()) return false;
   local_scripted=!NormalView(b,view) || Movie(b);
+  cutscene_active=local_scripted || together_scene.Active();
   if (v.host) {
     // Other scene passes must never invalidate the opaque camera publication.
     if (caller!=0x8287390C) return false;
