@@ -29,8 +29,8 @@ typedef struct NrEffectStats {
   double last_change_ms;                 // the render thread's time for the last one
   char upscaler[96];                     // "DLSS 310.9.1 Quality preset M (Vulkan)", "off"
   double cel_ms;                         // cel shading (bit 128 of applied; preparing bit 16)
-  // Task 354: texture pack work not finished yet (queued and in-flight reads, read images not yet taken, an upload
-  // in progress, a folder change not yet seen); 0 = the pack has streamed in everything asked for so far.
+  // Task 354: texture pack work not finished yet (queued and in-flight reads, an upload in progress, a folder change
+  // not yet seen); 0 = the pack has streamed in everything asked for so far.
   uint32_t pack_pending;
   uint64_t pack_ready;                   // texture pack replacements finished uploading (run total)
 } NrEffectStats;

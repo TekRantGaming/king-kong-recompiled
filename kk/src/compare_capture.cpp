@@ -194,6 +194,32 @@ std::map<std::string, int> g_taken;  // pictures already in screenshots/compare,
 std::filesystem::path ShotsFile() { return rex::filesystem::GetExecutableFolder() / "compare-shots.txt"; }
 std::filesystem::path CompareDir() { return g_user_dir / "screenshots" / "compare"; }
 
+// The card's place across starts (each chapter start is a new game process): screenshots/compare/progress.txt,
+// "id=<shot id>" and "index=<n>" (the id wins when the list has it). g_shots_mutex held by the callers.
+bool g_progress_read = false;
+void SaveProgressLocked() {
+  if (g_shots.empty()) return;
+  std::error_code ec;
+  std::filesystem::create_directories(CompareDir(), ec);
+  std::ofstream(CompareDir() / "progress.txt", std::ios::binary | std::ios::trunc)
+      << "id=" << g_shots[size_t(g_index)].id << "\nindex=" << g_index << "\n";
+}
+void ReadProgressLocked() {
+  g_progress_read = true;
+  std::ifstream f(CompareDir() / "progress.txt", std::ios::binary);
+  std::string line, id;
+  int index = -1;
+  while (std::getline(f, line)) {
+    line = Trim(line);
+    if (line.rfind("id=", 0) == 0) id = line.substr(3);
+    else if (line.rfind("index=", 0) == 0) index = std::atoi(line.c_str() + 6);
+  }
+  for (size_t i = 0; i < g_shots.size(); ++i)
+    if (!id.empty() && g_shots[i].id == id) index = int(i);
+  if (index >= 0) g_index = std::clamp(index, 0, int(g_shots.size()) - 1);
+  if (index >= 0) REXLOG_INFO("KK compare: the card continues at shot {} ({})", g_index + 1, g_shots[size_t(g_index)].id);
+}
+
 void CountTaken() {
   std::map<std::string, int> taken;
   std::error_code ec;
@@ -237,6 +263,7 @@ void RefreshShots() {
   g_shots_from_file = from_file;
   g_shots_time = time;
   g_index = std::clamp(g_index, 0, int(g_shots.size()) - 1);
+  if (!g_progress_read) ReadProgressLocked();
   REXLOG_INFO("KK compare: {} shots ({})", g_shots.size(), from_file ? path.string() : "the built-in list");
 }
 
@@ -244,6 +271,7 @@ void StepShot(int delta) {
   std::lock_guard lock(g_shots_mutex);
   if (g_shots.empty()) return;
   g_index = std::clamp(g_index + delta, 0, int(g_shots.size()) - 1);
+  SaveProgressLocked();
 }
 
 // ------------------------------------------------------------------ capturing ---
@@ -291,7 +319,7 @@ struct Settled {
 // waiting, no upload) for kPackQuietFrames frames in a row: longer than its rescan (every 60 frames at most), so
 // textures first drawn meanwhile have been asked for too. The GI, lighting and upscaler workers must be done too.
 constexpr uint64_t kPackQuietFrames = 75;
-constexpr uint64_t kMaxPackFrames = 2400;  // 40 s at 60 frames a second
+constexpr int64_t kMaxPackMs = 20000;  // then the picture is taken anyway, noted in settings.txt
 
 Settled Settle(uint64_t min_frames, bool wait_pack) {
   Settled out;
@@ -312,9 +340,12 @@ Settled Settle(uint64_t min_frames, bool wait_pack) {
   };
   if (!WaitFrames(min_frames)) return out;
   if (wait_pack) {
-    const uint64_t give_up = GuestFrameCount() + kMaxPackFrames;
-    while (!pack_quiet() && GuestFrameCount() < give_up) WaitFrames(1, 5000);
+    const int64_t give_up = NowMs() + kMaxPackMs;
+    while (!pack_quiet() && NowMs() < give_up) WaitFrames(1, 5000);
     out.pack_done = quiet;
+    const NrEffectStats st = nr::kk::EffectTimes();
+    REXLOG_INFO("KK compare: texture pack {} after {} frames (pending {}, preparing {})",
+                quiet ? "quiet" : "still busy", GuestFrameCount() - start, st.pack_pending, st.preparing);
     out.pack_ready = nr::kk::EffectTimes().pack_ready - ready0;
   }
   rex::ui::RawImage prev;
@@ -455,6 +486,7 @@ void CaptureThread(Shot shot, int index, int shown_look) {
   {
     std::lock_guard lock(g_shots_mutex);
     if (g_index == index && index + 1 < int(g_shots.size())) ++g_index;
+    SaveProgressLocked();
   }
   finish("Saved " + dir.filename().string() +
          (o.settled && m.settled && m.pack_done ? "" : "  (not fully settled: see settings.txt)"));
@@ -660,6 +692,7 @@ void Create(rex::ui::ImGuiDrawer* drawer, rex::ui::Window* window, const std::fi
   created = true;
   g_user_dir = user_dir;
   RefreshShots();
+  CountTaken();  // "Taken" comes from the picture folders, so a restart or a crash never loses count
   new Card(drawer, window);  // lives for the rest of the session
 }
 

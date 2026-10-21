@@ -51,6 +51,7 @@ void InstallFpeGuard();  // fpe_guard.cpp
 #include "mouse_look.h"
 #include "freecam.h"
 #include "compare_capture.h"
+#include <future>
 #include "cursor_activity.h"
 #include "debug_overlay.h"
 #include "online.h"
@@ -469,10 +470,19 @@ class KingKongApp : public rex::ReXApp {
       }
       return true;
     });
-    kk::compare::SetGrabber([this](rex::ui::RawImage& image) {  // task 354 (any thread)
-      auto* gfx = runtime() ? runtime()->graphics_system() : nullptr;
-      auto* presenter = gfx ? gfx->presenter() : nullptr;
-      return presenter && presenter->CaptureGuestOutput(image);
+    kk::compare::SetGrabber([this](rex::ui::RawImage& image) {  // task 354: from its worker; read on the UI thread
+      // As F6 and photo mode do: the presenter's capture on the UI thread, between its paints.
+      auto done = std::make_shared<std::promise<bool>>();
+      auto out = std::make_shared<rex::ui::RawImage>();
+      std::future<bool> result = done->get_future();
+      app_context().CallInUIThread([this, done, out] {
+        auto* gfx = runtime() ? runtime()->graphics_system() : nullptr;
+        auto* presenter = gfx ? gfx->presenter() : nullptr;
+        done->set_value(presenter && presenter->CaptureGuestOutput(*out));
+      });
+      if (result.wait_for(std::chrono::seconds(10)) != std::future_status::ready || !result.get()) return false;
+      image = std::move(*out);
+      return true;
     });
     kk::art::SetFrameCapturer([this](const std::filesystem::path& path) {
       app_context().CallInUIThread([this, path] {

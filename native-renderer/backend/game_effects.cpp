@@ -80,6 +80,25 @@ void GameRenderer::UpdateEffects() {
   const auto start = std::chrono::steady_clock::now();
   EffectSettings s = options_.effect_settings();
   PhotoOverrideEffects(s);  // photo mode (game_photo.cpp): its picture settings while it lasts
+  {
+    // Task 354 (a device lost on D3D12 while the comparison capture switched many effects at once): a switch that
+    // makes or frees the upscaler, GI, AO, the lighting passes, tessellation or the texture pack waits for the GPU
+    // to finish the frames in flight first, so nothing those frames still use is released or replaced under them.
+    // Only on such a switch (a player's change in the F8 panel or the pause menu, never in a normal frame).
+    const AoSettings ao = options_.ao_settings ? options_.ao_settings() : AoSettings{};
+    char heavy[256];
+    std::snprintf(heavy, sizeof(heavy), "%u/%u|%d|%d|%d%d%d|%d|%d|%u", unsigned(s.upscale.kind), unsigned(s.upscale.quality),
+                  int(s.gi.enabled()), ao.mode, int(s.lighting.shadows_on()), int(s.lighting.water_on()),
+                  int(s.lighting.volumetrics_on()), int(s.tessellation), int(s.texture_pack), unsigned(s.ao_quality));
+    const std::string key = heavy + std::string("|") + s.texture_pack_folder;
+    if (!effects_heavy_.empty() && key != effects_heavy_) {
+      const auto wait_start = std::chrono::steady_clock::now();
+      UpscalerWaitForIdle(device_);  // the host's idle wait, under its queue lock
+      Logf(LogLevel::kInfo, "rexgpu-native: live settings: effects switched; waited %.1f ms for the GPU first",
+           MsSince(wait_start));
+    }
+    effects_heavy_ = key;
+  }
   options_.texture_pack = s.texture_pack;
   options_.texture_pack_folder = s.texture_pack_folder;
   tessellation_=s.tessellation && options_.tessellation_supported;

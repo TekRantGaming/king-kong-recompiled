@@ -466,7 +466,9 @@ void TexturePackStream::Cancel(uint64_t hash, const HostTexturePlan& original) {
 }
 size_t TexturePackStream::Pending() const {
   std::lock_guard lock(impl_->mutex);
-  return impl_->requests.size() + impl_->ready.size() + impl_->in_flight + (impl_->configure ? 1u : 0u);
+  // Read images not taken yet are left out: one whose original went meanwhile is never taken (the renderer's
+  // next scan, at most 60 frames later, takes the others and its upload counts then).
+  return impl_->requests.size() + impl_->in_flight + (impl_->configure ? 1u : 0u);
 }
 std::string TexturePackStream::Status() const { std::lock_guard lock(impl_->mutex); return impl_->status; }
 uint64_t TexturePackStream::Events() const { return impl_->events.load(std::memory_order_acquire); }
