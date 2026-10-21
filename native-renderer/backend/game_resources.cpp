@@ -107,8 +107,13 @@ GameRenderer::Scale GameRenderer::ScaleFor(bool depth, uint32_t pitch, uint32_t 
   // The census identifies these pitches as the game's 320x180 and 640x360/480 effect
   // surfaces, including their matching depth attachments. Shadow maps were handled above.
   // Use one scale on both axes so a non-16:9 output cannot change an effect's aspect.
+  // With an upscaler, before the upscale point they follow the scene's input size (as without one,
+  // where the input is the frame): the scene they are made from is no finer than that.
   if ((pitch == 320 || pitch == 640) && !shadow_pitches_.count(pitch) && (depth || format != 14)) {
-    const float scale = options_.effect_buffers ? std::min(options_.render_scale_x, options_.render_scale_y) : 1.0f;
+    const bool input = upscale_ && !output_gen;
+    const float sx = input ? upscale_->in_x : options_.render_scale_x;
+    const float sy = input ? upscale_->in_y : options_.render_scale_y;
+    const float scale = options_.effect_buffers ? std::min(sx, sy) : 1.0f;
     return {scale, scale};
   }
   // Upscalers: the scene's targets are the input size before the upscale point; shadow maps keep the
