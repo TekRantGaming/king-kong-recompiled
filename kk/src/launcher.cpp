@@ -437,10 +437,10 @@ OfferedUpscalers OfferedWhilePlaying() {
 }
 
 // ------------------------------------------------------------ presets ---
-// Graphics presets set the upscaler, render quality, anti-aliasing, texture
-// filtering, ambient occlusion and GI (motion blur and fog are left to taste).
+// Graphics presets set the upscaler and every quality setting of the Graphics page (graphics_presets.h: render
+// quality, anti-aliasing, sharpness, texture filtering, ambient occlusion, GI, shadows, water reflections, light
+// shafts, effect resolution); motion blur, screen blur and fog are left to taste.
 // The preset shown is the one the settings match; anything else is Custom.
-// Medium is the default settings (the default upscaler at Quality).
 
 // The upscaler modes (kk_render_quality); -1 for another render quality.
 constexpr const char* kUpscalerModes[] = {"native", "quality", "balanced", "performance"};
@@ -1726,8 +1726,7 @@ class SettingsPages {
       Item it;
       it.type = ItemType::kChoice;
       it.label = "Preset";
-      it.description = "Sets render quality, upscaling, anti-aliasing, texture filtering, ambient occlusion and global "
-                       "illumination together. Changing one of them shows Custom.";
+      it.description = "Sets every quality setting on this page at once. Changing one of them shows Custom.";
       for (const auto& p : kGraphicsPresets) it.options.push_back(p.label);
       it.options.push_back("Custom");
       const int match = MatchGraphicsPreset();

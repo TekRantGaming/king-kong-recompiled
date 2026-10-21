@@ -29,6 +29,7 @@
 #include <cstdlib>
 #include <fstream>
 #include <iostream>
+#include <algorithm>
 #include <iterator>
 #include <map>
 #include <string>
@@ -120,38 +121,153 @@ void ExtrasChecks() {
         "alternate ending uses its original level, score and completion requirements");
 }
 
+// Task 350b (owner, 21 Oct): every graphics setting follows the preset. The whole table, written out here on its
+// own (not read from graphics_presets.h), so a change to a preset has to change this test too. "-": the preset
+// leaves the setting alone (the AO rows with AO off: they are hidden then).
+struct ExpectedPreset {
+  const char* label;
+  std::map<std::string, std::string> values;
+};
+const std::vector<std::string> kPresetSettingNames = {
+    "kk_render_quality", "swap_post_effect", "native_sharpness", "anisotropic_override", "ao_mode", "ao_strength",
+    "native_ao_samples", "native_ao_quality", "native_ao_normal_smoothing", "native_gi", "native_gi_distance",
+    "native_gi_quality", "native_shadow_quality", "native_water_reflections", "native_volumetrics",
+    "native_effect_buffers", "kk_graphics_preset"};
+const ExpectedPreset kExpectedPresets[] = {
+    {"Low", {{"kk_render_quality", "performance"}, {"swap_post_effect", "fxaa"}, {"native_sharpness", "off"},
+             {"anisotropic_override", "2"}, {"ao_mode", "0"}, {"ao_strength", "-"}, {"native_ao_samples", "-"},
+             {"native_ao_quality", "-"}, {"native_ao_normal_smoothing", "-"}, {"native_gi", "low"},
+             {"native_gi_distance", "near"}, {"native_gi_quality", "auto"}, {"native_shadow_quality", "original"},
+             {"native_water_reflections", "original"}, {"native_volumetrics", "off"},
+             {"native_effect_buffers", "true"}, {"kk_graphics_preset", "Low"}}},
+    {"Medium", {{"kk_render_quality", "quality"}, {"swap_post_effect", "fxaa"}, {"native_sharpness", "off"},
+                {"anisotropic_override", "3"}, {"ao_mode", "0"}, {"ao_strength", "-"}, {"native_ao_samples", "-"},
+                {"native_ao_quality", "-"}, {"native_ao_normal_smoothing", "-"}, {"native_gi", "medium"},
+                {"native_gi_distance", "medium"}, {"native_gi_quality", "auto"}, {"native_shadow_quality", "original"},
+                {"native_water_reflections", "original"}, {"native_volumetrics", "off"},
+                {"native_effect_buffers", "true"}, {"kk_graphics_preset", "Medium"}}},
+    {"High", {{"kk_render_quality", "native"}, {"swap_post_effect", "fxaa"}, {"native_sharpness", "off"},
+              {"anisotropic_override", "5"}, {"ao_mode", "1"}, {"ao_strength", "3"}, {"native_ao_samples", "2"},
+              {"native_ao_quality", "auto"}, {"native_ao_normal_smoothing", "2"}, {"native_gi", "high"},
+              {"native_gi_distance", "far"}, {"native_gi_quality", "auto"}, {"native_shadow_quality", "high"},
+              {"native_water_reflections", "ssr"}, {"native_volumetrics", "low"},
+              {"native_effect_buffers", "true"}, {"kk_graphics_preset", "High"}}},
+    {"Ultra", {{"kk_render_quality", "native"}, {"swap_post_effect", "fxaa"}, {"native_sharpness", "off"},
+               {"anisotropic_override", "5"}, {"ao_mode", "1"}, {"ao_strength", "3"}, {"native_ao_samples", "3"},
+               {"native_ao_quality", "auto"}, {"native_ao_normal_smoothing", "2"}, {"native_gi", "high"},
+               {"native_gi_distance", "far"}, {"native_gi_quality", "auto"}, {"native_shadow_quality", "ultra"},
+               {"native_water_reflections", "ssr"}, {"native_volumetrics", "high"},
+               {"native_effect_buffers", "true"}, {"kk_graphics_preset", "Ultra"}}},
+    {"Steam Deck", {{"kk_render_quality", "native"}, {"swap_post_effect", "fxaa"}, {"native_sharpness", "off"},
+                    {"anisotropic_override", "2"}, {"ao_mode", "0"}, {"ao_strength", "-"}, {"native_ao_samples", "-"},
+                    {"native_ao_quality", "-"}, {"native_ao_normal_smoothing", "-"}, {"native_gi", "low"},
+                    {"native_gi_distance", "near"}, {"native_gi_quality", "auto"},
+                    {"native_shadow_quality", "original"}, {"native_water_reflections", "original"},
+                    {"native_volumetrics", "off"}, {"native_effect_buffers", "true"},
+                    {"kk_graphics_preset", "Steam Deck"}}},
+};
+// The temporal upscaler's mode each preset sets with the default upscaler (launcher.cpp ApplyGraphicsPreset).
+const char* const kExpectedTemporal[] = {"performance", "quality", "quality", "quality", "quality"};
+
+// A value no preset uses, for each setting (a "player's own" choice before a preset is picked).
+std::string OtherValue(const std::string& name) {
+  static const std::map<std::string, std::string> other = {
+      {"kk_render_quality", "balanced"}, {"swap_post_effect", "smaa"}, {"native_sharpness", "high"},
+      {"anisotropic_override", "4"}, {"ao_mode", "2"}, {"ao_strength", "1"}, {"native_ao_samples", "9"},
+      {"native_ao_quality", "full"}, {"native_ao_normal_smoothing", "1"}, {"native_gi", "off"},
+      {"native_gi_distance", "full"}, {"native_gi_quality", "full"}, {"native_shadow_quality", "custom"},
+      {"native_water_reflections", "custom"}, {"native_volumetrics", "custom"}, {"native_effect_buffers", "false"},
+      {"kk_graphics_preset", ""}};
+  return other.at(name);
+}
+
 void GraphicsPresetChecks() {
+  Check(kk::kGraphicsPresetCount == int(std::size(kExpectedPresets)), "every preset is in the expected table");
   const char* expected[] = {"low", "medium", "high", "high", "low"};
   const char* distances[] = {"near", "medium", "far", "far", "near"};  // Ultra: Far since Beta 8 (Full is F8 only)
   for (int i = 0; i < kk::kGraphicsPresetCount; ++i) {
     const auto& p = kk::kGraphicsPresets[i];
+    const ExpectedPreset& want = kExpectedPresets[i];
+    Check(std::string_view(p.label) == want.label, "preset order");
+    Check(std::string_view(p.temporal) == kExpectedTemporal[i], "preset temporal upscaler mode");
     Check(std::string_view(p.gi) == expected[i], "preset GI mapping");
     Check(std::string_view(p.gi_distance) == distances[i], "preset GI distance mapping");
+    Check(want.values.size() == kPresetSettingNames.size(), "expected table lists every setting");
+
+    // Applied over the player's own value in every setting, and over every other preset: each setting ends at
+    // the table's value ("-": left as it was).
+    for (int from = -1; from < kk::kGraphicsPresetCount; ++from) {
+      std::map<std::string, std::string> settings;
+      for (const auto& name : kPresetSettingNames) settings[name] = OtherValue(name);
+      auto set = [&](const char* name, const char* value) { settings[name] = value; };
+      if (from >= 0) kk::ApplyGraphicsPresetSettings(kk::kGraphicsPresets[from], set);
+      const std::map<std::string, std::string> before = settings;
+      kk::ApplyGraphicsPresetSettings(p, set);
+      for (const auto& name : kPresetSettingNames) {
+        const std::string& v = want.values.at(name);
+        const bool ok = v == "-" ? settings[name] == before.at(name) : settings[name] == v;
+        if (!ok) std::cerr << want.label << ": " << name << " = " << settings[name] << ", expected " << v << '\n';
+        Check(ok, "preset sets every setting of the table");
+      }
+      for (const auto& entry : settings)
+        Check(std::find(kPresetSettingNames.begin(), kPresetSettingNames.end(), entry.first) !=
+                  kPresetSettingNames.end(),
+              "a preset sets nothing outside the table");
+      auto get = [&](const char* name) { return settings[name]; };
+      Check(kk::MatchesGraphicsPresetSettings(p, get), "applied preset matches");
+      Check(kk::FindGraphicsPreset(get, [](const auto&) { return true; }) == i, "applied preset is the one shown");
+    }
+
+    // A manual change to any one setting the preset owns turns it into Custom.
     std::map<std::string, std::string> settings;
     auto get = [&](const char* name) { return settings[name]; };
-    kk::ApplyGraphicsPresetSettings(p, [&](const char* name, const char* value) { settings[name] = value; });
-    Check(kk::MatchesGraphicsPresetSettings(p, get), "applied preset matches");
+    auto set = [&](const char* name, const char* value) { settings[name] = value; };
+    kk::ApplyGraphicsPresetSettings(p, set);
+    for (const auto& name : kPresetSettingNames) {
+      if (want.values.at(name) == "-" || name == "kk_graphics_preset") continue;
+      const std::string keep = settings[name];
+      // AO: the other way round (any value but 0 is on: F8's "AO only" test view still counts as the preset's).
+      settings[name] = name == "ao_mode" ? (p.ao ? "0" : "1") : OtherValue(name);
+      if (kk::MatchesGraphicsPresetSettings(p, get)) std::cerr << want.label << ": " << name << " change not Custom\n";
+      Check(!kk::MatchesGraphicsPresetSettings(p, get), "a manual change makes the preset Custom");
+      Check(kk::FindGraphicsPreset(get, [](const auto&) { return true; }) == -1, "a manual change shows Custom");
+      settings[name] = keep;
+    }
+    Check(kk::MatchesGraphicsPresetSettings(p, get), "putting it back matches again");
+
+    // The migration of version 2 settings (MigrateSettings, include_effects false) still reads old presets by
+    // their render quality, anti-aliasing, filtering and AO alone.
     settings["native_gi"] = "off";
+    settings["native_shadow_quality"] = "high";
     Check(!kk::MatchesGraphicsPresetSettings(p, get), "different GI makes the preset Custom");
     Check(kk::MatchesGraphicsPresetSettings(p, get, false), "old preset is recognised without GI");
     settings["anisotropic_override"] = "-1";
     Check(!kk::MatchesGraphicsPresetSettings(p, get, false), "other custom settings do not match");
   }
+  // High and Ultra differ now (shadows, light shafts, AO quality): each is recognised as itself, marked or not.
   std::map<std::string, std::string> settings;
   auto get = [&](const char* name) { return settings[name]; };
   auto set = [&](const char* name, const char* value) { settings[name] = value; };
   auto match = [&] { return kk::FindGraphicsPreset(get, [](const auto&) { return true; }); };
   kk::ApplyGraphicsPresetSettings(kk::kGraphicsPresets[2], set);
   Check(settings["anisotropic_override"] == "5", "High uses 16x");
-  Check(match() == 2, "High selection survives identical Ultra values");
+  Check(match() == 2, "High selection is kept");
+  settings.erase("kk_graphics_preset");
+  Check(match() == 2, "unmarked High is recognised");
   kk::ApplyGraphicsPresetSettings(kk::kGraphicsPresets[3], set);
   Check(settings["anisotropic_override"] == "5", "Ultra uses 16x");
   Check(match() == 3, "Ultra selection is kept");
   settings.erase("kk_graphics_preset");
-  Check(match() == 3, "unmarked old Ultra is still recognised");
+  Check(match() == 3, "unmarked Ultra is recognised");
   settings["kk_graphics_preset"] = "High";
+  Check(match() == 3, "a High mark over Ultra's values shows Ultra");
   settings["anisotropic_override"] = "4";
   Check(match() == -1 && settings["anisotropic_override"] == "4", "existing 8x choice remains Custom and is not overwritten");
+  // Low and Steam Deck differ only in render quality (and the upscaler mode, checked by the launcher).
+  kk::ApplyGraphicsPresetSettings(kk::kGraphicsPresets[4], set);
+  Check(match() == 4, "Steam Deck selection is kept");
+  settings["kk_render_quality"] = "performance";
+  Check(match() == 0, "Low's render quality shows Low");
 }
 
 // The ONE definition of "the shaders are prepared" (shader_prepared.h; owner, 18 Oct): exactly one preparation

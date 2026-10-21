@@ -1,5 +1,12 @@
 # Lighting: dynamic shadows, water reflections and light shafts (experimental)
 
+## Graphics presets (Beta 14, task 350b)
+
+Since Beta 14 the graphics presets set all three (owner, 21 Oct; kk/src/graphics_presets.h): Low, Medium and
+Steam Deck Original / Original / Off; High High shadows, Screen space water reflections, Volumetric low light
+shafts; Ultra Ultra shadows, Screen space reflections, Volumetric high shafts. The defaults stay Original/Off, and
+changing one of them by hand shows the preset as Custom.
+
 ## Task 101 candidates (15 October 2026)
 
 All three options remain hidden and default to Original/Off after the six permitted runs. The visual
