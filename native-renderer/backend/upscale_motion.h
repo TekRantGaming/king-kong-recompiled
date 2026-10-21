@@ -86,9 +86,15 @@ class MotionHistory {
     // Task 351, the closest-constants search of a key with many draws: its draws sorted by one
     // float that tells them apart (a translation, typically), so a search measures only the draws
     // whose difference in that float alone is not already more than the best sum so far.
+    // Several such floats (task 351 follow-up: when the camera swings, the floats it moves leave
+    // every draw near; a world position still tells them apart): each search takes the one whose
+    // window is narrowest, and the others drop draws whose difference in them alone is too big.
+    static constexpr int kIndexes = 4;
     mutable bool index_built = false;
-    mutable int index_column = -1;  // -1: no usable float (the plain search)
-    mutable std::vector<std::pair<float, uint32_t>> index;  // (that float, draw), ascending
+    mutable int index_count = 0;  // 0: no usable float (the plain search)
+    mutable int index_column[kIndexes] = {};
+    mutable std::vector<std::pair<float, uint32_t>> index[kIndexes];  // (that float, draw), ascending
+    mutable std::vector<std::pair<double, uint32_t>> ranked;  // the search's scratch (sum before the shared floats, draw)
   };
   // Draws per key from which the closest-constants search uses the index.
   static constexpr size_t kIndexedSearchMin = 24;
