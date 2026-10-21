@@ -30,8 +30,9 @@
 
 <br>
 
-Future builds use native rendering only: Vulkan is the primary API and Auto selects it; DirectX 12 is
-available on the Graphics page. The Xbox 360 emulation renderer has been removed. Older renderer
+Future builds use native rendering only: on Windows DirectX 12 is the recommended API and the default, and
+the game switches to Vulkan by itself when DirectX 12 cannot start (Vulkan can also be chosen on the Graphics
+page); Linux and the Steam Deck use Vulkan. The Xbox 360 emulation renderer has been removed. Older renderer
 settings migrate automatically. If neither native API can start, update your graphics driver and check
 the requirements below. For help, use the Discord link above and include the logs folder.
 

@@ -63,6 +63,9 @@ REXCVAR_DEFINE_STRING(kk_last_version, "", "KK",
 REXCVAR_DEFINE_STRING(kk_setup_version, "", "KK",
                       "Internal: the port version whose setup steps this player has had (the first-time setup, or "
                       "the one-time New in this update screen); 'waiting' while that screen is still to be shown");
+REXCVAR_DEFINE_INT32(kk_setup_again, 0, "KK",
+                     "Internal: the round of 'everyone through the first-time setup again' this player has had "
+                     "(1: Beta 14, DirectX 12 and the new defaults; setup_again.h)");
 REXCVAR_DEFINE_INT32(kk_frame_rate, 30, "KK/Video",
                      "Frame-rate cap: 30, 60, 90, 120, 144, 165, 240, or 0 for unlimited");
 REXCVAR_DEFINE_BOOL(kk_hfr_fixes, true, "KK/Video",
@@ -556,6 +559,36 @@ void MigrateHdrSettings() {
                 rex::cvar::GetFlagByName("kk_hdr"), rex::cvar::GetFlagByName("kk_hdr_levels"));
 }
 
+namespace {
+// The settings file's version (kk_settings_version; MigrateSettings lists what each one changed).
+constexpr int32_t kSettingsVersion = 4;
+// 4: DirectX 12 is the default graphics API on Windows (task 350a, MigrateGraphicsApi).
+constexpr int32_t kD3d12DefaultVersion = 4;
+}  // namespace
+
+bool MigrateGraphicsApi() {
+#if defined(_WIN32)
+  // Read before MigrateSettings brings the version up to date (that runs once the paths are final, after the
+  // renderer has started). A new install (no file: version 0) is already on the default, DirectX 12.
+  if (REXCVAR_GET(kk_settings_version) >= kD3d12DefaultVersion) return false;
+  const rex::cvar::FlagEntry* flag = nullptr;
+  for (const auto& e : rex::cvar::GetRegistry())
+    if (e.name == "native_backend") flag = &e;
+  if (!flag) return false;  // no native renderer
+  // A command-line or environment value is this run's own (tests, --native_backend=vulkan): left alone.
+  if (flag->source == rex::cvar::Source::kCommandLine || flag->source == rex::cvar::Source::kEnvironment)
+    return false;
+  const std::string before = flag->getter();
+  if (before == "d3d12") return false;
+  rex::cvar::SetFlagByName("native_backend", "d3d12");
+  REXLOG_INFO("KK: settings from before Beta 14: graphics API {} -> d3d12 (DirectX 12 is the default on Windows; "
+              "Vulkan stays the fallback when DirectX 12 cannot start)", before);
+  return true;
+#else
+  return false;
+#endif
+}
+
 void MigrateSettings(const std::filesystem::path& config_path) {
   // 2: FSR 1 at Quality became the default (it was no upscaler at Native).
   // A settings file only keeps values that differ from the defaults, so an
@@ -563,7 +596,8 @@ void MigrateSettings(const std::filesystem::path& config_path) {
   // an update doesn't change a player's picture (or turn their High, Ultra or
   // Steam Deck preset into Custom). New installs get the new defaults.
   // 3: GI follows the preset. Saved GI values, including an explicit Off, win.
-  constexpr int32_t kVersion = 3;
+  // 4: DirectX 12 on Windows (MigrateGraphicsApi, before the renderer started; nothing more to do here).
+  constexpr int32_t kVersion = kSettingsVersion;
   if (REXCVAR_GET(kk_settings_version) >= kVersion) return;
   std::error_code ec;
   if (std::filesystem::exists(config_path, ec)) {
@@ -590,42 +624,46 @@ void MigrateSettings(const std::filesystem::path& config_path) {
       REXLOG_INFO("KK: settings from an older version: kept its upscaler settings ({}, {})",
                   rex::cvar::GetFlagByName("present_effect"), rex::cvar::GetFlagByName("kk_render_quality"));
     }
-    auto preset_gi = [](auto get) {
-      for (const auto& p : kGraphicsPresets)
-        if (MatchesGraphicsPresetSettings(p, get, false)) return p.gi;
-      // Custom settings retain their hardware recommendation, or Medium when
-      // they predate hardware detection. Do not change any other graphics value.
-      for (const auto& t : kHardwareTiers)
-        if (REXCVAR_GET(kk_hardware_tier) == t.id) return t.gi;
-      return "medium";
-    };
-    if (REXCVAR_GET(kk_original_look)) {
-      // The live Off belongs to Original. Migrate the saved Modern settings
-      // instead, so switching back restores GI with the rest of that look.
-      std::string modern = REXCVAR_GET(kk_modern_settings);
-      if (!modern.empty()) {
-        std::map<std::string, std::string> values;
-        for (size_t pos = 0, end; pos < modern.size(); pos = end + 1) {
-          end = modern.find(';', pos);
-          if (end == std::string::npos) end = modern.size();
-          const auto eq = modern.find('=', pos);
-          if (eq < end) values[modern.substr(pos, eq - pos)] = modern.substr(eq + 1, end - eq - 1);
+    if (REXCVAR_GET(kk_settings_version) < 3) {
+      auto preset_gi = [](auto get) {
+        for (const auto& p : kGraphicsPresets)
+          if (MatchesGraphicsPresetSettings(p, get, false)) return p.gi;
+        // Custom settings retain their hardware recommendation, or Medium when
+        // they predate hardware detection. Do not change any other graphics value.
+        for (const auto& t : kHardwareTiers)
+          if (REXCVAR_GET(kk_hardware_tier) == t.id) return t.gi;
+        return "medium";
+      };
+      if (REXCVAR_GET(kk_original_look)) {
+        // The live Off belongs to Original. Migrate the saved Modern settings
+        // instead, so switching back restores GI with the rest of that look.
+        std::string modern = REXCVAR_GET(kk_modern_settings);
+        if (!modern.empty()) {
+          std::map<std::string, std::string> values;
+          for (size_t pos = 0, end; pos < modern.size(); pos = end + 1) {
+            end = modern.find(';', pos);
+            if (end == std::string::npos) end = modern.size();
+            const auto eq = modern.find('=', pos);
+            if (eq < end) values[modern.substr(pos, eq - pos)] = modern.substr(eq + 1, end - eq - 1);
+          }
+          if (!values.count("native_gi")) {
+            values["native_gi"] = preset_gi([&](const char* name) {
+              const auto it = values.find(name);
+              return it != values.end() ? it->second : rex::cvar::GetFlagByName(name);
+            });
+            modern.clear();
+            for (const auto& [name, value] : values) modern += name + "=" + value + ";";
+            rex::cvar::SetFlagByName("kk_modern_settings", modern);
+          }
         }
-        if (!values.count("native_gi")) {
-          values["native_gi"] = preset_gi([&](const char* name) {
-            const auto it = values.find(name);
-            return it != values.end() ? it->second : rex::cvar::GetFlagByName(name);
-          });
-          modern.clear();
-          for (const auto& [name, value] : values) modern += name + "=" + value + ";";
-          rex::cvar::SetFlagByName("kk_modern_settings", modern);
-        }
+      } else if (rex::cvar::GetFlagSource("native_gi") == rex::cvar::Source::kDefault) {
+        rex::cvar::SetFlagByName("native_gi", preset_gi(rex::cvar::GetFlagByName));
       }
-    } else if (rex::cvar::GetFlagSource("native_gi") == rex::cvar::Source::kDefault) {
-      rex::cvar::SetFlagByName("native_gi", preset_gi(rex::cvar::GetFlagByName));
+      REXLOG_INFO("KK: GI settings migrated to version 3: {} (Original look {})",
+                  rex::cvar::GetFlagByName("native_gi"), REXCVAR_GET(kk_original_look));
     }
-    REXLOG_INFO("KK: GI settings migrated to version 3: {} (Original look {})",
-                rex::cvar::GetFlagByName("native_gi"), REXCVAR_GET(kk_original_look));
+    REXLOG_INFO("KK: settings file brought up to version {} (was {}); graphics API {}", kVersion,
+                REXCVAR_GET(kk_settings_version), rex::cvar::GetFlagByName("native_backend"));
     rex::cvar::SetFlagByName("kk_settings_version", std::to_string(kVersion));
     SaveSettings(config_path);
     return;
@@ -762,11 +800,16 @@ void InitializeHardwareRecommendation(const std::filesystem::path& config_path, 
   const bool exists = std::filesystem::exists(config_path, ec);
   // A pre-existing config, including one predating this feature, never gets a new tier automatically.
   const bool first_setup = !exists && !ec && REXCVAR_GET(kk_hardware_tier).empty();
-  ApplyHardwareRecommendation(first_setup, width, height, first_setup);
+  if (first_setup) ApplyFirstSetupHardwareRecommendation(width, height);
+  else ApplyHardwareRecommendation(false, width, height, false);
+}
+
+void ApplyFirstSetupHardwareRecommendation(int width, int height) {
+  ApplyHardwareRecommendation(true, width, height, true);
 #if !defined(_WIN32)
   // Later Linux launches keep the old GI-only policy. Persist a new Deck's
   // initial render choices so they survive that path; overrides still win.
-  if (first_setup && DetectHardware().steam_deck) {
+  if (DetectHardware().steam_deck) {
     for (const char* name : {"kk_render_quality", "native_upscaler_quality", "native_gi_distance",
                              "native_ao_quality", "native_ao_samples", "ao_mode"}) {
       if (rex::cvar::GetFlagSource(name) == rex::cvar::Source::kDefault)
@@ -879,6 +922,12 @@ void SetCvarDefault(std::string_view name, std::string_view value) {
 void ApplyPortDefaults() {
   // Windowed by default so the launcher isn't a giant fullscreen dialog.
   SetCvarDefault("fullscreen", "false");
+#if defined(_WIN32)
+  // Task 350a (owner, 21 Oct): DirectX 12 is the graphics API on Windows; startup recovery switches to Vulkan when
+  // DirectX 12 cannot start (startup_recovery.cpp). Linux keeps the renderer's own "auto" (Vulkan). A settings file
+  // from before Beta 14 is moved over once (MigrateGraphicsApi).
+  SetCvarDefault("native_backend", "d3d12");
+#endif
   SetCvarDefault("mnk_sensitivity", "0.010000");  // as the setting writes it, so it is not saved
   // Keyboard & mouse: laid out like other first-person games. The mouse turns
   // the camera (mouse_look.cpp; the runtime's own mouse-to-stick part is off,
