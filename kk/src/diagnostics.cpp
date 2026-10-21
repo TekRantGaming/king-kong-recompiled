@@ -5,6 +5,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <cctype>
+#include <chrono>
 #include <deque>
 #include <fstream>
 #include <mutex>
@@ -15,6 +16,7 @@
 #include <spdlog/sinks/base_sink.h>
 
 #include "log_tail_logic.h"
+#include "background_log_sink.h"
 
 #if defined(_WIN32)
 #define WIN32_LEAN_AND_MEAN
@@ -36,6 +38,36 @@ std::array<char, kReportSize> g_snapshot{}, g_initial{};
 std::vector<std::string> g_private;
 // The last 200 log lines for crash and hang reports, redacted as for uploads (task 197). Fixed memory.
 LogTail<> g_tail;
+std::shared_ptr<BackgroundLogSink> g_background_output;
+#if defined(KK_DEV_TOOLS)
+std::string DevLogSetting(const char* name) {
+#if defined(_WIN32)
+  char value[32]{};
+  const DWORD size = GetEnvironmentVariableA(name, value, DWORD(std::size(value)));
+  return size && size < std::size(value) ? value : "";
+#else
+  const char* value = std::getenv(name);
+  return value ? value : "";
+#endif
+}
+// Diagnostic injection only: model the original 18.6 s Guest FPS file write.
+// The mutex also stalls concurrent output, as the original file sink does.
+class SlowOutputForTest final : public spdlog::sinks::base_sink<std::mutex> {
+ public:
+  SlowOutputForTest(std::vector<spdlog::sink_ptr> outputs, int delay_ms)
+      : outputs_(std::move(outputs)), delay_ms_(delay_ms) {}
+ private:
+  void sink_it_(const spdlog::details::log_msg& msg) override {
+    if (std::string_view(msg.payload.data(), msg.payload.size()).starts_with("Guest FPS:") && ++fps_lines_ == 13)
+      std::this_thread::sleep_for(std::chrono::milliseconds(delay_ms_));
+    for (const auto& output : outputs_)
+      if (output->should_log(msg.level)) output->log(msg);
+  }
+  void flush_() override { for (const auto& output : outputs_) output->flush(); }
+  std::vector<spdlog::sink_ptr> outputs_;
+  int delay_ms_, fps_lines_ = 0;
+};
+#endif
 telemetry::Private g_personal;  // set once in InitDiagnostics, before any line is added
 void RememberLogLine(std::string_view line) {
   g_tail.Add(RedactLogLine(line, g_personal, decltype(g_tail)::kMaxLineBytes - 1));
@@ -281,8 +313,50 @@ void InitDiagnostics() {
         Capture(line, lower.find("[error]") != std::string::npos || lower.find("[critical]") != std::string::npos);
       }
     }
+    // The SDK's normal categories share their output sinks and flush level.
+    // Keep custom category routing unchanged if an embedding supplies it.
+    // Built-ins are lazy: register them before changing automatic flushes,
+    // including categories whose first message is emitted during gameplay.
+    for (const auto category : {rex::log::core(), rex::log::cpu(), rex::log::apu(), rex::log::gpu(),
+                                rex::log::krnl(), rex::log::sys(), rex::log::fs()}) (void)category;
+    const auto logger = rex::GetLogger();
+    auto outputs = logger->sinks();
+    const auto flush_level = logger->flush_level();
+    bool shared = !outputs.empty();
+    for (const auto& category : rex::GetAllCategories())
+      shared &= category.logger->sinks() == outputs && category.logger->flush_level() == flush_level;
+    bool background = true;
+#if defined(KK_DEV_TOOLS)
+    if (shared) {
+      const long delay = std::clamp(std::strtol(DevLogSetting("KK_DEV_LOG_IO_STALL_MS").c_str(), nullptr, 10), 0L, 20000L);
+      if (delay > 0) {
+        auto slow = std::make_shared<SlowOutputForTest>(outputs, int(delay));
+        for (const auto& output : outputs) rex::RemoveSink(output);
+        rex::AddSink(slow);
+        outputs = {slow};
+      }
+    }
+    background = DevLogSetting("KK_DEV_SYNC_LOG_OUTPUT") != "1";
+#endif
+    if (shared && background) {
+      // Logging keeps working synchronously if a worker cannot be created.
+      try { g_background_output = std::make_shared<BackgroundLogSink>(outputs, flush_level); }
+      catch (const std::exception&) {}
+    }
+    if (g_background_output) {
+      for (const auto& output : outputs) rex::RemoveSink(output);
+      rex::AddSink(g_background_output);
+      // Preserve automatic flushes on the worker. Explicit/periodic flushes
+      // still wait for preceding output; the per-frame log call only enqueues.
+      for (const auto& category : rex::GetAllCategories()) category.logger->flush_on(spdlog::level::off);
+    }
     rex::AddSink(std::make_shared<DiagnosticSink>());
+    REXLOG_INFO("KK: log output {}", g_background_output ? "background" : "direct");
   });
+}
+
+void StopBackgroundLogOutput() {
+  if (g_background_output) g_background_output->Stop();
 }
 
 std::string DiagnosticsHardware() {

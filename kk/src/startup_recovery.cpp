@@ -1,5 +1,6 @@
 #include "startup_recovery.h"
 #include "exit_evidence.h"
+#include "diagnostics.h"
 #include "startup_recovery_state.h"
 #include "amd_shader_cache.h"
 #include "launcher.h"
@@ -376,6 +377,7 @@ void Begin(const std::string& plugin, bool game) {
 }
 
 void CleanExit() {
+  kk::StopBackgroundLogOutput();
   kk::exit_evidence::NoteCleanExit("quit or restart");  // task 229: logs\session-<role>.txt
   std::lock_guard lock(mutex);
   if (launcher_active && state) LauncherGuard(state->directory).Clear();
