@@ -6,6 +6,7 @@
 #include "coop_nametag.h"
 #include "coop_observer.h"
 #include "coop_story_game.h"
+#include "coop_desync_game.h"
 #include "settings.h"
 #include "steam_runtime.h"
 #include "social_fake.h"
@@ -692,6 +693,7 @@ void GameFrame(uint8_t* base) {
   RefreshSessionCheats();
   kk::PartnerBodyGameFrame(base);
   StoryGameFrame(base);
+  WorldGuardFrame(base);
   if (!REXCVAR_GET(kk_coop_enabled)) { observer::GameFrame(base); return; }
   SessionReloadFrame(base);
   observer::GameFrame(base);

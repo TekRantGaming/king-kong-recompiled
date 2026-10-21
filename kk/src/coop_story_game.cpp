@@ -2,6 +2,7 @@
 // both peers; host events are convergence hints, never arbitrary native calls.
 #include "coop_story_game.h"
 #include "coop_story.h"
+#include "coop_desync_game.h"
 #include "coop_runtime.h"
 #include "coop_pose.h"
 #include "coop_partner_body.h"
@@ -635,6 +636,54 @@ void ChecksumFrame(uint8_t* b,double now) {
 }
 } // namespace
 
+std::vector<WorldScript> StoryWorldDigest(const uint8_t* b) {
+  std::vector<WorldScript> out;
+  for (const auto& [actor,s]:scripts) {
+    const auto* bind=story::Match(s.binding.source,s.binding.script,bindings);
+    if (!bind || bind->actor!=actor || Vars(b,bind->ai,19824)!=bind->vars || Shape(b,bind->vars)!=bind->script) continue;
+    const auto record=Load32(b,bind->vars+19812); if (record>kStoryRecords) continue;
+    const uint8_t flags=s.run ? uint8_t((s.started>=s.run ? 1:0) | (s.finished>=s.run ? 2:0) |
+        (Tracks(b,bind->ai,kLoop) ? 4:0)) : 0;
+    out.push_back({bind->source,bind->script,s.run,record,flags});
+  }
+  return out;
+}
+desync::Evidence StoryCompareDigest(const uint8_t* b,const desync::State& state,bool reconcile) {
+  desync::Evidence result; result.progress=14695981039346656037ull;
+  const auto mix=[&](uint64_t v) { for (unsigned i=0;i<8;++i) { result.progress^=uint8_t(v>>(i*8)); result.progress*=1099511628211ull; } };
+  for (const auto& h:state.scripts) {
+    const auto* bind=story::Match(h.source,h.script,bindings);
+    if (!bind || Vars(b,bind->ai,19824)!=bind->vars || Shape(b,bind->vars)!=bind->script) {
+      if (h.run && (h.flags&3)) { result.structural=true; mix(h.source); mix(0); }
+      continue;
+    }
+    auto& s=scripts.at(bind->actor); const auto index=Load32(b,bind->vars+19812);
+    if (!h.run || !(h.flags&3)) continue;
+    StoryEvent e{state.header.generation,state.header.level,1,h.source,h.script,h.run,h.record,
+        (h.flags&2) ? StoryPhase::SnapshotFinished : StoryPhase::SnapshotLoop};
+    if (CheckpointCovers(b,s,e) || SnapshotReached(b,s,e)) continue;
+    mix(h.source); mix(s.run); mix(index); mix(s.finished);
+    // Only activation bookkeeping may be quietly aligned, with independently
+    // matching native cursor/track state. Never write a received native cursor,
+    // actor flag or callback, especially for mixed/NPC/inventory programs.
+    const bool metadata=index==h.record && s.run<=h.run &&
+        (((h.flags&4) && Tracks(b,bind->ai,kLoop)) ||
+         ((h.flags&2) && !Tracks(b,bind->ai,kLoop) && !Load32(b,bind->vars+924+180*index)));
+    if (metadata) {
+      result.quiet=true;
+      if (reconcile) {
+        s.run=h.run; s.started=h.run; s.record=index; runs[h.source]=h.run;
+        if (h.flags&2) s.finished=h.run;
+        s.lag={};
+      }
+    } else result.lag=true;
+    if (reconcile) {
+      if (h.flags&2) { s.checkpoint_finished=e; CoverCheckpointPrefix(b,s); }
+      s.hints.Remember(e); Converge(s);
+    }
+  }
+  return result;
+}
 bool StoryBehind() { return behind.load(); }
 bool StoryNeedsMove() { return needs_move.load(); }
 bool StoryAnyBehind() {
@@ -663,6 +712,7 @@ void StoryPartnerMoved() {
   needs_move=false;
 }
 void StoryLoaded(uint8_t* b) {
+  WorldGuardLoaded();
   const auto v=SessionFlowSnapshot();
   if (!v.active || v.policy!=ChapterPolicy::Together || !v.world.generation || !v.world.level) return;
   const auto session_epoch=StorySessionEpoch();
@@ -717,6 +767,7 @@ void StoryGameFrame(uint8_t* b) {
     Refuse("private load or reconnect requires checkpoint catch-up");
   }
   for (const auto& m : TakeStory()) {
+    if (m.type==MessageType::WorldDigest) { WorldGuardReceive(m); continue; }
     const auto& e=m.story;
     if (host && e.phase!=StoryPhase::Checksum) Note("request received",e);
     if (m.epoch!=epoch || e.generation!=generation || e.level!=level) {

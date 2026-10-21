@@ -124,10 +124,10 @@ void CoopSession::Receive(const Message& m, double now) {
         return;
       }
       switch (m.type) {
-        case MessageType::StoryEvent: case MessageType::TriggerRequest:
+        case MessageType::StoryEvent: case MessageType::TriggerRequest: case MessageType::WorldDigest:
           if (state_!=SessionState::Connected || StorySender(m.type,config_.role)) return;
-          if (incoming_story_.size()>=kStoryQueue) { End(now); return; }
-          incoming_story_.push_back(m); break;
+          if (!RetainStoryMessage(incoming_story_,m)) { End(now); return; }
+          break;
         case MessageType::OwnershipChange:
           if (state_ != SessionState::Connected || OwnershipSender(m.ownership.phase, config_.role)) return;
           if (incoming_ownership_.size() >= kMaxEnemies*2) { End(now); return; }
@@ -347,6 +347,7 @@ bool CoopSession::QueueFlow(const Message& m) {
 bool CoopSession::QueueStory(const Message& m) {
   if (state_!=SessionState::Connected || !IsStoryMessage(m.type) || m.epoch!=epoch_ ||
       !StorySender(m.type,config_.role) || outgoing_story_.size()>=kStoryQueue) return false;
+  if (m.type==MessageType::WorldDigest && outgoing_story_.size()>=kStoryQueue/4) return false;
   std::vector<uint8_t> bytes; if (!Encode(m,bytes)) return false;
   outgoing_story_.push_back(m); return true;
 }

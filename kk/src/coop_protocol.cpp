@@ -2,6 +2,7 @@
 #include "coop_combat.h"
 
 #include <bit>
+#include <algorithm>
 #include <cmath>
 #include <utility>
 
@@ -208,9 +209,46 @@ bool ValidPlayerStatus(const PlayerStatus& p) {
   return ValidEnemyWorld(p.world) && p.incarnation && p.number &&
       p.condition >= PlayerCondition::Alive && p.condition <= PlayerCondition::Dead;
 }
+bool ValidWorldDigest(const WorldDigestPage& p) {
+  if (!p.generation || !p.level || p.level>100000 || p.start>10000 || p.checkpoint>10000 || !p.sweep ||
+      !p.parts || p.parts>256 || p.part>=p.parts || p.script_count>kStorySnapshotScripts || p.enemy_count>kMaxEnemies ||
+      p.extensions || !std::isfinite(p.captured) || p.captured<0 || p.captured>=1e12 ||
+      !ValidEnemyWorld(p.enemy_world) || p.enemy_world.level!=p.level || p.enemy_world.start!=p.start ||
+      p.scripts.size()>kDigestScriptsPerPage || p.enemies.size()>kDigestEnemiesPerPage ||
+      p.scripts.size()>p.script_count || p.enemies.size()>p.enemy_count ||
+      p.parts!=std::max<size_t>({1,(size_t(p.script_count)+15)/16,(size_t(p.enemy_count)+11)/12})) return false;
+  const auto expected=[](size_t total,size_t part,size_t per) { return std::min(per,total-std::min(total,part*per)); };
+  if (p.scripts.size()!=expected(p.script_count,p.part,kDigestScriptsPerPage) ||
+      p.enemies.size()!=expected(p.enemy_count,p.part,kDigestEnemiesPerPage)) return false;
+  for (const auto& s:p.scripts) if (!s.source || !s.script || s.record>kStoryRecords || s.flags>7 ||
+      (!s.run && s.flags)) return false;
+  for (const auto& e:p.enemies) if (!e.id.source || e.id.family<EnemyFamily::Raptor || e.id.family>EnemyFamily::Scorpion ||
+      e.owner>EnemyOwner::Guest || !std::isfinite(e.life) || std::abs(e.life)>=1000000 ||
+      !std::isfinite(e.secondary_life) || e.secondary_life<0 || e.secondary_life>=1000000 ||
+      (e.id.family!=EnemyFamily::Scorpion && e.secondary_life!=0)) return false;
+  return true;
+}
 bool Encode(const Message& m, std::vector<uint8_t>& out) {
   Writer payload;
   switch (m.type) {
+    case MessageType::WorldDigest: {
+      const auto& p=m.digest; if (!ValidWorldDigest(p)) return false;
+      for (uint32_t v:{p.generation,p.level,p.start,p.checkpoint,p.sweep}) payload.U(v,4);
+      payload.U(std::bit_cast<uint64_t>(p.captured),8);
+      WriteWorld(payload,p.enemy_world);
+      payload.U(p.completed,8);
+      for (uint16_t v:{p.part,p.parts,p.script_count,p.enemy_count}) payload.U(v,2);
+      payload.U(p.extensions,4); payload.U(p.scripts.size(),1); payload.U(p.enemies.size(),1);
+      for (const auto& s:p.scripts) {
+        payload.U(s.source,8); payload.U(s.script,8); payload.U(s.run,4); payload.U(s.record,4); payload.U(s.flags,1);
+      }
+      for (const auto& e:p.enemies) {
+        payload.U(e.id.source,8); payload.U(e.id.sequence,4); payload.U(uint16_t(e.id.family),2);
+        payload.U(uint8_t(e.owner),1); payload.U(e.generation,4);
+        payload.U(std::bit_cast<uint32_t>(e.life),4); payload.U(std::bit_cast<uint32_t>(e.secondary_life),4);
+      }
+      break;
+    }
     case MessageType::StoryEvent: case MessageType::TriggerRequest:
       if (!ValidStoryEvent(m.story) || (m.type == MessageType::TriggerRequest && !ValidStoryRequest(m.story.phase)) ||
           (m.type == MessageType::StoryEvent && m.story.phase==StoryPhase::SnapshotRequest)) return false;
@@ -356,6 +394,27 @@ bool Decode(std::span<const uint8_t> bytes, Message& out) {
   m.sequence = uint32_t(r.U(4)); m.epoch = r.U(8);
   if (r.U(4) != bytes.size() - kHeaderBytes) return false;
   switch (m.type) {
+    case MessageType::WorldDigest: {
+      auto& p=m.digest;
+      p.generation=uint32_t(r.U(4)); p.level=uint32_t(r.U(4)); p.start=uint32_t(r.U(4));
+      p.checkpoint=uint32_t(r.U(4)); p.sweep=uint32_t(r.U(4)); p.captured=std::bit_cast<double>(r.U(8));
+      p.enemy_world=ReadWorld(r); p.completed=r.U(8);
+      p.part=uint16_t(r.U(2)); p.parts=uint16_t(r.U(2)); p.script_count=uint16_t(r.U(2)); p.enemy_count=uint16_t(r.U(2));
+      p.extensions=uint32_t(r.U(4)); const size_t scripts=r.U(1),enemies=r.U(1);
+      if (scripts>kDigestScriptsPerPage || enemies>kDigestEnemiesPerPage) return false;
+      for (size_t i=0;i<scripts;++i) {
+        WorldScript s; s.source=r.U(8); s.script=r.U(8); s.run=uint32_t(r.U(4)); s.record=uint32_t(r.U(4)); s.flags=uint8_t(r.U(1));
+        p.scripts.push_back(s);
+      }
+      for (size_t i=0;i<enemies;++i) {
+        WorldEnemy e; e.id={r.U(8),uint32_t(r.U(4)),EnemyFamily(r.U(2))};
+        e.owner=EnemyOwner(r.U(1)); e.generation=uint32_t(r.U(4));
+        e.life=std::bit_cast<float>(uint32_t(r.U(4))); e.secondary_life=std::bit_cast<float>(uint32_t(r.U(4)));
+        p.enemies.push_back(e);
+      }
+      if (!ValidWorldDigest(p)) return false;
+      break;
+    }
     case MessageType::StoryEvent: case MessageType::TriggerRequest:
       m.story.generation=uint32_t(r.U(4)); m.story.level=uint32_t(r.U(4)); m.story.number=uint32_t(r.U(4));
       m.story.source=r.U(8); m.story.script=r.U(8);

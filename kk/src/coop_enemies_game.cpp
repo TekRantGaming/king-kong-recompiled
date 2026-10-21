@@ -450,6 +450,8 @@ Authority* AuthorityFor(EnemyId local) {
   return it == all.end() ? nullptr : &it->second;
 }
 std::optional<EnemyWorld> private_identity;
+struct GuardWorld { EnemyWorld world; uint64_t epoch=0; uint32_t generation=0; };
+std::optional<GuardWorld> guard_world;
 std::map<uint64_t,uint32_t> private_spawner_sequences;
 struct PrivateSequences {
   uint32_t shot=0, damage=0;
@@ -1810,6 +1812,29 @@ void EnemyDevGameFrame(PPCContext& ctx, uint8_t* base) {
   DevDie(ctx, base);
   DevBait(ctx, base);
 }
+bool EnemyDevWorldDrift(uint8_t* base) {
+  auto& s=Get();
+  if (!Connected() || s.link.role!=Role::Guest || !Environment(base,s.world)) return false;
+  for (const auto& r:s.link.remote.records) {
+    const auto& e=r.enemy;
+    if (e.owner!=EnemyOwner::Host || e.life<=0 || e.life>999900) continue;
+    const auto* binding=CanonicalBinding(base,e.id);
+    const auto auth=s.authority.find(e.id);
+    if (!binding || auth==s.authority.end() || auth->second.Frozen() || !auth->second.Accepts(e)) continue;
+    StoreF(base,binding->vars+LifeOffset(binding->id.family),e.life+20);
+    REXLOG_INFO("KK dev desync: injected native enemy health drift {:.1f} -> {:.1f}",e.life,e.life+20);
+    return true;
+  }
+  return false;
+}
+bool EnemyDevWorldGenerationDrift() {
+  auto& s=Get();
+  if (!Connected() || s.link.role!=Role::Guest || !ValidEnemyWorld(s.identity)) return false;
+  const auto before=s.identity.serial;
+  s.identity.serial=before==UINT32_MAX ? before-1 : before+1;
+  REXLOG_INFO("KK dev desync: injected native enemy world visit {} -> {}",before,s.identity.serial);
+  return true;
+}
 #endif
 std::optional<PlayerCondition> LocalPlayerCondition(const uint8_t* b) {
   const auto h=ReadHumanStatus(b); return h ? std::optional{h->condition} : std::nullopt;
@@ -1838,14 +1863,26 @@ void EnemyBeforeLoad() {
 #endif
   if (!REXCVAR_GET(kk_coop_enabled)) return;
   private_identity=SessionPrivateReload() ? std::optional{Get().identity} : std::nullopt;
+  const auto view=SessionFlowSnapshot(); const auto link=EnemyLinkSnapshot();
+  if (private_identity && SessionCheckpointCatchup() && !view.host && guard_world &&
+      guard_world->epoch==link.epoch && guard_world->generation==view.world.generation &&
+      guard_world->world.level==view.world.level && guard_world->world.start==view.world.start) {
+    private_identity=guard_world->world;
+    if (*private_identity!=Get().identity)
+      REXLOG_INFO("KK co-op desync: restoring guest enemy world to host level={} start={} visit={}",
+          private_identity->level,private_identity->start,private_identity->serial);
+  }
+  guard_world.reset();
   private_spawner_sequences.clear();
   private_sequences={};
   private_ownership={};
   if (private_identity) {
     const auto& s=Get();
-    for (const auto& [actor,sp] : s.spawners) private_spawner_sequences[sp.key]=sp.sequence;
     private_sequences={s.next_shot,s.next_damage,s.combat_epoch,s.shot_validator,s.status_replay};
-    private_ownership={s.ownership_epoch,s.aliases,s.authority,s.ownership_out,s.committed,s.ownership_in};
+    if (private_identity->level==s.identity.level && private_identity->start==s.identity.start) {
+      for (const auto& [actor,sp] : s.spawners) private_spawner_sequences[sp.key]=sp.sequence;
+      private_ownership={s.ownership_epoch,s.aliases,s.authority,s.ownership_out,s.committed,s.ownership_in};
+    }
   }
   ClearCombat();
   ClearOwnership();
@@ -1863,6 +1900,7 @@ void EnemyAfterLoad(const uint8_t* b, uint32_t game) {
   // pointers are rebuilt, but the living peer's events keep their scope.
   if (private_identity && private_identity->level==level) {
     s.identity=*private_identity; s.next_shot=private_sequences.shot;
+    s.visits[{s.identity.level,s.identity.start}]=s.identity.serial;
     s.shot_validator=private_sequences.shots;
     const auto link=EnemyLinkSnapshot();
     if (private_ownership.epoch && private_ownership.epoch==link.epoch) {
@@ -1883,6 +1921,71 @@ void EnemyAfterLoad(const uint8_t* b, uint32_t game) {
   private_identity.reset();
   private_ownership={};
   s.capture = ValidEnemyWorld(s.identity);
+}
+EnemyWorld EnemyCurrentWorld() { return Get().identity; }
+void EnemyGuardRecoveryWorld(EnemyWorld world) {
+  guard_world.reset();
+  const auto v=SessionFlowSnapshot(); const auto link=EnemyLinkSnapshot();
+  if (ValidEnemyWorld(world) && v.active && !v.host && v.policy==ChapterPolicy::Together && link.connected &&
+      world.level==v.world.level && world.start==v.world.start)
+    guard_world=GuardWorld{world,link.epoch,v.world.generation};
+}
+std::vector<WorldEnemy> EnemyWorldDigest(const uint8_t* b) {
+  auto& s=Get(); std::vector<WorldEnemy> out;
+  if (!Connected() || !Environment(b,s.world)) return out;
+  for (const auto& [local,r]:s.records) {
+    auto* a=AuthorityFor(local); if (!a || r.kind==EnemyEventKind::Removed) continue;
+    auto e=r.enemy;
+    for (const auto& [actor,binding]:s.bindings) if (binding.id==local && ValidBinding(b,binding)) {
+      e.life=LoadF(b,binding.vars+LifeOffset(local.family));
+      if (const auto offset=SecondaryLifeOffset(local.family)) e.secondary_life=LoadF(b,binding.vars+offset);
+      break;
+    }
+    if (!ValidEnemy(e)) continue;
+    if (a->dead || r.kind==EnemyEventKind::Died) e.life=std::min(0.f,e.life);
+    out.push_back({Canonical(local),a->owner,a->generation,e.life,e.secondary_life});
+  }
+  return out;
+}
+desync::Evidence EnemyCompareDigest(uint8_t* b,const desync::State& state,bool reconcile) {
+  desync::Evidence result;
+  const auto missing=[&](EnemyId id) { result.structural=true; result.progress=Mix(Mix(result.progress,id.source),id.sequence); };
+  auto& s=Get();
+  if (!Connected() || s.link.role!=Role::Guest) return result;
+  if (ValidEnemyWorld(s.identity) && s.identity!=state.header.enemy_world) { result.wrong_level=true; return result; }
+  if (!Environment(b,s.world)) return result;
+  const auto rough=[](float a,float b) { return (a>0)!=(b>0) || std::abs(a-b)>5.f; };
+  for (const auto& h:state.enemies) {
+    // Host digests never override guest-owned AI or an in-flight ownership change.
+    if (h.owner!=EnemyOwner::Host) continue;
+    const auto* binding=CanonicalBinding(b,h.id);
+    if (!binding) { if (h.life>0) missing(h.id); continue; }
+    const auto auth=s.authority.find(h.id);
+    if (auth==s.authority.end() || auth->second.owner!=h.owner || auth->second.generation!=h.generation ||
+        auth->second.Frozen()) continue;
+    const float life=LoadF(b,binding->vars+LifeOffset(binding->id.family));
+    const auto offset=SecondaryLifeOffset(binding->id.family);
+    const float secondary=offset ? LoadF(b,binding->vars+offset) : 0;
+    if (!rough(h.life,life) && !rough(h.secondary_life,secondary)) continue;
+    // Digest values can be old by the time the sweep completes. Repair only
+    // from the normal fresh replicated stream, preserving terminal-event wins.
+    const Record* latest=nullptr;
+    for (const auto& r:s.link.remote.records) if (r.enemy.id==h.id && r.enemy.owner==h.owner &&
+        r.enemy.generation==h.generation) { latest=&r; break; }
+    if (!latest || (auth->second.dead && latest->enemy.life>0) || !s.link.connected || Now()-s.link.remote.time>.5 ||
+        (!rough(latest->enemy.life,life) && !rough(latest->enemy.secondary_life,secondary))) continue;
+    result.quiet=true;
+    if (reconcile) WriteLife(b,*binding,latest->enemy);
+  }
+  std::set<EnemyId> host_ids;
+  for (const auto& h:state.enemies) host_ids.insert(h.id);
+  for (const auto& [actor,binding]:s.bindings) {
+    const auto id=Canonical(binding.id); const auto auth=s.authority.find(id);
+    if (!id.source || host_ids.contains(id) || auth==s.authority.end() || auth->second.dead ||
+        auth->second.owner!=EnemyOwner::Host || auth->second.Frozen() || !ValidBinding(b,binding)) continue;
+    if (LoadF(b,binding.vars+LifeOffset(binding.id.family))>0) missing(id);
+  }
+  return result;
 }
 void EnemyGameFrame() {
   if (!Connected()) {

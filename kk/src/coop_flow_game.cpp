@@ -3,6 +3,7 @@
 #include "coop_enemies_game.h"
 #include "coop_observer.h"
 #include "coop_story_game.h"
+#include "coop_desync_game.h"
 #include "coop_dev_follow.h"
 #include "benchmark.h"
 #include "play_internal.h"
@@ -43,6 +44,7 @@ enum class CatchupPhase { None, Requested, Loading, Placing };
 CatchupPhase catchup_phase=CatchupPhase::None;
 uint32_t catchup_target=0;
 bool catchup_from_offer=false;
+bool catchup_from_guard=false;
 double catchup_deadline=0;
 uint32_t pending_move=0;
 double move_until=0;
@@ -107,11 +109,18 @@ bool CatchupSafe(uint8_t* base,double now) {
   return local.pose && !EnemyNearPlayer(base,*local.pose,15);
 }
 void CancelCatchup() {
+  if (catchup_from_guard) WorldGuardCancelled(desync::Tier::Reload);
+  catchup_from_guard=false;
   catchup_phase=CatchupPhase::None; catchup_offer=false; catchup_request=0;
   private_load=private_request=false; catchup_notice_until=0; catchup_from_offer=false;
 }
-void BeginCatchup(const FlowView& v,double now,const char* reason,bool checkpoint_offer=false) {
-  if (!catchup.Begin(checkpoint_offer)) return;
+void BeginCatchup(const FlowView& v,double now,const char* reason,bool checkpoint_offer=false,bool desync_recovery=false) {
+  if (!catchup.Begin(checkpoint_offer,desync_recovery)) {
+    if (desync_recovery) { WorldGuardStarted(desync::Tier::Reload); WorldGuardCancelled(desync::Tier::Reload); }
+    return;
+  }
+  catchup_from_guard=desync_recovery;
+  if (desync_recovery) WorldGuardStarted(desync::Tier::Reload);
   catchup_from_offer=checkpoint_offer;
   catchup_target=catchup.Target(); catchup_phase=CatchupPhase::Requested;
   catchup_deadline=now+revive::kLoadTimeout; private_request=true;
@@ -186,10 +195,11 @@ void MoveToPartner(bool checkpoint_recovery) {
     REXLOG_INFO("KK co-op story: soft fix requested, move to partner without reload");
   }
 }
-void StopSessionFlow() { stopping=true; move_request=catchup_request=0; catchup_offer=false; catchup_notice_until=0; observer::SetPartnerSpectating(false); }
+void StopSessionFlow() { WorldGuardSummary(); stopping=true; move_request=catchup_request=0; catchup_offer=false; catchup_notice_until=0; observer::SetPartnerSpectating(false); }
 bool SessionInProcess() { return launched; }
 bool SessionPrivateReload() { return private_load; }
 bool SessionCheckpointCatchup() { return catchup_phase==CatchupPhase::Loading || catchup_phase==CatchupPhase::Placing; }
+uint32_t SessionNativeCheckpoint() { return catchup.WorldCheckpoint(); }
 void ApplySessionSettings() {
   if (!launched) return;
   const auto v=SessionFlowSnapshot();
@@ -322,8 +332,8 @@ bool SessionBeforeGo(PPCContext& ctx,uint8_t* base,uint32_t g) {
     const auto link=EnemyLinkSnapshot();
     if (catchup_phase==CatchupPhase::Requested) {
       const auto condition=LocalPlayerCondition(base);
-      if ((condition && *condition==PlayerCondition::Dead) || v.checkpoint<catchup.WorldCheckpoint() ||
-          (!catchup_from_offer && v.checkpoint==catchup.WorldCheckpoint())) {
+      if ((condition && *condition==PlayerCondition::Dead) || (!catchup_from_guard && v.checkpoint<catchup.WorldCheckpoint()) ||
+          (!catchup_from_offer && !catchup_from_guard && v.checkpoint==catchup.WorldCheckpoint())) {
         CancelCatchup(); return false; // The normal death route wins this race.
       }
     }
@@ -344,7 +354,7 @@ bool SessionBeforeGo(PPCContext& ctx,uint8_t* base,uint32_t g) {
     local_checkpoint=v.host ? v.partner_life.life.checkpoint : v.checkpoint;
     if (catchup_phase==CatchupPhase::Requested) {
       catchup.Observe(v.world.generation,v.checkpoint,Now());
-      catchup.Begin(catchup_from_offer); // Also consume a checkpoint that advanced after queuing.
+      catchup.Begin(catchup_from_offer,catchup_from_guard); // Also consume a checkpoint that advanced after queuing.
       catchup_target=local_checkpoint; catchup_phase=CatchupPhase::Loading;
       REXLOG_INFO("KK co-op catch-up: loading guest only generation {} level {} checkpoint {}",v.world.generation,v.world.level,catchup_target);
     }
@@ -578,6 +588,17 @@ void SessionReloadFrame(uint8_t* base) {
         !observer::Active() && !observer::InCutscene(base) && !play::StartLevelLoading() &&
         !play::CoverScreen() && !play::PauseMenuOpen() && !play::GamePausePageUp();
     const uint32_t accepted=catchup_request.exchange(0);
+    const auto guard_action=WorldGuardPending();
+    if (eligible && guard_action==desync::Tier::Reload) {
+      BeginCatchup(v,now,"persistent world digest drift",false,true);
+      return;
+    }
+    if (eligible && guard_action==desync::Tier::Move) {
+      move_request=v.world.generation; catchup_notice_until=now+4;
+      WorldGuardStarted(desync::Tier::Move);
+      REXLOG_INFO("KK co-op desync: automatic guest move queued generation={} level={}",v.world.generation,v.world.level);
+      return;
+    }
     const bool immediate=eligible &&
         (catchup.Offer(StoryAnyBehind(),true,now) || (catchup.Available() && StoryBehind())) && CatchupSafe(base,now);
     if (immediate && !catchup_offer.load())
@@ -668,6 +689,7 @@ void SessionReviveBeforeAi(PPCContext& ctx,uint8_t* base) {
     ++life_incarnation; life_number=0; life_sent=false; PublishLife(v,false,Now());
     REXLOG_INFO("KK co-op catch-up: guest placed beside host generation {} level {} checkpoint {}; host never entered a load barrier",
         v.world.generation,v.world.level,catchup_target);
+    catchup_from_guard=false; WorldGuardCompleted(desync::Tier::Reload);
   }
   const uint32_t requested_move=move_request.exchange(0);
   if (requested_move) { pending_move=requested_move; move_until=Now()+5; }
@@ -680,8 +702,10 @@ void SessionReviveBeforeAi(PPCContext& ctx,uint8_t* base) {
         ReviveTeleport(ctx,base,*link.partner)) {
       pending_move=0; move_offer=false; behind=BehindRule{};
       StoryPartnerMoved();
+      catchup_notice_until=Now()+4; WorldGuardCompleted(desync::Tier::Move);
       REXLOG_INFO("KK co-op story: soft fix applied, native teleport beside host; no reload");
     } else if (Now()>move_until) {
+      WorldGuardCancelled(desync::Tier::Move);
       pending_move=0; move_offer=true;
       REXLOG_INFO("KK co-op story: soft fix deferred, safe live partner/Jack/controller unavailable; no reload");
     }

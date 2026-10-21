@@ -133,8 +133,9 @@ class BehindRule {
 };
 
 // Host checkpoint notifications update the retry save, not the guest's live
-// world. Track actual native checkpoints/loads separately and try each newer
-// host checkpoint at most once. A failed private catch-up must never loop.
+// world. Ordinary catch-up tries each newer host checkpoint at most once.
+// Proven world drift may also return to the same/older authoritative checkpoint.
+// Track actual native checkpoints/loads separately; a failed attempt never loops.
 class CheckpointCatchup {
  public:
   void Reset(uint32_t generation,uint32_t checkpoint) {
@@ -150,8 +151,9 @@ class CheckpointCatchup {
     return !attempted_ && offered_until_>=0 && host_>=world_ && script_behind && safe && std::isfinite(now) &&
         now>=offered_until_-6 && now<=offered_until_;
   }
-  bool Begin(bool checkpoint_offer=false) {
-    if (!Available() && !(checkpoint_offer && !attempted_ && offered_until_>=0 && host_==world_)) return false;
+  bool Begin(bool checkpoint_offer=false,bool desync_recovery=false) {
+    if (!Available() && !(!attempted_ && desync_recovery) &&
+        !(!attempted_ && host_==world_ && checkpoint_offer && offered_until_>=0)) return false;
     attempted_=true; return true;
   }
   uint32_t Target() const { return host_; }

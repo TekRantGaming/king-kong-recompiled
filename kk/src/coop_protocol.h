@@ -11,7 +11,7 @@
 
 namespace kk::coop {
 constexpr uint32_t kMagic = 0x4B4B4331;  // KKC1, network byte order throughout
-constexpr uint16_t kProtocolVersion = 14; // C61 six-character codes and revision-scoped Direct IP lobby choices.
+constexpr uint16_t kProtocolVersion = 15; // C72 bounded host world-state digest pages.
 constexpr size_t kMaxDisplayNameBytes = 32;
 // Valid UTF-8, no controls or invisible direction/line formatting, bounded at a codepoint.
 // Empty or wholly invalid input becomes "Partner". Never log the input or result.
@@ -24,7 +24,7 @@ enum class MessageType : uint16_t {
   Checkpoint = 18, ChapterFinished = 19, ReloadRequest = 20, FlowAbort = 21,
   DamageEvent = 22, PlayerStatus = 23, OwnershipChange = 24,
   PlayerDowned = 25, PlayerRevived = 26, CameraPose = 27, CameraCut = 28,
-  StoryEvent = 29, TriggerRequest = 30
+  StoryEvent = 29, TriggerRequest = 30, WorldDigest = 31
 };
 
 // Values only. source is an immutable authored-position/script signature, never
@@ -56,7 +56,7 @@ inline bool StorySnapshotEntry(StoryPhase phase) {
   return phase==StoryPhase::SnapshotIdle || phase==StoryPhase::SnapshotLoop || phase==StoryPhase::SnapshotFinished;
 }
 inline bool IsStoryMessage(MessageType t) {
-  return t == MessageType::StoryEvent || t == MessageType::TriggerRequest;
+  return t == MessageType::StoryEvent || t == MessageType::TriggerRequest || t == MessageType::WorldDigest;
 }
 
 // Session control is reliable and scoped by the packet epoch and a load generation.
@@ -218,6 +218,34 @@ struct EnemyEvent {
 };
 bool ValidEnemy(const EnemyState& enemy);
 bool ValidEnemyWorld(const EnemyWorld& world);
+// Extension mask is reserved for future world-object pages. Unknown extensions
+// are rejected until their codec/comparison rules are implemented.
+struct WorldScript {
+  uint64_t source=0,script=0;
+  uint32_t run=0,record=0;
+  uint8_t flags=0; // bit 0 started, bit 1 finished, bit 2 active native loop
+  auto operator<=>(const WorldScript&) const = default;
+};
+struct WorldEnemy {
+  EnemyId id;
+  EnemyOwner owner=EnemyOwner::Host;
+  uint32_t generation=0;
+  float life=0,secondary_life=0;
+  auto operator<=>(const WorldEnemy&) const = default;
+};
+constexpr size_t kDigestScriptsPerPage=16,kDigestEnemiesPerPage=12;
+struct WorldDigestPage {
+  uint32_t generation=0,level=0,start=0,checkpoint=0,sweep=0;
+  double captured=0; // host steady clock, compared only with the host's pose clock
+  EnemyWorld enemy_world; // native visit identity, retained across private reloads
+  uint64_t completed=0;
+  uint16_t part=0,parts=1,script_count=0,enemy_count=0;
+  uint32_t extensions=0;
+  std::vector<WorldScript> scripts;
+  std::vector<WorldEnemy> enemies;
+  auto operator<=>(const WorldDigestPage&) const = default;
+};
+bool ValidWorldDigest(const WorldDigestPage& page);
 struct Message {
   MessageType type = MessageType::Hello;
   uint16_t protocol = kProtocolVersion;
@@ -244,6 +272,7 @@ struct Message {
   FlowEvent flow;
   PlayerLife life;
   StoryEvent story;
+  WorldDigestPage digest;
 };
 // Encoders also reject invalid input. Decoding leaves out untouched on failure.
 bool Encode(const Message& message, std::vector<uint8_t>& out);

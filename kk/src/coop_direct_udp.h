@@ -11,6 +11,9 @@ struct DirectUdpOptions {
   std::string address = "127.0.0.1";
   uint16_t port = 27080;
   std::string join_code;
+#if defined(KK_DEV_TOOLS)
+  struct Simulation { double latency_ms=0,jitter_ms=0,loss_percent=0; } simulation;
+#endif
 };
 bool ValidJoinCode(std::string_view code);
 std::string NormalizeJoinCode(std::string_view code);

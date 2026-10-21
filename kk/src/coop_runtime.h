@@ -44,6 +44,7 @@ bool SessionDevFollowPad(uint32_t user, uint8_t* state);
 // Private death/catch-up reload does not advance the shared load barrier or enemy visit.
 bool SessionPrivateReload();
 bool SessionCheckpointCatchup();  // game thread, host-checkpoint private load/placement
+uint32_t SessionNativeCheckpoint(); // actual loaded/taken checkpoint, not the retry-save mirror
 void SessionReviveBeforeAi(PPCContext& ctx, uint8_t* base);
 int SessionCheats();  // -1 outside a C24 launch, otherwise immutable host settings
 void StopSessionFlow();

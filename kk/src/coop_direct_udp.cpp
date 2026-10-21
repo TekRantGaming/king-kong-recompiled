@@ -8,6 +8,10 @@
 #include <map>
 #include <random>
 #include <utility>
+#if defined(KK_DEV_TOOLS)
+#include <cstdio>
+#include <cstdlib>
+#endif
 #ifdef _WIN32
 #define WIN32_LEAN_AND_MEAN
 #define NOMINMAX
@@ -82,6 +86,18 @@ bool SameAddress(const sockaddr_storage& a, const sockaddr_storage& b) {
 class Udp final : public DirectUdpTransport {
  public:
   explicit Udp(DirectUdpOptions options) : options_(std::move(options)) {
+#if defined(KK_DEV_TOOLS)
+    if (const char* value=std::getenv("KK_DEV_UDP_SIM"); value && !options_.simulation.latency_ms &&
+        !options_.simulation.jitter_ms && !options_.simulation.loss_percent) {
+      auto& s=options_.simulation;
+      if (std::sscanf(value,"%lf:%lf:%lf",&s.latency_ms,&s.jitter_ms,&s.loss_percent)!=3) s={};
+    }
+    auto& simulation=options_.simulation;
+    if (!std::isfinite(simulation.latency_ms) || !std::isfinite(simulation.jitter_ms) || !std::isfinite(simulation.loss_percent) ||
+        simulation.latency_ms<0 || simulation.latency_ms>2000 || simulation.jitter_ms<0 ||
+        simulation.jitter_ms>simulation.latency_ms || simulation.loss_percent<0 || simulation.loss_percent>30) simulation={};
+    sim_random_.seed(options_.host ? 0xC7201u : 0xC7202u);
+#endif
     if (!network_.ok || !options_.port || !ValidJoinCode(options_.join_code)) return;
     std::random_device random;
     nonce_=(uint64_t(random())<<32)^random(); if (!nonce_) nonce_=1;
@@ -159,6 +175,14 @@ class Udp final : public DirectUdpTransport {
   void Poll(double now) override {
     if (state_!=TransportState::Ready || !std::isfinite(now)) return;
     now_=now; DrainOrdered();
+#if defined(KK_DEV_TOOLS)
+    for (auto it=simulated_.begin();it!=simulated_.end() && it->first<=now;) {
+      const auto& packet=it->second;
+      sendto(socket_,reinterpret_cast<const char*>(packet.wire.data()),int(packet.wire.size()),0,
+          reinterpret_cast<const sockaddr*>(&packet.address),packet.length);
+      it=simulated_.erase(it);
+    }
+#endif
     for (int i=0; i<64; ++i) {
       std::array<uint8_t,kMaxPacketBytes+kWireHeader+1> wire{};
       sockaddr_storage from{}; AddressLength length=sizeof(from);
@@ -242,6 +266,9 @@ class Udp final : public DirectUdpTransport {
     if (socket_!=kInvalid) { CloseSocket(socket_); socket_=kInvalid; }
     state_=TransportState::Closed; peer_ready_=false;
     ready_.clear(); ordered_.clear(); pending_.clear();
+#if defined(KK_DEV_TOOLS)
+    simulated_.clear();
+#endif
   }
  private:
   struct Pending { std::vector<uint8_t> wire; double last=-1; uint32_t attempts=0; };
@@ -255,7 +282,10 @@ class Udp final : public DirectUdpTransport {
   }
   bool Queue(std::span<const uint8_t> data,bool reliable,bool control) {
     if (state_!=TransportState::Ready || data.empty() || data.size()>kMaxPacketBytes) return false;
-    if (reliable && pending_.size()>=kWindow) { state_=TransportState::Failed; return false; }
+    // A WAN round trip can fill the reliable window during a save or digest
+    // sweep. The caller retains unsent data and retries after acknowledgements.
+    // Backpressure is not a broken connection and must not become Lost/Ended.
+    if (reliable && pending_.size()>=kWindow) return false;
     const uint32_t seq=reliable ? next_send_++ : 0;
     if (reliable && !seq) { state_=TransportState::Failed; return false; }
     auto wire=Wire(reliable ? 1 : 0,seq,control,data);
@@ -284,6 +314,17 @@ class Udp final : public DirectUdpTransport {
   }
   bool TransmitTo(std::span<const uint8_t> wire,const sockaddr_storage& address,AddressLength length) {
     if (!outgoing_.Take(now_)) return false;
+#if defined(KK_DEV_TOOLS)
+    const auto& sim=options_.simulation;
+    if (sim.latency_ms || sim.loss_percent) {
+      if (simulated_.size()>=2048) return false;
+      ++stats_.sent;
+      if (std::uniform_real_distribution<double>(0,100)(sim_random_)<sim.loss_percent) return true;
+      const double delay=sim.latency_ms+std::uniform_real_distribution<double>(-sim.jitter_ms,sim.jitter_ms)(sim_random_);
+      simulated_.emplace(now_+delay/1000,SimPacket{{wire.begin(),wire.end()},address,length});
+      return true;
+    }
+#endif
     const int n=int(sendto(socket_,reinterpret_cast<const char*>(wire.data()),int(wire.size()),0,
         reinterpret_cast<const sockaddr*>(&address),length));
     if (n==int(wire.size())) { ++stats_.sent; return true; } return false;
@@ -301,6 +342,11 @@ class Udp final : public DirectUdpTransport {
   std::map<uint32_t,Pending> pending_;
   std::map<uint32_t,Incoming> ordered_;
   std::deque<std::vector<uint8_t>> ready_;
+#if defined(KK_DEV_TOOLS)
+  struct SimPacket { std::vector<uint8_t> wire; sockaddr_storage address; AddressLength length; };
+  std::multimap<double,SimPacket> simulated_;
+  std::mt19937 sim_random_;
+#endif
 };
 } // namespace
 std::unique_ptr<DirectUdpTransport> CreateDirectUdp(DirectUdpOptions options) { return std::make_unique<Udp>(std::move(options)); }
