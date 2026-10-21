@@ -14,7 +14,7 @@ version's notes the first time you start it.
 - **A rare crash at the start on some NVIDIA graphics cards**: the launcher now checks which upscalers your PC offers before it opens its window, and remembers the answer until your graphics card, driver or the game changes. The first start after such a change opens a second or two later.
 
 ### Changed
-- **Faster soft shadows with DLSS, FSR and XeSS**: the shadows are now worked out at the upscaler's own resolution instead of the full output size, which saves about 1 ms a frame at 4K (around 13% more frames in our tests).
+- **Faster shadows with DLSS, FSR and XeSS**: soft shadows and the game's own shadows are now worked out at the upscaler's resolution instead of the full output size, and the soft shadows at High and Ultra use slightly lighter internal settings with no visible difference. About 25% more frames at 4K in our tests.
 - **Smoother chapter starts after the PS2 cutscenes**: while a story cutscene plays, the game now prepares most of the next chapter's textures, so far fewer have to load in the first minute of play.
 - **Lighter defaults on weak hardware**: the first setup picks a lighter preset for handhelds, integrated graphics, entry gaming laptops and PCs with little video memory. Existing players keep their settings.
 - **Medium preset**: uses the original shadows, which saves a lot of graphics time on mid-range PCs. High and Ultra are unchanged.
