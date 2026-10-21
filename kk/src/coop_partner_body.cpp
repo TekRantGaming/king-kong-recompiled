@@ -286,9 +286,19 @@ std::optional<uint8_t> LoadedItem(const uint8_t* b,const Rig& r,uint32_t action)
   return {};
 }
 uint32_t BodyWeapon(const uint8_t* b,const Rig& r) {
-  const auto game=Load32(b,0x82CC97C0), slot=Load32(b,r.vars+4);
-  // H_callback_tir indexes the same G+13124 table by the human's slot.
-  return slot>=1 && slot<=12 && Range(game,13176) ? Load32(b,game+13124+4*slot) : 0;
+  const auto slot=Load32(b,r.vars+4);
+  // H_callback_tir (82696B08) indexes the bank at *82CC8848, not the
+  // universe request globals at *82CC97C0. The native offset is 4*(slot+3281).
+  const auto weapon=coop::puppet::HumanWeapon(slot,
+      [&](uint32_t address) { return Load32(b,address); },
+      [&](uint32_t address,uint32_t bytes) { return Range(address,bytes); });
+#if defined(KK_DEV_TOOLS)
+  static std::set<uint32_t> logged;
+  if (logged.size()<32 && logged.insert(r.actor).second)
+    REXLOG_INFO("PUPPET weapon actor={:08X} slot={} native-bank={:08X} universe-globals={:08X} held={}",
+        r.actor,slot,Load32(b,0x82CC8848),Load32(b,0x82CC97C0),weapon);
+#endif
+  return weapon;
 }
 uint8_t AnimationSupport(const uint8_t* b, const Rig& r, uint8_t weapon) {
   if (Load32(b,r.vars) != 0) return 0;

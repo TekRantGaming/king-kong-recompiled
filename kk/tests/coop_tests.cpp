@@ -476,6 +476,19 @@ void Disabled() {
 }
 void PuppetPolicies() {
   using namespace kk::coop::puppet;
+  std::map<uint32_t,uint32_t> weapon_memory{{0x82CC8848,0x40000000},{0x82CC97C0,0x50000000},
+      {0x40000000+4*(3+3281),2},{0x50000000+4*(3+3281),1}};
+  const auto weapon_word=[&](uint32_t p) { return weapon_memory.at(p); };
+  const auto weapon_address=[](uint32_t p,uint32_t n) { return p==0x40000000 && n==13176; };
+  Check(HumanWeapon(3,weapon_word,weapon_address)==2,
+      "body weapon follows the native character bank, not universe request globals");
+  Check(!HumanWeapon(0,weapon_word,weapon_address) && !HumanWeapon(13,weapon_word,weapon_address),
+      "invalid character slots never index a weapon bank");
+  weapon_memory[0x82CC8848]=0;
+  Check(!HumanWeapon(3,weapon_word,weapon_address),"absent native bank never reaches a table read");
+  weapon_memory[0x82CC8848]=0x40000000;
+  weapon_memory[0x40000000+4*(3+3281)]=999;
+  Check(!HumanWeapon(3,weapon_word,weapon_address),"unknown native gun cannot choose an animation");
   std::map<uint32_t, uint32_t> animation_memory{{100 + 132, 300}, {300 + 4, 400}, {400, 500}};
   const auto pointer = [&](uint32_t p, uint32_t off, uint32_t) {
     // Invalid or absent pointers must never cause the next memory read.

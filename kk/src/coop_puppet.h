@@ -10,6 +10,16 @@
 #include <span>
 
 namespace kk::coop::puppet {
+// H_callback_tir 82696B08: the character's weapon uses the native global
+// variable bank and its slot, independently of the local Jack loadout.
+template<class Word,class Address>
+uint32_t HumanWeapon(uint32_t slot,Word word,Address address) {
+  if (slot<1 || slot>12) return 0;
+  const auto bank=word(0x82CC8848);
+  if (!address(bank,13176)) return 0;
+  const auto weapon=word(bank+4*(slot+3281));
+  return weapon<=4 ? weapon : 0;
+}
 // Native animation-event lookup (823F8FB0) reads layer+4 -> descriptor+0
 // -> header+4. A live layer can temporarily have no header during a switch.
 template<class Pointer>
