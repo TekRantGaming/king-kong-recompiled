@@ -55,6 +55,8 @@
 #include "freecam.h"
 #include "frame_stats.h"
 #include "launcher_ui.h"
+#include "mods.h"
+#include "hooks/kk_native_ui.h"
 #include "photo_mode.h"
 #include "play_internal.h"
 #include "play_session.h"
@@ -97,7 +99,9 @@ std::map<std::string, bool, std::less<>> g_baselined;
 std::atomic<int> g_look{kMax};
 std::atomic<bool> g_capturing{false};
 std::atomic<int64_t> g_press_until_ms{0};
-std::string g_upscaler, g_texture_pack;  // the Max look's (fixed at the start)
+std::string g_upscaler;    // the Max look's (fixed at the start)
+std::string g_uhd_folder;  // the Kong UHD Textures pack's folder (with pack.txt); empty: not installed
+std::map<std::string, std::string, std::less<>> g_owner;  // every setting changed: the player's own value
 std::string g_status;
 Clock::time_point g_status_until{};
 std::filesystem::path g_user_dir;
@@ -118,7 +122,10 @@ void Set(const char* name, const std::string& value) {
   if (!rex::cvar::GetFlagInfo(name)) return;
   {
     std::lock_guard lock(g_mutex);
-    if (g_baselined.try_emplace(name, true).second) SetTemporarySettingBaseline(name, Get(name));
+    if (g_baselined.try_emplace(name, true).second) {
+      SetTemporarySettingBaseline(name, Get(name));
+      g_owner.try_emplace(name, Get(name));
+    }
   }
   if (Get(name) != value && rex::cvar::SetFlagByName(name, value)) SetTemporarySettingTrialValue(name, Get(name));
 }
@@ -129,8 +136,22 @@ int OutputHeight() {
 }
 
 std::vector<Setting> LookSettings(int look) {
-  return look == kOriginal ? OriginalSettings(OutputHeight()) : MaxSettings(g_upscaler, g_texture_pack);
+  return look == kOriginal ? OriginalSettings(OutputHeight(), g_uhd_folder) : MaxSettings(g_upscaler, g_uhd_folder);
 }
+
+// Leaving the tool (the play session ended): the player's own settings again, the texture pack included.
+void RestoreOwner() {
+  std::map<std::string, std::string, std::less<>> owner;
+  {
+    std::lock_guard lock(g_mutex);
+    owner = g_owner;
+  }
+  for (const auto& [name, value] : owner)
+    if (Get(name.c_str()) != value && rex::cvar::SetFlagByName(name, value)) SetTemporarySettingTrialValue(name, value);
+  REXLOG_INFO("KK compare: the player's own settings back ({} settings)", owner.size());
+}
+
+constexpr const char* kNoUhd = "UHD pack not installed: MAX uses the game's textures";
 
 void ApplyLook(int look) {
   for (const auto& [name, value] : LookSettings(look)) Set(name, value);
@@ -156,7 +177,8 @@ std::string LookLabel(int look) {
   }
   std::string up = g_upscaler;
   std::transform(up.begin(), up.end(), up.begin(), [](unsigned char c) { return char(std::toupper(c)); });
-  return "MAX  " + out + " native, " + up + (g_upscaler == "dlss" ? " (DLAA)" : " native AA");
+  return "MAX  " + out + " native, " + up + (g_upscaler == "dlss" ? " (DLAA)" : " native AA") +
+         (g_uhd_folder.empty() ? std::string("  (") + kNoUhd + ")" : std::string(", UHD textures"));
 }
 
 // ------------------------------------------------------------------ the shot list ---
@@ -259,14 +281,42 @@ bool WaitFor(Pred pred, int64_t timeout_ms) {
 struct Settled {
   rex::ui::RawImage image;
   bool settled = false;
+  bool pack_done = true;    // the texture pack had nothing left to stream in (Max with the UHD pack)
+  uint64_t pack_ready = 0;  // pack replacements uploaded meanwhile
   uint64_t frames = 0;  // guest frames from the look's change to the picture
   FrameDifference difference;
 };
 
-Settled Settle(uint64_t min_frames) {
+// The texture pack is quiet once the renderer reports nothing pending (no reads queued or in flight, no image
+// waiting, no upload) for kPackQuietFrames frames in a row: longer than its rescan (every 60 frames at most), so
+// textures first drawn meanwhile have been asked for too. The GI, lighting and upscaler workers must be done too.
+constexpr uint64_t kPackQuietFrames = 75;
+constexpr uint64_t kMaxPackFrames = 2400;  // 40 s at 60 frames a second
+
+Settled Settle(uint64_t min_frames, bool wait_pack) {
   Settled out;
   const uint64_t start = GuestFrameCount();
+  const uint64_t ready0 = nr::kk::EffectTimes().pack_ready;
+  uint64_t quiet_since = start;
+  bool quiet = !wait_pack;
+  auto pack_quiet = [&] {
+    if (!wait_pack) return true;
+    const NrEffectStats st = nr::kk::EffectTimes();
+    if (!st.size || st.pack_pending || st.preparing) {
+      quiet_since = GuestFrameCount();
+      quiet = false;
+    } else {
+      quiet = GuestFrameCount() - quiet_since >= kPackQuietFrames;
+    }
+    return quiet;
+  };
   if (!WaitFrames(min_frames)) return out;
+  if (wait_pack) {
+    const uint64_t give_up = GuestFrameCount() + kMaxPackFrames;
+    while (!pack_quiet() && GuestFrameCount() < give_up) WaitFrames(1, 5000);
+    out.pack_done = quiet;
+    out.pack_ready = nr::kk::EffectTimes().pack_ready - ready0;
+  }
   rex::ui::RawImage prev;
   if (!Grab(prev)) return out;
   FrameDifference best;
@@ -288,7 +338,7 @@ Settled Settle(uint64_t min_frames) {
       out.frames = GuestFrameCount() - start;
       out.difference = d;
     }
-    if (d.p90 <= kSettled) {
+    if (d.p90 <= kSettled && pack_quiet()) {
       out.settled = true;
       break;
     }
@@ -344,7 +394,13 @@ void SaveSettingsText(const std::filesystem::path& path, const Shot& shot, const
     << "pictures: " << o.image.width << "x" << o.image.height << " (original), " << m.image.width << "x"
     << m.image.height << " (max)\n"
     << "original: " << settle(o) << "\n"
-    << "max: " << settle(m) << "\n\n[original]\n"
+    << "max: " << settle(m) << "\n"
+    << "max texture pack: "
+    << (g_uhd_folder.empty() ? std::string(kNoUhd)
+                             : "Kong UHD Textures (" + g_uhd_folder + "): " +
+                                   (m.pack_done ? "finished streaming in" : "NOT finished streaming in (gave up waiting)") +
+                                   ", " + std::to_string(m.pack_ready) + " replacements uploaded while waiting")
+    << "\noriginal texture pack: off (the game's textures)\n\n[original]\n"
     << original << "\n[max]\n"
     << max << "\n[the same in both]\n";
   for (const char* name : kContext)
@@ -378,10 +434,10 @@ void CaptureThread(Shot shot, int index, int shown_look) {
   WaitFrames(8);  // the free camera has the game's view, the pause's dimming is taken back
 
   ApplyLook(kOriginal);
-  Settled o = Settle(kMinFramesOriginal);
+  Settled o = Settle(kMinFramesOriginal, false);
   const std::string original_settings = SettingsText(kOriginal);
   ApplyLook(kMax);
-  Settled m = Settle(kMinFramesMax);
+  Settled m = Settle(kMinFramesMax, !g_uhd_folder.empty());
   const std::string max_settings = SettingsText(kMax);
   if (!o.image.width || !m.image.width) return finish("Capture failed: no picture from the game");
 
@@ -400,7 +456,8 @@ void CaptureThread(Shot shot, int index, int shown_look) {
     std::lock_guard lock(g_shots_mutex);
     if (g_index == index && index + 1 < int(g_shots.size())) ++g_index;
   }
-  finish("Saved " + dir.filename().string() + (o.settled && m.settled ? "" : "  (not fully settled: see settings.txt)"));
+  finish("Saved " + dir.filename().string() +
+         (o.settled && m.settled && m.pack_done ? "" : "  (not fully settled: see settings.txt)"));
 }
 
 // ------------------------------------------------------------------ the card ---
@@ -455,6 +512,10 @@ class Card final : public rex::ui::ImGuiDialog, public rex::ui::WindowInputListe
 #if defined(KK_DEV_TOOLS) && defined(_WIN32)
     DevKeys();
 #endif
+    if (!play::SessionActive() && applied_ && !g_capturing.load()) {  // the tool is left: the player's own again
+      applied_ = false;
+      RestoreOwner();
+    }
     if (!InPlay()) return;
     if (!applied_) {  // the plugin's settings exist now: the look again, complete
       applied_ = true;
@@ -498,7 +559,8 @@ class Card final : public rex::ui::ImGuiDialog, public rex::ui::WindowInputListe
     const float pad = 12 * s;
     const std::string title = "Shot " + std::to_string(index + 1) + " of " + std::to_string(count) + ": " + shot.feature;
     const std::string keys = "Insert: Original / Max    Home: capture    Page Down: skip    Page Up: back" +
-                             (taken ? "    Taken: " + std::to_string(taken) : std::string());
+                             (taken ? "    Taken: " + std::to_string(taken) : std::string()) +
+                             (g_uhd_folder.empty() ? std::string("\n") + kNoUhd : std::string());
     std::string status;
     {
       std::lock_guard lock(g_mutex);
@@ -570,9 +632,16 @@ class Card final : public rex::ui::ImGuiDialog, public rex::ui::WindowInputListe
 
 bool Enabled() { return REXCVAR_GET(kk_compare_capture); }
 
-void ApplyAtGameStart() {
+void ApplyAtGameStart(const std::filesystem::path& user_data) {
   if (!Enabled()) return;
-  g_texture_pack = Get("native_texture_pack") == "true" ? "true" : "false";
+  // The Kong UHD Textures pack (content.h kUhd): the Workshop installs it as the texture pack mod of that name.
+  g_uhd_folder.clear();
+  for (const auto& m : mods::Scan(user_data))
+    if (m.type == mods::Type::kTexturePack && m.Usable() && !m.content.empty() &&
+        (m.name == "Kong UHD Textures" || m.folder == "Kong UHD Textures")) {
+      g_uhd_folder = m.content.string();
+      break;
+    }
   g_upscaler = BestUpscaler(Get("kk_upscalers_offered"));
   // Restart-only: the Remastered look (the Original one is put on live instead), no FSR 1, the native render
   // quality, and a temporal upscaler from the start, so the frame is the output size in both looks.
@@ -580,7 +649,8 @@ void ApplyAtGameStart() {
   Set("present_effect", "bilinear");
   Set("kk_render_quality", "native");
   ApplyLook(g_look.load());
-  REXLOG_INFO("KK compare: on (Max upscaler {}, texture pack {})", g_upscaler, g_texture_pack);
+  REXLOG_INFO("KK compare: on (Max upscaler {}, UHD pack {})", g_upscaler,
+              g_uhd_folder.empty() ? std::string("not installed: the game's textures") : g_uhd_folder);
 }
 
 void Create(rex::ui::ImGuiDrawer* drawer, rex::ui::Window* window, const std::filesystem::path& user_dir) {

@@ -220,7 +220,7 @@ class KingKongApp : public rex::ReXApp {
       // (which wins) and before the GPU starts.
       if (!kk::benchmark::Active()) kk::mods::ApplyAtGameStart(defaults.user_data_root);
       kk::NoteGameStarting();  // task 285: a startup hang report if no first frame follows
-      kk::compare::ApplyAtGameStart();  // task 354 (--kk_compare_capture only): before the Original look
+      kk::compare::ApplyAtGameStart(defaults.user_data_root);  // task 354 (--kk_compare_capture only): before the Original look
       kk::EnforceOriginalLook();
       kk::ApplyFullscreenMode(window());
       kk::ApplyRendererChoice();  // the renderer, and with it the default upscaler
@@ -240,7 +240,7 @@ class KingKongApp : public rex::ReXApp {
     cb.play = [this, resume, defaults] {
       app_context().CallInUIThreadDeferred([this, resume, defaults] {
         kk::mods::ApplyAtGameStart(defaults.user_data_root);  // Kong mods, for this run only
-        kk::compare::ApplyAtGameStart();  // task 354 (--kk_compare_capture only): before the Original look
+        kk::compare::ApplyAtGameStart(defaults.user_data_root);  // task 354 (--kk_compare_capture only): before the Original look
         kk::EnforceOriginalLook();  // the Original look still wins over a settings mod
         // The Resolution (Display page) before the render quality, which follows it.
         kk::ApplyFullscreenMode(window());

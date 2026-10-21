@@ -1,8 +1,9 @@
-Comparison capture (private test build): ORIGINAL = the Xbox 360 look at 720p, MAX = everything highest at 4K.
+Comparison capture (private test build): ORIGINAL = the Xbox 360 look at 720p, MAX = everything highest at 4K
+with the Kong UHD Textures pack (Workshop). Without it the card says so and MAX uses the game's textures.
 1. Set Windows to 3840x2160, then double-click "Start comparison capture.bat" (fullscreen at the desktop size).
 2. Play to a good spot. The card at the top says which shot is next and what shows it well.
 3. Insert flips the live game between ORIGINAL and MAX (the label at the top left says which one is showing).
-4. Home captures: the game pauses, saves ORIGINAL then MAX of the same frame, then resumes (a few seconds).
+4. Home captures: the game pauses, saves ORIGINAL, then MAX once the UHD textures have streamed in, then resumes.
 5. Page Down skips to the next shot, Page Up goes back. A capture moves the card on by itself.
 6. Pictures: Documents\king_kong\screenshots\compare\<shot>-<date>-<time>\ original.png, max.png, settings.txt.
 7. Taking a shot again keeps the earlier one (a new folder). Home also works inside photo mode (your framing).

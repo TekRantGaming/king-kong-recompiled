@@ -127,8 +127,14 @@ using Setting = std::pair<const char*, std::string>;
 // The Original look (the Xbox 360 as shipped): settings.cpp's OriginalLookSettings that apply while the game runs,
 // plus what our renderer added since (texture pack, tessellation) off. The 720p picture is the bilinear stretch of
 // a 720p input, unjittered, with the game's own texture bias. Field of view 69 (Jack's, the console's).
-inline std::vector<Setting> OriginalSettings(int output_height) {
-  return {
+// `uhd_folder`: the Kong UHD Textures pack's folder (empty: not installed). It is the pack folder in both looks, so
+// the pack streams in while the Original look shows it switched off, and Max only switches it on (owner, task 354).
+inline std::vector<Setting> WithPackFolder(std::vector<Setting> list, const std::string& uhd_folder) {
+  if (!uhd_folder.empty()) list.push_back({"native_texture_pack_folder", uhd_folder});
+  return list;
+}
+inline std::vector<Setting> OriginalSettings(int output_height, const std::string& uhd_folder = {}) {
+  return WithPackFolder({
       {"native_upscaler", "bilinear"},
       {"native_upscaler_quality", OriginalModeFor(output_height).quality},
       {"native_upscaler_mip_bias", "0"},
@@ -152,16 +158,17 @@ inline std::vector<Setting> OriginalSettings(int output_height) {
       {"kk_fog", "true"},
       {"kk_big_blur", "true"},
       {"kk_fov", "69"},
-  };
+  }, uhd_folder);
 }
 
 // The Max look: the Ultra preset with every effect at its highest (GI High at Full distance and full resolution,
 // AO High samples at full resolution, Ultra shadows, screen-space water reflections, Volumetric high light
 // shafts, 16x filtering, tessellation on) and the best temporal upscaler at native resolution (DLAA where it runs).
 // The game's own effects at the Remastered defaults (motion blur and the 720p screen blur off, fog on); the same
-// field of view as the Original look (the same camera in both pictures); the texture pack as the player has it.
-inline std::vector<Setting> MaxSettings(const std::string& upscaler, const std::string& texture_pack) {
-  return {
+// field of view as the Original look (the same camera in both pictures); the Kong UHD Textures pack (owner, task
+// 354), or the game's textures when it is not installed.
+inline std::vector<Setting> MaxSettings(const std::string& upscaler, const std::string& uhd_folder) {
+  return WithPackFolder({
       {"native_upscaler", upscaler},
       {"native_upscaler_quality", "native"},
       {"native_upscaler_dlss_preset", "latest"},
@@ -186,12 +193,12 @@ inline std::vector<Setting> MaxSettings(const std::string& upscaler, const std::
       {"native_effect_buffers", "true"},
       {"native_sharpness", "off"},
       {"native_tessellation", "true"},
-      {"native_texture_pack", texture_pack},
+      {"native_texture_pack", uhd_folder.empty() ? "false" : "true"},
       {"kk_motion_blur", "false"},
       {"kk_fog", "true"},
       {"kk_big_blur", "false"},
       {"kk_fov", "69"},
-  };
+  }, uhd_folder);
 }
 
 // The mean absolute difference of two R8G8B8X8 pictures of the same size (0 to 255 a channel), every `step`th

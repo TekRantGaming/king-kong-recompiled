@@ -54,7 +54,7 @@ int main() {
   // Both looks set the same settings (a switch leaves nothing of the other behind), the same field of view, and
   // only live settings.
   const auto o = OriginalSettings(2160);
-  const auto m = MaxSettings("dlss", "true");
+  const auto m = MaxSettings("dlss", "C:/mods/Kong UHD Textures/textures");
   for (const auto& [name, value] : o) {
     (void)value;
     const std::string n = name;
@@ -70,7 +70,13 @@ int main() {
             Value(o, "native_upscaler_mip_bias") == "0",
         "Original: a still bilinear stretch at the game's texture bias");
   Check(Value(m, "native_upscaler_quality") == "native" && Value(m, "native_upscaler_still") == "false", "Max: native AA");
-  Check(Value(o, "native_texture_pack") == "false" && Value(m, "native_texture_pack") == "true", "texture pack");
+  Check(Value(o, "native_texture_pack") == "false" && Value(m, "native_texture_pack") == "true", "UHD pack in Max only");
+  Check(Value(OriginalSettings(2160, "x"), "native_texture_pack_folder") == "x" &&
+            Value(m, "native_texture_pack_folder") == "C:/mods/Kong UHD Textures/textures",
+        "the same pack folder in both looks");
+  Check(Value(MaxSettings("dlss", ""), "native_texture_pack") == "false" &&
+            Value(MaxSettings("dlss", ""), "native_texture_pack_folder") == "<none>",
+        "no UHD pack: the game's textures, the player's folder left alone");
 
   // The settle measure.
   std::vector<uint8_t> a(4 * 4 * 4, 100), b = a;

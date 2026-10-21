@@ -19,7 +19,7 @@ namespace kk::compare {
 bool Enabled();
 // Before the GPU starts (king_kong_app.h, before EnforceOriginalLook): the settings both looks need from the start
 // (the Remastered look, a temporal upscaler so the frame is the output size), then the Max look. Never saved.
-void ApplyAtGameStart();
+void ApplyAtGameStart(const std::filesystem::path& user_data);
 // The card, the look label and the keys, for the rest of the session (only when Enabled).
 void Create(rex::ui::ImGuiDrawer* drawer, rex::ui::Window* window, const std::filesystem::path& user_dir);
 // The app's guest output reader (the presenter's CaptureGuestOutput; any thread).
