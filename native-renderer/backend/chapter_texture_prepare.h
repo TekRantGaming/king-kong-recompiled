@@ -5,6 +5,7 @@
 #include <condition_variable>
 #include <mutex>
 #include <thread>
+#include "backend/thread_scheduling.h"
 #include "kknr/resident_snapshot.h"
 
 namespace nr {
@@ -75,6 +76,7 @@ class ChapterTexturePrepare {
   }
  private:
   void Run() {
+    SchedulePipelineCompiler(false);  // the same below-normal/EcoQoS policy as other background preparation
     std::unique_lock lock(mutex_);
     for (;;) {
       cv_.wait(lock, [&] { return stop_ || pending_; });
