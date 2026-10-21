@@ -98,6 +98,18 @@ void WorldGuardFrame(uint8_t* base) {
       link.session_state==SessionState::Ended) { WorldGuardSummary(); pending=desync::Tier::None; return; }
   if (!v.world.generation || !link.epoch) return;
   Scope(v,link.epoch,now);
+#if defined(KK_DEV_TOOLS)
+  static const bool trace=[] { const char* value=std::getenv("KK_DEV_DESYNC_TRACE"); return value && *value=='1'; }();
+  static double next_trace=0;
+  if (trace && now>=next_trace) {
+    next_trace=now+10;
+    REXLOG_INFO("KK dev desync gate: host={} playing={} together={} connected={} private={} catchup={} observer={} cutscene={} loading={} cover={} pause={} dead={} received={} outgoing={}",
+        v.host,v.phase==FlowPhase::Playing,v.policy==ChapterPolicy::Together,link.connected,
+        SessionPrivateReload(),SessionCheckpointCatchup(),observer::Active(),observer::InCutscene(base),
+        play::StartLevelLoading(),play::CoverScreen(),play::PauseMenuOpen() || play::GamePausePageUp(),
+        LocalPlayerCondition(base)==PlayerCondition::Dead,bool(received),outgoing.size());
+  }
+#endif
   if (v.phase!=FlowPhase::Playing || v.policy!=ChapterPolicy::Together || !link.connected ||
       SessionPrivateReload() || SessionCheckpointCatchup() || observer::Active() || observer::InCutscene(base) ||
       play::StartLevelLoading() || play::CoverScreen() || play::PauseMenuOpen() || play::GamePausePageUp() ||

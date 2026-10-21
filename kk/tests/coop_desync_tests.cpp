@@ -17,6 +17,20 @@ WorldDigestPage Page(uint16_t part=0) {
   return p;
 }
 void Codec() {
+  for (unsigned family=unsigned(EnemyFamily::Raptor);family<=unsigned(EnemyFamily::Prey);++family) {
+    Message m; m.type=MessageType::WorldDigest; m.digest=Page();
+    m.digest.enemies[0].id.family=EnemyFamily(family);
+    StoryMailbox box;
+    m.epoch=17;
+    std::vector<uint8_t> bytes; Message out;
+    Check(box.Submit(m) && Encode(m,bytes) && Decode(bytes,out) && out.digest==m.digest,
+        "every shared native enemy family survives digest mailbox and wire codec");
+  }
+  for (auto family:{EnemyFamily::None,EnemyFamily(unsigned(EnemyFamily::Prey)+1)}) {
+    Message m; m.type=MessageType::WorldDigest; m.digest=Page(); m.digest.enemies[0].id.family=family;
+    std::vector<uint8_t> bytes;
+    Check(!Encode(m,bytes),"unknown digest family rejected");
+  }
   for (auto part:{0,1}) {
     Message m; m.type=MessageType::WorldDigest; m.epoch=9; m.digest=Page(uint16_t(part));
     std::vector<uint8_t> bytes; Check(Encode(m,bytes) && bytes.size()<=kMaxPacketBytes,"maximum digest fits datagram");

@@ -228,7 +228,7 @@ bool ValidWorldDigest(const WorldDigestPage& p) {
       p.enemies.size()!=expected(p.enemy_count,p.part,kDigestEnemiesPerPage)) return false;
   for (const auto& s:p.scripts) if (!s.source || !s.script || s.record>kStoryRecords || s.flags>7 ||
       (!s.run && s.flags)) return false;
-  for (const auto& e:p.enemies) if (!e.id.source || e.id.family<EnemyFamily::Raptor || e.id.family>EnemyFamily::Scorpion ||
+  for (const auto& e:p.enemies) if (!e.id.source || !ValidEnemyFamily(e.id.family) ||
       e.owner>EnemyOwner::Guest || !std::isfinite(e.life) || std::abs(e.life)>=1000000 ||
       !std::isfinite(e.secondary_life) || e.secondary_life<0 || e.secondary_life>=1000000 ||
       (e.id.family!=EnemyFamily::Scorpion && e.secondary_life!=0)) return false;
