@@ -924,17 +924,27 @@ if '—' in gfx or '–' in gfx:
 for banned in ('setup-art', '-original.png', '-new.png'):
     if banned in gfx:
         fail(f'task 219: the setup pages still load shipped screenshots ({banned})')
-# Task 219: HDR follows Windows: the Display rows, the calibration button, and present_hdr decided at start.
+# Task 219: present_hdr decided at start (kk_hdr and kk_hdr_levels, hdr_display.cpp).
 _l219 = (src / 'launcher.cpp').read_text(encoding='utf-8')
-for needle, why in (
-        ('"kk_hdr", {{"Follow Windows", "auto"}, {"On", "on"}, {"Off", "off"}}', 'HDR row: Follow Windows / On / Off'),
-        ('"kk_hdr_levels", {{"Automatic (from Windows)", "auto"}, {"Manual", "manual"}}', 'HDR brightness row'),
-        ('[] { hdr::OpenCalibrationApp(); }', 'Open Windows HDR Calibration button'),
-        ('"kk_hdr", "kk_hdr_levels", "present_hdr"', 'Display reset includes the HDR modes')):
-    if needle not in _l219:
-        fail(f'219: {why}')
 if 'kk::hdr::Apply("start");' not in (src / 'king_kong_app.h').read_text(encoding='utf-8'):
     fail('219: present_hdr is not decided at start')
+# Owner, 21 Oct (Beta 14): HDR is off by default and experimental: no HDR rows in Settings > Display, the setup or
+# the pause menu (they share launcher.cpp's DisplayItems), only the F8 graphics panel's "HDR (experimental)".
+for needle, where in (
+        ('"kk_hdr"', 'launcher.cpp'), ('"kk_hdr_levels"', 'launcher.cpp'), ('OpenCalibrationApp', 'launcher.cpp'),
+        ('HdrItems', 'launcher.cpp'), ('"HDR"', 'launcher_setup_graphics.inc'), ('HDR', 'pause_menu_logic.h'),
+        ('"HDR', 'settings_layout.h'), ('{"HDR', 'settings_help.h')):
+    if needle in (src / where).read_text(encoding='utf-8'):
+        fail(f'Beta 14: HDR is F8 only, but {where} still has {needle}')
+_panel = (src / 'debug_overlay.cpp').read_text(encoding='utf-8')
+for needle, why in (
+        ('{"HDR (experimental)", "HDR (experimental)", "kk_hdr", Kind::kToggle, {{"Off", "off"}, {"On", "on"}}',
+         "the F8 panel's HDR (experimental) toggle (kk_hdr, saved)"),
+        ('hdr::Apply("graphics panel")', 'the F8 panel applies an HDR change at once')):
+    if needle not in _panel:
+        fail(f'Beta 14: {why}')
+if not re.search(r'REXCVAR_DEFINE_STRING\(kk_hdr, "off"', (src / 'settings.cpp').read_text(encoding='utf-8')):
+    fail('Beta 14: HDR is not off by default')
 
 # Job J5: setup steps 9 and 10 come after the graphics pages (launcher_setup_end.inc): the button prompt cards
 # set kk_button_prompts (Keyboard and mouse through the Controls page's own input switch).

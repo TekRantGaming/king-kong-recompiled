@@ -1,5 +1,7 @@
     {"HDR output", "HDR-Ausgabe", "Salida HDR", "Sortie HDR", "Uscita HDR"},
     {"HDR", "HDR", "HDR", "HDR", "HDR"},
+    // Beta 14 (owner, 21 Oct): HDR is experimental, in the F8 graphics panel only.
+    {"HDR (experimental)", "HDR (experimentell)", "HDR (experimental)", "HDR (expérimental)", "HDR (sperimentale)"},
     {"Peak brightness (nits)", "Spitzenhelligkeit (Nits)", "Brillo máximo (nits)", "Luminosité maximale (nits)", "Luminosità massima (nit)"},
     {"Paper white (nits)", "Papierweiß (Nits)", "Blanco de referencia (nits)", "Blanc de référence (nits)", "Bianco di riferimento (nit)"},
     {"Requires Windows HDR on the current display. Uses SDR when HDR is unavailable.",

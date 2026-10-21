@@ -2,7 +2,7 @@
 // Settings and the pause menu's (launcher.cpp, SettingsPages). The order follows what most PC games use
 // (owner, 16 Oct): Display, Graphics, Audio, Controls, Gameplay, Cheats, then Advanced (Cheats has its own tab,
 // owner 16 Oct evening; the launcher adds About as its last tab, which has no settings rows); inside each, the usual order
-// (Display: window mode, monitor, resolution, refresh rate, VSync, frame-rate cap, HDR, then the camera: field of
+// (Display: window mode, monitor, resolution, refresh rate, VSync, frame-rate cap, then the camera: field of
 // view, motion blur, camera shake; Graphics: preset, graphics API, upscaler and quality, anti-aliasing, the effects,
 // advanced items last; Audio: master, music, effects, speech, menu sounds; Controls: sensitivity, inversion,
 // vibration, bindings; Gameplay: subtitles, language, HUD, Performance metrics, then the rest). Owner, 18 Oct (after
@@ -38,10 +38,7 @@ inline constexpr Row kDisplayRows[] = {
     {"Screen", "Refresh rate"},      {"Screen", "Aspect ratio"},
     {"Picture", "Brightness"},       {"Picture", "Gamma"},
     {"Frame rate", "VSync"},         {"Frame rate", "Frame rate"},
-    {"HDR output", "HDR"},           {"HDR output", "HDR brightness"},
-    {"HDR output", "Peak brightness (nits)"},
-    {"HDR output", "Paper white (nits)"},
-    {"HDR output", "Open Windows HDR Calibration"},
+    // (No HDR rows since Beta 14, owner 21 Oct: HDR is experimental, in the F8 graphics panel only.)
     {"Camera", "Field of view"},     {"Camera", "Motion blur"},
     {"Camera", "Camera shake"},      {"Camera", "Camera shake strength"},
 };

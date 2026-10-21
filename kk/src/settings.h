@@ -191,12 +191,13 @@ void ApplyUpscalerDefaults();
 void SetOfferedUpscalers(const std::string& offered);
 // Once the settings file is read: brings one from an older version up to date
 // (preserving explicit choices; version 3 enables GI for old presets; version 4 is
-// DirectX 12 on Windows, MigrateGraphicsApi, done before the renderer starts) and saves
-// it; a new install just gets the current defaults.
+// DirectX 12 on Windows, MigrateGraphicsApi, done before the renderer starts; version 5
+// turns HDR off once, as it is experimental, F8 panel only) and saves it; a new install
+// just gets the current defaults.
 void MigrateSettings(const std::filesystem::path& config_path);
 // Beta 9: an old Show FPS (kk_show_fps = true) becomes Performance metrics "fps" (run after the settings load).
 void MigrateFrameCounter();
-// Beta 10: HDR follows Windows; an older file's HDR On stays On, moved Peak/Paper white sliders stay Manual.
+// Beta 10: HDR follows Windows; an older file's moved Peak/Paper white sliders stay Manual.
 void MigrateHdrSettings();
 // Settings the player can't change (shader preparing is always Balanced).
 void ApplyFixedSettings();

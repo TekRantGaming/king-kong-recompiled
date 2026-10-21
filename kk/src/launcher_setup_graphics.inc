@@ -194,10 +194,7 @@
                               def == "5");
         rows.push_back(std::move(Disable(it, original, kSetByOriginal)));
       }
-      if (ScreenHdrOn()) {
-        std::vector<Item> display = DisplayItems();
-        TakeRow(display, "HDR", "Brighter highlights and deeper colour on your HDR screen.", rows);
-      }
+      // (No HDR row since Beta 14, owner 21 Oct: HDR is experimental, in the F8 graphics panel only.)
     } else if (page == 2) {
       std::vector<Item> graphics = GraphicsItems();
       TakeRow(graphics, "Global illumination", "Sunlight bounces off surfaces and softly lights the shade beside them.",

@@ -96,8 +96,11 @@ REXCVAR_DEFINE_DOUBLE(kk_gamma, 1.0, "KK/Video",
 // HDR follows Windows (owner, 17/18 Oct; hdr_logic.h): kk_hdr and kk_hdr_levels decide the presenter's
 // present_hdr, present_hdr_peak and present_hdr_paper_white (hdr_display.cpp sets them at every start and while
 // the settings pages are open). Those three are then not saved, except Peak and Paper white in Manual.
-REXCVAR_DEFINE_STRING(kk_hdr, "auto", "KK/Video",
-                      "HDR output: auto (follow Windows HDR for the game's screen), on or off")
+// Beta 14 (owner, 21 Oct): HDR is off by default and experimental: it is no longer in Settings, the setup or the
+// pause menu, only in the F8 graphics panel ("HDR (experimental)", debug_overlay.cpp). Settings version 5 turns it
+// off once for every existing player (MigrateSettings).
+REXCVAR_DEFINE_STRING(kk_hdr, "off", "KK/Video",
+                      "HDR output (experimental, F8 panel): off, on, or auto (follow Windows HDR for the game's screen)")
     .allowed({"auto", "on", "off"});
 REXCVAR_DEFINE_STRING(kk_hdr_levels, "auto", "KK/Video",
                       "HDR peak brightness and paper white: auto (from Windows HDR Calibration and Windows' SDR "
@@ -542,13 +545,13 @@ void MigrateFrameCounter() {
 }
 
 void MigrateHdrSettings() {
-  // Beta 10: HDR follows Windows. A settings file from before has present_hdr only when the player turned HDR on
-  // (On stays On), and Peak brightness or Paper white only when the player moved them (Manual keeps them). Newer
-  // files never save present_hdr, and save the two levels only in Manual, so this changes nothing after that.
+  // Beta 10: HDR follows Windows. A settings file from before has Peak brightness or Paper white only when the
+  // player moved them (Manual keeps them). Newer files never save present_hdr, and save the two levels only in
+  // Manual, so this changes nothing after that. (Beta 10 to 13 also kept an old file's HDR On as On; since Beta 14
+  // HDR is off for everyone until it is switched on in the F8 panel, settings version 5, so an old present_hdr
+  // no longer turns it on.)
   using rex::cvar::GetFlagSource, rex::cvar::Source;
   const bool hdr_saved = GetFlagSource("present_hdr") == Source::kConfig;
-  if (hdr_saved && GetFlagSource("kk_hdr") == Source::kDefault && rex::cvar::GetFlagByName("present_hdr") == "true")
-    rex::cvar::SetFlagByName("kk_hdr", "on");
   bool levels_saved = false;
   for (const char* name : {"present_hdr_peak", "present_hdr_paper_white"})
     levels_saved |= GetFlagSource(name) == Source::kConfig;
@@ -561,9 +564,11 @@ void MigrateHdrSettings() {
 
 namespace {
 // The settings file's version (kk_settings_version; MigrateSettings lists what each one changed).
-constexpr int32_t kSettingsVersion = 4;
+constexpr int32_t kSettingsVersion = 5;
 // 4: DirectX 12 is the default graphics API on Windows (task 350a, MigrateGraphicsApi).
 constexpr int32_t kD3d12DefaultVersion = 4;
+// 5: HDR is off for everyone (owner, 21 Oct; experimental, F8 panel only).
+constexpr int32_t kHdrOffVersion = 5;
 }  // namespace
 
 bool MigrateGraphicsApi() {
@@ -597,6 +602,8 @@ void MigrateSettings(const std::filesystem::path& config_path) {
   // Steam Deck preset into Custom). New installs get the new defaults.
   // 3: GI follows the preset. Saved GI values, including an explicit Off, win.
   // 4: DirectX 12 on Windows (MigrateGraphicsApi, before the renderer started; nothing more to do here).
+  // 5: HDR off once for every existing player, also one who had it On or on Follow Windows (owner, 21 Oct): it is
+  //    experimental now, in the F8 panel only. A command-line or environment value is that run's own and stays.
   constexpr int32_t kVersion = kSettingsVersion;
   if (REXCVAR_GET(kk_settings_version) >= kVersion) return;
   std::error_code ec;
@@ -661,6 +668,15 @@ void MigrateSettings(const std::filesystem::path& config_path) {
       }
       REXLOG_INFO("KK: GI settings migrated to version 3: {} (Original look {})",
                   rex::cvar::GetFlagByName("native_gi"), REXCVAR_GET(kk_original_look));
+    }
+    if (REXCVAR_GET(kk_settings_version) < kHdrOffVersion) {
+      const auto source = rex::cvar::GetFlagSource("kk_hdr");
+      const std::string before = REXCVAR_GET(kk_hdr);
+      if (source != rex::cvar::Source::kCommandLine && source != rex::cvar::Source::kEnvironment && before != "off") {
+        rex::cvar::SetFlagByName("kk_hdr", "off");
+        REXLOG_INFO("KK: settings from before version 5: HDR {} -> off (experimental now, in the F8 panel only)",
+                    before);
+      }
     }
     REXLOG_INFO("KK: settings file brought up to version {} (was {}); graphics API {}", kVersion,
                 REXCVAR_GET(kk_settings_version), rex::cvar::GetFlagByName("native_backend"));

@@ -69,6 +69,7 @@
 #include "launcher_text.h"
 #include "ui_paint.h"
 #include "freecam.h"
+#include "hdr_display.h"
 #include "play_internal.h"
 #include "settings.h"
 #if defined(KK_DEV_TOOLS)
@@ -126,19 +127,26 @@ struct Setting {
 
 const std::vector<Setting>& Settings() {
   static const std::vector<Setting> settings = {
-      {"HDR output", "HDR", "present_hdr", Kind::kToggle, {{"Off", "false"}, {"On", "true"}},
+      // HDR (owner, 21 Oct, Beta 14): experimental and off by default, and only here (no longer in Settings, the
+      // setup or the pause menu). The toggle is kk_hdr, so "Save as my settings" keeps it; hdr_display.cpp turns it
+      // into the presenter's present_hdr (at once on a change here: Change). HDR brightness (kk_hdr_levels) is the
+      // launcher's old choice: Manual keeps and saves the Peak brightness and Paper white sliders.
+      {"HDR (experimental)", "HDR (experimental)", "kk_hdr", Kind::kToggle, {{"Off", "off"}, {"On", "on"}},
        0, 1, "", false, Show::kAlways,
        "Requires Windows HDR on the current display. Uses SDR when HDR is unavailable."},
-      {"HDR output", "Peak brightness (nits)", "present_hdr_peak", Kind::kSlider, {}, 80, 10000, "%.0f", false,
+      {"HDR (experimental)", "HDR brightness", "kk_hdr_levels", Kind::kChoice,
+       {{"Automatic (from Windows)", "auto"}, {"Manual", "manual"}}, 0, 1, "", false, Show::kAlways,
+       "Automatic takes Peak brightness from Windows HDR Calibration and Paper white from the SDR content brightness in Windows. Manual uses the sliders below."},
+      {"HDR (experimental)", "Peak brightness (nits)", "present_hdr_peak", Kind::kSlider, {}, 80, 10000, "%.0f", false,
        Show::kAlways, "Highlight ceiling, limited to the display's reported peak brightness."},
-      {"HDR output", "Paper white (nits)", "present_hdr_paper_white", Kind::kSlider, {}, 80, 500, "%.0f", false,
+      {"HDR (experimental)", "Paper white (nits)", "present_hdr_paper_white", Kind::kSlider, {}, 80, 500, "%.0f", false,
        Show::kAlways, "Brightness of neutral whites and menus. Limited by peak brightness."},
       // Task 262/317 (SDK patches 0044/0045; hidden when the SDK has no such cvar). 0 = SDR picture at paper white.
-      {"HDR output", "Highlight expansion", "present_hdr_highlights", Kind::kSlider, {}, 0, 1, "%.2f", false,
+      {"HDR (experimental)", "Highlight expansion", "present_hdr_highlights", Kind::kSlider, {}, 0, 1, "%.2f", false,
        Show::kAlways, "Makes the brightest parts of the picture brighter than paper white, up to peak brightness. 0 = off."},
-      {"HDR output", "Highlight knee", "present_hdr_knee", Kind::kSlider, {}, 0.2f, 0.9f, "%.2f", false,
+      {"HDR (experimental)", "Highlight knee", "present_hdr_knee", Kind::kSlider, {}, 0.2f, 0.9f, "%.2f", false,
        Show::kAlways, "Where highlight expansion starts. Lower = more of the picture gets brighter."},
-      {"HDR output", "Brightness cap (nits)", "present_hdr_peak_cap", Kind::kSlider, {}, 200, 4000, "%.0f", false,
+      {"HDR (experimental)", "Brightness cap (nits)", "present_hdr_peak_cap", Kind::kSlider, {}, 200, 4000, "%.0f", false,
        Show::kAlways, "Highlights never go above this, even when the display reports a higher peak."},
       // Upscaling.
       {"Upscaling", "Upscaler", "native_upscaler", Kind::kUpscaler, {}, 0, 1, "", true, Show::kAlways,
@@ -314,6 +322,10 @@ std::map<std::string, std::string, std::less<>> g_ab_trial;  // while F7 is held
 bool g_ab = false;
 std::filesystem::path g_settings_path;
 
+// HDR's two choices (kk_hdr, kk_hdr_levels) decide the presenter's present_hdr and its levels (hdr_display.cpp):
+// a change here applies at once, as the launcher's rows did before Beta 14.
+bool HdrChoice(std::string_view name) { return name == "kk_hdr" || name == "kk_hdr_levels"; }
+
 void Change(const char* name, const std::string& value) {
   if (g_ab) return;  // the saved settings are showing
   {
@@ -321,7 +333,10 @@ void Change(const char* name, const std::string& value) {
     const auto [entry, inserted] = g_saved.try_emplace(name, Get(name));
     if (inserted) SetTemporarySettingBaseline(name, entry->second);
   }
-  if (rex::cvar::SetFlagByName(name, value)) SetTemporarySettingTrialValue(name, Get(name));
+  if (rex::cvar::SetFlagByName(name, value)) {
+    SetTemporarySettingTrialValue(name, Get(name));
+    if (HdrChoice(name)) hdr::Apply("graphics panel");
+  }
 }
 
 // The settings that differ from the saved ones now.
@@ -340,10 +355,17 @@ void EndAb();
 
 void Reset() {
   EndAb();
-  std::lock_guard lock(g_mutex);
-  for (const auto& [name, value] : g_saved) rex::cvar::SetFlagByName(name, value);
-  g_saved.clear();
-  ClearTemporarySettingBaselines();
+  bool hdr_changed = false;
+  {
+    std::lock_guard lock(g_mutex);
+    for (const auto& [name, value] : g_saved) {
+      rex::cvar::SetFlagByName(name, value);
+      hdr_changed |= HdrChoice(name);
+    }
+    g_saved.clear();
+    ClearTemporarySettingBaselines();
+  }
+  if (hdr_changed) hdr::Apply("graphics panel");
 }
 
 bool SaveAsMine() {
@@ -357,29 +379,39 @@ bool SaveAsMine() {
 
 // F7 held: the saved values, the trial ones put aside.
 void StartAb() {
-  std::lock_guard lock(g_mutex);
-  if (g_ab) return;
-  g_ab = true;
-  g_ab_trial.clear();
-  for (const auto& [name, saved] : g_saved) {
-    const std::string trial = Get(name.c_str());
-    if (trial == saved) continue;
-    g_ab_trial[name] = trial;
-    rex::cvar::SetFlagByName(name, saved);
+  bool hdr_changed = false;
+  {
+    std::lock_guard lock(g_mutex);
+    if (g_ab) return;
+    g_ab = true;
+    g_ab_trial.clear();
+    for (const auto& [name, saved] : g_saved) {
+      const std::string trial = Get(name.c_str());
+      if (trial == saved) continue;
+      g_ab_trial[name] = trial;
+      rex::cvar::SetFlagByName(name, saved);
+      hdr_changed |= HdrChoice(name);
+    }
+    REXLOG_INFO("KK graphics panel: A/B: saved settings ({} differ)", g_ab_trial.size());
   }
-  REXLOG_INFO("KK graphics panel: A/B: saved settings ({} differ)", g_ab_trial.size());
+  if (hdr_changed) hdr::Apply("graphics panel");
 }
 
 void EndAb() {
-  std::lock_guard lock(g_mutex);
-  if (!g_ab) return;
-  g_ab = false;
-  for (const auto& [name, trial] : g_ab_trial) {
-    rex::cvar::SetFlagByName(name, trial);
-    SetTemporarySettingTrialValue(name, trial);
+  bool hdr_changed = false;
+  {
+    std::lock_guard lock(g_mutex);
+    if (!g_ab) return;
+    g_ab = false;
+    for (const auto& [name, trial] : g_ab_trial) {
+      rex::cvar::SetFlagByName(name, trial);
+      SetTemporarySettingTrialValue(name, trial);
+      hdr_changed |= HdrChoice(name);
+    }
+    g_ab_trial.clear();
+    REXLOG_INFO("KK graphics panel: A/B: trial settings again");
   }
-  g_ab_trial.clear();
-  REXLOG_INFO("KK graphics panel: A/B: trial settings again");
+  if (hdr_changed) hdr::Apply("graphics panel");
 }
 
 bool Visible(const Setting& s) {
