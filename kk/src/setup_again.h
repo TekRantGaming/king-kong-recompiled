@@ -29,8 +29,9 @@ inline bool Resets(std::string_view name, std::string_view category) {
       // Display
       "fullscreen", "kk_fullscreen_mode", "window_width", "window_height", "monitor", "present_letterbox",
       "kk_brightness", "kk_gamma", "d3d12_allow_variable_refresh_rate_and_tearing", "kk_frame_rate", "kk_hdr",
-      "kk_hdr_levels", "present_hdr", "present_hdr_peak", "present_hdr_paper_white", "kk_fov", "kk_motion_blur",
-      "kk_camera_shake", "kk_camera_shake_strength",
+      "kk_hdr_levels", "kk_fov", "kk_motion_blur", "kk_camera_shake", "kk_camera_shake_strength",
+      // (present_hdr and its levels follow kk_hdr and kk_hdr_levels at every start: hdr_display.cpp. A Manual peak
+      // and paper white are not used once HDR brightness is back on Auto, and are then not saved.)
       // Graphics (the graphics API comes back to DirectX 12 on Windows, Vulkan on Linux)
       "kk_original_look", "kk_modern_settings", "kk_graphics_preset", "native_backend", "swap_post_effect",
       "anisotropic_override", "present_effect", "kk_render_quality", "resolution_scale", "draw_resolution_scale_x",
