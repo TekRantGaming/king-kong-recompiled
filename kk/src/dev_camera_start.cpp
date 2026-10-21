@@ -5,6 +5,8 @@
 // pitch and no position writes. Due requests wait for a usable pose/camera.
 // KK_DEV_FACE_ENEMY=<seconds>[:<repeat seconds>] takes precedence and aims at
 // the nearest matched live enemy on the guest, including pitch at camera commit.
+// KK_DEV_FACE_POINT=seconds:repeat,x,y,z aims this same native camera at a
+// fixed world point for object geometry proofs. It takes precedence over both.
 //
 // KK_DEV_CAMERA_START=<s> with KK_DEV_SAMPLE_DIR writes, for the first <s> seconds on the dev script
 // clock (from when the chapter's level has loaded; dev_tools.cpp DevSecondsSinceMenu):
@@ -49,11 +51,23 @@ namespace {
 // Separate from the dev script clock: rearmed after every actual level load.
 struct FacePartner {
   using Clock = std::chrono::steady_clock;
-  bool enabled = false, loaded = false, done = false, enemy = false, logged = false;
+  bool enabled = false, loaded = false, done = false, enemy = false, logged = false, point_set = false;
+  coop::ShotVector point{};
   double first = 0, repeat = 0, next = 0;
   Clock::time_point load_time{};
 
   FacePartner() {
+    if (const char* value = std::getenv("KK_DEV_FACE_POINT"); value && *value) {
+      char trailing=0;
+      enabled=std::sscanf(value,"%lf:%lf,%f,%f,%f%c",&first,&repeat,&point.x,&point.y,&point.z,&trailing)==5 &&
+          std::isfinite(first) && first>=0 && first<=3600 &&
+          std::isfinite(repeat) && repeat>0 && repeat<=3600;
+      for (const auto coordinate : {point.x,point.y,point.z})
+        enabled=enabled && std::isfinite(coordinate) && std::abs(coordinate)<=100000;
+      point_set=enabled;
+      if (!enabled) REXLOG_WARN("KK dev: invalid KK_DEV_FACE_POINT (expected seconds:positive-repeat,x,y,z)");
+      return;
+    }
     const char* value = std::getenv("KK_DEV_FACE_ENEMY");
     enemy = value && *value;
     if (!enemy) value = std::getenv("KK_DEV_FACE_PARTNER");
@@ -95,13 +109,13 @@ void DevFacePartnerCamera(PPCContext& ctx, uint8_t* base) {
   if (elapsed < f.next || play::StartLevelLoading() || photo::Active() || freecam::Active()) return;
   const auto snapshot = coop::PartnerBodySnapshot();
   if (!snapshot.enabled || !snapshot.fresh || snapshot.state != coop::SessionState::Connected ||
-      !snapshot.local || (!f.enemy && !snapshot.partner)) return;
+      !snapshot.local || (!f.enemy && !f.point_set && !snapshot.partner)) return;
   using namespace hfr;
   const auto local = coop::ReadJackPose(
       [&](uint32_t a) { return Load32(base, a); },
       [&](uint32_t a) { return Load16(base, a); },
       [&](uint32_t a) { return LoadF(base, a); }, elapsed);
-  if (!local.pose || (!f.enemy && local.pose->level != snapshot.partner->level) ||
+  if (!local.pose || (!f.enemy && !f.point_set && local.pose->level != snapshot.partner->level) ||
       local.pose->level != snapshot.local->level) return;
   const uint32_t hero = Load32(base, 0x82CCBF7C);
   const uint32_t script = Load32(base, 0x82CCBF64);
@@ -115,12 +129,12 @@ void DevFacePartnerCamera(PPCContext& ctx, uint8_t* base) {
       !coop::PoseAddress(Load32(base, camera + 12), 64) ||
       forward != ctx.r1.u32 + 112 || !coop::PoseAddress(forward, 12) || up != cm + 208) return;
   const auto matrix = Load32(base, camera+12);
-  const coop::ShotVector eye = f.enemy ? coop::ShotVector{LoadF(base, matrix+48), LoadF(base, matrix+52), LoadF(base, matrix+56)} :
+  const coop::ShotVector eye = (f.enemy || f.point_set) ? coop::ShotVector{LoadF(base, matrix+48), LoadF(base, matrix+52), LoadF(base, matrix+56)} :
       coop::ShotVector{local.pose->x, local.pose->y, local.pose->z};
-  auto target = f.enemy ? coop::EnemyAimTarget(base, eye) :
+  auto target = f.point_set ? std::optional<coop::ShotVector>{f.point} : f.enemy ? coop::EnemyAimTarget(base, eye) :
       std::optional<coop::ShotVector>{coop::ShotVector{snapshot.partner->x, snapshot.partner->y, eye.z}};
   if (!target) return; // Due requests wait for a matched live enemy and normal Jack camera.
-  const float dx = target->x - eye.x, dy = target->y - eye.y, dz = f.enemy ? target->z-eye.z : 0;
+  const float dx = target->x - eye.x, dy = target->y - eye.y, dz = (f.enemy || f.point_set) ? target->z-eye.z : 0;
   const float horizontal = std::hypot(dx, dy);
   const float distance = std::hypot(horizontal, dz);
   // An overlapping partner has no useful yaw. Keep the due request pending.
@@ -134,8 +148,8 @@ void DevFacePartnerCamera(PPCContext& ctx, uint8_t* base) {
   StoreF(base, cm + 168, 0);  // CM_Cam's accumulated pitch in its constrained-view branch.
   // Repeated enemy aiming commits pitch with the same native orientation setter;
   // its following call turns Jack using the horizontal forward vector (.52:20959).
-  if (!f.logged || !f.enemy || f.repeat >= 1)
-    REXLOG_INFO("KK dev: face {} yaw={:.4f} pitch={:.4f} distance={:.3f}", f.enemy ? "enemy" : "partner",
+  if (!f.logged || (!f.enemy && !f.point_set) || f.repeat >= 1)
+    REXLOG_INFO("KK dev: face {} yaw={:.4f} pitch={:.4f} distance={:.3f}", f.point_set ? "point" : f.enemy ? "enemy" : "partner",
         std::atan2(dy, dx), std::atan2(dz, horizontal), distance);
   f.logged = true;
   if (f.repeat > 0) {
