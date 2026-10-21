@@ -169,7 +169,10 @@ int main() {
   Check(FirstSetupHardwareTierIndex(fake) == 0, "6 GiB inclusive");
   fake.gpu.dedicated_memory = 12 * GiB;
   fake.physical_cores = 6;
-  Check(FirstSetupHardwareTierIndex(fake) == 0, "6 cores inclusive");
+  Check(FirstSetupHardwareTierIndex(fake) != 0, "a 6-core desktop with a strong GPU is not low");
+  fake.physical_cores = 5;
+  Check(FirstSetupHardwareTierIndex(fake) == 0, "fewer than 6 cores is low");
+  fake.physical_cores = 6;
   Check(HardwareTierIndex(fake) == 2, "later explicit recommendation policy unchanged");
   for (const auto& tier : kHardwareTiers) {
     Check(std::string(RecommendedRenderQuality(tier, 3840, 2160)) ==

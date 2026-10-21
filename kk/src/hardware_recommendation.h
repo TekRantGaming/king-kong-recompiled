@@ -52,7 +52,7 @@ inline size_t HardwareTierIndex(const HardwareProfile& h) {
 // launch and the explicit Recommended action retain the existing tier policy.
 inline size_t FirstSetupHardwareTierIndex(const HardwareProfile& h) {
   constexpr uint64_t GiB = uint64_t(1) << 30;
-  if (h.steam_deck || h.gpu.dedicated_memory <= 6 * GiB || h.physical_cores <= 6) return 0;
+  if (h.steam_deck || h.gpu.dedicated_memory <= 6 * GiB || h.physical_cores < 6) return 0;  // 6-core desktops with a strong GPU are common: not Low by cores alone (coordinator)
   std::string model;
   for (size_t i = 0; i < h.gpu.name.size(); ++i) {
     // DXGI names may put (R) and (TM) between the words used below.
