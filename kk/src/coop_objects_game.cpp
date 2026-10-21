@@ -24,6 +24,10 @@ REX_EXTERN(__imp__sub_82552200);
 REX_EXTERN(__imp__sub_82515CF0);
 REX_EXTERN(__imp__sub_82516128);
 REX_EXTERN(__imp__sub_8271CCB8);
+REX_EXTERN(__imp__sub_8270FA58);
+REX_EXTERN(__imp__sub_8270F918);
+REX_EXTERN(__imp__sub_8270FCE0);
+REX_EXTERN(__imp__sub_8271A6F8);
 REX_EXTERN(__imp__sub_82543478);
 REX_EXTERN(__imp__sub_82574D80);
 REX_EXTERN(__imp__sub_826F9DC0);
@@ -487,6 +491,33 @@ void EndDoorTracks(PPCContext& ctx,uint8_t* b,const Binding& o) {
     __imp__sub_826F9DC0(ctx,b);
   }
 }
+bool PrepareDoorGeometry(PPCContext& ctx,uint8_t* b,const Binding& o) {
+  if (!Load32(b,o.vars+592)) Store32(b,o.vars+592,o.actor);
+  if (!Load32(b,o.vars+564)) return true;
+  const auto length=[&](uint32_t p) { return std::hypot(LoadF(b,p),LoadF(b,p+4),LoadF(b,p+8)); };
+  const auto f=length(o.vars+1116),u=length(o.vars+1128);
+  if (std::isfinite(f) && std::isfinite(u) && f>.9f && f<1.1f && u>.9f && u<1.1f) return true;
+  const auto target=Load32(b,o.vars+364),pivot=Load32(b,o.vars+368);
+  if (!Ptr(b,target,12,64) || (pivot && !Ptr(b,pivot,12,64))) return false;
+  // Exact local transform setup from82574D80 (755CC..756B8), without its
+  // authored predicate or participant setup. Dormant init left these vectors0.
+  const auto vector=ctx.r1.u32+256,origin=vector+16;
+  ctx.r3.u64=o.actor; ctx.r4.u64=vector; __imp__sub_8270FA58(ctx,b);
+  for (unsigned i=0;i<3;++i) Store32(b,o.vars+1116+4*i,Load32(b,vector+4*i));
+  ctx.r3.u64=o.actor; ctx.r4.u64=vector; __imp__sub_8270F918(ctx,b);
+  for (unsigned i=0;i<3;++i) Store32(b,o.vars+1128+4*i,Load32(b,vector+4*i));
+  if (pivot) {
+    ctx.r3.u64=o.actor; ctx.r4.u64=origin; __imp__sub_8270FCE0(ctx,b);
+    ctx.r3.u64=pivot; ctx.r4.u64=vector; __imp__sub_8270FCE0(ctx,b);
+    for (unsigned i=0;i<3;++i) StoreF(b,vector+4*i,LoadF(b,vector+4*i)-LoadF(b,origin+4*i));
+    ctx.r3.u64=o.actor; ctx.r4.u64=vector; ctx.r5.u64=origin; __imp__sub_8271A6F8(ctx,b);
+    for (unsigned i=0;i<3;++i) Store32(b,o.vars+1140+4*i,Load32(b,origin+4*i));
+  }
+  if (Trace()) REXLOG_INFO("KK dev object door geometry initialized: role={} id={:016X} forward={} up={} pivot={:08X} offset=({:.3f},{:.3f},{:.3f})",
+      state.host ? "host" : "guest",o.source,length(o.vars+1116),length(o.vars+1128),pivot,
+      LoadF(b,o.vars+1140),LoadF(b,o.vars+1144),LoadF(b,o.vars+1148));
+  return true;
+}
 void RefreshDoor(PPCContext& ctx,uint8_t* b,Binding& o,const ObjectState& s,bool own_track=true) {
   if (Load32(b,0x82CCBF64)!=o.ai || Load32(b,0x82CCBF6C)!=o.actor) return;
   const bool ended=!(s.value&kDoorScheduled) && DoorScheduled(b,o.ai);
@@ -503,6 +534,11 @@ void RefreshDoor(PPCContext& ctx,uint8_t* b,Binding& o,const ObjectState& s,bool
   constexpr uint32_t globals[]{0x82CCBF58,0x82CCBF5C,0x82CCBF60,0x82CCBF64,0x82CCBF68,0x82CCBF6C,0x82CCBF70};
   uint32_t values[7]; for (unsigned i=0;i<7;++i) values[i]=Load32(b,globals[i]);
   ctx.r1.u64=start+12288; std::memset(b+start+12288,0,4096); Store32(b,start+12288,sp);
+  const auto restore=[&] {
+    for (unsigned i=0;i<7;++i) Store32(b,globals[i],values[i]);
+    std::memcpy(b+start,scratch,sizeof(scratch)); ctx=saved;
+  };
+  if (!PrepareDoorGeometry(ctx,b,o)) { restore(); return; }
   ApplyDoor(b,o,s);
   {
     auto guarded=s;
@@ -513,11 +549,14 @@ void RefreshDoor(PPCContext& ctx,uint8_t* b,Binding& o,const ObjectState& s,bool
       else EndDoorTracks(ctx,b,o);
     }
   }
-  for (unsigned i=0;i<7;++i) Store32(b,globals[i],values[i]);
-  std::memcpy(b+start,scratch,sizeof(scratch)); ctx=saved; o.driven_position=s.position;
+  restore(); o.driven_position=s.position;
 #if defined(KK_DEV_TOOLS)
   if (Trace() && s.position==1) REXLOG_INFO("KK dev object door endpoint: role={} id={:016X} fraction={} endpoint={} scheduled={}",
       state.host ? "host" : "guest",o.source,LoadF(b,o.vars+1084),Load32(b,o.vars+1096),DoorScheduled(b,o.ai));
+  if (Trace() && s.position==1) REXLOG_INFO("KK dev object door final geometry: role={} id={:016X} pos=({:.3f},{:.3f},{:.3f}) forward={} up={} pivot={:08X}",
+      state.host ? "host" : "guest",o.source,LoadF(b,o.matrix+48),LoadF(b,o.matrix+52),LoadF(b,o.matrix+56),
+      std::hypot(LoadF(b,o.vars+1116),LoadF(b,o.vars+1120),LoadF(b,o.vars+1124)),
+      std::hypot(LoadF(b,o.vars+1128),LoadF(b,o.vars+1132),LoadF(b,o.vars+1136)),Load32(b,o.vars+368));
   if (!state.host && s.position==1 && Load32(b,o.vars+1096)==1) state.observed_change=true;
 #endif
 }
