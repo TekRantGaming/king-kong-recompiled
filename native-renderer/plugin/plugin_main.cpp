@@ -494,6 +494,12 @@ REXCVAR_DEFINE_STRING(native_upscaler_mip_bias, "auto", "Native renderer",
                       "output size), or a number")
     .lifecycle(rex::cvar::Lifecycle::kHotReload);
 
+// Task 354 (the comparison capture, kk/src/compare_capture.cpp): no jitter while it is on, so a still frame of
+// the bilinear stretch (the "Original" 720p picture) stays put. Read every frame; off by default.
+REXCVAR_DEFINE_BOOL(native_upscaler_still, false, "Native renderer",
+                    "No jitter for the upscaler's input while on (still comparison pictures of the bilinear stretch)")
+    .lifecycle(rex::cvar::Lifecycle::kHotReload);
+
 REXCVAR_DEFINE_DOUBLE(native_upscaler_reactive, 1.0, "Native renderer",
                       "Strength of the reactive mask (what changed after the opaque pass: water, fur, smoke, rain, "
                       "particles), 0 to 1; 0: no mask")

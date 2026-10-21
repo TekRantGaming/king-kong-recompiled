@@ -50,6 +50,7 @@ void InstallFpeGuard();  // fpe_guard.cpp
 #include "menu_hook.h"
 #include "mouse_look.h"
 #include "freecam.h"
+#include "compare_capture.h"
 #include "cursor_activity.h"
 #include "debug_overlay.h"
 #include "online.h"
@@ -219,6 +220,7 @@ class KingKongApp : public rex::ReXApp {
       // (which wins) and before the GPU starts.
       if (!kk::benchmark::Active()) kk::mods::ApplyAtGameStart(defaults.user_data_root);
       kk::NoteGameStarting();  // task 285: a startup hang report if no first frame follows
+      kk::compare::ApplyAtGameStart();  // task 354 (--kk_compare_capture only): before the Original look
       kk::EnforceOriginalLook();
       kk::ApplyFullscreenMode(window());
       kk::ApplyRendererChoice();  // the renderer, and with it the default upscaler
@@ -238,6 +240,7 @@ class KingKongApp : public rex::ReXApp {
     cb.play = [this, resume, defaults] {
       app_context().CallInUIThreadDeferred([this, resume, defaults] {
         kk::mods::ApplyAtGameStart(defaults.user_data_root);  // Kong mods, for this run only
+        kk::compare::ApplyAtGameStart();  // task 354 (--kk_compare_capture only): before the Original look
         kk::EnforceOriginalLook();  // the Original look still wins over a settings mod
         // The Resolution (Display page) before the render quality, which follows it.
         kk::ApplyFullscreenMode(window());
@@ -466,6 +469,11 @@ class KingKongApp : public rex::ReXApp {
       }
       return true;
     });
+    kk::compare::SetGrabber([this](rex::ui::RawImage& image) {  // task 354 (any thread)
+      auto* gfx = runtime() ? runtime()->graphics_system() : nullptr;
+      auto* presenter = gfx ? gfx->presenter() : nullptr;
+      return presenter && presenter->CaptureGuestOutput(image);
+    });
     kk::art::SetFrameCapturer([this](const std::filesystem::path& path) {
       app_context().CallInUIThread([this, path] {
         rex::ui::RawImage image;
@@ -508,6 +516,7 @@ class KingKongApp : public rex::ReXApp {
     kk::photo::CreatePanel(drawer, immediate_drawer(), user_data_root_);  // photo mode (photo_mode.cpp)
     kk::CreateFpsOverlay(drawer);
     kk::CreateDebugOverlay(drawer, window(), config_path_, user_data_root_);
+    kk::compare::Create(drawer, window(), user_data_root_);  // task 354: only with --kk_compare_capture=true
     kk::CreateCursorActivity(drawer, window());
     kk::freecam::Install(drawer, window());
     kk::benchmark::CreateBenchmarkDialog(drawer);

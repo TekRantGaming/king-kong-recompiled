@@ -72,6 +72,7 @@ namespace color = ui::color;
 std::atomic<bool> g_active{false};
 std::atomic<uint8_t*> g_base{nullptr};  // guest memory (Frame), for the developer steps' readings
 std::atomic<bool> g_exit_requested{false}, g_resume_requested{false};
+std::atomic<bool> g_quiet{false};  // task 354: the comparison capture holds photo mode (no panel, no input)
 std::mutex g_values_mutex;
 Values g_values;
 
@@ -177,6 +178,11 @@ void Exit(bool resume_game) {
   if (resume_game) play::RunPauseAction(play::PauseAction::kResume);
 }
 
+void SetQuiet(bool quiet) {
+  g_quiet = quiet;
+  RequestUiPaint();
+}
+
 void OnPad(uint16_t buttons, int16_t, int16_t, int16_t, int16_t, uint8_t, uint8_t) {
   std::lock_guard lock(g_pad.lock);
   g_pad.buttons = buttons;
@@ -241,6 +247,10 @@ class Panel final : public rex::ui::ImGuiDialog {
 #endif
     ServiceWaitingEnter();
     if (!g_active.load()) return;
+    if (g_quiet.load()) {  // task 354: frozen for the comparison capture; nothing drawn, nothing read
+      SendToRenderer();
+      return;
+    }
     {
       std::lock_guard lock(g_pad.lock);
       if (g_pad.fresh) input_.FeedPad(g_pad.buttons, 0, 0, 0, 0);  // the sticks and triggers fly the camera

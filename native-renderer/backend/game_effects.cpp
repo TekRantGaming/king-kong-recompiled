@@ -133,7 +133,7 @@ void GameRenderer::UpdateUpscaler(UpscaleConfig want) {
   if (options_.table_capacities != kNativeTableCapacities) want.kind = UpscalerKind::kOff;
   // What only the start sets (the point, debugging, timers, rules) stays as it was.
   want.point = upscale_initial_.point;
-  want.debug = upscale_initial_.debug;
+  want.debug = upscale_initial_.debug | (want.debug & 8u);  // task 354: native_upscaler_still (no jitter) is live
   want.gpu_time = upscale_initial_.gpu_time;
   want.rules_file = upscale_initial_.rules_file;
   if (Ready(upscale_build_)) {
@@ -195,6 +195,7 @@ void GameRenderer::UpdateUpscaler(UpscaleConfig want) {
   u.config.reactive = want.reactive;
   u.config.mip_bias = want.mip_bias;
   u.config.mip_bias_auto = want.mip_bias_auto;
+  u.config.debug = (u.config.debug & ~8u) | (want.debug & 8u);  // task 354: jitter off/on (native_upscaler_still)
   const float bias = UpscaleMipBiasFor(u);
   if (bias != u.mip_bias) {
     u.mip_bias = bias;
