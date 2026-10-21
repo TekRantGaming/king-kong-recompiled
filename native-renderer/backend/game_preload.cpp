@@ -143,6 +143,7 @@ void GameRenderer::PrepareChapterTextures() {
   // Each request scans at most 32 MiB using fault-safe copies. No render-thread
   // memory sweep, waiting, or publication based on a header alone.
   auto discover = [&] {
+    if (const char* value = std::getenv("KK341_DISCOVER"); value && *value == '0') return false;
     if (!chapter_scan_ready_) return false;
     if (!chapter_scan_low_ && chapter_scan_cursor_ >= 0xC0000000) {
       chapter_scan_low_ = true;

@@ -188,11 +188,10 @@ NR_HOOK_LIST(NR_HOOK)
 
 // Creation is not a bind. Notify the optional loading service after the library
 // has filled in both addresses; it queues only the guest object address here.
-REX_EXTERN(__imp__sub_82118A68);
-REX_HOOK_RAW(sub_82118A68) {
-  __imp__sub_82118A68(ctx, base);
+namespace {
+void NotifyTextureObject(uint32_t object) {
   const NrApi* api = Api();
-  if (!ctx.r3.u32 || !api || !api->is_active(api->self)) return;
+  if (!object || !api || !api->is_active(api->self)) return;
   using Notify = void (*)(uint32_t);
   static const auto notify = []() -> Notify {
 #if defined(_WIN32)
@@ -210,7 +209,25 @@ REX_HOOK_RAW(sub_82118A68) {
 #endif
     return nullptr;
   }();
-  if (notify) notify(ctx.r3.u32);
+  if (notify) notify(object);
+}
+}  // namespace
+
+REX_EXTERN(__imp__sub_82118A68);
+REX_HOOK_RAW(sub_82118A68) {
+  __imp__sub_82118A68(ctx, base);
+  NotifyTextureObject(ctx.r3.u32);
+}
+
+// The archive path also constructs a header around already-loaded physical
+// data without calling CreateTexture. sub_8220B1C8 copies ten words to stack
+// argument +124 after filling the base/mip addresses (generated body +0x1C8).
+REX_EXTERN(__imp__sub_8220B1C8);
+REX_HOOK_RAW(sub_8220B1C8) {
+  const auto* p = base + ctx.r1.u32 + 124;
+  const uint32_t object = (uint32_t(p[0]) << 24) | (uint32_t(p[1]) << 16) | (uint32_t(p[2]) << 8) | p[3];
+  __imp__sub_8220B1C8(ctx, base);
+  NotifyTextureObject(object);
 }
 
 // Checked at load: every hook has a table entry (Find would return null).
