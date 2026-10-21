@@ -391,6 +391,14 @@ if(KK_DEV_TOOLS)
     target_include_directories(kk-startup-clock-tests PRIVATE src ../native-renderer)
     rexglue_apply_target_settings(kk-startup-clock-tests)
     add_test(NAME startup-clock COMMAND kk-startup-clock-tests)
+    # Task 342: device open cannot hold the game thread; cancelled opens never
+    # retain the SDK client semaphore, and current PCM takes over without replay.
+    add_executable(kk-deferred-audio-tests tests/deferred_audio_tests.cpp)
+    target_include_directories(kk-deferred-audio-tests PRIVATE src)
+    target_link_libraries(kk-deferred-audio-tests PRIVATE rex::runtime)
+    rexglue_apply_target_settings(kk-deferred-audio-tests)
+    add_test(NAME deferred-audio COMMAND kk-deferred-audio-tests)
+    set_tests_properties(deferred-audio PROPERTIES TIMEOUT 20)
     # Task 206: brightness and gamma (the renderer's picture curve), the Performance metrics overlay's logic.
     add_executable(kk-perf-overlay-tests tests/perf_overlay_tests.cpp)
     target_include_directories(kk-perf-overlay-tests PRIVATE src ../native-renderer)
