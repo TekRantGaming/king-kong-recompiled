@@ -17,6 +17,11 @@ void GameRenderer::IdleTexturePreload() {
   // The original loader clears these guest flags before its wait for the clip
   // ends. resource_loading_ remains true until the first real game frame polls
   // the request again; use that lifetime for the idle clip preparation too.
+  if (!chapter_texture_screen_ && !chapter_texture_state_) {
+    const auto now = std::chrono::steady_clock::now();
+    if (chapter_scan_quiet_ == std::chrono::steady_clock::time_point{}) chapter_scan_quiet_ = now;
+    if (now - chapter_scan_quiet_ >= std::chrono::milliseconds(100)) chapter_scan_ready_ = true;
+  }
   PrepareChapterTextures();
 }
 
@@ -39,6 +44,16 @@ void GameRenderer::PrepareChapterTextures() {
     chapter_texture_submitted_ = false;
   }
   if (chapter_textures_) if (auto job = chapter_textures_->Take()) {
+    if (job->scan) {
+      if (job->generation == chapter_texture_generation_) {
+        ++chapter_scan_jobs_;
+        chapter_scan_headers_ += job->discovered.size();
+        for (const uint32_t object : job->discovered)
+          if (chapter_candidates_.size() < 4096 &&
+              std::find(chapter_candidates_.begin(), chapter_candidates_.end(), object) == chapter_candidates_.end())
+            chapter_candidates_.push_back(object);
+      }
+    } else {
     if (job->matched) ++chapter_texture_matches_;
     ProcessInvalidations();
     auto* entry = textures_.Find(job->fetch);
@@ -109,6 +124,7 @@ void GameRenderer::PrepareChapterTextures() {
         }
       }
     }
+    }
   }
   auto incoming = TextureCreationInbox().Take();
   for (const auto object : incoming) {
@@ -119,8 +135,38 @@ void GameRenderer::PrepareChapterTextures() {
       chapter_candidates_[chapter_candidate_cursor_++] = object;
     }
   }
-  if (chapter_candidates_.empty() || preload_records_.empty() ||
+  if (preload_records_.empty() ||
       preload_reserved_bytes_ >= ChapterPreloadBytes() || (chapter_textures_ && chapter_textures_->Busy())) return;
+  // Asset archives can carry ready-made headers which never call CreateTexture.
+  // Discover these on the same CPU worker, only after the loader has finished
+  // and no game frame has arrived for 100 ms (the remaining animated clip).
+  // Each request scans at most 32 MiB using fault-safe copies. No render-thread
+  // memory sweep, waiting, or publication based on a header alone.
+  auto discover = [&] {
+    if (!chapter_scan_ready_) return false;
+    if (!chapter_scan_low_ && chapter_scan_cursor_ >= 0xC0000000) {
+      chapter_scan_low_ = true;
+      chapter_scan_cursor_ = 0x10000;
+    }
+    const uint32_t end = chapter_scan_low_ ? 0x40000000 : 0xC0000000;
+    if (chapter_scan_cursor_ >= end) return false;
+    auto job = std::make_unique<ChapterTexturePrepare::Job>();
+    job->scan = true;
+    job->generation = chapter_texture_generation_;
+    job->scan_begin = chapter_scan_cursor_;
+    job->scan_end = std::min(end, chapter_scan_cursor_ + (32u << 20));
+    chapter_scan_cursor_ = job->scan_end;
+    job->copy = [this](uint32_t at, void* out, uint32_t bytes) { return memory_.CopyVirtual(at, out, bytes); };
+    job->cancelled = [this] { return !chapter_discover_allowed_.load(std::memory_order_relaxed); };
+    for (const auto& record : preload_records_) if (record.kind == ResourcePreloadRecord::Texture)
+      job->layouts.push_back(ChapterTextureLayout(kknr::TextureFetch::FromWords(record.words.data())));
+    if (!chapter_textures_) chapter_textures_ = std::make_unique<ChapterTexturePrepare>();
+    chapter_textures_->Start(std::move(job));
+    ++chapter_texture_attempts_;
+    return true;
+  };
+  if (chapter_texture_attempts_ % 4 == 0 && discover()) return;
+  bool queued = false;
   // CPU snapshots and decoded output have separate hard bounds. One candidate
   // per service call; unrelated headers are passed over without hashing.
   for (size_t i = 0; i < chapter_candidates_.size(); ++i) {
@@ -171,8 +217,10 @@ void GameRenderer::PrepareChapterTextures() {
     if (!chapter_textures_) chapter_textures_ = std::make_unique<ChapterTexturePrepare>();
     chapter_textures_->Start(std::move(job));
     ++chapter_texture_attempts_;
+    queued = true;
     break;
   }
+  if (!queued) discover();
 }
 
 bool GameRenderer::LoadResourceList(const std::string& path) {
@@ -263,6 +311,12 @@ void GameRenderer::PreloadResources(nvrhi::ICommandList* cl, bool loading, uint3
     chapter_texture_attempts_ = chapter_texture_matches_ = chapter_texture_stale_ = chapter_texture_idle_ = 0;
     chapter_candidates_.clear();
     chapter_candidate_cursor_ = 0;
+    chapter_scan_cursor_ = 0x40000000;
+    chapter_scan_low_ = false;
+    chapter_scan_jobs_ = chapter_scan_headers_ = 0;
+    chapter_scan_quiet_ = {};
+    chapter_scan_ready_ = false;
+    chapter_discover_allowed_.store(true, std::memory_order_relaxed);
     // A different chapter: the previous one's unused pack replacements are freed after this load.
     if (changed) TexturePackLoadStarted();
     PipelineLevelLoading(level);  // task 276: level tags, its pipelines first, all workers while loading
@@ -306,11 +360,14 @@ void GameRenderer::PreloadResources(nvrhi::ICommandList* cl, bool loading, uint3
     Logf(LogLevel::kInfo, "rexgpu-native: resource loading: level %u start %u, %zu descriptions (%zu local, %zu shipped)",
          level, start, preload_records_.size(), local, preload_records_.size() - local);
   } else if (!loading && resource_loading_) {
+    chapter_discover_allowed_.store(false, std::memory_order_relaxed);
     Logf(LogLevel::kInfo, "rexgpu-native: chapter content preparation: level %u, %llu textures uploaded before play, %zu creation headers",
          preload_level_, static_cast<unsigned long long>(chapter_texture_uploads_), chapter_candidates_.size());
     Logf(LogLevel::kInfo, "rexgpu-native: chapter content probe: attempts %llu matches %llu stale %llu idle %llu last screen %u state %u",
          (unsigned long long)chapter_texture_attempts_, (unsigned long long)chapter_texture_matches_,
          (unsigned long long)chapter_texture_stale_, (unsigned long long)chapter_texture_idle_, chapter_texture_screen_, chapter_texture_state_);
+    Logf(LogLevel::kInfo, "rexgpu-native: chapter content discovery: %llu jobs, %llu headers, cursor %08X",
+         (unsigned long long)chapter_scan_jobs_, (unsigned long long)chapter_scan_headers_, chapter_scan_cursor_);
     TexturePackLoadEnded();
     PipelineLevelPlaying();  // task 276: fewer background workers while playing (native_pipeline_play_workers)
     // The universe can clear/change its request fields as loading ends. Keep
