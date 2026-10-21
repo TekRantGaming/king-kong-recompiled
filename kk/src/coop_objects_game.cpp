@@ -9,6 +9,7 @@
 #include <rex/hook.h>
 #include <rex/logging.h>
 #include <chrono>
+#include <array>
 #include <cstdlib>
 #include <cstring>
 #include <set>
@@ -19,8 +20,8 @@ REX_EXTERN(__imp__sub_82552200);
 REX_EXTERN(__imp__sub_82515CF0);
 REX_EXTERN(__imp__sub_82543478);
 REX_EXTERN(__imp__sub_826F9DC0);
-#if defined(KK_DEV_TOOLS)
 REX_EXTERN(__imp__sub_82634428);
+#if defined(KK_DEV_TOOLS)
 namespace kk {
 double DevSecondsSinceMenu();
 bool DevTeleportJack(PPCContext&,uint8_t*,uint32_t,coop::ShotVector,float,float);
@@ -36,14 +37,18 @@ using namespace hfr;
 constexpr uint32_t kDoorGamePtr=0x82CC8F40;
 struct Binding : objects::Binding {
   float x=0,y=0,z=0;
-  uint32_t pending_damage=0,pending_levers=0;
+  struct Hit { ObjectState raw; double until=0; };
+  std::deque<Hit> pending_hits;
+  uint32_t pending_levers=0;
   uint32_t local_levers=0;
+  uint32_t sent_holds=0,observed_hold=0;
+  double next_hold=0;
+  std::array<objects::LeverHold,8> local_holds,remote_holds;
   double pending_until=0;
   double local_lever_until=0;
-  double local_hit_until=0;
   float driven_position=-1;
   ObjectState last;
-  bool sent=false;
+  bool sent=false,lever_logged=false;
 };
 struct State {
   uint64_t epoch=0;
@@ -65,6 +70,7 @@ struct State {
   std::map<uint32_t,Pickup> pickups;
   std::set<uint64_t> debug_sources;
   unsigned scan_pass=0,scan_rows=0;
+  bool observed_change=false;
   double scan_next=0;
   std::set<uint32_t> scan_seen;
 #endif
@@ -199,12 +205,15 @@ void Census(const uint8_t* b) {
 }
 uint32_t Lever(const uint8_t* b,const Binding& o,unsigned slot) {
   const auto count=Load32(b,o.vars+612);
-  if (count>8 || slot>=count) return 0;
+  // Keep paired620, marker640 and capability660 slots disjoint from the fixed
+  // endpoint field676. Larger authored counts need a recovered layout; the
+  // wider wire mask is not permission to read through adjacent native fields.
+  if (count>4 || slot>=count) return 0;
   return Ptr(b,Load32(b,o.vars+640+slot*4),24,42);
 }
 ObjectState Sample(const uint8_t* b,const Binding& o) {
   ObjectState s{state.generation,state.level,1,o.source,o.kind};
-  if (o.kind==ObjectKind::Breakable) s.value=Load32(b,o.vars+552);
+  if (o.kind==ObjectKind::Breakable) { s.value=Load32(b,o.vars+552); s.position=float(Load32(b,o.vars+560)); }
   else {
     for (unsigned i=0;i<8;++i) if (const auto ext=Lever(b,o,i)) {
       if (Load16(b,ext+40)&1) s.value|=1u<<i;
@@ -236,12 +245,56 @@ void Flush() {
     state.pending.erase(it);
   }
 }
-bool Request(const Binding& o,uint32_t value) {
+bool Request(const Binding& o,uint32_t value,float position=0,float seconds=0) {
   if (state.request==UINT32_MAX || state.outgoing.size()>=objects::kQueue) { ++state.rejected; return false; }
   Message m; m.type=MessageType::ObjectRequest; m.epoch=state.epoch;
-  m.object={state.generation,state.level,++state.request,o.source,o.kind,value};
+  m.object={state.generation,state.level,++state.request,o.source,o.kind,value,position,seconds};
+  if (!ValidObjectRequest(m.object)) { ++state.rejected; return false; }
   state.outgoing.push_back(m); ++state.requested;
   return true;
+}
+void Holds(const uint8_t* b) {
+  const auto now=Now();
+  const auto hero=Load32(b,0x82CCBF7C);
+  const auto ai=Ptr(b,Ptr(b,hero,24,8),4,88),matrix=Ptr(b,hero,12,64);
+  const auto human=Track(b,ai,0x826718B8) ? Ptr(b,ai,64,13388) : 0;
+  const auto paired=human ? Load32(b,human+13376) : 0,marker=human ? Load32(b,human+13380) : 0;
+  const auto paired_ext=Ptr(b,paired,24,42);
+  for (auto& [actor,o] : state.bindings) {
+    if (o.kind!=ObjectKind::Door || !Valid(b,o) || Match(o.source,o.kind)!=&o || Load32(b,o.vars)!=2) continue;
+    uint32_t mask=0;
+    if (matrix && paired_ext && (Load16(b,paired_ext+40)&0x80) && LoadF(b,o.vars+1084)<1) {
+      for (unsigned i=0;i<8;++i) if (const auto ext=Lever(b,o,i)) {
+        const auto m=Ptr(b,Load32(b,o.vars+640+4*i),12,64);
+        if (!m || !(Load16(b,ext+40)&1) || marker!=Load32(b,o.vars+640+4*i) ||
+            paired!=Load32(b,o.vars+620+4*i)) continue;
+        const auto distance=std::hypot(LoadF(b,m+48)-LoadF(b,matrix+48),LoadF(b,m+52)-LoadF(b,matrix+52),LoadF(b,m+56)-LoadF(b,matrix+56));
+        if (std::isfinite(distance) && distance<=6) mask|=1u<<i;
+      }
+    }
+    if (state.host) {
+      for (unsigned i=0;i<8;++i) o.local_holds[i].Touch(mask&(1u<<i),now);
+    } else {
+      const bool renew=now>=o.next_hold;
+      for (unsigned i=0;i<8;++i) {
+        const auto bit=1u<<i;
+        if ((mask&bit) && (!(o.sent_holds&bit) || renew)) {
+          if (Request(o,i,0,1)) o.sent_holds|=bit;
+        } else if (!(mask&bit) && (o.sent_holds&bit)) {
+          if (Request(o,i,0,2)) o.sent_holds&=~bit;
+        }
+      }
+      if (renew) o.next_hold=now+.2;
+    }
+    if (Trace() && mask!=o.observed_hold) {
+      // No human state is written. The log also establishes whether the named
+      // IA hold contract is actually reached by the local player at runtime.
+      static uint64_t logged=0;
+      if (logged++<128) REXLOG_INFO("KK dev object native hold: role={} id={:016X} mask={} human-mode={}",
+          state.host ? "host" : "guest",o.source,mask,human ? Load32(b,human+2712) : 0);
+    }
+    o.observed_hold=mask;
+  }
 }
 void Receive(const uint8_t* b) {
   const auto link=EnemyLinkSnapshot();
@@ -272,7 +325,17 @@ void Receive(const uint8_t* b) {
     const auto& p=*link.partner;
     const double distance=std::hypot(std::hypot(double(p.x)-LoadF(b,matrix+48),double(p.y)-LoadF(b,matrix+52)),double(p.z)-LoadF(b,matrix+56));
     if (!state.requests.Admit(r,Now(),distance)) { ++state.rejected; continue; }
-    if (r.kind==ObjectKind::Breakable) o->pending_damage=std::min(o->pending_damage+r.value,100000u);
+    if (r.kind==ObjectKind::Breakable) {
+      if (o->pending_hits.size()>=16) { ++state.rejected; continue; }
+      o->pending_hits.push_back({r,Now()+.5});
+    }
+    else if (r.seconds!=0) {
+      // Installed lever holds never tag a host marker or change host Jack.
+      // Require the native installed bit and paired actor on this same door.
+      if (r.seconds==1 && (!(Load16(b,Lever(b,*o,r.value)+40)&1) ||
+          !Ptr(b,Load32(b,o->vars+620+4*r.value),24,42))) { ++state.rejected; continue; }
+      o->remote_holds[r.value].Touch(r.seconds==1,Now());
+    }
     else o->pending_levers|=1u<<r.value;
     o->pending_until=Now()+.5;
 #if defined(KK_DEV_TOOLS)
@@ -281,29 +344,80 @@ void Receive(const uint8_t* b) {
     ++state.accepted;
   }
 }
+bool NativeHit(PPCContext& ctx,uint8_t* b,const Binding& o,uint32_t hero,uint32_t ai,uint32_t flags,uint32_t magnitude,float seconds=.5f) {
+  const auto sp=ctx.r1.u32;
+  if ((sp&15) || sp<0x40014000 || sp>=0xA0000000) return false;
+  constexpr uint32_t pool=0x82C8EF30;
+  const auto count=Load32(b,pool+12),used=Load32(b,pool+8);
+  if (!count || count>4096 || used>=count || !Ptr(b,pool,0,count*116)) return false;
+  uint8_t scratch[16384]; const auto start=sp-sizeof(scratch); const PPCContext saved=ctx;
+  std::memcpy(scratch,b+start,sizeof(scratch)); ctx.r1.u64=start+12288;
+  std::memset(b+start+12288,0,4096); Store32(b,start+12288,sp);
+  constexpr uint32_t globals[]{0x82CCBF64,0x82CCBF68,0x82CCBF6C,0x82CCBF70};
+  uint32_t values[4]; for (unsigned i=0;i<4;++i) values[i]=Load32(b,globals[i]);
+  Store32(b,globals[0],ai); Store32(b,globals[1],ai); Store32(b,globals[2],hero); Store32(b,globals[3],hero);
+  const auto result=ctx.r1.u32+0x100;
+  Store32(b,result,UINT32_MAX); Store32(b,result+4,0);
+  StoreF(b,ctx.r1.u32+80,0); StoreF(b,ctx.r1.u32+84,0); StoreF(b,ctx.r1.u32+88,1);
+  StoreF(b,ctx.r1.u32+96,LoadF(b,o.matrix+48)); StoreF(b,ctx.r1.u32+100,LoadF(b,o.matrix+52)); StoreF(b,ctx.r1.u32+104,LoadF(b,o.matrix+56));
+  ctx.r3.u64=result; ctx.r4.s64=-1; ctx.r5.u64=flags; ctx.r6.u64=hero; ctx.r7.u64=0;
+  ctx.r8.u64=o.actor; ctx.r9.s64=-1; ctx.r10.u64=magnitude; ctx.f1.f64=seconds;
+  __imp__sub_82634428(ctx,b);
+  const bool queued=Load32(b,result)!=UINT32_MAX && Load32(b,result+4)!=0;
+  for (unsigned i=0;i<4;++i) Store32(b,globals[i],values[i]);
+  std::memcpy(b+start,scratch,sizeof(scratch)); ctx=saved; return queued;
+}
 void Damage(PPCContext& ctx,uint8_t* b) {
   const auto output=ctx.r4.u32;
-  auto* o=state.ready && Shared() ? Current(b,ObjectKind::Breakable) : nullptr;
-  __imp__sub_824ADD48(ctx,b);
-  if (!o || !PoseAddress(output,4)) return;
-  const auto local=Load32(b,output);
-  if (state.host) {
-    if (o->pending_damage && Now()<=o->pending_until) {
-      Store32(b,output,std::min(local+o->pending_damage,100000u)); o->pending_damage=0; ++state.applied;
+  // A private loader can run native prop callbacks before the new registry is
+  // rebound. Never let raw guest hits remove geometry in that interval, since
+  // an absolute damage snapshot cannot rebuild already-removed parts.
+  if (!state.ready && REXCVAR_GET(kk_coop_enabled) && SessionInProcess()) {
+    const auto v=SessionFlowSnapshot();
+    const auto ai=Load32(b,0x82CCBF64);
+    if (v.active && !v.host && v.policy==ChapterPolicy::Together && Family(b,ai)==ObjectKind::Breakable &&
+        PoseAddress(output,4) && PoseAddress(ctx.r3.u32,12)) {
+      Store32(b,output,0);
+      StoreF(b,ctx.r3.u32,0); StoreF(b,ctx.r3.u32+4,0); StoreF(b,ctx.r3.u32+8,0);
+      return;
     }
-    else o->pending_damage=0;
+  }
+  auto* o=state.ready && Shared() ? Current(b,ObjectKind::Breakable) : nullptr;
+  const auto weak_before=o ? Load32(b,o->vars+560) : 0;
+  if (o && state.host) {
+    while (!o->pending_hits.empty()) {
+      const auto pending=o->pending_hits.front();
+      if (Now()>pending.until) { o->pending_hits.pop_front(); ++state.rejected; continue; }
+      const auto& hit=pending.raw;
+      // Use a local obstacle source, never host Jack's interaction state.
+      // The original collector owns classification, weak count and part effects.
+      if (!NativeHit(ctx,b,*o,o->actor,o->ai,hit.value,uint32_t(hit.position),hit.seconds)) break;
+      o->pending_hits.pop_front(); ++state.applied;
+      if (Trace()) REXLOG_INFO("KK dev object raw replay: id={:016X} flags={:08X} magnitude={} lifetime={:.3f} weak-before={}",
+          o->source,hit.value,hit.position,hit.seconds,Load32(b,o->vars+560));
+    }
+  }
+  if (!o || state.host) {
+    __imp__sub_824ADD48(ctx,b);
+    if (o && Trace() && PoseAddress(output,4) && (Load32(b,output) || weak_before!=Load32(b,o->vars+560)))
+      REXLOG_INFO("KK dev object classification: id={:016X} class={} weak={}->{} damage-before={}",
+          o->source,Load32(b,output),weak_before,Load32(b,o->vars+560),Load32(b,o->vars+552));
     return;
   }
-  // Environmental/AI damage is simulated only by the host. Forward only a
-  // native hit whose source was this guest's validated Jack, once consumed.
-  if (local && Now()<=o->local_hit_until) {
-    Request(*o,local>=100 ? 100 : 1); o->local_hit_until=0;
-  }
+  if (!PoseAddress(output,4) || !PoseAddress(ctx.r3.u32,12)) return;
+  // Each successfully enqueued local hit is forwarded at the pool hook. Never
+  // infer ownership from a per-object time latch or forward a classified delta.
   const auto* authority=state.replica.Find(o->kind,o->source);
+  // Do not run the guest's raw collector: its special-hit branch can mutate
+  // physics before returning a damage class. Native Go still consumes the
+  // host's absolute delta and owns geometry, grid and capability updates.
+  StoreF(b,ctx.r3.u32,0); StoreF(b,ctx.r3.u32+4,0); StoreF(b,ctx.r3.u32+8,0);
+  Store32(b,o->vars+560,authority ? uint32_t(authority->position) : 0);
   const auto delta=authority ? objects::DamageDelta(Load32(b,o->vars+552),authority->value) : 0;
   Store32(b,output,delta);
   if (delta) ++state.applied;
 }
+
 void ApplyDoor(uint8_t* b,const Binding& o,const ObjectState& s) {
   for (unsigned i=0;i<8;++i) if (const auto ext=Lever(b,o,i)) {
     auto flags=Load16(b,ext+40);
@@ -352,10 +466,22 @@ void RefreshDoor(PPCContext& ctx,uint8_t* b,Binding& o,const ObjectState& s) {
   }
   for (unsigned i=0;i<6;++i) Store32(b,globals[i],values[i]);
   std::memcpy(b+start,scratch,sizeof(scratch)); ctx=saved; o.driven_position=s.position;
+#if defined(KK_DEV_TOOLS)
+  if (!state.host && s.position==1 && Load32(b,o.vars+1096)==1) state.observed_change=true;
+#endif
 }
 void Door(PPCContext& ctx,uint8_t* b) {
   auto* o=state.ready && Shared() ? Current(b,ObjectKind::Door) : nullptr;
   if (!o) { __imp__sub_8256C3F8(ctx,b); return; }
+  bool open=false;
+  if (state.host && LoadF(b,o->vars+1084)<1) {
+    const auto now=Now();
+    const auto dt=LoadF(b,0x82C636E0),duration=LoadF(b,o->vars+1088);
+    for (unsigned i=0;i<8;++i) {
+      open|=o->local_holds[i].Step(now,dt,duration);
+      open|=o->remote_holds[i].Step(now,dt,duration);
+    }
+  }
   const auto game=Load32(b,kDoorGamePtr);
   const auto* s=state.host ? nullptr : state.replica.Find(o->kind,o->source);
   if (!state.host && o->local_levers) {
@@ -394,6 +520,23 @@ void Door(PPCContext& ctx,uint8_t* b) {
     o->pending_levers=0;
   }
   if (s && Valid(b,*o)) RefreshDoor(ctx,b,*o,*s);
+  if (open && Components(b,*o)) {
+    const auto hero=Load32(b,0x82CCBF7C),hero_ai=Ptr(b,Ptr(b,hero,24,8),4,88);
+    const auto human=Ptr(b,hero_ai,64,13388);
+    const auto host_input=[&] {
+      std::array<uint32_t,8> fields{};
+      if (human) { fields[0]=Load32(b,human+2712); fields[1]=Load32(b,human+13376);
+        fields[2]=Load32(b,human+13380); fields[3]=Load32(b,human+13384); }
+      if (PoseAddress(game,17804)) for (unsigned i=0;i<4;++i) fields[4+i]=Load32(b,game+offsets[i]);
+      return fields;
+    };
+    const auto before=host_input();
+    auto endpoint=Sample(b,*o); endpoint.position=1;
+    RefreshDoor(ctx,b,*o,endpoint);
+    Observe(b,*o);
+    REXLOG_INFO("KK co-op objects: installed lever opened id={:016X} native-duration={} fraction={} endpoint={} host-jack-readable={} host-jack-unchanged={}",
+        o->source,LoadF(b,o->vars+1088),LoadF(b,o->vars+1084),Load32(b,o->vars+1096),human!=0 && PoseAddress(game,17804),before==host_input());
+  }
   if (state.host && Components(b,*o) && !DoorScheduled(b,o->ai)) Observe(b,*o);
 }
 void Breakable(PPCContext& ctx,uint8_t* b) {
@@ -402,6 +545,10 @@ void Breakable(PPCContext& ctx,uint8_t* b) {
   // Capture the final native damage in the same call, before a later frame
   // retires an exploded obstacle from the full registry.
   if (o && state.host && Components(b,*o)) Observe(b,*o);
+#if defined(KK_DEV_TOOLS)
+  if (o && !state.host && Components(b,*o)) if (const auto* s=state.replica.Find(o->kind,o->source))
+    if (s->value && Load32(b,o->vars+552)>=s->value) state.observed_change=true;
+#endif
 }
 void DoorUpdate(PPCContext& ctx,uint8_t* b) {
   auto* o=state.ready && Shared() ? Current(b,ObjectKind::Door) : nullptr;
@@ -412,6 +559,9 @@ void DoorUpdate(PPCContext& ctx,uint8_t* b) {
   if (s) { DoorStopGuard guard(*o,*s); __imp__sub_82552200(ctx,b); }
   else __imp__sub_82552200(ctx,b);
   if (s) o->driven_position=s->position;
+#if defined(KK_DEV_TOOLS)
+  if (s && s->position==1 && LoadF(b,o->vars+1084)==1 && Load32(b,o->vars+1096)==1) state.observed_change=true;
+#endif
   if (o && state.host && Components(b,*o) && !DoorScheduled(b,o->ai)) Observe(b,*o);
 }
 void DoorStop(PPCContext& ctx,uint8_t* b) {
@@ -488,36 +638,14 @@ void ScanInventory(const uint8_t* b,uint32_t w) {
 // Acceptance must still be observed in each world's native damage/opening state.
 struct Probe {
   double due=-1,act=0; uint64_t source=0; bool done=false;
-  unsigned slot=0;
+  unsigned slot=0,hits=0;
   explicit Probe(const char* name) {
     const char* value=std::getenv(name); if (!value || !*value) return;
     char* end=nullptr; const auto t=std::strtod(value,&end);
     if (end!=value && !*end && std::isfinite(t) && t>=0 && t<=3600) due=t;
   }
 };
-bool ProbeHit(PPCContext& ctx,uint8_t* b,const Binding& o,uint32_t hero,uint32_t ai) {
-  const auto sp=ctx.r1.u32;
-  if ((sp&15) || sp<0x40014000 || sp>=0xA0000000) return false;
-  constexpr uint32_t pool=0x82C8EF30;
-  const auto count=Load32(b,pool+12),used=Load32(b,pool+8);
-  if (!count || count>4096 || used>=count || !Ptr(b,pool,0,count*116)) return false;
-  uint8_t scratch[16384]; const auto start=sp-sizeof(scratch); const PPCContext saved=ctx;
-  std::memcpy(scratch,b+start,sizeof(scratch)); ctx.r1.u64=start+12288;
-  std::memset(b+start+12288,0,4096); Store32(b,start+12288,sp);
-  constexpr uint32_t globals[]{0x82CCBF64,0x82CCBF68,0x82CCBF6C,0x82CCBF70};
-  uint32_t values[4]; for (unsigned i=0;i<4;++i) values[i]=Load32(b,globals[i]);
-  Store32(b,globals[0],ai); Store32(b,globals[1],ai); Store32(b,globals[2],hero); Store32(b,globals[3],hero);
-  const auto result=ctx.r1.u32+0x100;
-  Store32(b,result,UINT32_MAX); Store32(b,result+4,0);
-  StoreF(b,ctx.r1.u32+80,0); StoreF(b,ctx.r1.u32+84,0); StoreF(b,ctx.r1.u32+88,1);
-  StoreF(b,ctx.r1.u32+96,LoadF(b,o.matrix+48)); StoreF(b,ctx.r1.u32+100,LoadF(b,o.matrix+52)); StoreF(b,ctx.r1.u32+104,LoadF(b,o.matrix+56));
-  ctx.r3.u64=result; ctx.r4.s64=-1; ctx.r5.u64=64; ctx.r6.u64=hero; ctx.r7.u64=0;
-  ctx.r8.u64=o.actor; ctx.r9.s64=-1; ctx.r10.u64=1000; ctx.f1.f64=.5;
-  ObjectsObserveHit(ctx,b); __imp__sub_82634428(ctx,b);
-  const bool queued=Load32(b,result)!=UINT32_MAX && Load32(b,result+4)!=0;
-  for (unsigned i=0;i<4;++i) Store32(b,globals[i],values[i]);
-  std::memcpy(b+start,scratch,sizeof(scratch)); ctx=saved; return queued;
-}
+
 void DevProbe(PPCContext& ctx,uint8_t* b,Probe& probe,ObjectKind kind) {
   const auto t=kk::DevSecondsSinceMenu();
   if (probe.done || probe.due<0 || t<probe.due) return;
@@ -532,11 +660,11 @@ void DevProbe(PPCContext& ctx,uint8_t* b,Probe& probe,ObjectKind kind) {
       unsigned slot=0;
       if (kind==ObjectKind::Door) {
         if (Load32(b,o.vars)!=2 || LoadF(b,o.vars+1084)>=1) continue;
-        for (;slot<8;++slot) { const auto ext=Lever(b,o,slot); if (ext && !(Load16(b,ext+40)&1)) break; }
+        for (;slot<8;++slot) { const auto ext=Lever(b,o,slot); if (ext && (Load16(b,ext+40)&1)) break; }
         if (slot==8) continue;
       }
       const auto marker=kind==ObjectKind::Door ? Ptr(b,Load32(b,o.vars+640+4*slot),12,64) : o.matrix;
-      if (!marker || std::abs(LoadF(b,o.matrix+56)-LoadF(b,hm+56))>2) continue;
+      if (!marker || std::abs(LoadF(b,marker+56)-LoadF(b,hm+56))>2) continue;
       const float x=LoadF(b,marker+48),y=LoadF(b,marker+52);
       if (!std::isfinite(x) || !std::isfinite(y)) continue;
       const float d=std::hypot(x-LoadF(b,hm+48),y-LoadF(b,hm+52));
@@ -548,7 +676,7 @@ void DevProbe(PPCContext& ctx,uint8_t* b,Probe& probe,ObjectKind kind) {
     if (!matrix) return;
     // A marker high above/below the current walkable area is not a demonstrated
     // placement. Do not repeat the chapter-3 probe's off-cliff teleport.
-    if (std::abs(LoadF(b,best->matrix+56)-LoadF(b,hm+56))>2) return;
+    if (std::abs(LoadF(b,matrix+56)-LoadF(b,hm+56))>2) return;
     float fx=LoadF(b,matrix+48)-LoadF(b,hm+48),fy=LoadF(b,matrix+52)-LoadF(b,hm+52);
     const auto length=std::hypot(fx,fy); fx=length>.01f ? fx/length : 0; fy=length>.01f ? fy/length : 1;
     const float gap=kind==ObjectKind::Door ? 1.f : 3.f;
@@ -563,16 +691,32 @@ void DevProbe(PPCContext& ctx,uint8_t* b,Probe& probe,ObjectKind kind) {
   if (t<probe.act) return;
   auto* o=Match(probe.source,kind); if (!o || !Valid(b,*o)) { probe.done=true; return; }
   bool supplied=false;
-  if (kind==ObjectKind::Breakable) supplied=ProbeHit(ctx,b,*o,hero,ai);
+  if (kind==ObjectKind::Breakable) {
+    static const auto magnitude=[] {
+      const char* value=std::getenv("KK_DEV_OBJECT_HIT_MAGNITUDE");
+      if (!value) return 1000u;
+      char* end=nullptr; const auto n=std::strtoul(value,&end,10);
+      return end!=value && !*end && n<=100000 ? uint32_t(n) : 1000u;
+    }();
+    supplied=NativeHit(ctx,b,*o,hero,ai,64,magnitude);
+  }
   else if (const auto ext=Lever(b,*o,probe.slot)) { Store16(b,ext+40,Load16(b,ext+40)|0x8000); supplied=true; }
   if (!supplied) return;
-  probe.done=true;
+  ++probe.hits;
+  const char* repeat=kind==ObjectKind::Breakable ? std::getenv("KK_DEV_OBJECT_HIT_COUNT") : nullptr;
+  const auto count=repeat ? std::clamp(std::atoi(repeat),1,12) : 1;
+  probe.done=probe.hits>=unsigned(count); probe.act=t+1;
   REXLOG_INFO("KK dev object probe: native input role={} kind={} id={:016X} supplied={} native-result-awaiting=true",
       state.host ? "host" : "guest",uint8_t(kind),o->source,supplied);
 }
 void Probes(PPCContext& ctx,uint8_t* b) {
   static Probe hit("KK_DEV_OBJECT_HIT"),lever("KK_DEV_OBJECT_LEVER");
   DevProbe(ctx,b,hit,ObjectKind::Breakable); DevProbe(ctx,b,lever,ObjectKind::Door);
+}
+void ReloadProbe(uint8_t* b) {
+  static Probe probe("KK_DEV_OBJECT_RELOAD");
+  if (probe.done || probe.due<0 || state.host || kk::DevSecondsSinceMenu()<probe.due || !state.observed_change) return;
+  if (SessionDevObjectReload(b)) probe.done=true;
 }
 void PickupProbe(PPCContext& ctx,uint8_t* b) {
   static Probe probe("KK_DEV_OBJECT_PICKUP");
@@ -611,16 +755,45 @@ void PickupProbe(PPCContext& ctx,uint8_t* b) {
 }
 #endif
 } // namespace
-void ObjectsObserveHit(const PPCContext& ctx,const uint8_t* b) {
-  if (!state.ready || state.host || !Shared()) return;
-  const auto hero=Load32(b,0x82CCBF7C);
-  if (ctx.r6.u32!=hero) return;
+void ObjectsFirearm(const PPCContext& input,const uint8_t* b) {
+  if (!Trace() || !state.ready || !Shared() || input.r6.u32!=Load32(b,0x82CCBF7C)) return;
+  const auto caller=uint32_t(input.lr);
+  if (caller!=0x82696E74 && caller!=0x82697494 && caller!=0x82697970 && caller!=0x82698C00) return;
+  const Binding* target=nullptr; bool part=false;
+  for (const auto& [actor,o] : state.bindings) if (o.kind==ObjectKind::Breakable && Valid(b,o)) {
+    bool hit=actor==input.r8.u32;
+    for (unsigned i=0;i<10 && !hit;++i) hit=Load32(b,o.vars+20+4*i)==input.r8.u32 && input.r8.u32!=0;
+    if (hit) { if (target) return; target=&o; part=actor!=input.r8.u32; }
+  }
+  if (!target) return;
+  REXLOG_INFO("KK dev object firearm: role={} id={:016X} target={:08X} part={} weapon-caller={:08X} flags={:08X} magnitude={}",
+      state.host ? "host" : "guest",target->source,input.r8.u32,part,caller,input.r5.u32,input.r10.u32);
+}
+ObjectEnqueue ObjectsBeginEnqueue(const PPCContext& input,const uint8_t* b) {
+  if (input.r4.u32!=4 || !state.ready || input.r3.u32!=Load32(b,0x82CCBF7C) ||
+      !Shared() || !PoseAddress(input.r8.u32,8)) return {};
+  return {input.r4.u32,input.r3.u32,input.r6.u32,input.r8.u32,uint32_t(input.lr),float(input.f1.f64),
+      uint64_t(Load32(b,input.r8.u32))<<32|Load32(b,input.r8.u32+4)};
+}
+void ObjectsEnqueued(const ObjectEnqueue& input,const uint8_t* b) {
+  if (input.type!=4 || !state.ready || !Shared() || !PoseAddress(input.payload,108)) return;
+  const auto payload=input.payload,hero=Load32(b,0x82CCBF7C);
+  if (input.source!=hero) return;
+  if (!objects::StrikeRecord([&](uint32_t address){ return Load32(b,address); },input.output,input.previous,
+      hero,Load32(b,payload+4),Load32(b,payload+88),Load32(b,payload+92),input.seconds)) return;
   const auto ai=Ptr(b,Ptr(b,hero,24,8),4,88);
   if (!Track(b,ai,0x826718B8)) return;
-  const auto it=state.bindings.find(ctx.r8.u32);
-  if (it!=state.bindings.end() && it->second.kind==ObjectKind::Breakable && Valid(b,it->second) &&
-      Match(it->second.source,it->second.kind)==&it->second) it->second.local_hit_until=Now()+.5;
+  const auto it=state.bindings.find(Load32(b,payload+4));
+  if (it==state.bindings.end()) return;
+  const auto& o=it->second;
+  if (o.kind!=ObjectKind::Breakable || !Valid(b,o) || Match(o.source,o.kind)!=&o) return;
+  const auto flags=Load32(b,payload+88),magnitude=Load32(b,payload+92);
+  if ((flags&~kObjectHitFlags) || magnitude>100000 || !std::isfinite(input.seconds) || input.seconds<0 || input.seconds>2) return;
+  if (!state.host) Request(o,flags,float(magnitude),input.seconds);
+  if (Trace()) REXLOG_INFO("KK dev object raw hit: role={} id={:016X} handle={:08X}/{} flags={:08X} magnitude={} lifetime={:.3f} caller={:08X}",
+      state.host ? "host" : "guest",o.source,Load32(b,input.output),Load32(b,input.output+4),flags,magnitude,input.seconds,input.caller);
 }
+
 void ObjectsLoaded(uint8_t* b) {
   if (!REXCVAR_GET(kk_coop_enabled) || !SessionInProcess()) { state={}; return; }
   const auto v=SessionFlowSnapshot(); const auto epoch=StorySessionEpoch();
@@ -652,7 +825,8 @@ void ObjectsBeforeAi(PPCContext& ctx,uint8_t* b,uint32_t w) {
     state.outgoing.clear();
     for (auto& [actor,o] : state.bindings) {
       if (o.local_levers && w==state.world && Valid(b,o)) FinishLocalLever(b,o,o.local_levers);
-      o.pending_damage=o.pending_levers=o.local_levers=0; o.local_hit_until=0;
+      o.pending_hits.clear(); o.pending_levers=o.local_levers=o.sent_holds=o.observed_hold=0;
+      o.local_holds={}; o.remote_holds={};
     }
     return;
   }
@@ -661,7 +835,7 @@ void ObjectsBeforeAi(PPCContext& ctx,uint8_t* b,uint32_t w) {
   // for ten seconds of actual shared AI, rather than expiring while waiting.
   if (!state.census_started) { state.census_started=true; state.census_until=Now()+10; state.next_census=0; }
   if (Now()>=state.next_census) Census(b);
-  state.ready=true; Receive(b); Flush();
+  state.ready=true; Receive(b); Holds(b); Flush();
 #if defined(KK_DEV_TOOLS)
   Probes(ctx,b);
   PickupProbe(ctx,b);
@@ -683,6 +857,9 @@ void ObjectsAfterAi(PPCContext&,uint8_t* b,uint32_t w) {
     }
   }
   Flush();
+#if defined(KK_DEV_TOOLS)
+  ReloadProbe(b);
+#endif
   if (now>=state.next_log) {
     state.next_log=now+5;
     unsigned breakables=0,doors=0;
@@ -691,12 +868,33 @@ void ObjectsAfterAi(PPCContext&,uint8_t* b,uint32_t w) {
         state.host ? "host" : "guest",state.generation,state.level,breakables,doors,state.requested,state.accepted,state.applied,state.received,state.rejected,state.pending.size()+state.outgoing.size());
 #if defined(KK_DEV_TOOLS)
     unsigned details=0;
-    if (Trace()) for (const auto& [actor,o] : state.bindings) if (Valid(b,o) && Match(o.source,o.kind)==&o) {
+    if (Trace()) {
+      const auto hero=Load32(b,0x82CCBF7C),matrix=Ptr(b,hero,12,64);
+      const auto human=Ptr(b,Ptr(b,Ptr(b,hero,24,8),4,88),64,13388);
+      const auto game=Load32(b,0x82CC97C0); // actual cheats/firearm inventory cache
+      if (matrix && human && PoseAddress(game,13652))
+        REXLOG_INFO("KK dev object player: role={} pos=({:.3f},{:.3f},{:.3f}) mode={} paired={:08X} marker={:08X} weapon={} ammo={}/{}/{}/{}",
+            state.host ? "host" : "guest",LoadF(b,matrix+48),LoadF(b,matrix+52),LoadF(b,matrix+56),Load32(b,human+2712),
+            Load32(b,human+13376),Load32(b,human+13380),Load32(b,game+13128),Load32(b,game+13432),Load32(b,game+13504),Load32(b,game+13576),Load32(b,game+13648));
+    }
+    if (Trace()) for (auto& [actor,o] : state.bindings) if (Valid(b,o) && Match(o.source,o.kind)==&o) {
       if (details++>=32 && !state.debug_sources.contains(o.source)) continue;
       const auto local=Sample(b,o); const auto* authority=state.replica.Find(o.kind,o.source);
       REXLOG_INFO("KK dev object state: role={} id={:016X} kind={} local={}/{:.3f}/{:.3f} host={}/{:.3f} matched={}",
           state.host ? "host" : "guest",o.source,uint8_t(o.kind),local.value,local.position,local.seconds,
           authority ? authority->value : local.value,authority ? authority->position : local.position,state.host || authority!=nullptr);
+      if (o.kind==ObjectKind::Door && !o.lever_logged) {
+        bool logged=false;
+        for (unsigned i=0;i<8;++i) if (const auto ext=Lever(b,o,i)) {
+          const auto m=Ptr(b,Load32(b,o.vars+640+4*i),12,64);
+          if (!m) continue;
+          REXLOG_INFO("KK dev object lever: role={} id={:016X} slot={} flags={:04X} marker=({:.3f},{:.3f},{:.3f}) installed={} one-way={} close-on-zero={} native-duration={}",
+              state.host ? "host" : "guest",o.source,i,Load16(b,ext+40),LoadF(b,m+48),LoadF(b,m+52),LoadF(b,m+56),
+              bool(Load16(b,ext+40)&1),Load32(b,o.vars+568),Load32(b,o.vars+572),LoadF(b,o.vars+1088));
+          logged=true;
+        }
+        o.lever_logged=logged;
+      }
     }
     details=0;
     if (Trace()) for (const auto& [actor,p] : state.pickups) {

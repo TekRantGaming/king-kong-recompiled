@@ -11,7 +11,7 @@
 
 namespace kk::coop {
 constexpr uint32_t kMagic = 0x4B4B4331;  // KKC1, network byte order throughout
-constexpr uint16_t kProtocolVersion = 15; // C71 authoritative world-object outcomes and requests.
+constexpr uint16_t kProtocolVersion = 17; // C71b raw obstacle hits; 16 reserved by C68b.
 constexpr size_t kMaxDisplayNameBytes = 32;
 // Valid UTF-8, no controls or invisible direction/line formatting, bounded at a codepoint.
 // Empty or wholly invalid input becomes "Partner". Never log the input or result.
@@ -29,13 +29,16 @@ enum class MessageType : uint16_t {
 
 enum class ObjectKind : uint8_t { Breakable=1, Door=2 };
 constexpr uint32_t kDoorScheduled=0x100;
+constexpr uint32_t kObjectHitFlags=0x00FFFFFF;
 constexpr size_t kObjectQueue=256,kObjectCensus=2048;
 // source hashes immutable authored position and native family. Scope is
 // epoch + shared load generation/level, including private guest reloads.
 // Breakable: value=cumulative native damage. Door: value=lever mask plus
 // kDoorScheduled while its native loop/wait/init track still exists,
 // position=native opening fraction, seconds=opening time. Requests use value
-// for native strike class (1/100) or lever slot; floats must be zero.
+// Breakable state position=weak-hit counter (0..5). Breakable requests carry
+// raw native hit flags in value, integer magnitude in position, lifetime in seconds.
+// Door requests use value=slot; seconds=0 installs, 1 holds, 2 releases.
 struct ObjectState {
   uint32_t generation=0, level=0, number=0;
   uint64_t source=0;

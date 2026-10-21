@@ -42,6 +42,7 @@
 #include "coop_observer.h"
 #include "coop_story_game.h"
 #include "coop_enemies_game.h"
+#include "coop_objects_game.h"
 #include "photo_mode.h"
 #include "settings.h"
 
@@ -1727,7 +1728,9 @@ REX_HOOK_RAW(sub_82454690) {
 REX_HOOK_RAW(sub_8271E4E8) {
   if (kk::PartnerBodyStimulus(ctx, base)) return;
   kk::PartnerBodyTriggerReference(base, ctx.r6.u32);
+  const auto input=kk::coop::ObjectsBeginEnqueue(ctx,base);
   __imp__sub_8271E4E8(ctx, base);
+  kk::coop::ObjectsEnqueued(input,base);
 }
 REX_HOOK_RAW(sub_82449F18) {
   const auto record = ctx.r3.u32;

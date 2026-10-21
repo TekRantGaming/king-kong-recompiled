@@ -1,11 +1,24 @@
 #pragma once
 #include "coop_enemies.h"
 #include "coop_pose.h"
+#include "coop_stimulus_debug.h"
 #include <map>
 #include <set>
+#include <bit>
 
 namespace kk::coop::objects {
 constexpr size_t kQueue=kObjectQueue, kCensus=kObjectCensus;
+// The enqueue result must be NEW and name this exact local shooter's record.
+// Another environmental hit on the same obstacle cannot borrow its provenance.
+template<class Read> bool StrikeRecord(Read read,uint32_t output,uint64_t previous,
+    uint32_t shooter,uint32_t target,uint32_t flags,uint32_t magnitude,float seconds=0) {
+  if (!PoseAddress(output,8) || magnitude>100000 ||
+      (uint64_t(read(output))<<32|read(output+4))==previous) return false;
+  const auto r=stimulus_debug::ReadHandle(read,output);
+  return r.valid && (r.id>>24)==4 && r.source==shooter && r.target==target &&
+      read(r.address+96)==flags && read(r.address+100)==magnitude &&
+      read(r.address+4)==std::bit_cast<uint32_t>(seconds);
+}
 // Same native loaded-file join used by dev_sample.cpp: key -> file index ->
 // loaded address. Authored actor keys survive heap relocation and moving doors.
 // Refuse aliases instead of accepting the last row for a duplicated address.
@@ -116,7 +129,7 @@ class Requests {
     last_=r.number;
     if (now-window_>=1) { window_=now; count_=0; }
     if (++count_>16) return false;
-    return r.kind==ObjectKind::Breakable ? distance<=80 && (r.value==1 || r.value==100) :
+    return r.kind==ObjectKind::Breakable ? distance<=80 :
         r.kind==ObjectKind::Door && r.value<8 && distance<=6;
   }
  private:
@@ -127,4 +140,25 @@ class Requests {
 inline uint32_t DamageDelta(uint32_t local,uint32_t authority) {
   return authority>local ? std::min(authority-local,100000u) : 0;
 }
+// Native time advances only while the host door runs. Heartbeat expiry and an
+// explicit release reset progress; packet duplication never advances the clock.
+class LeverHold {
+ public:
+  void Touch(bool holding,double now) {
+    if (!holding || !std::isfinite(now)) { *this={}; return; }
+    if (last_<0 || now<last_ || now-last_>.75) *this={};
+    last_=now;
+  }
+  bool Step(double now,float dt,float duration) {
+    if (!std::isfinite(now) || last_<0 || now<last_ || now-last_>.75) { *this={}; return false; }
+    if (done_ || !std::isfinite(dt) || dt<=0 || dt>.1f ||
+        !std::isfinite(duration) || duration<=0 || duration>3600) return false;
+    elapsed_+=dt;
+    if (elapsed_+1e-6<duration) return false;
+    done_=true; return true;
+  }
+ private:
+  double last_=-1,elapsed_=0;
+  bool done_=false;
+};
 } // namespace kk::coop::objects

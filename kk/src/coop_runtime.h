@@ -40,6 +40,7 @@ void SessionReloadFrame(uint8_t* base);
 #if defined(KK_DEV_TOOLS)
 bool SessionDevChapterEnd();  // same finish messages as a native chapter exit, no hero dependency
 bool SessionDevFollowPad(uint32_t user, uint8_t* state);
+bool SessionDevObjectReload(uint8_t* base); // private guest recovery, never a shared reload
 #endif
 // Private death/catch-up reload does not advance the shared load barrier or enemy visit.
 bool SessionPrivateReload();

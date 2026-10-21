@@ -1,7 +1,8 @@
 #pragma once
 #include <cstdint>
 
-// Read-only native stimulus diagnostics. Runtime callers are KK_DEV_TOOLS only;
+// Read-only native stimulus validation and diagnostics. C71b also uses exact
+// handle/source/target validation in shipping before forwarding obstacle hits;
 // readers are injected so bounds/generation handling can be checked without a game.
 namespace kk::coop::stimulus_debug {
 constexpr uint32_t kPools = 0x82C8EEF0, kStride = 116;

@@ -2107,7 +2107,6 @@ REX_HOOK_RAW(sub_8254A8F8) {
 }
 #endif
 REX_HOOK_RAW(sub_8261DE68) {
-  kk::coop::ObjectsObserveHit(ctx,base);
 #if defined(KK_DEV_TOOLS)
   if (REXCVAR_GET(kk_coop_enabled) && kk::coop::EnemyConnectionReady()) {
     static unsigned count = 0;
@@ -2170,6 +2169,6 @@ REX_HOOK_RAW(sub_8243A3C0) {
   kk::coop::ShotRay(base, origin, point, object, caller);
 }
 REX_HOOK_RAW(sub_82634428) {
-  kk::coop::ObjectsObserveHit(ctx,base);
+  kk::coop::ObjectsFirearm(ctx,base);
   if (!kk::coop::ForwardShotEvent(ctx, base)) __imp__sub_82634428(ctx, base);
 }

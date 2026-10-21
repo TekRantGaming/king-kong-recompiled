@@ -1,5 +1,6 @@
 #include "coop_objects.h"
 #include "coop_session.h"
+#include "coop_stimulus_debug.h"
 #include <cstdio>
 #include <cstdlib>
 #include <limits>
@@ -7,14 +8,15 @@ using namespace kk::coop;
 namespace {
 void Check(bool value,const char* text) { if (!value) { std::fprintf(stderr,"FAIL: %s\n",text); std::exit(1); } }
 Message Packet(MessageType type=MessageType::ObjectState,ObjectKind kind=ObjectKind::Breakable) {
-  Message m; m.type=type; m.epoch=17; m.object={2,203,1,0x123456789abcdef0ull,kind,1}; return m;
+  Message m; m.type=type; m.epoch=17; m.object={2,203,1,0x123456789abcdef0ull,kind,type==MessageType::ObjectRequest && kind==ObjectKind::Breakable ? 0u : 1u}; return m;
 }
 void Codec() {
   for (auto type : {MessageType::ObjectState,MessageType::ObjectRequest}) for (auto kind : {ObjectKind::Breakable,ObjectKind::Door}) {
     auto m=Packet(type,kind);
+    if (type==MessageType::ObjectRequest && kind==ObjectKind::Breakable) { m.object.value=0x800010; m.object.position=42; m.object.seconds=.125f; }
     if (type==MessageType::ObjectState && kind==ObjectKind::Door) { m.object.position=.375f; m.object.seconds=2.5f; m.object.value=511; }
     std::vector<uint8_t> bytes; Check(Encode(m,bytes),"object encodes");
-    Check(bytes.size()==kHeaderBytes+33 && bytes[5]==15,"bounded protocol 15 object wire");
+    Check(bytes.size()==kHeaderBytes+33 && bytes[5]==17,"bounded protocol 17 object wire");
     Message out; Check(Decode(bytes,out) && out.object==m.object,"object round trip");
     for (size_t i=0;i<bytes.size();++i) {
       Message sentinel; sentinel.sequence=123;
@@ -26,12 +28,59 @@ void Codec() {
     Check(!Decode(bad,out),"nonfinite float refused");
   }
   auto m=Packet(MessageType::ObjectRequest); std::vector<uint8_t> bytes;
-  m.object.value=99; Check(!Encode(m,bytes),"request cannot choose arbitrary native damage");
+  m.object.value=0x01000000; Check(!Encode(m,bytes),"unsupported native hit flag range refused");
   m=Packet(MessageType::ObjectRequest,ObjectKind::Door); m.object.value=8;
   Check(!Encode(m,bytes),"lever slot bounded"); m.object.value=0; m.object.position=.1f;
   Check(!Encode(m,bytes),"request cannot choose door progress");
 }
 void Policies() {
+  auto raw=Packet(MessageType::ObjectRequest).object;
+  raw.value=0x800010; raw.position=6;
+  Check(ValidObjectRequest(raw) && !ValidObjectState(raw),"raw hit is distinct from absolute damage");
+  raw.position=6.5f; Check(!ValidObjectRequest(raw),"raw magnitude must be an integer");
+  raw.position=100001; Check(!ValidObjectRequest(raw),"raw magnitude bounded");
+  auto weak=Packet().object; weak.position=5;
+  Check(ValidObjectState(weak),"snapshot retains native weak-hit count");
+  weak.position=6; Check(!ValidObjectState(weak),"native sixth weak hit must reset before snapshot");
+  auto hold=Packet(MessageType::ObjectRequest,ObjectKind::Door).object; hold.seconds=1;
+  Check(ValidObjectRequest(hold),"installed lever hold admitted");
+  hold.seconds=2; Check(ValidObjectRequest(hold),"installed lever release admitted");
+  hold.seconds=3; Check(!ValidObjectRequest(hold),"unknown lever operation refused");
+  objects::LeverHold timer;
+  timer.Touch(true,1);
+  for (int i=0;i<4;++i) Check(!timer.Step(1,.05f,.25f),"hold uses native simulation time");
+  Check(timer.Step(1,.05f,.25f) && !timer.Step(1,.05f,.25f),"one endpoint per continuous hold");
+  timer.Touch(false,1.1); timer.Touch(true,2);
+  Check(!timer.Step(2,.05f,.1f),"release resets partial progress");
+  Check(!timer.Step(3,.05f,.1f),"lost heartbeat cannot open a door");
+  timer.Touch(true,4);
+  Check(!timer.Step(4,1,.1f) && !timer.Step(4,.05f,0),"bad delta or duration cannot force endpoint");
+  std::map<uint32_t,uint32_t> pool{{stimulus_debug::kPools+64,0x45000000},
+      {stimulus_debug::kPools+72,1},{stimulus_debug::kPools+76,4},
+      {0x45000000,0},{0x45000008,0x42000000},{0x4500000c,0x42001000},
+      {0x45000070,9},{0x46000000,0x04000000},{0x46000004,9}};
+  const auto read_pool=[&](uint32_t a){ const auto it=pool.find(a); return it==pool.end() ? 0u : it->second; };
+  auto record=stimulus_debug::ReadHandle(read_pool,0x46000000);
+  Check(record.valid && record.source==0x42000000 && record.target==0x42001000,"exact record retains separate shooter and target");
+  pool[0x45000060]=64; pool[0x45000064]=6;
+  const auto strike=[&](uint64_t previous=0){ return objects::StrikeRecord(read_pool,0x46000000,previous,0x42000000,0x42001000,64,6); };
+  Check(strike(),"new successful native raw hit accepted");
+  pool[0x45000000]=1;
+  Check(strike(),"new pending native record is accepted before the next pool activation pass");
+  pool[0x45000000]=0;
+  pool[0x45000004]=std::bit_cast<uint32_t>(.125f);
+  Check(!strike() && objects::StrikeRecord(read_pool,0x46000000,0,0x42000000,0x42001000,64,6,.125f),"raw lifetime must match the exact native record");
+  pool[0x45000004]=0;
+  Check(!strike(uint64_t(0x04000000)<<32|9),"pool-full unchanged result cannot replay the previous shot");
+  pool[0x45000008]=0x42002000;
+  Check(!strike(),"environmental hit cannot borrow a previous local shooter latch");
+  pool[0x45000008]=0x42000000; pool[0x45000064]=1000;
+  Check(!strike(),"mixed hit magnitudes cannot share provenance");
+  pool[0x45000064]=6;
+  pool[0x46000004]=8;
+  Check(!stimulus_debug::ReadHandle(read_pool,0x46000000).valid,"reused pool slot cannot authorize a stale hit");
+  pool[0x46000004]=9; pool[0x45000000]=4;
+  Check(!stimulus_debug::ReadHandle(read_pool,0x46000000).valid,"freed record cannot authorize a hit");
   std::map<uint32_t,uint32_t> memory{{0x82C4EDC0,0x43000000},{0x82C4EDC4,2},
       {0x43000000,7},{0x43000004,0x42000000},{0x43000008,8},{0x4300000c,0x42001000},
       {0x82C4ED94,0x44000000},{0x82C4ED98,3},{0x44000000,0xabcd1234},{0x44000004,7},
@@ -99,14 +148,16 @@ void Network() {
   for (int n=0;n<20;++n) { host.Tick(n*.01); guest.Tick(n*.01); }
   Check(host.State()==SessionState::Connected && guest.State()==SessionState::Connected,"real session handshake");
   ObjectMailbox hm,gm;
-  auto invalid=Packet(MessageType::ObjectRequest); invalid.object.value=99;
+  auto invalid=Packet(MessageType::ObjectRequest); invalid.object.value=0x01000000;
   Check(!gm.Submit(invalid),"malformed request cannot poison mailbox head");
   Check(hm.Submit(Packet()),"host outcome queued"); hm.Exchange(host); ht.blocked=true; host.Tick(.21); guest.Tick(.21); gm.Exchange(guest);
   Check(gm.Take().empty(),"backpressure retains outcome");
   ht.blocked=false; host.Tick(.22); guest.Tick(.22); gm.Exchange(guest);
   auto received=gm.Take(); Check(received.size()==1 && received[0].object==Packet().object,"reliable retry reaches guest");
-  Check(gm.Submit(Packet(MessageType::ObjectRequest)),"guest request queued"); gm.Exchange(guest); guest.Tick(.23); host.Tick(.23); hm.Exchange(host);
-  Check(hm.Take().size()==1,"request reaches host");
+  auto raw=Packet(MessageType::ObjectRequest); raw.object.value=0x800010; raw.object.position=42; raw.object.seconds=.125f;
+  Check(gm.Submit(raw),"guest raw hit queued"); gm.Exchange(guest); guest.Tick(.23); host.Tick(.23); hm.Exchange(host);
+  auto hits=hm.Take();
+  Check(hits.size()==1 && hits[0].object==raw.object,"raw classification and magnitude survive real mailboxes and wire");
   Check(!guest.QueueObjects(Packet()),"guest cannot author outcomes");
   Check(!host.QueueObjects(Packet(MessageType::ObjectRequest)),"host cannot impersonate guest intent");
   auto old=Packet(); old.epoch=18; Check(!host.QueueObjects(old),"stale epoch refused");

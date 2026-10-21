@@ -174,7 +174,8 @@ inline bool ObjectSender(MessageType type,Role role) {
 class ObjectMailbox {
  public:
   bool Submit(Message m) {
-    if (!IsObjectMessage(m.type) || !m.epoch || !ValidObjectState(m.object)) return false;
+    if (!IsObjectMessage(m.type) || !m.epoch ||
+        !(m.type==MessageType::ObjectRequest ? ValidObjectRequest(m.object) : ValidObjectState(m.object))) return false;
     std::vector<uint8_t> bytes; if (!Encode(m,bytes)) return false;
     std::lock_guard lock(mutex_);
     if (outgoing_.size()>=kObjectQueue) return false;

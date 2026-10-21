@@ -635,6 +635,24 @@ bool SessionDevFollowPad(uint32_t user,uint8_t* state) {
   std::memcpy(state,&packet,4); std::memcpy(state+8,&x,2); std::memcpy(state+10,&y,2);
   return true;
 }
+bool SessionDevObjectReload(uint8_t* base) {
+  const auto v=SessionFlowSnapshot(); const auto now=Now(); const auto link=EnemyLinkSnapshot();
+  const auto condition=LocalPlayerCondition(base);
+  if (!launched || !v.active || v.host || v.policy!=ChapterPolicy::Together ||
+      v.phase!=FlowPhase::Playing || recovery.Downed() || private_load || private_request ||
+      catchup_phase!=CatchupPhase::None || !condition || *condition==PlayerCondition::Dead ||
+      !PartnerAliveHere(v,link,now) || !CatchupSafe(base,now)) return false;
+  // Test only: exercise the existing living-guest catch-up load even when the
+  // checkpoint number has not changed. Its timeout ends the session and never
+  // enters the shared death/reload fallback.
+  catchup_from_offer=true; catchup_target=v.checkpoint; catchup_phase=CatchupPhase::Requested;
+  catchup_deadline=now+revive::kLoadTimeout; private_request=true;
+  catchup_offer=move_offer=false; catchup_request=0; move_request=0; pending_move=0;
+  catchup_notice_until=now+6;
+  REXLOG_INFO("KK dev object reload: private guest recovery requested generation={} level={} checkpoint={}; host continues",
+      v.world.generation,v.world.level,v.checkpoint);
+  return true;
+}
 bool SessionDevChapterEnd() {
   const auto v=SessionFlowSnapshot();
   if (!launched || !v.active || v.phase!=FlowPhase::Playing || !play::SessionActive()) return false;
