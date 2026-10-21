@@ -20,6 +20,8 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #include <fstream>
 #include <sstream>
@@ -818,6 +820,7 @@ void GameRenderer::UpscaleMotionPass(nvrhi::ICommandList* cl, HostTarget* depth_
 void GameRenderer::RunUpscale(nvrhi::ICommandList* cl, UpscaleFrameTracker::Trigger trigger) {
   GameUpscale& u = *upscale_;
   if (u.upscaled) return;
+  PostSplitMark(cl, 2, "1 the upscale point");
   // The ambient occlusion goes in first when its moments missed this scene.
   if (scene_ao_) scene_ao_->OnPresent(cl, AoSettingsFor(u.frame));
   u.upscaled = true;
@@ -1143,6 +1146,57 @@ void GameRenderer::RunUpscale(nvrhi::ICommandList* cl, UpscaleFrameTracker::Trig
          render.height, out_size.width, out_size.height, u.jitter.x, u.jitter.y, u.motion_draws.size(), matched,
          changed, int(camera), camera ? reprojection[3] : 0.0, camera ? reprojection[7] : 0.0, int(have_depth), int(u.snapshot_taken), int(reset), done ? u.name.c_str() : "bilinear");
   }
+}
+
+
+// ---------------------------------------------------------------- dev aid: the frame's GPU time in pieces
+
+bool GameRenderer::PostSplitOn() {
+  if (post_split_on_ < 0) {
+    const char* e = std::getenv("KK_DEV_POST_SPLIT");
+    post_split_on_ = (e && *e == '1') ? 1 : 0;
+  }
+  return post_split_on_ == 1;
+}
+
+void GameRenderer::PostSplitMark(nvrhi::ICommandList* cl, uint64_t bucket, const char* what) {
+  if (!PostSplitOn() || !cl) return;
+  PostSplitBucket& b = post_split_[bucket];
+  if (!b.timer) {
+    b.what = what;
+    b.timer = std::make_unique<AoGpuTimer>(device_, b.what.c_str(), "Frame split GPU time");
+  }
+  if (post_split_open_ == b.timer.get()) return;
+  if (post_split_open_) post_split_open_->End(cl);
+  b.timer->Begin(cl);
+  post_split_open_ = b.timer.get();
+}
+
+void GameRenderer::PostSplitTarget(nvrhi::ICommandList* cl, const HostTarget* t, char kind, uint64_t shader) {
+  if (!PostSplitOn() || !t) return;
+  // Before the upscale point by target; after it by target, kind (draw, clear, resolve) and pixel shader.
+  const bool after = upscale_ && upscale_->upscaled;
+  if (!after) kind = 0, shader = 0;
+  const uint32_t pitch = uint32_t((t->key >> 16) & 0x3FFF), format = uint32_t((t->key >> 40) & 0xFF);
+  uint64_t bucket = 0x100ull | uint64_t(pitch) << 8 | uint64_t(format) << 24 | uint64_t(t->depth) << 32 |
+                    uint64_t(t->host_width) << 40 | uint64_t(after) << 60;
+  bucket = Mix64(Mix64(bucket, uint64_t(uint8_t(kind))), shader) | 0x100;
+  char what[128];
+  if (after)
+    std::snprintf(what, sizeof(what), "2 after the upscale point: pitch %u format %u %s %ux%u %s %016llx", pitch, format,
+                  t->depth ? "depth" : "colour", t->host_width, t->host_height,
+                  kind == 'd' ? "draw ps" : kind == 'c' ? "clear" : "resolve", static_cast<unsigned long long>(shader));
+  else
+    std::snprintf(what, sizeof(what), "0 before it: pitch %u format %u %s %ux%u", pitch, format,
+                  t->depth ? "depth" : "colour", t->host_width, t->host_height);
+  PostSplitMark(cl, bucket, what);
+}
+
+void GameRenderer::PostSplitFrameEnd(nvrhi::ICommandList* cl) {
+  if (!PostSplitOn()) return;
+  if (post_split_open_ && cl) post_split_open_->End(cl);
+  post_split_open_ = nullptr;
+  for (auto& [key, b] : post_split_) b.timer->FrameEnd();
 }
 
 }  // namespace nr

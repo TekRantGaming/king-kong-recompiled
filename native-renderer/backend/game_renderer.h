@@ -679,6 +679,21 @@ class GameRenderer {
   nvrhi::TextureHandle fxaa_source_;  // Options::fxaa: the frame before spatial anti-aliasing
   nvrhi::TextureHandle cas_source_;
   std::unique_ptr<AoGpuTimer> cas_timer_;
+  // Dev aid (KK_DEV_POST_SPLIT=1, game_upscale.cpp): the GPU time of the frame's work in pieces: before
+  // the upscale point by target (pitch, format, size), the upscale point, after it by target, kind (draw,
+  // clear, resolve) and pixel shader, then Present; and a log line for each new target. Logged every 600
+  // frames; nothing without the variable.
+  struct PostSplitBucket {
+    std::string what;
+    std::unique_ptr<AoGpuTimer> timer;
+  };
+  std::map<uint64_t, PostSplitBucket> post_split_;
+  AoGpuTimer* post_split_open_ = nullptr;
+  int post_split_on_ = -1;
+  bool PostSplitOn();
+  void PostSplitMark(nvrhi::ICommandList* cl, uint64_t bucket, const char* what);
+  void PostSplitTarget(nvrhi::ICommandList* cl, const HostTarget* target, char kind, uint64_t shader = 0);
+  void PostSplitFrameEnd(nvrhi::ICommandList* cl);
   std::unique_ptr<Smaa> smaa_;
   std::deque<std::pair<uint64_t, nvrhi::ResourceHandle>> retired_resources_;  // (frame, resource)
   // Destroys the retired resources past their GPU lifetime within a per-frame time budget (task 174:
