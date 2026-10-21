@@ -7,6 +7,11 @@ version's notes the first time you start it.
 
 **Beta 14**: fixes and performance, from the beta channel (**About** > **Change version**). Your saves and settings are kept. Windows only for this beta.
 
+### What's new
+- **DirectX 12 is now the default on Windows**, for new players and for everyone updating. Vulkan is used automatically if DirectX 12 cannot start on your PC, and you can still choose it in Settings > Graphics.
+- **A fresh first-time setup**: updating to Beta 14 takes everyone through the setup once more, starting from the new defaults and the preset recommended for your PC. Your saves, game files and downloads are kept, and the game files page is skipped. The graphics are prepared again for DirectX 12 the first time, which can take a few minutes.
+- **Graphics presets now set every graphics setting**, including shadows, water reflections and light shafts: High gives High shadows, water reflections and low light shafts; Ultra gives Ultra shadows, water reflections and high light shafts. Changing any one setting shows Custom.
+
 ### Fixed
 - **The live main menu now always loads behind the loading screen**, including on the Steam Deck and after setup or an update. A slow or failed start tries again instead of falling back to the slideshow of pictures.
 - **Up to a 10 second freeze at the start when Windows was slow to open the sound device**: the game, the menu music and the button sounds now open their sound in the background, so the game keeps running while Windows gets the device ready.
