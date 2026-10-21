@@ -16,7 +16,7 @@ version's notes the first time you start it.
 - **Smoother chapter starts after the PS2 cutscenes**: while a story cutscene plays, the game now prepares most of the next chapter's textures, so far fewer have to load in the first minute of play.
 - **Lighter defaults on weak hardware**: the first setup picks a lighter preset for handhelds, integrated graphics, entry gaming laptops and PCs with little video memory. Existing players keep their settings.
 - **Medium preset**: uses the original shadows, which saves a lot of graphics time on mid-range PCs. High and Ultra are unchanged.
-- **More graphics prepared ahead of time**: the shipped list now has 16,285 graphics pipelines (1,588 more), from players who share them with Online players on, so fewer things hitch the first time you see them.
+- **More graphics prepared ahead of time**: the shipped list now has 16,292 graphics pipelines (1,595 more), from players who share them with Online players on, so fewer things hitch the first time you see them.
 
 ## v2.0.0-beta.13 (20 October 2026)
 
