@@ -250,15 +250,28 @@ const VsConstants* MotionHistory::FindPrevious(const MotionDrawKey& key, uint32_
     // only win when it comes earlier. The draws are measured from the nearest in that float outwards,
     // each against the best so far, and the winner is the same smallest sum and first of equals.
     if (!s->index_built) BuildIndex(*s);
-    if (s->index_column >= 0 && std::isfinite(current[size_t(s->index_column)])) {
+    const float cur = s->index_column >= 0 ? current[size_t(s->index_column)] : 0.0f;
+    const auto& idx = s->index;
+    const auto bound = [&](size_t j) { return std::fabs(double(idx[j].first) - double(cur)); };
+    size_t right = 0;
+    bool use_index = s->index_column >= 0 && std::isfinite(cur);
+    if (use_index) {
+      right = size_t(std::lower_bound(idx.begin(), idx.end(), cur,
+                                      [](const std::pair<float, uint32_t>& e, float v) { return e.first < v; }) -
+                     idx.begin());
+      if (!nan_first) {
+        // When the best sum so far leaves most draws in the window (a camera cut: every draw far from
+        // last frame's), the in-order search below is cheaper (memory in order): the same answer.
+        size_t lo = 0, hi = right;  // first left entry within the window
+        while (lo < hi) { const size_t m = (lo + hi) / 2; if (bound(m) > best_d) lo = m + 1; else hi = m; }
+        size_t lo2 = right, hi2 = idx.size();  // first right entry past it
+        while (lo2 < hi2) { const size_t m = (lo2 + hi2) / 2; if (bound(m) <= best_d) lo2 = m + 1; else hi2 = m; }
+        if ((lo2 - lo) * 2 > idx.size()) use_index = false;
+      }
+    }
+    if (use_index) {
       bool has_best = !nan_first;
-      const float cur = current[size_t(s->index_column)];
-      const auto& idx = s->index;
-      size_t right = size_t(std::lower_bound(idx.begin(), idx.end(), cur,
-                                             [](const std::pair<float, uint32_t>& e, float v) { return e.first < v; }) -
-                            idx.begin());
       size_t left = right;  // the left side's next is idx[left - 1]
-      const auto bound = [&](size_t j) { return std::fabs(double(idx[j].first) - double(cur)); };
       while (left > 0 || right < idx.size()) {
         const double lb_left = left > 0 ? bound(left - 1) : INFINITY;
         const double lb_right = right < idx.size() ? bound(right) : INFINITY;
