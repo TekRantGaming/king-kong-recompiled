@@ -33,6 +33,13 @@ REXCVAR_DEFINE_STRING(native_shadow_quality, "original", "Test", "Test");
 REXCVAR_DEFINE_STRING(swap_post_effect, "none", "Test", "Test");
 REXCVAR_DEFINE_INT32(anisotropic_override, -1, "Test", "Test");
 REXCVAR_DEFINE_INT32(ao_strength, 1, "Test", "Test");
+// The rest of what a graphics preset sets (task 350b), with the native renderer's defaults (plugin_main.cpp).
+REXCVAR_DEFINE_STRING(native_water_reflections, "original", "Test", "Test");
+REXCVAR_DEFINE_STRING(native_volumetrics, "off", "Test", "Test");
+REXCVAR_DEFINE_STRING(native_sharpness, "off", "Test", "Test");
+REXCVAR_DEFINE_BOOL(native_effect_buffers, true, "Test", "Test");
+REXCVAR_DEFINE_STRING(native_gi_quality, "auto", "Test", "Test");
+REXCVAR_DEFINE_INT32(native_ao_normal_smoothing, 0, "Test", "Test");
 
 namespace kk {
 HardwareProfile fake;
@@ -487,8 +494,8 @@ int main() {
     Check(!SetModSetting("no_such_setting_x", "1"), "mod: unknown setting refused");
     ClearModSettings();
   }
-  // Medium owns its cheaper shadow setting only on an explicit selection.
-  // A saved custom shadow setting survives startup, and High/Ultra still preserve it.
+  // A preset owns its shadows only on an explicit selection: a saved custom shadow setting survives startup.
+  // Since task 350b every preset sets shadows (owner's table: Original, Original, High, Ultra, Steam Deck Original).
   {
     auto set = [](const char* n, const char* v) { rex::cvar::SetFlagByName(n, v); };
     auto get = [](const char* n) { return rex::cvar::GetFlagByName(n); };
@@ -506,10 +513,67 @@ int main() {
           "custom expensive shadows are not labelled Medium");
     ApplyGraphicsPresetSettings(kGraphicsPresets[1], set);
     Equals("native_shadow_quality", "original");
-    for (int index : {2, 3}) {
-      set("native_shadow_quality", "high");
+    const char* shadows[] = {"original", "original", "high", "ultra", "original"};
+    for (int index = 0; index < kGraphicsPresetCount; ++index) {
+      set("native_shadow_quality", index == 2 ? "ultra" : "high");
       ApplyGraphicsPresetSettings(kGraphicsPresets[index], set);
-      Equals("native_shadow_quality", "high");
+      Equals("native_shadow_quality", shadows[index]);
+    }
+  }
+  // Task 350b: each preset through the real settings registry, then saved and read back as at the next start
+  // (a setting at its default is left out of the file): every value of the table, and the same preset shown.
+  {
+    struct Row {
+      const char *shadows, *water, *shafts, *ao_mode, *ao_samples;
+    };
+    const Row rows[] = {{"original", "original", "off", "0", "9"},
+                        {"original", "original", "off", "0", "9"},
+                        {"high", "ssr", "low", "1", "2"},
+                        {"ultra", "ssr", "high", "1", "3"},
+                        {"original", "original", "off", "0", "9"}};
+    auto set = [](const char* n, const char* v) { rex::cvar::SetFlagByName(n, v); };
+    auto get = [](const char* n) { return rex::cvar::GetFlagByName(n); };
+    for (int i = 0; i < kGraphicsPresetCount; ++i) {
+      for (int from = 0; from < kGraphicsPresetCount; ++from) {
+        rex::cvar::ResetAllToDefaults();
+        ApplyPortDefaults();
+        // The player's own values first (AO quality 9: none of the presets'), or another preset.
+        for (const auto& [name, value] : std::initializer_list<std::pair<const char*, const char*>>{
+                 {"native_sharpness", "high"}, {"native_effect_buffers", "false"}, {"native_gi_quality", "full"},
+                 {"native_ao_quality", "half"}, {"native_ao_samples", "9"}, {"native_ao_normal_smoothing", "1"},
+                 {"native_water_reflections", "ssr"}, {"native_volumetrics", "high"}, {"native_shadow_quality", "ultra"}})
+          set(name, value);
+        if (from != i) ApplyGraphicsPresetSettings(kGraphicsPresets[from], set);
+        if (from != i) set("native_ao_samples", "9");
+        ApplyGraphicsPresetSettings(kGraphicsPresets[i], set);
+        for (int pass = 0; pass < 2; ++pass) {
+          const Row& r = rows[i];
+          Equals("native_shadow_quality", r.shadows);
+          Equals("native_water_reflections", r.water);
+          Equals("native_volumetrics", r.shafts);
+          Equals("ao_mode", r.ao_mode);
+          Equals("native_ao_samples", r.ao_samples);
+          Equals("native_sharpness", "off");
+          Equals("native_effect_buffers", "true");
+          Equals("native_gi_quality", "auto");
+          Equals("native_gi", kGraphicsPresets[i].gi);
+          Equals("native_gi_distance", kGraphicsPresets[i].gi_distance);
+          Equals("kk_render_quality", kGraphicsPresets[i].quality);
+          Equals("swap_post_effect", kGraphicsPresets[i].aa);
+          Equals("anisotropic_override", kGraphicsPresets[i].filtering);
+          if (kGraphicsPresets[i].ao) {
+            Equals("ao_strength", "3");
+            Equals("native_ao_normal_smoothing", "2");
+            Equals("native_ao_quality", "auto");
+          }
+          Equals("kk_graphics_preset", kGraphicsPresets[i].label);
+          Check(FindGraphicsPreset(get, [](const GraphicsPreset&) { return true; }) == i,
+                pass == 0 ? "the chosen preset is shown" : "the chosen preset is shown after the next start");
+          Check(SaveSettings(config), "save the preset");
+          rex::cvar::ResetAllToDefaults();
+          rex::cvar::LoadConfig(config);
+        }
+      }
     }
   }
   // Version 3 recognises every old preset without touching its other settings.
