@@ -744,6 +744,18 @@ extern "C" REX_GPU_PLUGIN_EXPORT uint32_t nr_upscaler_query(NrUpscalerSupport* o
 
 extern "C" REX_GPU_PLUGIN_EXPORT void nr_upscaler_query_wait(void) { nr::WaitUpscalerQuery(); }
 
+// Task 353: the upscaler check's own process (king_kong.exe --kk_upscaler_check=...; kk/src/main.cpp calls this
+// before anything else of the game runs). Returns the process's exit code.
+extern "C" REX_GPU_PLUGIN_EXPORT int nr_upscaler_check_main(const wchar_t* report, const wchar_t* adapter) {
+#if NR_GAME_RENDERER && NR_HAS_D3D12
+  return nr::UpscalerCheckMain(report, adapter);
+#else
+  (void)report;
+  (void)adapter;
+  return 5;
+#endif
+}
+
 // The graphics panel's view of the same answer: never starts the question (the game's device exists).
 extern "C" REX_GPU_PLUGIN_EXPORT uint32_t nr_upscaler_query_peek(NrUpscalerSupport* out) {
   return nr::UpscalerQueryPeek(out);

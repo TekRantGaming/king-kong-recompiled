@@ -36,7 +36,8 @@
 #include "exit_evidence.h"
 #include "exit_evidence_logic.h"
 #include "dev_launcher_chain.h"
-#include "hooks/kk_native_ui.h"  // the temporal upscalers this PC runs
+#include "hooks/kk_native_ui.h"
+#include "backend/startup_steps.h"  // the temporal upscalers this PC runs
 #include "debug_overlay_logic.h"  // the upscalers the running game offers (as F8 lists them)
 #include "ultrawide_logic.h"  // the Ultrawide mod's picture shape (task 311)
 
@@ -3053,6 +3054,10 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
 #if defined(KK_DEV_TOOLS)
     DevPerf(draw_start);
 #endif
+    if (!first_frame_noted_) {
+      first_frame_noted_ = true;
+      nr::steps::Note("launcher: first frame drawn");  // task 353
+    }
   }
 
   // What keeps the launcher at its full frame rate (OnDraw): input of any kind, a page, view, pop-up or
@@ -8438,6 +8443,7 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
   double loop_first_ = -1;   // ImGui time of its first picture
   float loop_end_ = -1.0f;    // seconds since it started fading (< 0: not yet)
   float loop_wait_ = 0.0f;   // seconds since the launcher's first frame
+  bool first_frame_noted_ = false;  // task 353: the start-up step log
   float scene_gain_ = 0.0f;  // task 330: the live menu scene's sound (0 .. 1)
   bool scene_retry_ = false;    // task 330: the scene may start later in this launcher (TickSceneStart)
   double scene_retry_at_ = 0;

@@ -19,6 +19,7 @@
 #include <dlfcn.h>
 #endif
 
+#include "backend/upscaler.h"
 #include "backend/vulkan_dispatch.h"
 
 namespace nr {
@@ -71,6 +72,9 @@ void UpscalerVulkanWants(const UpscaleConfig& config, uint32_t vendor, bool* dls
 
 std::vector<std::string> UpscalerVulkanInstanceExtensions(bool dlss, bool xess) {
   std::vector<std::string> out;
+  // Task 353: asking XeSS loads its library: only an SDK the upscaler check confirmed.
+  dlss = dlss && UpscalerGateAllows(UpscalerKind::kDlss, nullptr);
+  xess = xess && UpscalerGateAllows(UpscalerKind::kXess, nullptr);
   if (dlss) AddUnique(out, DlssVulkanInstanceExtensions());
   if (xess) AddUnique(out, XessVulkanInstanceExtensions());
   return out;
@@ -92,6 +96,8 @@ UpscalerVulkanNeeds UpscalerVulkanDeviceNeeds(bool dlss, bool xess, VkInstance i
   const auto* half_bytes = reinterpret_cast<const uint8_t*>(&half);
   out.features.emplace_back(half_bytes, half_bytes + sizeof(half));
   (void)gipa;
+  dlss = dlss && UpscalerGateAllows(UpscalerKind::kDlss, nullptr);  // task 353, as above
+  xess = xess && UpscalerGateAllows(UpscalerKind::kXess, nullptr);
   if (dlss) out.Add(DlssVulkanDeviceNeeds(instance, physical));
   if (xess) out.Add(XessVulkanDeviceNeeds(instance, physical));
   return out;

@@ -10,6 +10,7 @@
 // The SDK 2.3 headers (MIT, thirdparty/FSR-SDK-API) differ from the FidelityFX SDK 1.1.4 ones FSR 3.1
 // uses, so they are kept in a namespace of their own here.
 
+#include "backend/startup_steps.h"
 #include "backend/upscaler.h"
 
 #if NR_HAS_FFX && NR_HAS_D3D12
@@ -61,7 +62,9 @@ const Fsr4Functions* Library() {
   static const Fsr4Functions fns = [] {
     Fsr4Functions fn;
     const std::wstring path = UpscalerDllFolder() + L"amd_fidelityfx_loader_dx12.dll";
+    steps::Note("upscaler: loading %s", "FSR 4 loader");  // task 353: the start-up step log
     fn.dll = LoadLibraryExW(path.c_str(), nullptr, LOAD_WITH_ALTERED_SEARCH_PATH);
+    steps::Note("upscaler: %s %s", "FSR 4 loader", fn.dll ? "loaded" : "not loaded");
     if (!fn.dll) return fn;
     fn.CreateContext = reinterpret_cast<f::PfnFfxCreateContext>(GetProcAddress(fn.dll, "ffxCreateContext"));
     fn.DestroyContext = reinterpret_cast<f::PfnFfxDestroyContext>(GetProcAddress(fn.dll, "ffxDestroyContext"));
@@ -228,6 +231,7 @@ class Fsr4Upscaler final : public Upscaler {
 }  // namespace
 
 std::unique_ptr<Upscaler> CreateFsr4Upscaler(nvrhi::IDevice* device, const UpscaleConfig& config, std::string* why) {
+  if (!UpscalerGateAllows(UpscalerKind::kFsr4, why)) return nullptr;  // task 353: confirmed by the upscaler check
   if (device->getGraphicsAPI() != nvrhi::GraphicsAPI::D3D12) {
     if (why) *why = "FSR 4 needs Direct3D 12 (AMD's FSR SDK has no Vulkan version)";
     return nullptr;
