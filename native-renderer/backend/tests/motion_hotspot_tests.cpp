@@ -2,6 +2,7 @@
 #include "backend/tests/check.h"
 #include "backend/tests/hotspot_bench.h"
 #include <bit>
+#include <limits>
 #include <random>
 using namespace nr;
 using MotionData = std::vector<VsConstants>;
@@ -93,6 +94,9 @@ TEST(MotionIndexedSearchMatchesOldForManyDraws) {
       const float x = value(60.0f), z = value(40.0f);
       for (unsigned i = first; i < first + span; ++i) c[i] = (i % 7 == 3) ? x : (i % 7 == 5) ? z : value(1.0f);
       if (pass % 5 == 1 && d % 9 == 0) c[first + rng() % span] = std::bit_cast<float>(odd[rng() % std::size(odd)]);
+      // Ann's plants: a third of the draws with NaN in one float (the measured draw's sum is then
+      // often not a number: the search from no best).
+      if (pass % 5 == 2 && d % 3 == 0) c[first + 1] = std::numeric_limits<float>::quiet_NaN();
       if (d > 0 && rng() % 6 == 0) c = data[rng() % d];  // duplicates
     }
     for (auto& c : data) { old.Record(key, c); next.Record(key, c); }

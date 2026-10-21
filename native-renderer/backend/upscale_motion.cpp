@@ -227,13 +227,13 @@ const VsConstants* MotionHistory::FindPrevious(const MotionDrawKey& key, uint32_
     const double d = distance(guess, best_d, guess < best);
     if (d < best_d || (guess < best && d == best_d)) best_d = d, best = guess;
   }
-  if (std::isnan(best_d)) {
-    // Not a number in its constants (never seen): measure in order, as before.
+  // Not a number in the first measured draw's sum: the others are measured in order from no best,
+  // as before (a draw whose sum is not a number never wins; the first of the smallest; draw 0 when
+  // none has a sum).
+  const bool nan_first = std::isnan(best_d);
+  if (nan_first) {
     best = 0;
     best_d = INFINITY;
-    for (size_t i = 0; i < n; ++i)
-      if (const double d = distance(i, best_d, false); d < best_d) best_d = d, best = i;
-    return &s->constants[best];
   }
   if (n >= kIndexedSearchMin) {
     // Task 351: many draws of one key (Ann's chapter: hundreds of plants, each its own world matrix)
@@ -245,6 +245,7 @@ const VsConstants* MotionHistory::FindPrevious(const MotionDrawKey& key, uint32_
     // each against the best so far, and the winner is the same smallest sum and first of equals.
     if (!s->index_built) BuildIndex(*s);
     if (s->index_column >= 0 && std::isfinite(current[size_t(s->index_column)])) {
+      bool has_best = !nan_first;
       const float cur = current[size_t(s->index_column)];
       const auto& idx = s->index;
       size_t right = size_t(std::lower_bound(idx.begin(), idx.end(), cur,
@@ -259,18 +260,24 @@ const VsConstants* MotionHistory::FindPrevious(const MotionDrawKey& key, uint32_
         const double lb = take_left ? lb_left : lb_right;
         if (!(lb <= best_d)) break;  // both sides are past the best sum (each side's bounds only grow)
         const size_t i = take_left ? idx[--left].second : idx[right++].second;
-        if (i == first) continue;  // measured in full above
-        const bool earlier = i < best;
+        if (i == first) continue;  // measured in full above (or its sum is not a number)
+        const bool earlier = has_best && i < best;
         if (lb == best_d && !earlier) continue;  // at best a tie, and a later draw loses ties
         const double d = distance(i, best_d, earlier);
         if (d < best_d || (earlier && d == best_d)) {
           best_d = d;
           best = i;
+          has_best = true;
         }
       }
-      s->next_guess = best + 1;
+      if (!nan_first) s->next_guess = best + 1;
       return &s->constants[best];
     }
+  }
+  if (nan_first) {
+    for (size_t i = 0; i < n; ++i)
+      if (const double d = distance(i, best_d, false); d < best_d) best_d = d, best = i;
+    return &s->constants[best];
   }
   for (size_t i = 0; i < n && best_d > 0; ++i) {
     if (i == first) continue;
