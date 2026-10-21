@@ -18,6 +18,7 @@
 #include <atomic>
 
 REX_EXTERN(__imp__sub_824ADD48);
+REX_EXTERN(__imp__sub_82448E08);
 REX_EXTERN(__imp__sub_8256C3F8);
 REX_EXTERN(__imp__sub_82552200);
 REX_EXTERN(__imp__sub_82515CF0);
@@ -39,15 +40,14 @@ using namespace hfr;
 // directly rather than assuming another library's globals alias it.
 constexpr uint32_t kDoorGamePtr=0x82CC8F40;
 struct Binding : objects::Binding {
+  uint64_t hold_tick=0;
   float x=0,y=0,z=0;
   struct Hit { ObjectState raw; double until=0; };
   std::deque<Hit> pending_hits;
-  uint32_t pending_levers=0;
   uint32_t local_levers=0;
   uint32_t sent_holds=0,observed_hold=0;
   double next_hold=0;
   std::array<objects::LeverHold,8> local_holds,remote_holds;
-  double pending_until=0;
   double local_lever_until=0;
   float driven_position=-1;
   ObjectState last;
@@ -55,6 +55,7 @@ struct Binding : objects::Binding {
 };
 struct State {
   uint64_t epoch=0;
+  uint64_t ai_tick=0;
   uint32_t generation=0,level=0,world=0,number=0,request=0;
   bool host=false,ready=false,census_started=false;
   double census_until=0,next_census=0,next_sample=0,next_full=0,next_log=0;
@@ -360,8 +361,9 @@ void Receive(const uint8_t* b) {
           !Ptr(b,Load32(b,o->vars+620+4*r.value),24,42))) { ++state.rejected; continue; }
       o->remote_holds[r.value].Touch(r.seconds==1,Now());
     }
-    else o->pending_levers|=1u<<r.value;
-    o->pending_until=Now()+.5;
+    else { // Handle installation has no replay that avoids host inventory state.
+      ++state.rejected; continue;
+    }
 #if defined(KK_DEV_TOOLS)
     if (state.debug_sources.size()<8) state.debug_sources.insert(r.source);
 #endif
@@ -494,38 +496,55 @@ void RefreshDoor(PPCContext& ctx,uint8_t* b,Binding& o,const ObjectState& s) {
   if (!state.host && s.position==1 && Load32(b,o.vars+1096)==1) state.observed_change=true;
 #endif
 }
+void OpenHeldDoor(PPCContext& ctx,uint8_t* b,Binding& o) {
+  if (!state.host || !Components(b,o) || LoadF(b,o.vars+1084)>=1 ||
+      Load32(b,0x82CCBF64)!=o.ai || Load32(b,0x82CCBF6C)!=o.actor) return;
+  // A native wait-to-loop transition may invoke both callbacks in one AI pass.
+  if (o.hold_tick==state.ai_tick) return;
+  o.hold_tick=state.ai_tick;
+  // The wait track has not necessarily normalized its authored opening time.
+  // Verified native leaf: only door timing fields and its extension flag change.
+  if (LoadF(b,o.vars+1088)<=0) {
+    const PPCContext saved=ctx; __imp__sub_82448E08(ctx,b); ctx=saved;
+  }
+  bool open=false;
+  const auto now=Now();
+  const auto dt=LoadF(b,0x82C636E0),duration=LoadF(b,o.vars+1088);
+  for (unsigned i=0;i<8;++i) {
+    open|=o.local_holds[i].Step(now,dt,duration);
+    open|=o.remote_holds[i].Step(now,dt,duration);
+  }
+  const auto game=Load32(b,kDoorGamePtr);
+  constexpr uint32_t offsets[]{13128,13204,13280,17800};
+  if (open && Components(b,o)) {
+    const auto hero=Load32(b,0x82CCBF7C),hero_ai=Ptr(b,Ptr(b,hero,24,8),4,88);
+    const auto human=Ptr(b,hero_ai,64,13388);
+    const auto host_input=[&] {
+      std::array<uint32_t,8> fields{};
+      if (human) { fields[0]=Load32(b,human+2712); fields[1]=Load32(b,human+13376);
+        fields[2]=Load32(b,human+13380); fields[3]=Load32(b,human+13384); }
+      if (PoseAddress(game,17804)) for (unsigned i=0;i<4;++i) fields[4+i]=Load32(b,game+offsets[i]);
+      return fields;
+    };
+    const auto before=host_input();
+    auto endpoint=Sample(b,o); endpoint.position=1; endpoint.value&=~kDoorScheduled;
+    RefreshDoor(ctx,b,o,endpoint);
+    Observe(b,o);
+    REXLOG_INFO("KK co-op objects: installed lever opened id={:016X} native-duration={} fraction={} endpoint={} host-jack-readable={} host-jack-unchanged={}",
+        o.source,LoadF(b,o.vars+1088),LoadF(b,o.vars+1084),Load32(b,o.vars+1096),human!=0 && PoseAddress(game,17804),before==host_input());
+  }
+}
 void Door(PPCContext& ctx,uint8_t* b) {
   auto* o=state.ready && Shared() ? Current(b,ObjectKind::Door) : nullptr;
   if (!o) { __imp__sub_8256C3F8(ctx,b); return; }
-  bool open=false;
-  if (state.host && LoadF(b,o->vars+1084)<1) {
-    const auto now=Now();
-    const auto dt=LoadF(b,0x82C636E0),duration=LoadF(b,o->vars+1088);
-    for (unsigned i=0;i<8;++i) {
-      open|=o->local_holds[i].Step(now,dt,duration);
-      open|=o->remote_holds[i].Step(now,dt,duration);
-    }
-  }
-  const auto game=Load32(b,kDoorGamePtr);
   const auto* s=state.host ? nullptr : state.replica.Find(o->kind,o->source);
   if (!state.host && o->local_levers) {
     const auto done=s ? (s->position==1 ? o->local_levers : o->local_levers&s->value) : 0;
     if (done) FinishLocalLever(b,*o,done);
     if (Now()>o->local_lever_until) FinishLocalLever(b,*o,o->local_levers);
   }
-  if (Now()>o->pending_until) o->pending_levers=0;
-  bool natural=false;
-  for (unsigned i=0;i<8;++i) if (const auto ext=Lever(b,*o,i)) natural|=(Load16(b,ext+40)&0x8001)==0x8000;
-  // Do not restore inventory over a real host interaction occurring in this
-  // same native call. Let that input finish, then admit guest-only work on the
-  // next scheduled door pass (still subject to the half-second deadline).
-  const bool forced=state.host && o->pending_levers && !natural && PoseAddress(game,17804);
-  uint32_t saved[4]{};
-  constexpr uint32_t offsets[]{13128,13204,13280,17800};
-  if (forced) for (unsigned i=0;i<4;++i) saved[i]=Load32(b,game+offsets[i]);
   for (unsigned i=0;i<8;++i) if (const auto ext=Lever(b,*o,i)) {
     const auto flags=Load16(b,ext+40);
-    if (forced && (o->pending_levers&(1u<<i)) && !(flags&1)) Store16(b,ext+40,flags|0x8000);
     if (!state.host && (flags&0x8000) && !(flags&1)) {
       if (s && ((s->value&(1u<<i)) || s->position==1)) FinishLocalLever(b,*o,1u<<i);
       else if (!(o->local_levers&(1u<<i))) {
@@ -537,30 +556,8 @@ void Door(PPCContext& ctx,uint8_t* b) {
   }
   if (s) ApplyDoor(b,*o,*s);
   __imp__sub_8256C3F8(ctx,b);
-  if (forced) {
-    for (unsigned i=0;i<4;++i) Store32(b,game+offsets[i],saved[i]);
-    if ((Sample(b,*o).value&o->pending_levers)==o->pending_levers) ++state.applied;
-    else ++state.rejected;
-    o->pending_levers=0;
-  }
   if (s && Valid(b,*o)) RefreshDoor(ctx,b,*o,*s);
-  if (open && Components(b,*o)) {
-    const auto hero=Load32(b,0x82CCBF7C),hero_ai=Ptr(b,Ptr(b,hero,24,8),4,88);
-    const auto human=Ptr(b,hero_ai,64,13388);
-    const auto host_input=[&] {
-      std::array<uint32_t,8> fields{};
-      if (human) { fields[0]=Load32(b,human+2712); fields[1]=Load32(b,human+13376);
-        fields[2]=Load32(b,human+13380); fields[3]=Load32(b,human+13384); }
-      if (PoseAddress(game,17804)) for (unsigned i=0;i<4;++i) fields[4+i]=Load32(b,game+offsets[i]);
-      return fields;
-    };
-    const auto before=host_input();
-    auto endpoint=Sample(b,*o); endpoint.position=1;
-    RefreshDoor(ctx,b,*o,endpoint);
-    Observe(b,*o);
-    REXLOG_INFO("KK co-op objects: installed lever opened id={:016X} native-duration={} fraction={} endpoint={} host-jack-readable={} host-jack-unchanged={}",
-        o->source,LoadF(b,o->vars+1088),LoadF(b,o->vars+1084),Load32(b,o->vars+1096),human!=0 && PoseAddress(game,17804),before==host_input());
-  }
+  OpenHeldDoor(ctx,b,*o);
   if (state.host && Components(b,*o) && !DoorScheduled(b,o->ai)) Observe(b,*o);
 }
 void Breakable(PPCContext& ctx,uint8_t* b) {
@@ -597,9 +594,12 @@ void DoorStop(PPCContext& ctx,uint8_t* b) {
   __imp__sub_826F9DC0(ctx,b);
 }
 void DoorWait(PPCContext& ctx,uint8_t* b) {
-  auto* o=state.ready && !state.host && Shared() ? Current(b,ObjectKind::Door) : nullptr;
+  auto* o=state.ready && Shared() ? Current(b,ObjectKind::Door) : nullptr;
   __imp__sub_82543478(ctx,b);
-  if (o && Valid(b,*o)) if (const auto* s=state.replica.Find(o->kind,o->source)) RefreshDoor(ctx,b,*o,*s);
+  if (o && Valid(b,*o)) {
+    if (state.host) OpenHeldDoor(ctx,b,*o);
+    else if (const auto* s=state.replica.Find(o->kind,o->source)) RefreshDoor(ctx,b,*o,*s);
+  }
 }
 #if defined(KK_DEV_TOOLS)
 void ScanInventory(const uint8_t* b,uint32_t w) {
@@ -853,7 +853,7 @@ void ObjectsBeforeAi(PPCContext& ctx,uint8_t* b,uint32_t w) {
     state.outgoing.clear();
     for (auto& [actor,o] : state.bindings) {
       if (o.local_levers && w==state.world && Valid(b,o)) FinishLocalLever(b,o,o.local_levers);
-      o.pending_hits.clear(); o.pending_levers=o.local_levers=o.sent_holds=o.observed_hold=0;
+      o.pending_hits.clear(); o.local_levers=o.sent_holds=o.observed_hold=0;
       o.local_holds={}; o.remote_holds={};
     }
     return;
@@ -863,7 +863,7 @@ void ObjectsBeforeAi(PPCContext& ctx,uint8_t* b,uint32_t w) {
   // for ten seconds of actual shared AI, rather than expiring while waiting.
   if (!state.census_started) { state.census_started=true; state.census_until=Now()+10; state.next_census=0; }
   if (Now()>=state.next_census) Census(b);
-  state.ready=true; Receive(b); Holds(b); Flush();
+  state.ready=true; ++state.ai_tick; Receive(b); Holds(b); Flush();
 #if defined(KK_DEV_TOOLS)
   Probes(ctx,b);
   PickupProbe(ctx,b);
