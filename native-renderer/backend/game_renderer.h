@@ -60,6 +60,7 @@
 #include "backend/pipeline_cache.h"
 #include "backend/pipeline_demand.h"
 #include "backend/resource_preload.h"
+#include "backend/chapter_texture_prepare.h"
 #include "backend/resource_preload_bundle.h"
 #include "kknr/texture_pack.h"
 #include "backend/guest_device.h"
@@ -402,6 +403,9 @@ class GameRenderer {
   // Render-thread loading-screen service. Also callable with an explicit state
   // by offline fixtures; the normal path reads the title's loading variables.
   void PreloadResources(nvrhi::ICommandList* cl, bool loading, uint32_t level, uint32_t start);
+  // Render-thread idle service. Does no work unless the same loading request is
+  // still active; completed CPU work is polled, never joined by a game frame.
+  void IdleTexturePreload();
   // Versioned chapter hints shipped beside the executable. Read before the first
   // draw; independent of the writable pipeline/local-learning cache.
   bool LoadResourceList(const std::string& path);
@@ -729,6 +733,16 @@ class GameRenderer {
   void SaveResourcePreload();
   std::string resource_cache_base_, resource_cache_path_;
   std::vector<ResourcePreloadRecord> preload_records_, learned_resources_;
+  void PrepareChapterTextures();
+  static void ZeroUnwrittenSubresources(nvrhi::ICommandList* list, nvrhi::ITexture* texture,
+                                        const kknr::HostTextureData& data);
+  std::unique_ptr<ChapterTexturePrepare> chapter_textures_;
+  std::vector<kknr::TextureFetch> chapter_candidates_;
+  size_t chapter_candidate_cursor_ = 0;
+  uint64_t chapter_texture_generation_ = 0, chapter_texture_uploads_ = 0;
+  nvrhi::CommandListHandle chapter_texture_list_;
+  nvrhi::EventQueryHandle chapter_texture_query_;
+  bool chapter_texture_submitted_ = false;
   std::vector<ResourcePreloadChapter> shipped_resources_;  // protected by cache_mutex_
   std::unordered_set<const kknr::ResidentEntry*> resource_seen_;
   size_t preload_cursor_ = 0;

@@ -159,6 +159,7 @@ GameRenderer::GameRenderer(nvrhi::IDevice* device, const GuestMemory& memory,
 }
 
 GameRenderer::~GameRenderer() {
+  chapter_textures_.reset();  // CPU snapshot worker stops before any cache/resources go away.
   if (pipeline_library_ && shaders_) shaders_->SetBuiltCallback({});
   file_writer_.set_exit_task({});  // this renderer is going: FlushAll must not reach it
   SaveResourcePreload();

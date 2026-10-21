@@ -69,11 +69,12 @@ const uint8_t* SnapshotGuestMemory::Virtual(uint32_t address) const {
 
 void SnapshotGuestMemory::SetCurrent(const GuestSnapshot* snapshot) { t_snapshot = snapshot; }
 
-ThreadedSink::ThreadedSink(DrawSink& inner, const GuestMemory& memory)
+ThreadedSink::ThreadedSink(DrawSink& inner, const GuestMemory& memory, std::function<void()> on_idle)
     : inner_(inner),
       memory_(memory),
       sent_device_(dev::kSize, 0),
       device_image_(dev::kSize, 0),
+      on_idle_(std::move(on_idle)),
       thread_([this] { Run(); }) {}
 
 ThreadedSink::~ThreadedSink() {
@@ -286,8 +287,15 @@ void ThreadedSink::Run() {
     if (queue_.empty() && !stop_) {
       // Nothing queued: the render thread waits for the game (the summary's idle time).
       const auto idle = std::chrono::steady_clock::now();
-      work_cv_.wait(lock, [&] { return stop_ || !queue_.empty(); });
+      if (on_idle_) work_cv_.wait_for(lock, std::chrono::milliseconds(10), [&] { return stop_ || !queue_.empty(); });
+      else work_cv_.wait(lock, [&] { return stop_ || !queue_.empty(); });
       stats_.render_idle_us += Micros(idle);
+      if (queue_.empty() && !stop_ && on_idle_) {
+        lock.unlock();
+        on_idle_();
+        lock.lock();
+        continue;
+      }
     }
     if (queue_.empty()) return;  // stopping, and nothing left
     std::unique_ptr<Command> c = std::move(queue_.front());

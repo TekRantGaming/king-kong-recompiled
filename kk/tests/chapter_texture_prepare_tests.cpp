@@ -1,0 +1,57 @@
+#include "backend/chapter_texture_prepare.h"
+#include <chrono>
+#include <cstdio>
+
+int main() {
+  auto check = [](bool ok, const char* name) {
+    if (!ok) { std::fprintf(stderr, "failed: %s\n", name); std::exit(1); }
+  };
+  kknr::TextureFetch fetch;
+  fetch.words[0] = 2 | (4u << 22);
+  fetch.words[1] = 0x1000 | 6;
+  fetch.words[2] = 127 | (127u << 13);
+  fetch.words[3] = kknr::kSwizzleXYZW << 1;
+  fetch.words[5] = 1u << 9;
+  auto relocated = fetch;
+  relocated.words[1] += 0x20000;
+  check(nr::ChapterTextureLayout(fetch) == nr::ChapterTextureLayout(relocated), "relocation preserves layout");
+  auto different = fetch;
+  different.words[1] ^= 1;
+  check(!(nr::ChapterTextureLayout(fetch) == nr::ChapterTextureLayout(different)), "format separates layouts");
+  different = fetch;
+  different.words[2] ^= 1;
+  check(!(nr::ChapterTextureLayout(fetch) == nr::ChapterTextureLayout(different)), "size separates layouts");
+  nr::ChapterTextureInbox inbox;
+  auto alias = fetch;
+  alias.words[1] |= 0xC0000000;
+  inbox.Push(alias.words);
+  auto messages = inbox.Take();
+  check(messages.size() == 1 && kknr::MakeTextureKey(messages[0]) == kknr::MakeTextureKey(fetch), "physical aliases normalized");
+  for (unsigned i = 0; i < 5000; ++i) inbox.Push(fetch.words);
+  check(inbox.Take().size() == 4096 && inbox.Take().empty(), "bounded inbox drains once");
+  std::vector<uint8_t> live(0x50000);
+  for (size_t i = 0; i < live.size(); ++i) live[i] = uint8_t(i * 17 + i / 257);
+  kknr::GuestMemory memory{live.data(), live.size(), 0};
+  nr::ChapterTexturePrepare worker;
+  for (bool match : {true, false}) {
+    auto job = std::make_unique<nr::ChapterTexturePrepare::Job>();
+    job->fetch = relocated;
+    const auto ranges = kknr::GetTextureRanges(relocated);
+    const kknr::GuestRange source[2] = {{ranges.base, ranges.base_bytes}, {ranges.mip, ranges.mip_bytes}};
+    check(job->snapshot.Capture(source, memory, job->source, nr::ChapterTexturePrepare::kMaxBytes), "snapshot capture");
+    const uint64_t hash = job->snapshot.Hash();
+    job->expected = {match ? hash : hash ^ 1};
+    // Conversion must use the immutable snapshot, even when the live memory changes.
+    std::fill(live.begin(), live.end(), 0);
+    worker.Start(std::move(job));
+    std::unique_ptr<nr::ChapterTexturePrepare::Job> done;
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(5);
+    while (!(done = worker.Take()) && std::chrono::steady_clock::now() < deadline)
+      std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    check(bool(done), "job finishes without caller joining");
+    check(done->matched == match && done->converted == match, "only a full content match converts");
+    check(done->hash == hash, "snapshot hash retained");
+    if (match) check(done->data.bytes.size() == 65536 && done->data.bytes[1] != 0, "snapshot payload preserved");
+  }
+  std::puts("chapter texture preparation checks passed");
+}

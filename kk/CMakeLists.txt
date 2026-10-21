@@ -255,6 +255,10 @@ execute_process(COMMAND git describe --always --dirty --abbrev=12 WORKING_DIRECT
 target_compile_definitions(king_kong PRIVATE KK_BENCH_BUILD="${KK_BENCH_BUILD}-task115")
 
 if(KK_DEV_TOOLS)
+    add_executable(kk-chapter-texture-prepare-tests tests/chapter_texture_prepare_tests.cpp)
+    target_include_directories(kk-chapter-texture-prepare-tests PRIVATE ../native-renderer)
+    target_link_libraries(kk-chapter-texture-prepare-tests PRIVATE kknr_resources)
+    add_test(NAME chapter-texture-prepare COMMAND kk-chapter-texture-prepare-tests)
     add_executable(kk-freecam-tests tests/freecam_tests.cpp)
     target_include_directories(kk-freecam-tests PRIVATE src)
     enable_testing()

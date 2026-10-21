@@ -240,10 +240,9 @@ nvrhi::IFramebuffer* GameRenderer::GetFramebuffer(const std::array<HostTarget*, 
 
 // ---------------------------------------------------------------- textures
 
-namespace {
 // Task 304 (placed_textures.h): with texture memory that is not zeroed, the subresources a conversion
 // leaves unwritten get zeros, as a committed texture's would have. Nothing happens otherwise.
-void ZeroUnwrittenSubresources(nvrhi::ICommandList* list, nvrhi::ITexture* texture, const kknr::HostTextureData& data) {
+void GameRenderer::ZeroUnwrittenSubresources(nvrhi::ICommandList* list, nvrhi::ITexture* texture, const kknr::HostTextureData& data) {
   if (!g_texture_memory_not_zeroed.load(std::memory_order_relaxed)) return;
   const nvrhi::TextureDesc& d = texture->getDesc();
   const bool volume = d.dimension == nvrhi::TextureDimension::Texture3D;
@@ -270,8 +269,6 @@ void ZeroUnwrittenSubresources(nvrhi::ICommandList* list, nvrhi::ITexture* textu
          "(placed texture memory is not zeroed)", d.width, d.height, d.mipLevels, layers, missing.size());
   }
 }
-}  // namespace
-
 GameRenderer::HostTexture* GameRenderer::CreateHostTexture(const kknr::HostTexturePlan& plan,
                                                            bool render_target, float scale_x, float scale_y,
                                                            kknr::ResourceWork* profile) {

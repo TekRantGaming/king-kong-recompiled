@@ -52,10 +52,12 @@ void DevStartPreparationTrace() {
     std::fprintf(file, "unix_s,frame,loading,waits,skipped,textures,upload_bytes,texture_ms,prepare_ms,jobs\n");
     sampler = std::thread([read, file] {
       uint64_t previous = ~uint64_t(0);
+      uint64_t previous_textures = ~uint64_t(0);
       while (!stopped.load(std::memory_order_relaxed)) {
         NrBenchmarkStats s;
-        if (read(&s) && s.frame != previous) {
+        if (read(&s) && (s.frame != previous || s.texture_uploads != previous_textures)) {
           previous = s.frame;
+          previous_textures = s.texture_uploads;
           const double now = std::chrono::duration<double>(std::chrono::system_clock::now().time_since_epoch()).count();
           std::fprintf(file, "%.6f,%llu,%u,%llu,%llu,%llu,%llu,%.6f,%.6f,%u\n", now,
               static_cast<unsigned long long>(s.frame), s.resource_loading,

@@ -646,7 +646,14 @@ bool Backend::Initialize(uint32_t width, uint32_t height, const GameSettings& ga
   }
   DrawSink* sink = sink_.get();
   if (game.render_thread) {
-    threaded_ = std::make_unique<ThreadedSink>(*sink_, guest_memory_);
+    threaded_ = std::make_unique<ThreadedSink>(*sink_, guest_memory_, [this] {
+#if NR_GAME_RENDERER
+      RunGuarded("loading texture preparation", [&] {
+        std::unique_lock lock(mutex_, std::try_to_lock);
+        if (lock && renderer_ && renderer_->game()) renderer_->game()->IdleTexturePreload();
+      });
+#endif
+    });
     threaded_->max_queued_presents = std::max<uint32_t>(1, game.render_thread_presents);
 #if NR_GAME_RENDERER
     // The library patches a shader's microcode again for the next declaration: hashed at once.

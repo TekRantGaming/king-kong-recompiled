@@ -97,7 +97,7 @@ class ThreadedSink final : public DrawSink {
 
   // `inner` runs the calls on the render thread; `memory` is live guest memory, read on the game's
   // thread for the copies.
-  ThreadedSink(DrawSink& inner, const GuestMemory& memory);
+  ThreadedSink(DrawSink& inner, const GuestMemory& memory, std::function<void()> on_idle = {});
   ~ThreadedSink() override;  // runs what is queued, then stops
 
   void OnClear(const ClearCall& call) override;
@@ -195,6 +195,7 @@ class ThreadedSink final : public DrawSink {
   Stats stats_;
   Stats frame_start_stats_;  // at the last Present
   std::chrono::steady_clock::time_point last_present_{};
+  const std::function<void()> on_idle_;
   std::thread thread_;
 };
 
