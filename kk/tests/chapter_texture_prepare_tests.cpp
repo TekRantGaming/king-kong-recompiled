@@ -33,7 +33,7 @@ int main() {
   nr::ChapterTexturePrepare worker;
   for (bool cancel : {false, true}) {
     std::vector<uint8_t> headers(65536);
-    nr::StoreBE32(headers.data() + 0x120, 0x01030001);
+    nr::StoreBE32(headers.data() + 0x120, 0x01030000);  // archive headers need not own a reference yet
     for (unsigned i = 0; i < 6; ++i) nr::StoreBE32(headers.data() + 0x130 + 4 * i, relocated.words[i]);
     auto job = std::make_unique<nr::ChapterTexturePrepare::Job>();
     job->scan = true;

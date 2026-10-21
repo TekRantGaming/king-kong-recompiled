@@ -117,7 +117,7 @@ class ChapterTexturePrepare {
       for (uint32_t at = 0; at + 40 <= size; at += 4) {
         const auto* p = bytes.data() + at;
         const uint32_t common = LoadBE32(p);
-        if (((common >> 16) & 7) != 3 || !(common & 255)) continue;
+        if (((common >> 16) & 7) != 3) continue;
         const uint32_t word0 = LoadBE32(p + 16) & ~(0x1FFu << 10);
         if (!first_words.contains(word0)) continue;
         const auto fetch = kknr::TextureFetch::FromGuest(p + 16);
