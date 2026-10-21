@@ -6,6 +6,7 @@
 // (native-renderer/hooks) use it to reach the backend (native_api.h).
 
 #include <filesystem>
+#include "backend/chapter_texture_prepare.h"
 #include <string_view>
 
 #include <rex/cvar.h>
@@ -664,6 +665,15 @@ extern "C" REX_GPU_PLUGIN_EXPORT uint64_t nr_shader_compile_milliseconds(void) {
 
 extern "C" REX_GPU_PLUGIN_EXPORT const NrApi* nr_get_api(void) {
   return nr::NativeGraphicsSystem::GetApi();
+}
+
+// Optional creation-only notification, independent of the versioned draw API.
+extern "C" REX_GPU_PLUGIN_EXPORT void nr_texture_preload_object(uint32_t object) {
+  nr::TextureCreationInbox().Push(object);
+}
+
+extern "C" REX_GPU_PLUGIN_EXPORT void nr_clip_texture_loading(uint32_t level, uint32_t start, uint32_t active) {
+  nr::ChapterTextureClip().store(active ? (uint64_t(level) << 32) | start : 0, std::memory_order_release);
 }
 
 // The launcher's prewarm (native_prewarm.h).

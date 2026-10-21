@@ -10,6 +10,12 @@
 #include <deque>
 #include <condition_variable>
 #include <unordered_map>
+#if defined(_WIN32)
+#include <windows.h>
+#elif defined(__linux__)
+#include <sys/uio.h>
+#include <unistd.h>
+#endif
 
 #include <rex/cvar.h>
 #include <rex/logging.h>
@@ -45,6 +51,20 @@ const uint8_t* RuntimeGuestMemory::Virtual(uint32_t address) const {
 
 const uint8_t* RuntimeGuestMemory::Physical(uint32_t address) const {
   return memory_->TranslatePhysical(address);
+}
+
+bool RuntimeGuestMemory::CopyVirtual(uint32_t address, void* output, uint32_t bytes) const {
+  const auto* p = Virtual(address);
+  if (!p) return false;
+#if defined(_WIN32)
+  SIZE_T copied = 0;
+  return ReadProcessMemory(GetCurrentProcess(), p, output, bytes, &copied) && copied == bytes;
+#elif defined(__linux__)
+  iovec local{output, bytes}, remote{const_cast<uint8_t*>(p), bytes};
+  return process_vm_readv(getpid(), &local, 1, &remote, 1, 0) == bytes;
+#else
+  return false;  // optional preparation is skipped without a fault-safe reader
+#endif
 }
 
 namespace {
@@ -646,7 +666,14 @@ bool Backend::Initialize(uint32_t width, uint32_t height, const GameSettings& ga
   }
   DrawSink* sink = sink_.get();
   if (game.render_thread) {
-    threaded_ = std::make_unique<ThreadedSink>(*sink_, guest_memory_);
+    threaded_ = std::make_unique<ThreadedSink>(*sink_, guest_memory_, [this] {
+#if NR_GAME_RENDERER
+      RunGuarded("loading texture preparation", [&] {
+        std::unique_lock lock(mutex_, std::try_to_lock);
+        if (lock && renderer_ && renderer_->game()) renderer_->game()->IdleTexturePreload();
+      });
+#endif
+    });
     threaded_->max_queued_presents = std::max<uint32_t>(1, game.render_thread_presents);
 #if NR_GAME_RENDERER
     // The library patches a shader's microcode again for the next declaration: hashed at once.

@@ -144,6 +144,7 @@ list(APPEND KINGKONG_SOURCES ${KK_PS2_DECODER})
 # Developer-only test aids (never in release builds): -DKK_DEV_TOOLS=ON.
 option(KK_DEV_TOOLS "Build developer test aids such as KK_DEV_AUTOSKIP" OFF)
 if(KK_DEV_TOOLS)
+    list(APPEND KINGKONG_SOURCES src/dev_chapter_prepare.cpp)
     list(APPEND KINGKONG_SOURCES src/dev_lod.cpp src/dev_aa.cpp)
     list(APPEND KINGKONG_SOURCES src/dev_tools.cpp src/dev_watch.cpp src/dev_ae.cpp src/dev_sound_trace.cpp src/dev_load_trace.cpp src/dev_frame_log.cpp src/dev_sample.cpp src/dev_venture.cpp src/dev_chapter_jump.cpp src/dev_pause.cpp src/dev_fish.cpp src/dev_clock_trace.cpp src/dev_camera_start.cpp src/dev_game_watch.cpp src/dev_teleport.cpp src/dev_trig_trace.cpp src/dev_kong_lift.cpp)
 endif()
@@ -254,6 +255,10 @@ execute_process(COMMAND git describe --always --dirty --abbrev=12 WORKING_DIRECT
 target_compile_definitions(king_kong PRIVATE KK_BENCH_BUILD="${KK_BENCH_BUILD}-task115")
 
 if(KK_DEV_TOOLS)
+    add_executable(kk-chapter-texture-prepare-tests tests/chapter_texture_prepare_tests.cpp)
+    target_include_directories(kk-chapter-texture-prepare-tests PRIVATE ../native-renderer)
+    target_link_libraries(kk-chapter-texture-prepare-tests PRIVATE kknr_resources)
+    add_test(NAME chapter-texture-prepare COMMAND kk-chapter-texture-prepare-tests)
     add_executable(kk-freecam-tests tests/freecam_tests.cpp)
     target_include_directories(kk-freecam-tests PRIVATE src)
     enable_testing()

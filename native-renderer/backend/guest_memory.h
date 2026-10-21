@@ -16,6 +16,14 @@ class GuestMemory {
   virtual const uint8_t* Virtual(uint32_t address) const = 0;
   // Host pointer for a GPU physical address (vertex / index / texture data).
   virtual const uint8_t* Physical(uint32_t address) const = 0;
+  // Optional hints may name an object already released by the guest. Runtime
+  // implementations copy fault-safely; fixtures default to their mapped bytes.
+  virtual bool CopyVirtual(uint32_t address, void* output, uint32_t bytes) const {
+    const auto* p = Virtual(address);
+    if (!p) return false;
+    std::memcpy(output, p, bytes);
+    return true;
+  }
 };
 
 inline uint32_t LoadBE32(const uint8_t* p) {
