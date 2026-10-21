@@ -29,6 +29,7 @@ REXCVAR_DEFINE_INT32(draw_resolution_scale_x, 1, "Test", "Test");
 REXCVAR_DEFINE_INT32(draw_resolution_scale_y, 1, "Test", "Test");
 REXCVAR_DEFINE_STRING(native_gi, "off", "Test", "Test");
 REXCVAR_DEFINE_STRING(native_gi_distance, "medium", "Test", "Test");
+REXCVAR_DEFINE_STRING(native_shadow_quality, "original", "Test", "Test");
 REXCVAR_DEFINE_STRING(swap_post_effect, "none", "Test", "Test");
 REXCVAR_DEFINE_INT32(anisotropic_override, -1, "Test", "Test");
 REXCVAR_DEFINE_INT32(ao_strength, 1, "Test", "Test");
@@ -483,12 +484,38 @@ int main() {
     Check(!SetModSetting("no_such_setting_x", "1"), "mod: unknown setting refused");
     ClearModSettings();
   }
+  // Medium owns its cheaper shadow setting only on an explicit selection.
+  // A saved custom shadow setting survives startup, and High/Ultra still preserve it.
+  {
+    auto set = [](const char* n, const char* v) { rex::cvar::SetFlagByName(n, v); };
+    auto get = [](const char* n) { return rex::cvar::GetFlagByName(n); };
+    rex::cvar::ResetAllToDefaults();
+    ApplyPortDefaults();
+    ApplyGraphicsPresetSettings(kGraphicsPresets[1], set);
+    set("kk_hardware_tier", "high");
+    set("native_shadow_quality", "high");
+    Check(SaveSettings(config), "save custom shadows before startup");
+    rex::cvar::ResetAllToDefaults();
+    rex::cvar::LoadConfig(config);
+    InitializeHardwareRecommendation(config, 1920, 1080);
+    Equals("native_shadow_quality", "high");
+    Check(FindGraphicsPreset(get, [](const GraphicsPreset&) { return true; }) == -1,
+          "custom expensive shadows are not labelled Medium");
+    ApplyGraphicsPresetSettings(kGraphicsPresets[1], set);
+    Equals("native_shadow_quality", "original");
+    for (int index : {2, 3}) {
+      set("native_shadow_quality", "high");
+      ApplyGraphicsPresetSettings(kGraphicsPresets[index], set);
+      Equals("native_shadow_quality", "high");
+    }
+  }
   // Version 3 recognises every old preset without touching its other settings.
   for (const auto& p : kGraphicsPresets) {
     rex::cvar::ResetAllToDefaults();
     ApplyPortDefaults();
     rex::cvar::SetFlagByName("kk_settings_version", "2");
     ApplyGraphicsPresetSettings(p, [](const char* n, const char* v) { rex::cvar::SetFlagByName(n, v); });
+    rex::cvar::SetFlagByName("native_shadow_quality", "high"); // legacy presets did not own shadows
     rex::cvar::ResetToDefault("native_gi"); // old files omitted the default Off
     Check(SaveSettings(config), "write old preset");
     rex::cvar::ResetAllToDefaults();
@@ -497,6 +524,7 @@ int main() {
     Equals("native_gi", p.gi);
     Equals("kk_settings_version", "3");
     Equals("kk_render_quality", p.quality);
+    Equals("native_shadow_quality", "high");
     Check(!std::filesystem::exists(config.string() + ".bak"), "valid version 2 is not mistaken for unread settings");
     MigrateSettings(config);
     Equals("native_gi", p.gi);

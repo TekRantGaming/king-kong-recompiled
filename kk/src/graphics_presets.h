@@ -13,10 +13,11 @@ struct GraphicsPreset {
   bool ao;                // ao_mode 1 at strength 3
   const char* gi;         // native_gi
   const char* gi_distance; // native_gi_distance
+  const char* shadows = nullptr; // native_shadow_quality; null preserves the player's choice
 };
 inline constexpr GraphicsPreset kGraphicsPresets[] = {
     {"Low", "performance", "performance", "fxaa", "2", false, "low", "near"},
-    {"Medium", "quality", "quality", "fxaa", "3", false, "medium", "medium"},
+    {"Medium", "quality", "quality", "fxaa", "3", false, "medium", "medium", "original"},
     {"High", "quality", "native", "fxaa", "5", true, "high", "far"},
     {"Ultra", "quality", "native", "fxaa", "5", true, "high", "far"},  // Full GI distance is F8 only (owner, Beta 8)
     {"Steam Deck", "quality", "native", "fxaa", "2", false, "low", "near"},
@@ -25,13 +26,15 @@ inline constexpr int kGraphicsPresetCount = int(std::size(kGraphicsPresets));
 
 // Shared by the launcher, pause settings and the migration of pre-GI presets.
 // The upscaler match is checked separately because its default depends on the GPU.
+// Legacy migration passes false: newer effect choices must not change its preset inference.
 template <typename Get>
-bool MatchesGraphicsPresetSettings(const GraphicsPreset& p, Get get, bool include_gi = true) {
+bool MatchesGraphicsPresetSettings(const GraphicsPreset& p, Get get, bool include_effects = true) {
   const bool ao = get("ao_mode") != "0";
   return get("kk_render_quality") == p.quality && get("swap_post_effect") == p.aa &&
          get("anisotropic_override") == p.filtering && ao == p.ao &&
          (!ao || get("ao_strength") == "3") &&
-         (!include_gi || (get("native_gi") == p.gi && get("native_gi_distance") == p.gi_distance));
+         (!include_effects || (get("native_gi") == p.gi && get("native_gi_distance") == p.gi_distance &&
+                              (!p.shadows || get("native_shadow_quality") == p.shadows)));
 }
 
 // High and Ultra currently share their values. Keep an explicit selection, and recognise
@@ -61,5 +64,6 @@ void ApplyGraphicsPresetSettings(const GraphicsPreset& p, Set set) {
   set("native_gi", p.gi);
   set("kk_graphics_preset", p.label);
   set("native_gi_distance", p.gi_distance);
+  if (p.shadows) set("native_shadow_quality", p.shadows);
 }
 }  // namespace kk
