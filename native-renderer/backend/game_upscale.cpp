@@ -24,6 +24,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <fstream>
+#include <optional>
 #include <sstream>
 
 #include "backend/ao_camera.h"
@@ -444,6 +445,8 @@ void GameRenderer::UpscaleRecordMotion(const DrawCall& call, const dev::DeviceVi
                                        const nvrhi::DrawArguments& args, bool indexed) {
   GameUpscale& u = *upscale_;
   if (u.upscaled || u.motion_draws.size() >= 8192) return;
+  TraceTimer record_timer(frame_trace_ ? &frame_motion_record_ms_ : nullptr);
+  trace_draw_motion_ = frame_trace_ != nullptr;
   GameUpscale::MotionDraw m;
   const AnnNormalLayout* ann_normal = nullptr;
   m.previous_tessellation_flags = tessellation_previous_flags_;
@@ -791,6 +794,8 @@ void GameRenderer::UpscaleMotionPass(nvrhi::ICommandList* cl, HostTarget* depth_
     mc.params[2] = vulkan ? 1.0f : -1.0f;
     mc.params[3] = 0.0f;
     if (m.pipeline.flags&kRecordTessellation) std::memcpy(&mc.params[3],&m.previous_tessellation_flags,sizeof(uint32_t));
+    std::optional<TraceTimer> submit_timer;
+    if (frame_trace_) submit_timer.emplace(&frame_motion_submit_ms_);
     if (!NoteVolatileDraw(cl, true)) continue;  // within the volatile versions (task 154)
     cl->writeBuffer(u.motion_vs_constants, m.constants.data(), sizeof(float) * 1024);
     cl->writeBuffer(u.motion_draw_constants, &m.dc, sizeof(m.dc));
@@ -903,9 +908,14 @@ void GameRenderer::RunUpscale(nvrhi::ICommandList* cl, UpscaleFrameTracker::Trig
   if (!have_depth) ++u.stats.no_depth;
   // The camera: the draws that met again vote.
   uint32_t matched = 0, changed = 0, objects = 0, objects_matched = 0;
+  std::optional<TraceTimer> vote_timer;
+  if (frame_trace_) vote_timer.emplace(&frame_motion_vote_ms_);
   for (const GameUpscale::MotionDraw& m : u.motion_draws) {
     if (!m.camera_only) ++objects;
+    std::optional<TraceTimer> find_timer;
+    if (frame_trace_) find_timer.emplace(&frame_motion_find_ms_);
     const VsConstants* prev = PreviousConstants(u, m);
+    find_timer.reset();
     if (!prev) continue;
     ++matched;
     if (!m.camera_only) ++objects_matched;
@@ -931,6 +941,7 @@ void GameRenderer::RunUpscale(nvrhi::ICommandList* cl, UpscaleFrameTracker::Trig
       u.vote.Offer(&m.constants[size_t(m.wvp_register) * 4], &(*prev)[size_t(m.wvp_register) * 4]);
   }
   u.stats.motion_matched += matched;
+  vote_timer.reset();
   Mat4 reprojection;
   const bool camera = u.screen_valid && u.vote.Result(reprojection);
   if (u.config.debug & 128) {
