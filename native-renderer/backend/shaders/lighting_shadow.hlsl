@@ -51,22 +51,12 @@ float kl_Noise(float2 pixel)
     return frac(52.9829189 * frac(dot(pixel, float2(0.06711056, 0.00583715))));
 }
 
-// A Vogel disc: tap i of n at radius sqrt((i + 0.5) / n) and the golden angle times i, turned by
-// the pixel's angle. The unturned taps are constants (sqrt, cos and sin of i, computed once, at
-// float precision); the turn is one sine and cosine a pixel (rot = (cos, sin) of the angle)
-// instead of one per tap: the same offsets up to float rounding.
-static const float2 kl_Disc4[4] = {
-    float2(0.353553385, 0), float2(-0.451544344, 0.413651705),
-    float2(0.0691159591, -0.787542403), float2(0.569142818, 0.742345273)};
-static const float2 kl_Disc8[8] = {
-    float2(0.25, 0), float2(-0.319290072, 0.292495906),
-    float2(0.0488723665, -0.55687654), float2(0.40244475, 0.524917364),
-    float2(-0.738535166, -0.1306362), float2(0.699604869, -0.445031524),
-    float2(-0.234003276, 0.870484054), float2(-0.446272045, -0.85926789)};
-float2 kl_Disc(uint i, uint n, float2 rot)
+// A Vogel disc: tap i of n at radius sqrt((i + 0.5) / n) and the golden angle times i, turned.
+float2 kl_Disc(uint i, uint n, float angle)
 {
-    float2 t = n == 8 ? kl_Disc8[i] : kl_Disc4[i];
-    return float2(t.x * rot.x - t.y * rot.y, t.x * rot.y + t.y * rot.x);
+    float r = sqrt((float(i) + 0.5) / float(n));
+    float a = float(i) * 2.39996323 + angle;
+    return r * float2(cos(a), sin(a));
 }
 
 // One bilinear comparison: the four texels around uv against the reference, weighted as bilinear
@@ -94,7 +84,7 @@ struct KLReceiver
     float2 slope;   // light-space depth per unit of uv (the receiver plane), limited
 };
 
-float kl_Shadow1(Texture2D<float4> map, SamplerState s, KLReceiver r, float2 rot)
+float kl_Shadow1(Texture2D<float4> map, SamplerState s, KLReceiver r, float angle)
 {
     uint2 hostSize;
     map.GetDimensions(hostSize.x, hostSize.y);
@@ -106,7 +96,7 @@ float kl_Shadow1(Texture2D<float4> map, SamplerState s, KLReceiver r, float2 rot
     float blockers = 0.0, blockerDepth = 0.0;
     [unroll] for (uint i = 0; i < KL_SEARCH_TAPS; i++)
     {
-        float2 o = kl_Disc(i, KL_SEARCH_TAPS, rot) * searchUv;
+        float2 o = kl_Disc(i, KL_SEARCH_TAPS, angle) * searchUv;
         float4 z = map.GatherRed(s, r.uv + o);
         float reference = r.depth + dot(r.slope, o);
         float4 plane = kl_GatherPlane(r.uv + o, size, r.slope);
@@ -128,7 +118,7 @@ float kl_Shadow1(Texture2D<float4> map, SamplerState s, KLReceiver r, float2 rot
     float lit = 0.0;
     [unroll] for (uint j = 0; j < taps; j++)
     {
-        float2 o = kl_Disc(j, taps, rot) * radiusUv;
+        float2 o = kl_Disc(j, taps, angle) * radiusUv;
         lit += kl_Compare(map, s, r.uv + o, size, r.depth + dot(r.slope, o), r.slope);
     }
     return lit / float(taps);
@@ -187,12 +177,11 @@ void main(
     float z = kk_Tex2D[kk_TexIndex(0)].Sample(kk_PSSamplerState(0), screen).x;
     float4 viewPos = float4(iT0.xy * z, z, 1.0);
     float angle = kl_Noise(iPos.xy) * 6.28318531;
-    float2 rot = float2(cos(angle), sin(angle));
     float3 lit = 1.0;
     [unroll] for (uint i = 0; i < KL_LIGHTS; i++)
     {
         KLReceiver r = kl_Receiver(viewPos, i);
-        lit[i] = kl_Shadow1(kk_Tex2D[kk_TexIndex(2 + i)], kk_PSSamplerState(1 + i), r, rot);
+        lit[i] = kl_Shadow1(kk_Tex2D[kk_TexIndex(2 + i)], kk_PSSamplerState(1 + i), r, angle);
     }
     float3 shadowColor = kk_PC[KL_COLOR].xyz;
     oC0 = float4(lerp(shadowColor, 1.0, lit), 0.0);
@@ -211,8 +200,7 @@ float4 ps_main(float4 pos : SV_Position, float2 uv : TEXCOORD0) : SV_Target0
     r.uv = uv;
     r.slope = fixture_surface.yz;
     r.depth = fixture_surface.x + dot(r.slope, uv - 0.5);
-    float angle = kl_Noise(pos.xy) * 6.28318531;
-    float lit = kl_Shadow1(fixture_map, fixture_sampler, r, float2(cos(angle), sin(angle)));
+    float lit = kl_Shadow1(fixture_map, fixture_sampler, r, kl_Noise(pos.xy) * 6.28318531);
     return float4(lit, lit, lit, 1.0);
 }
 #endif
