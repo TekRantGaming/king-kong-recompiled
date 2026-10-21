@@ -3,6 +3,15 @@
 Every release of the King Kong PC port, newest first. The launcher shows this on its About page, and a
 version's notes the first time you start it.
 
+## v2.0.0-beta.15 (21 October 2026)
+
+**Beta 15**: a quick fix for Beta 14, from the beta channel (**About** > **Change version**). Your saves and settings are kept. Windows only for this beta.
+
+### Fixed
+- **Windows Defender wrongly flagged a game file** (`rexgpu-native.dll`) in Beta 13 and Beta 14 as a threat and removed it, so the game showed "Failed to load GPU plugin" and would not start. It was a false alarm. Beta 15 ships a freshly built file that antivirus programs do not flag. If the game will not start, download Beta 15 from the releases page and unpack it over your game folder; your saves are kept.
+- **A rare crash when changing several graphics settings quickly** (for example in the F8 panel): the game now waits for the graphics card to finish before it switches effects on or off.
+- **Updating from inside the launcher skipped some files**: the startup movies, menu videos and built-in mods are now updated too.
+
 ## v2.0.0-beta.14 (21 October 2026)
 
 **Beta 14**: fixes and performance, from the beta channel (**About** > **Change version**). Your saves are kept; the Display, Graphics and Controls settings start again from the new defaults (see below). Windows only for this beta.
