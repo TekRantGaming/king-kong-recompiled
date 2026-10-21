@@ -29,7 +29,10 @@ version's notes the first time you start it.
 - **Lighter defaults on weak hardware**: the first setup picks a lighter preset for handhelds, integrated graphics, entry gaming laptops and PCs with little video memory. Existing players keep their settings.
 - **Medium preset**: uses the original shadows, which saves a lot of graphics time on mid-range PCs.
 - **Less work for your CPU**: parts of the renderer that run for every draw are faster, with exactly the same picture.
-- **More graphics prepared ahead of time**: the shipped list now has 16,293 graphics pipelines (1,596 more), from players who share them with Online players on, so fewer things hitch the first time you see them.
+- **More graphics prepared ahead of time**: the shipped list now has 16,295 graphics pipelines (1,598 more), from players who share them with Online players on, so fewer things hitch the first time you see them.
+
+### Known issues
+- **With FSR, a few short stutters remain in very busy scenes** such as parts of Ann's chapter, when the camera swings quickly. The long ones are gone, and DLSS is not affected. We are still working on it.
 
 ## v2.0.0-beta.13 (20 October 2026)
 
