@@ -70,6 +70,7 @@ void InstallFpeGuard();  // fpe_guard.cpp
 #include "startup_recovery.h"
 #include "telemetry.h"
 #include "hooks/kk_native_ui.h"  // the native renderer's launcher prewarm
+#include "backend/startup_steps.h"  // task 353
 
 class KingKongApp : public rex::ReXApp {
  public:
@@ -161,6 +162,7 @@ class KingKongApp : public rex::ReXApp {
       defaults.user_data_root = kk::benchmark::Prepare(input_paths.user_data_root);
     user_data_root_ = defaults.user_data_root;
     config_path_ = defaults.config_path;
+    nr::steps::Note("window and graphics device made (presentation set up)");
     kk::SetDebugOverlayConfigPath(defaults.config_path);
     kk::InitDiagnostics();
     {
@@ -342,6 +344,7 @@ class KingKongApp : public rex::ReXApp {
     kk::ShowLauncher(imgui_drawer(), immediate_drawer(),
                       {defaults.game_data_root, defaults.user_data_root, defaults.config_path},
                       std::move(cb));
+    nr::steps::Note("launcher made; its first frame next");
     // The native renderer makes the game's pipelines while the player is in the launcher, when
     // --native_launcher_prewarm is on (the plugin decides; nothing happens otherwise). After the
     // launcher is made: it applies the Original look, which the settings the prewarm reads follow.
@@ -383,6 +386,16 @@ class KingKongApp : public rex::ReXApp {
   void OnPreSetup(rex::RuntimeConfig& config) override {
     // SetupPresentation precedes OnFinalizePaths in the SDK. Arm before either provider or game GPU setup.
     user_data_root_ = user_data_root();
+    {
+      // Task 353: crash reports and the start-up step log before the upscaler check, the graphics device, the
+      // swapchain and the window (SetupPresentation), not only from OnFinalizePaths on.
+      const std::filesystem::path log = REXCVAR_GET(log_file);
+      kk::InstallEarlyCrashHandlers(log.has_parent_path() ? log.parent_path()
+                                                          : rex::filesystem::GetExecutableFolder() / "logs",
+                                    user_data_root_);
+      kk::exit_evidence::InstallHandlers();
+      nr::steps::Note("settings read; renderer and graphics API next");
+    }
     // Task 350a: DirectX 12 on Windows for a settings file from before Beta 14, once: before the renderer reads
     // native_backend, and before startup recovery puts a fallback (Vulkan when DirectX 12 cannot start) over it.
     kk::MigrateGraphicsApi();
@@ -406,6 +419,9 @@ class KingKongApp : public rex::ReXApp {
     // process's device, swapchain and window; NVIDIA's driver crashed when both were made at once.
     if (!config.graphics && show_launcher_ && *show_launcher_ && config.gpu_plugin == "native")
       kk::AskUpscalersBeforeWindow();
+    nr::steps::Note("renderer %s, graphics API %s, %s; the window and graphics device next", config.gpu_plugin.c_str(),
+                    rex::cvar::GetFlagByName("native_backend").c_str(),
+                    show_launcher_ && *show_launcher_ ? "launcher" : "game");
     // Task 286: always ours. The SDK's SetupPresentation sets its plain SDLAudioSystem before OnPreSetup, so
     // the old "if (!config.audio_factory)" never chose this one (no audio thread scheduling since e360f6f,
     // and none of task 285's slow audio-open lines).
@@ -413,6 +429,7 @@ class KingKongApp : public rex::ReXApp {
   }
 
   void OnPostSetup() override {
+    nr::steps::Note("game runtime set up (guest graphics ready)");
     kk::g_guest_base = runtime()->virtual_membase();
     kk::InstallFpeGuard();  // after the runtime's own signal handlers
     kk::TuneProcessScheduling();

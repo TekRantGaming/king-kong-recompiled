@@ -13,6 +13,7 @@
 // On Vulkan the game's instance and device must have XeSS's extensions and features
 // (upscaler_vulkan.h).
 
+#include "backend/startup_steps.h"
 #include "backend/upscaler.h"
 #if NR_HAS_VULKAN
 #include "backend/upscaler_vulkan.h"
@@ -90,7 +91,9 @@ const XessFunctions* Xess() {
   static const XessFunctions fns = [] {
     XessFunctions f;
     const std::wstring path = UpscalerDllFolder() + kDllName;
+    steps::Note("upscaler: loading %s", "libxess.dll");  // task 353: the start-up step log
     f.dll = LoadLibraryExW(path.c_str(), nullptr, LOAD_WITH_ALTERED_SEARCH_PATH);
+    steps::Note("upscaler: %s %s", "libxess.dll", f.dll ? "loaded" : "not loaded");
     if (!f.dll) return f;
     auto get = [&](auto& fn, const char* name) { fn = reinterpret_cast<std::remove_reference_t<decltype(fn)>>(GetProcAddress(f.dll, name)); };
     get(f.GetVersion, "xessGetVersion");
@@ -341,6 +344,7 @@ class XessUpscaler final : public Upscaler {
 }  // namespace
 
 std::unique_ptr<Upscaler> CreateXessUpscaler(nvrhi::IDevice* device, const UpscaleConfig& config, std::string* why) {
+  if (!UpscalerGateAllows(UpscalerKind::kXess, why)) return nullptr;  // task 353: confirmed by the upscaler check
   const XessFunctions* x = Xess();
   if (!x) {
     if (why) *why = "libxess.dll is not beside the game";

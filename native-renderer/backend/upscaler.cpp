@@ -2,6 +2,7 @@
 
 #include "backend/upscaler.h"
 
+#include <atomic>
 #include <mutex>
 #include <vector>
 
@@ -29,6 +30,7 @@
 namespace nr {
 
 namespace {
+std::atomic<UpscalerGate> g_gate{nullptr};  // constant-initialised (task 353)
 std::mutex g_idle_mutex;
 nvrhi::IDevice* g_idle_device = nullptr;
 std::function<void()> g_idle_wait;
@@ -36,6 +38,13 @@ UpscalerExclusive g_exclusive;
 nvrhi::IDevice* g_exclusive_device = nullptr;
 thread_local bool t_exclusive = false;  // inside UpscalerRunExclusive: the locks are held
 }  // namespace
+
+void SetUpscalerGate(UpscalerGate gate) { g_gate.store(gate); }
+
+bool UpscalerGateAllows(UpscalerKind kind, std::string* why) {
+  const UpscalerGate gate = g_gate.load();
+  return !gate || gate(kind, why);
+}
 
 void SetUpscalerExclusive(nvrhi::IDevice* device, UpscalerExclusive run) {
   std::lock_guard lock(g_idle_mutex);

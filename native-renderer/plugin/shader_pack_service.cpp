@@ -1,3 +1,4 @@
+#include "backend/startup_steps.h"
 #include "plugin/shader_pack_service.h"
 #include "plugin/plugin_settings.h"
 #include "plugin/builtin_shaders.h"
@@ -334,7 +335,10 @@ NrShaderPackJob* StartJob(const char* cache_dir, const char* game_dir, uint32_t 
         std::lock_guard lock(job->mutex);
         job->options.backend = backend;
       }
+      nr::steps::Note("shader pack: %s %s", kkshaders::packBackendName(backend), job->force ? "rebuilding" : "checking");
       r = kkshaders::buildPack(options, &job->progress, job->force);
+      nr::steps::Note("shader pack: %s %s", kkshaders::packBackendName(backend),
+                      r.ok ? (r.upToDate ? "current" : "built") : "failed");
       current = current && r.upToDate;
       seconds += r.seconds;
       compiled += r.compiled;
@@ -389,7 +393,9 @@ NrShaderPackJob* StartJob(const char* cache_dir, const char* game_dir, uint32_t 
           std::filesystem::is_regular_file(job->driver_cache_path, marker_error)) {
         nr::PreferHighPerformanceGpu(nr::GpuApi::kVulkan);  // the game's GPU, not adapter 0 (task 203)
         nr::PrepareVulkanDeviceRequests();  // the graphics pipeline library (task 183)
+        nr::steps::Note("shader setup: making a Vulkan device to check the driver cache");
         provider = rex::ui::vulkan::VulkanProvider::Create(true, false);
+        nr::steps::Note("shader setup: Vulkan device %s", provider ? "made" : "not made");
         if (provider) host = nr::CreateVulkanHostDevice(*provider);
         if (host && host->pipeline_cache()) {
           std::string note;
@@ -412,7 +418,9 @@ NrShaderPackJob* StartJob(const char* cache_dir, const char* game_dir, uint32_t 
         if (backend == kkshaders::PackBackend::Spirv && !host) {
           nr::PreferHighPerformanceGpu(nr::GpuApi::kVulkan);  // the game's GPU, not adapter 0 (task 203)
           nr::PrepareVulkanDeviceRequests();  // the graphics pipeline library (task 183)
+          nr::steps::Note("shader setup: making a Vulkan device for the pipelines");
           provider = rex::ui::vulkan::VulkanProvider::Create(true, false);
+          nr::steps::Note("shader setup: Vulkan device %s", provider ? "made" : "not made");
           if (provider) host = nr::CreateVulkanHostDevice(*provider);
         }
 #endif
@@ -421,7 +429,9 @@ NrShaderPackJob* StartJob(const char* cache_dir, const char* game_dir, uint32_t 
           // The SDK's default is the first adapter: the integrated GPU on hybrid laptops, where
           // Intel's driver crashed preparing these pipelines (Beta 7/8 reports, task 203).
           nr::PreferHighPerformanceGpu(nr::GpuApi::kD3D12);
+          nr::steps::Note("shader setup: making a Direct3D 12 device for the pipelines");
           provider = rex::ui::d3d12::D3D12Provider::Create();
+          nr::steps::Note("shader setup: Direct3D 12 device %s", provider ? "made" : "not made");
           if (provider) host = nr::CreateD3D12HostDevice(*provider);
         }
 #endif

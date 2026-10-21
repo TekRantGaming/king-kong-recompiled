@@ -12,6 +12,7 @@ set(NR_PLUGIN_SOURCES
     plugin_settings.cpp
     launcher_prewarm.cpp
     upscaler_query.cpp
+    upscaler_check_child.cpp
     gpu_preference.cpp
     ring_skimmer.cpp
     photo_api.cpp

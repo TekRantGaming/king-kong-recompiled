@@ -16,6 +16,12 @@ constexpr uint64_t FrameStallMilliseconds(uint64_t now, uint64_t last) {
 // game draws no frame for 20 seconds.
 void InstallCrashDumps(const std::filesystem::path& logs_dir, const std::filesystem::path& user_root);
 
+// Task 353: as soon as the logs folder is known, before the window, the graphics device and the upscaler
+// check: the crash handlers (the hang watchdog waits for InstallCrashDumps), a vectored exception handler that
+// notes serious exceptions before any other handler can swallow them, and the start-up step log
+// (logs\startup-steps.txt: KK_STEP_LOG for this process and its children, backend/startup_steps.h).
+void InstallEarlyCrashHandlers(const std::filesystem::path& logs_dir, const std::filesystem::path& user_root);
+
 // Task 285: the game starts in this process (the launcher's Play, or a start without the launcher). If no
 // guest frame follows within 60 seconds, the watchdog writes one hang-startup-<time>.txt/.dmp with where
 // every thread waits (before this, a stall before the first frame left no report). Any thread, once.

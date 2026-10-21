@@ -17,4 +17,9 @@ uint32_t UpscalerQueryAnswer(NrUpscalerSupport* out, bool start);
 // Returns once the question's thread is done (at once when it never started).
 void WaitUpscalerQuery();
 
+// Task 353: the question runs in a separate short-lived process (king_kong.exe --kk_upscaler_check=<report>
+// --kk_upscaler_check_adapter=<luid>), which calls this (upscaler_check_child.cpp) and ends with its result
+// as the exit code. The game's process never loads an SDK that process did not confirm (SetUpscalerGate).
+int UpscalerCheckMain(const wchar_t* report, const wchar_t* adapter);
+
 }  // namespace nr

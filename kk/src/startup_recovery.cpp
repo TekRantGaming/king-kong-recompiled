@@ -18,6 +18,7 @@
 #include <rex/logging.h>
 #include "hooks/kk_native_ui.h"
 #include "startup_clock.h"
+#include "backend/startup_steps.h"
 #if defined(_WIN32)
 #ifndef WIN32_LEAN_AND_MEAN
 #define WIN32_LEAN_AND_MEAN
@@ -27,6 +28,7 @@
 #endif
 #include <windows.h>
 #include <shellapi.h>
+#include <cwchar>
 #if defined(KK_DEV_TOOLS)
 #include <tlhelp32.h>
 #endif
@@ -185,6 +187,7 @@ void Disarm(const char* why) {
   REXLOG_INFO("KK recovery: startup finished ({}), startup marker cleared", why);
 }
 void FirstFramePresented() {
+  nr::steps::Note("first game frame shown");
   std::lock_guard lock(mutex);
   Disarm("first game frame shown");
 }
@@ -208,6 +211,42 @@ void MonitorStartup() {
   if (!GetModuleFileNameW(nullptr, exe, 32768)) { CloseHandle(read); CloseHandle(write); return; }
   const std::string pipe = std::to_string(reinterpret_cast<uintptr_t>(write));
   _putenv_s("KK_STARTUP_PIPE", pipe.c_str());
+  // Task 353: the child writes the path of its start-up step log here (crash_dump.cpp), so this process can add
+  // how it ended: a fail-fast or a driver ending the program leaves nothing else.
+  wchar_t note[MAX_PATH] = L"";
+  {
+    wchar_t temp[MAX_PATH];
+    const DWORD n = GetTempPathW(MAX_PATH, temp);
+    if (n && n < MAX_PATH - 48) {
+      swprintf(note, MAX_PATH, L"%lsking_kong-monitor-%lu.txt", temp, GetCurrentProcessId());
+      DeleteFileW(note);
+      SetEnvironmentVariableW(L"KK_MONITOR_NOTE", note);
+    }
+  }
+  auto note_end = [&](DWORD pid, DWORD code) {
+    if (!note[0]) return;
+    wchar_t path[MAX_PATH] = L"";
+    HANDLE f = CreateFileW(note, GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE, nullptr, OPEN_EXISTING,
+                           FILE_ATTRIBUTE_NORMAL, nullptr);
+    if (f == INVALID_HANDLE_VALUE) return;
+    DWORD got = 0;
+    ReadFile(f, path, sizeof(path) - sizeof(wchar_t), &got, nullptr);
+    CloseHandle(f);
+    path[got / sizeof(wchar_t)] = 0;
+    if (!path[0]) return;
+    SetEnvironmentVariableW(L"KK_STEP_LOG", path);
+    const char* what = code == 0            ? "ended normally"
+                       : code == kRetryExit ? "ended to start again with the other graphics API"
+                       : code == 0xC0000005 ? "crashed (access violation)"
+                       : code == 0xC0000409 ? "was ended by a fail-fast (or a stack buffer overrun)"
+                       : code == 0xC00000FD ? "crashed (stack overflow)"
+                       : code == 0xC0000374 ? "crashed (heap corruption)"
+                       : code == 0xC000001D ? "crashed (illegal instruction)"
+                       : code == 0x40000015 ? "ended by abort()"
+                       : code == 1          ? "ended (exit code 1)"
+                                            : "ended";
+    nr::steps::Note("monitor: king_kong process %lu %s, exit code 0x%08lX", pid, what, code);
+  };
   DWORD result = 0;
   for (int attempt = 0; attempt < 6; ++attempt) {
 #if defined(KK_DEV_TOOLS)
@@ -247,6 +286,7 @@ void MonitorStartup() {
     WaitForSingleObject(pi.hProcess, INFINITE);
     GetExitCodeProcess(pi.hProcess, &result);
     CloseHandle(pi.hProcess);
+    note_end(pi.dwProcessId, result);
     DWORD available = 0, got = 0;
     char last = 0;
     while (PeekNamedPipe(read, nullptr, 0, nullptr, &available, nullptr) && available) {
@@ -258,6 +298,7 @@ void MonitorStartup() {
     if (last != 'F' && !(last == 'B' && result != 0)) break;
   }
   CloseHandle(read); CloseHandle(write);
+  if (note[0]) DeleteFileW(note);
   std::_Exit(result);
 #endif
 }
@@ -333,6 +374,7 @@ void Begin(const std::string& plugin, bool game) {
     const unsigned generation = ++arm_generation;
     Signal('B');
     REXLOG_INFO("KK recovery: startup armed for {}", api);
+    nr::steps::Note("game start in this process (%s)", api.c_str());
     std::ofstream journal(state->directory / "attempts.log", std::ios::app);
     journal << api << " crashes=" << state->crashes << " reason=" << state->reason << '\n';
     // Startup also ends after a time limit, in case no frame is reported. Task 297: time spent compiling
