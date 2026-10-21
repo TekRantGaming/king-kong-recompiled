@@ -74,6 +74,8 @@ void PublishInventoryState(const InventoryState& inventory);
 // UI/game callers publish own choices and apply the worker's value-only overlay.
 void RefreshSessionCheats();
 std::vector<ReceivedShot> TakeShotIntents();
+bool SubmitShotReceipt(const ShotReceipt& receipt);
+std::vector<ShotReceipt> TakeShotReceipts();
 void SetShotCounters(ShotCounters counters);
 bool SubmitCombat(Message message, double now);
 std::vector<ReceivedCombat> TakeCombat();

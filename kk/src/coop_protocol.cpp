@@ -160,8 +160,11 @@ bool ValidFlowEvent(const FlowEvent& f) {
 bool ValidEnemyWorld(const EnemyWorld& w) {
   return w.level > 0 && w.level <= 100000 && w.start <= 10000 && w.serial > 0;
 }
+bool ValidShotReceipt(const ShotReceipt& r) {
+  return ValidEnemyWorld(r.world) && r.number && r.reason < ShotReject::Count;
+}
 bool ValidEnemy(const EnemyState& e) {
-  return e.id.source && e.id.family >= EnemyFamily::Raptor && e.id.family <= EnemyFamily::Scorpion &&
+  return e.id.source && ValidEnemyFamily(e.id.family) &&
       std::isfinite(e.x) && std::isfinite(e.y) && std::isfinite(e.z) && std::isfinite(e.facing) &&
       std::isfinite(e.life) && std::abs(e.x) < 1000000 && std::abs(e.y) < 1000000 &&
       std::abs(e.z) < 1000000 && std::abs(e.facing) <= 3.1416f && std::abs(e.life) < 1000000 &&
@@ -187,7 +190,7 @@ bool ValidShotIntent(const ShotIntent& s) {
   if (length < .99f || length > 1.01f) return false;
   for (size_t i = 0; i < s.hits.size(); ++i) {
     const auto& hit = s.hits[i];
-    if (!hit.id.source || hit.id.family < EnemyFamily::Raptor || hit.id.family > EnemyFamily::Scorpion || !Point(hit.point)) return false;
+    if (!hit.id.source || !ValidEnemyFamily(hit.id.family) || !Point(hit.point)) return false;
     for (size_t j = 0; j < i; ++j) if (s.hits[j].id == hit.id) return false;
   }
   return true;
@@ -362,6 +365,11 @@ bool Encode(const Message& m, std::vector<uint8_t>& out) {
           m.enemy_event.kind < EnemyEventKind::Spawned || m.enemy_event.kind > EnemyEventKind::Removed) return false;
       WriteWorld(payload, m.enemy_event.world); payload.U(uint8_t(m.enemy_event.kind), 1);
       WriteEnemy(payload, m.enemy_event.enemy);
+      break;
+    case MessageType::ShotReceipt:
+      if (!ValidShotReceipt(m.shot_receipt)) return false;
+      WriteWorld(payload,m.shot_receipt.world); payload.U(m.shot_receipt.number,4);
+      payload.U(uint8_t(m.shot_receipt.reason),1); payload.U(m.shot_receipt.queued,1);
       break;
     case MessageType::ShotIntent:
       if (!ValidShotIntent(m.shot)) return false;
@@ -540,6 +548,12 @@ bool Decode(std::span<const uint8_t> bytes, Message& out) {
       if (!ValidEnemyWorld(m.enemy_event.world) || !ValidEnemy(m.enemy_event.enemy) ||
           m.enemy_event.kind < EnemyEventKind::Spawned || m.enemy_event.kind > EnemyEventKind::Removed) return false;
       break;
+    case MessageType::ShotReceipt: {
+      m.shot_receipt.world=ReadWorld(r); m.shot_receipt.number=uint32_t(r.U(4));
+      m.shot_receipt.reason=ShotReject(r.U(1)); const auto queued=r.U(1);
+      if (queued>1 || !ValidShotReceipt(m.shot_receipt)) return false;
+      m.shot_receipt.queued=queued!=0; break;
+    }
     case MessageType::ShotIntent: {
       m.shot.world = ReadWorld(r); m.shot.number = uint32_t(r.U(4)); m.shot.weapon = uint8_t(r.U(1));
       m.shot.time = std::bit_cast<double>(r.U(8)); m.shot.origin = ReadVector(r); m.shot.direction = ReadVector(r);

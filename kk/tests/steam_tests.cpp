@@ -201,14 +201,14 @@ void EveryProtocolMessage() {
     MessageType::LoadRelease, MessageType::Checkpoint, MessageType::ChapterFinished, MessageType::ReloadRequest,
     MessageType::FlowAbort, MessageType::DamageEvent, MessageType::PlayerStatus, MessageType::OwnershipChange,
     MessageType::PlayerDowned, MessageType::PlayerRevived, MessageType::CameraCut,
-    MessageType::StoryEvent, MessageType::TriggerRequest, MessageType::WorldDigest
+    MessageType::StoryEvent, MessageType::TriggerRequest, MessageType::WorldDigest, MessageType::ShotReceipt
   };
   const MessageType unreliable[] = {MessageType::Ping, MessageType::Pong, MessageType::PlayerPose,
       MessageType::EnemySnapshot, MessageType::CameraPose};
-  static_assert(kProtocolVersion == 15 && std::size(reliable)+std::size(unreliable) == 31);
+  static_assert(kProtocolVersion == 17 && std::size(reliable)+std::size(unreliable) == 32);
   Backend a,b; a.self=1; b.self=2; a.remote=&b; b.remote=&a;
   SteamMessagesTransport at(a,2),bt(b,1);
-  unsigned seen[32]{};
+  unsigned seen[33]{};
   for (bool r : {true,false}) {
     const auto types = r ? std::span<const MessageType>(reliable) : std::span<const MessageType>(unreliable);
     for (auto type : types) {
@@ -232,7 +232,7 @@ void EveryProtocolMessage() {
       if (type==MessageType::ShotIntent) Check(packet.size()==554,"maximum shotgun hits fit packet cap");
     }
   }
-  for (unsigned i=1;i<=31;++i) Check(seen[i]==1,"all 31 distinct protocol IDs covered");
+  for (unsigned i=1;i<=32;++i) Check(seen[i]==1,"all 32 distinct protocol IDs covered");
 }
 void StoryOverMessages() {
   Backend a,b; a.self=1; b.self=2; a.remote=&b; b.remote=&a;
@@ -240,7 +240,7 @@ void StoryOverMessages() {
   CoopSession host({true,Role::Host,12345,Compatible()},at),guest({true,Role::Guest,0,Compatible()},bt);
   for (unsigned i=0;i<20;++i) { host.Tick(i*.01); guest.Tick(i*.01); }
   Check(host.State()==SessionState::Connected && guest.State()==SessionState::Connected,
-      "protocol 15 story session handshakes over Steam adapter");
+      "protocol 17 story session handshakes over Steam adapter");
   StoryMailbox h,g;
   uint32_t number=0;
   double now=.2;

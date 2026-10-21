@@ -5,15 +5,18 @@
 #include <string_view>
 
 namespace kk::coop {
+// Explicit test options. Shipping UI never populates these; no wire changes.
+struct UdpSimulation {
+  double delay_ms = 0, jitter_ms = 0, loss_percent = 0;
+  uint32_t seed = 68;
+};
 struct DirectUdpOptions {
   bool host = false;
   // Numeric IPv4/IPv6. Host: "::" is dual stack, "127.0.0.1"/"::1" are private tests.
   std::string address = "127.0.0.1";
   uint16_t port = 27080;
   std::string join_code;
-#if defined(KK_DEV_TOOLS)
-  struct Simulation { double latency_ms=0,jitter_ms=0,loss_percent=0; } simulation;
-#endif
+  UdpSimulation simulation;
 };
 bool ValidJoinCode(std::string_view code);
 std::string NormalizeJoinCode(std::string_view code);
@@ -37,4 +40,7 @@ class DirectUdpTransport : public ICoopTransport {
   virtual uint16_t LocalPort() const = 0;
 };
 std::unique_ptr<DirectUdpTransport> CreateDirectUdp(DirectUdpOptions options);
+#if defined(KK_DEV_TOOLS)
+void ConfigureDevUdpSimulation(DirectUdpOptions& options);
+#endif
 }  // namespace kk::coop
