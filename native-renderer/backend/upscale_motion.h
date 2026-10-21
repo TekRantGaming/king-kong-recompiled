@@ -89,6 +89,7 @@ class MotionHistory {
     mutable bool index_built = false;
     mutable int index_column = -1;  // -1: no usable float (the plain search)
     mutable std::vector<std::pair<float, uint32_t>> index;  // (that float, draw), ascending
+    mutable std::vector<std::pair<double, uint32_t>> ranked;  // the search's scratch (sum before the shared floats, draw)
   };
   // Draws per key from which the closest-constants search uses the index.
   static constexpr size_t kIndexedSearchMin = 24;

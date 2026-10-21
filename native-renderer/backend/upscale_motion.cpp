@@ -241,6 +241,58 @@ const VsConstants* MotionHistory::FindPrevious(const MotionDrawKey& key, uint32_
     for (const float f : current) current_nan |= f != f;
     if (current_nan) return &s->constants[0];
   }
+  if (n >= kIndexedSearchMin && !nan_first && end == current.size() &&
+      std::max(prefix, suffix) + 64 <= end) {
+    // Task 351 follow-up: this draw differs from last frame's in the floats they all share (the
+    // camera swung, a light changed): every draw's sum then runs on through those shared floats,
+    // a thousand terms each, and a frame took 100-230 ms. A draw's sum is its sum up to the shared
+    // part, S, carried through the same additions (F, the same for every draw, and never
+    // decreasing in S), so the draws are ranked by S and F is worked out for the few with the
+    // smallest S: the same smallest sum and first of equals.
+    const size_t tail_from = std::max(prefix, suffix);
+    const VsConstants& shared = s->constants[0];
+    const auto carry = [&](double x) {  // F
+      for (size_t k = tail_from; k < end; ++k) x += std::fabs(double(shared[k]) - double(current[k]));
+      return x;
+    };
+    const auto head = [&](size_t i, double limit) {  // S, or a value at or past `limit` when cut short
+      double d = prefix_d;
+      const VsConstants& c = s->constants[i];
+      for (size_t k = prefix; k < tail_from && d < limit; ++k) d += std::fabs(double(c[k]) - double(current[k]));
+      return d;
+    };
+    const double s_best = head(best, INFINITY);
+    // A sum just above the best draw's whose F is already more than the best sum: every draw whose S
+    // reaches it cannot win.
+    const double probe = s_best + std::max(std::fabs(s_best) * 1e-9, 1e-300);
+    if (std::isfinite(probe) && carry(probe) > best_d) {
+      auto& ranked = s->ranked;
+      ranked.clear();
+      ranked.emplace_back(s_best, uint32_t(best));
+      for (size_t i = 0; i < n; ++i) {
+        if (i == best) continue;
+        const double si = head(i, probe);
+        if (si < probe) ranked.emplace_back(si, uint32_t(i));  // NaN: never wins
+      }
+      std::sort(ranked.begin(), ranked.end());
+      double min_d = INFINITY;
+      size_t winner = best;
+      for (size_t j = 0; j < ranked.size(); ++j) {
+        const double d = carry(ranked[j].first);
+        if (j == 0) {
+          min_d = d;
+          winner = ranked[0].second;
+        } else if (d == min_d) {
+          winner = std::min<size_t>(winner, ranked[j].second);
+        } else {
+          break;  // F never decreases: no later draw ties
+        }
+      }
+      best = winner;
+      s->next_guess = best + 1;
+      return &s->constants[best];
+    }
+  }
   if (n >= kIndexedSearchMin) {
     // Task 351: many draws of one key (Ann's chapter: hundreds of plants, each its own world matrix)
     // made this search measure every draw for every draw, milliseconds a frame whenever culling

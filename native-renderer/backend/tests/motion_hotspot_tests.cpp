@@ -104,13 +104,20 @@ TEST(MotionIndexedSearchMatchesOldForManyDraws) {
     const unsigned now = count + (rng() % 41) - 20;  // culling changed the count
     for (unsigned q = 0; q < 300; ++q) {
       auto cur = data[rng() % count];
-      switch (q % 6) {
+      switch (q % 8) {
         case 0: break;  // an exact match
         case 1: for (unsigned i = first; i < first + span; i += 3) cur[i] += value(0.01f); break;  // the camera moved
         case 2: cur[first + rng() % span] = value(60.0f); break;
         case 3: for (unsigned i = first; i < first + span; ++i) cur[i] = value(30.0f); break;  // a new draw
         case 4: cur[first + rng() % span] = std::bit_cast<float>(odd[rng() % std::size(odd)]); break;
         case 5: cur[rng() % 1024] += 0.25f; break;
+        case 6:  // the camera swung: the floats it moves change for every draw, the world positions do not
+          for (unsigned i = first; i < first + span; ++i) if (i % 7 != 3 && i % 7 != 5) cur[i] += value(5.0f);
+          break;
+        case 7:  // the floats every draw shares changed too (a light, the fog): long shared tails
+          for (unsigned i = first + span; i < 1024; i += 1 + rng() % 3) cur[i] += value(coarse ? 1.0f : 3.0f);
+          if (rng() % 2) cur[first + rng() % span] += value(1.0f);
+          break;
       }
       const unsigned ordinal = rng() % (now + 3);
       const auto* a = old.FindPrevious(key, ordinal, cur, now);
@@ -121,7 +128,7 @@ TEST(MotionIndexedSearchMatchesOldForManyDraws) {
 }
 
 template<class History>
-NR_NOINLINE uint64_t AnnPlantsRun(const MotionData& instances, bool move_camera) {
+NR_NOINLINE uint64_t AnnPlantsRun(const MotionData& instances, int camera) {  // 0 still, 1 moving, 2 swinging
   // Hundreds of draws of one key with their own matrices, a few culled each frame (the count changes).
   History h;
   uint64_t sum = 0;
@@ -131,14 +138,16 @@ NR_NOINLINE uint64_t AnnPlantsRun(const MotionData& instances, bool move_camera)
     for (unsigned i = 0; i < instances.size(); ++i) {
       if ((i + frame) % 17 == 0) continue;  // culled this frame
       auto c = instances[i];
-      if (move_camera) for (unsigned k = 0; k < 16; ++k) c[k] += float(frame) * 0.001f;
+      for (unsigned k = 0; k < 16 && camera; ++k) c[k] += camera == 1 ? float(frame) * 0.001f : float(frame % 2 ? 3 : -3) * float(k + 1) * 0.1f;
+      if (camera == 2) for (unsigned k = 64; k < 1024; ++k) c[k] += frame % 2 ? 0.5f : -0.5f;  // a light changed too
       h.Record(key, c);
     }
     uint32_t ordinal = 0;
     for (unsigned i = 0; i < instances.size(); ++i) {
       if ((i + frame) % 17 == 0) continue;
       auto c = instances[i];
-      if (move_camera) for (unsigned k = 0; k < 16; ++k) c[k] += float(frame) * 0.001f;
+      for (unsigned k = 0; k < 16 && camera; ++k) c[k] += camera == 1 ? float(frame) * 0.001f : float(frame % 2 ? 3 : -3) * float(k + 1) * 0.1f;
+      if (camera == 2) for (unsigned k = 64; k < 1024; ++k) c[k] += frame % 2 ? 0.5f : -0.5f;  // a light changed too
       if (const auto* p = h.FindPrevious(key, ordinal++, c, h.CountThisFrame(key))) sum += std::bit_cast<uint32_t>((*p)[34]);
     }
   }
@@ -208,10 +217,10 @@ int main(int argc, char** argv) {
       for (unsigned k = 0; k < 16; ++k) c[k] = float(k % 4) * 0.25f + x * 0.001f + z * 0.0007f;
       for (unsigned k = 32; k < 48; ++k) c[k] = k % 4 == 3 ? (k < 36 ? x : k < 40 ? 0.0f : z) : float(rng() % 1000) / 1000.0f;
     }
-    for (bool moving : {false, true})
-      nr::test::Benchmark(moving ? "motion-ann-440-moving-camera" : "motion-ann-440-static-camera", 40 * 440,
-        [&] { return AnnPlantsRun<nr::test::ReferenceMotionHistory>(plants, moving); },
-        [&] { return AnnPlantsRun<MotionHistory>(plants, moving); });
+    for (int camera : {0, 1, 2})
+      nr::test::Benchmark(camera == 2 ? "motion-ann-440-swinging-camera" : camera ? "motion-ann-440-moving-camera" : "motion-ann-440-static-camera", 40 * 440,
+        [&] { return AnnPlantsRun<nr::test::ReferenceMotionHistory>(plants, camera); },
+        [&] { return AnnPlantsRun<MotionHistory>(plants, camera); });
   }
   // A control case with no shared finite ranges: the optional cache must not rely on sparse data.
   for (unsigned i = 0; i < 256; ++i)
