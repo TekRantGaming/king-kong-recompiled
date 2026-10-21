@@ -161,7 +161,8 @@ void ApplyPortDefaults();
 // First launch selects and persists a hardware tier. Existing installs are left alone.
 void InitializeHardwareRecommendation(const std::filesystem::path& config_path, int width, int height);
 // Recommended refreshes defaults only; explicit player settings always win.
-void ApplyHardwareRecommendation(bool detect, int width, int height);
+// first_setup selects the task 338 policy only while assigning a new install's tier.
+void ApplyHardwareRecommendation(bool detect, int width, int height, bool first_setup = false);
 
 // The default upscaler (Beta 3, docs/upscalers.md "The default"): with the native renderer, the best
 // temporal upscaler this PC runs (native_upscaler): DLSS on an NVIDIA card that supports it, FSR 4 on

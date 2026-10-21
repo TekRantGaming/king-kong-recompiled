@@ -703,23 +703,26 @@ void ApplyUpscalerDefaults() {
   SetCvarDefault("present_effect", temporal != "off" ? "bilinear" : SpatialDefault());
 }
 
-void ApplyHardwareRecommendation(bool detect, int width, int height) {
+void ApplyHardwareRecommendation(bool detect, int width, int height, bool first_setup) {
 #if !defined(_WIN32)
-  // Only GI follows detection on Linux in this update; the existing resolution
-  // and upscaler recommendation behaviour is unchanged.
-  if (detect) {
-    const auto& tier = kHardwareTiers[HardwareTierIndex(DetectHardware())];
-    rex::cvar::SetFlagByName("kk_hardware_tier", tier.id);
+  // Existing Linux installs retain their GI-only recommendation behaviour.
+  // GPU details are unavailable here; only a positively identified Steam Deck
+  // receives the lighter render defaults at first setup.
+  if (!first_setup || !DetectHardware().steam_deck) {
+    if (detect) {
+      const auto& tier = kHardwareTiers[HardwareTierIndex(DetectHardware())];
+      rex::cvar::SetFlagByName("kk_hardware_tier", tier.id);
+    }
+    if (!REXCVAR_GET(kk_original_look)) {
+      for (const auto& tier : kHardwareTiers)
+        if (REXCVAR_GET(kk_hardware_tier) == tier.id) SetCvarDefault("native_gi", tier.gi);
+    }
+    return;
   }
-  if (!REXCVAR_GET(kk_original_look)) {
-    for (const auto& tier : kHardwareTiers)
-      if (REXCVAR_GET(kk_hardware_tier) == tier.id) SetCvarDefault("native_gi", tier.gi);
-  }
-  return;
 #endif
   if (detect) {
     const HardwareProfile h = DetectHardware();
-    const auto& tier = kHardwareTiers[HardwareTierIndex(h)];
+    const auto& tier = kHardwareTiers[first_setup ? FirstSetupHardwareTierIndex(h) : HardwareTierIndex(h)];
     rex::cvar::SetFlagByName("kk_hardware_tier", tier.id);
     REXLOG_INFO("KK: hardware recommendation {}: GPU {} ({} MiB), {} physical cores, {} MiB RAM, display {}x{}@{}",
                 tier.id, h.gpu.name, h.gpu.dedicated_memory >> 20, h.physical_cores,
@@ -758,7 +761,19 @@ void InitializeHardwareRecommendation(const std::filesystem::path& config_path, 
   std::error_code ec;
   const bool exists = std::filesystem::exists(config_path, ec);
   // A pre-existing config, including one predating this feature, never gets a new tier automatically.
-  ApplyHardwareRecommendation(!exists && !ec && REXCVAR_GET(kk_hardware_tier).empty(), width, height);
+  const bool first_setup = !exists && !ec && REXCVAR_GET(kk_hardware_tier).empty();
+  ApplyHardwareRecommendation(first_setup, width, height, first_setup);
+#if !defined(_WIN32)
+  // Later Linux launches keep the old GI-only policy. Persist a new Deck's
+  // initial render choices so they survive that path; overrides still win.
+  if (first_setup && DetectHardware().steam_deck) {
+    for (const char* name : {"kk_render_quality", "native_upscaler_quality", "native_gi_distance",
+                             "native_ao_quality", "native_ao_samples", "ao_mode"}) {
+      if (rex::cvar::GetFlagSource(name) == rex::cvar::Source::kDefault)
+        rex::cvar::SetFlagByName(name, rex::cvar::GetFlagByName(name));
+    }
+  }
+#endif
 }
 
 void SetOfferedUpscalers(const std::string& offered) {

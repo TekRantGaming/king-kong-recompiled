@@ -993,7 +993,7 @@ for needle, why in (
         fail(f'J6: {why} ({needle})')
 m = re.search(r'void StartFullSetup\(bool save = true\) \{(.*?)\n  \}\n', launcher, re.S)
 body = m.group(1) if m else ''
-if 'if (Get("kk_setup_version").empty()) {\n      ApplyRemastered();' not in body:
+if 'if (Get("kk_setup_version").empty()) {\n      ApplyRemastered(true);' not in body:
     fail('J6: a new install does not start Remastered')
 if 'Set("kk_setup_version", KK_VERSION);' not in body or 'update_new_ = false;' not in body:
     fail('J6: the full setup does not stand in for the New screen')

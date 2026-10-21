@@ -29,6 +29,7 @@ REXCVAR_DEFINE_INT32(draw_resolution_scale_x, 1, "Test", "Test");
 REXCVAR_DEFINE_INT32(draw_resolution_scale_y, 1, "Test", "Test");
 REXCVAR_DEFINE_STRING(native_gi, "off", "Test", "Test");
 REXCVAR_DEFINE_STRING(native_gi_distance, "medium", "Test", "Test");
+REXCVAR_DEFINE_STRING(native_shadow_quality, "original", "Test", "Test");
 REXCVAR_DEFINE_STRING(swap_post_effect, "none", "Test", "Test");
 REXCVAR_DEFINE_INT32(anisotropic_override, -1, "Test", "Test");
 REXCVAR_DEFINE_INT32(ao_strength, 1, "Test", "Test");
@@ -101,6 +102,78 @@ int main() {
     fake = {{c.vendor, c.model, c.vram * GiB}, c.cores, c.ram * GiB, 1920, 1080, 144, c.deck};
     Check(HardwareTierIndex(fake) == c.tier, c.model);
   }
+  // Task 338: exaggerated UMA reservations and core counts isolate name/ID
+  // rules from the low-memory/core fallbacks. Dedicated Arc cards stay distinct.
+  const Case first_setup_cases[] = {
+    {GpuVendor::kAmd, "AMD Radeon(TM) Graphics", 16, 8, 32, false, 0},
+    {GpuVendor::kAmd, "AMD Radeon(TM)Graphics", 16, 8, 32, false, 0},
+    {GpuVendor::kAmd, "AMD RADEON GRAPHICS", 16, 8, 32, false, 0},
+    {GpuVendor::kAmd, "AMD Radeon 780M Graphics", 16, 8, 32, false, 0},
+    {GpuVendor::kAmd, "AMD Radeon 890M Graphics", 16, 12, 32, false, 0},
+    {GpuVendor::kAmd, "AMD Radeon 760M", 16, 8, 32, false, 0},
+    {GpuVendor::kAmd, "AMD Radeon 860M", 16, 8, 32, false, 0},
+    {GpuVendor::kAmd, "AMD Radeon 880M", 16, 8, 32, false, 0},
+    {GpuVendor::kAmd, "AMD Ryzen Z1 Extreme", 16, 8, 32, false, 0},
+    {GpuVendor::kAmd, "AMD Ryzen Z2 Extreme", 16, 8, 32, false, 0},
+    {GpuVendor::kIntel, "Intel(R) Arc(TM) Graphics", 16, 16, 32, false, 0},
+    {GpuVendor::kIntel, "Intel(R)Arc(TM)Graphics", 16, 16, 32, false, 0},
+    {GpuVendor::kIntel, "Intel Arc 140V GPU", 16, 8, 32, false, 0},
+    {GpuVendor::kIntel, "Intel Arc 130V GPU", 16, 8, 32, false, 0},
+    {GpuVendor::kIntel, "Intel Arc 140T GPU", 16, 16, 32, false, 0},
+    {GpuVendor::kIntel, "Intel Arc 8-Core iGPU", 16, 16, 32, false, 0},
+    {GpuVendor::kIntel, "Intel Arc 7-Core iGPU", 16, 16, 32, false, 0},
+    {GpuVendor::kIntel, "Intel Arc integrated GPU", 16, 16, 32, false, 0},
+    {GpuVendor::kIntel, "Intel(R) Arc(TM) B370 GPU", 16, 14, 32, false, 0},
+    {GpuVendor::kIntel, "Intel(R) Arc(TM) B390 GPU", 16, 16, 32, false, 0},
+    {GpuVendor::kIntel, "Intel Arc Pro B370 Graphics", 16, 14, 32, false, 0},
+    {GpuVendor::kIntel, "Intel Arc Pro B390 Graphics", 16, 16, 32, false, 0},
+    {GpuVendor::kNvidia, "NVIDIA GeForce RTX 4050 Laptop GPU", 8, 12, 32, false, 0},
+    {GpuVendor::kNvidia, "NVIDIA GeForce RTX 4050 (Laptop GPU)", 8, 12, 32, false, 0},
+    {GpuVendor::kNvidia, "NVIDIA GeForce RTX 3050 Laptop GPU", 8, 12, 32, false, 0},
+    {GpuVendor::kNvidia, "NVIDIA GeForce RTX 2050 Laptop GPU", 8, 12, 32, false, 0},
+    {GpuVendor::kNvidia, "RTX 4050 Notebook", 8, 12, 32, false, 0},
+    {GpuVendor::kNvidia, "RTX 2050 Mobile", 8, 12, 32, false, 0},
+    {GpuVendor::kAmd, "AMD Custom GPU 0405", 16, 8, 32, true, 0},
+    {GpuVendor::kAmd, "AMD Custom GPU 0932", 16, 8, 32, true, 0},
+    {GpuVendor::kNvidia, "RTX 3060", 6, 8, 32, false, 0},
+    {GpuVendor::kNvidia, "RTX 3060", 12, 6, 32, false, 2},  // 6 cores and a strong GPU: not Low
+    {GpuVendor::kNvidia, "RTX 4070 Ti", 12, 8, 32, false, 2},
+    {GpuVendor::kIntel, "Intel Arc A770", 16, 8, 32, false, 2},
+    {GpuVendor::kIntel, "Intel Arc B580", 12, 8, 32, false, 2},
+    {GpuVendor::kIntel, "Intel Arc A750", 8, 8, 32, false, 1},
+    {GpuVendor::kAmd, "AMD Radeon RX 7900 XTX", 24, 8, 32, false, 2},
+    {GpuVendor::kAmd, "AMD Radeon RX 6600", 8, 8, 32, false, 1},
+    {GpuVendor::kUnknown, "Unknown", 0, 0, 0, false, 0},
+  };
+  for (const auto& c : first_setup_cases) {
+    fake = {{c.vendor, c.model, c.vram * GiB}, c.cores, c.ram * GiB, 1920, 1080, 144, c.deck};
+    Check(FirstSetupHardwareTierIndex(fake) == c.tier, c.model);
+  }
+  for (uint32_t id : {0x7D51, 0x7DD1, 0x7D41, 0x7D67, 0xB640, 0x7D40, 0x7D45,
+                     0x7D55, 0x7D60, 0x7DD5, 0x6420, 0x64A0, 0x64B0,
+                     0xB080, 0xB081, 0xB082, 0xB083, 0xB084, 0xB085,
+                     0xB086, 0xB087, 0xB08F, 0xB090, 0xB0A0, 0xB0B0}) {
+    fake = {{GpuVendor::kIntel, "Generic display adapter", 16 * GiB, "", 0x8086, id}, 16, 32 * GiB};
+    Check(FirstSetupHardwareTierIndex(fake) == 0, "integrated Intel PCI ID");
+    fake.gpu.vendor = GpuVendor::kNvidia;
+    fake.gpu.vendor_id = 0x10DE;
+    Check(FirstSetupHardwareTierIndex(fake) == 1, "PCI ID must match its vendor");
+  }
+  fake = {{GpuVendor::kIntel, "Intel Arc A770", 16 * GiB, "", 0x8086, 0x56A0}, 8, 32 * GiB};
+  Check(FirstSetupHardwareTierIndex(fake) == 2, "dedicated Intel ID retains high");
+  fake = {{GpuVendor::kIntel, "Intel Arc B580", 12 * GiB, "", 0x8086, 0xE20B}, 8, 32 * GiB};
+  Check(FirstSetupHardwareTierIndex(fake) == 2, "dedicated B-series ID retains high");
+  fake = {{GpuVendor::kNvidia, "RTX 4070 Ti", 6 * GiB + 1}, 7, 32 * GiB};
+  Check(FirstSetupHardwareTierIndex(fake) == 1, "just above both low thresholds");
+  fake.gpu.dedicated_memory = 6 * GiB;
+  Check(FirstSetupHardwareTierIndex(fake) == 0, "6 GiB inclusive");
+  fake.gpu.dedicated_memory = 12 * GiB;
+  fake.physical_cores = 6;
+  Check(FirstSetupHardwareTierIndex(fake) != 0, "a 6-core desktop with a strong GPU is not low");
+  fake.physical_cores = 5;
+  Check(FirstSetupHardwareTierIndex(fake) == 0, "fewer than 6 cores is low");
+  fake.physical_cores = 6;
+  Check(HardwareTierIndex(fake) == 2, "later explicit recommendation policy unchanged");
   for (const auto& tier : kHardwareTiers) {
     Check(std::string(RecommendedRenderQuality(tier, 3840, 2160)) ==
           (std::string(tier.id) == "high" ? "quality" : "performance"), "4K policy");
@@ -126,6 +199,25 @@ int main() {
       std::chrono::steady_clock::now().time_since_epoch().count()));
   std::filesystem::create_directories(dir);
   const auto config = dir / "king_kong.toml";
+  // Only a missing config receives the new policy. The setup's second pass
+  // reuses the selected tier, and later launches retain it even on another GPU.
+  const auto first_config = dir / "first-setup.toml";
+  fake = {{GpuVendor::kNvidia, "NVIDIA GeForce RTX 4050 Laptop GPU", 8 * GiB}, 12, 32 * GiB};
+  ApplyPortDefaults();
+  InitializeHardwareRecommendation(first_config, 1920, 1080);
+  Equals("kk_hardware_tier", "low");
+  Equals("native_upscaler_quality", "performance");
+  Equals("native_gi", "low");
+  ApplyHardwareRecommendation(false, 1920, 1080); // setup must not redetect with the old policy
+  Equals("kk_hardware_tier", "low");
+  Check(SaveSettings(first_config), "save first-setup low tier");
+  fake = {{GpuVendor::kNvidia, "RTX 4070 Ti", 12 * GiB}, 8, 32 * GiB};
+  rex::cvar::ResetAllToDefaults();
+  rex::cvar::LoadConfig(first_config);
+  InitializeHardwareRecommendation(first_config, 1920, 1080);
+  Equals("kk_hardware_tier", "low");
+  Equals("native_upscaler_quality", "performance");
+  rex::cvar::ResetAllToDefaults();
   ApplyPortDefaults();
   Equals("native_gi", "medium");
   fake = {{GpuVendor::kNvidia, "RTX 4070 Ti", 12 * GiB}, 8, 32 * GiB, 3840, 2160, 120, false};
@@ -395,12 +487,38 @@ int main() {
     Check(!SetModSetting("no_such_setting_x", "1"), "mod: unknown setting refused");
     ClearModSettings();
   }
+  // Medium owns its cheaper shadow setting only on an explicit selection.
+  // A saved custom shadow setting survives startup, and High/Ultra still preserve it.
+  {
+    auto set = [](const char* n, const char* v) { rex::cvar::SetFlagByName(n, v); };
+    auto get = [](const char* n) { return rex::cvar::GetFlagByName(n); };
+    rex::cvar::ResetAllToDefaults();
+    ApplyPortDefaults();
+    ApplyGraphicsPresetSettings(kGraphicsPresets[1], set);
+    set("kk_hardware_tier", "high");
+    set("native_shadow_quality", "high");
+    Check(SaveSettings(config), "save custom shadows before startup");
+    rex::cvar::ResetAllToDefaults();
+    rex::cvar::LoadConfig(config);
+    InitializeHardwareRecommendation(config, 1920, 1080);
+    Equals("native_shadow_quality", "high");
+    Check(FindGraphicsPreset(get, [](const GraphicsPreset&) { return true; }) == -1,
+          "custom expensive shadows are not labelled Medium");
+    ApplyGraphicsPresetSettings(kGraphicsPresets[1], set);
+    Equals("native_shadow_quality", "original");
+    for (int index : {2, 3}) {
+      set("native_shadow_quality", "high");
+      ApplyGraphicsPresetSettings(kGraphicsPresets[index], set);
+      Equals("native_shadow_quality", "high");
+    }
+  }
   // Version 3 recognises every old preset without touching its other settings.
   for (const auto& p : kGraphicsPresets) {
     rex::cvar::ResetAllToDefaults();
     ApplyPortDefaults();
     rex::cvar::SetFlagByName("kk_settings_version", "2");
     ApplyGraphicsPresetSettings(p, [](const char* n, const char* v) { rex::cvar::SetFlagByName(n, v); });
+    rex::cvar::SetFlagByName("native_shadow_quality", "high"); // legacy presets did not own shadows
     rex::cvar::ResetToDefault("native_gi"); // old files omitted the default Off
     Check(SaveSettings(config), "write old preset");
     rex::cvar::ResetAllToDefaults();
@@ -409,6 +527,7 @@ int main() {
     Equals("native_gi", p.gi);
     Equals("kk_settings_version", "3");
     Equals("kk_render_quality", p.quality);
+    Equals("native_shadow_quality", "high");
     Check(!std::filesystem::exists(config.string() + ".bak"), "valid version 2 is not mistaken for unread settings");
     MigrateSettings(config);
     Equals("native_gi", p.gi);
