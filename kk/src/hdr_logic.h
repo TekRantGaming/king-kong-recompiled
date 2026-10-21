@@ -1,7 +1,8 @@
 // HDR follows Windows (owner, 17 and 18 Oct; DECISIONS.md "HDR follows Windows"): the pure rules, kept apart
 // from the Windows queries (hdr_display.cpp) so the unit tests (tests/hdr_tests.cpp) can check them anywhere.
 //
-//  - kk_hdr: auto (Follow Windows, the default), on, off. Follow Windows asks for HDR only when Windows HDR is
+//  - kk_hdr: off (the default since Beta 14: HDR is experimental, the F8 panel's "HDR (experimental)" switches
+//    between off and on), on, auto (Follow Windows, the default before). Follow Windows asks for HDR only when Windows HDR is
 //    detected on for the game's screen; On always asks (the presenter still needs Windows HDR for that screen and
 //    falls back to SDR without it); Off never asks. The answer goes into the presenter's present_hdr.
 //  - kk_hdr_levels: auto (the default) or manual. Automatic takes Peak brightness from the Windows HDR Calibration

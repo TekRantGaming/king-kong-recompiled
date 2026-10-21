@@ -511,8 +511,14 @@ void SettingsLayoutChecks() {
             std::string(L::kPageNames[4]) == "Gameplay" && std::string(L::kPageNames[5]) == "Cheats" &&
             std::string(L::kPageNames[6]) == "Advanced" && L::kPageCount == 7,
         "categories: Display, Graphics, Audio, Controls, Gameplay, Cheats, Advanced (owner, 16 Oct evening)");
-  Check(in_order(L::kDisplay, {"Window mode", "Monitor", "Resolution", "Refresh rate", "VSync", "Frame rate", "HDR"}),
-        "Display: window mode, monitor, resolution, refresh rate, VSync, frame-rate cap, HDR");
+  Check(in_order(L::kDisplay, {"Window mode", "Monitor", "Resolution", "Refresh rate", "VSync", "Frame rate"}),
+        "Display: window mode, monitor, resolution, refresh rate, VSync, frame-rate cap");
+  // Owner, 21 Oct (Beta 14): HDR is experimental, in the F8 graphics panel only: no HDR row on any page.
+  for (int page = 0; page < L::kPageCount; ++page)
+    for (const char* hdr : {"HDR", "HDR brightness", "Peak brightness (nits)", "Paper white (nits)",
+                            "Open Windows HDR Calibration"})
+      Check(L::IndexOf(L::Page(page), hdr) < 0 || L::IndexOf(L::Page(page), hdr) == L::IndexOf(L::Page(page), "*"),
+            (std::string("no HDR row in Settings: ") + hdr).c_str());
   Check(in_order(L::kGraphics, {"Preset", "Graphics API", "Upscaler", "Upscaler mode", "Anti-aliasing",
                                 "Ambient occlusion", "Global illumination", "Screen blur", "Texture pack"}),
         "Graphics: preset, API, upscaler and quality, anti-aliasing, effects, advanced last");
@@ -530,7 +536,7 @@ void SettingsLayoutChecks() {
         "Advanced: the PS2 cutscenes switch, Download and Remove (job J2)");
   // Owner, 18 Oct: brightness and gamma on Display (Picture), and the frame counter became Performance metrics
   // (the pause menu shows it too).
-  Check(in_order(L::kDisplay, {"Aspect ratio", "Brightness", "Gamma", "VSync", "HDR"}) &&
+  Check(in_order(L::kDisplay, {"Aspect ratio", "Brightness", "Gamma", "VSync"}) &&
             std::string(L::RowsOf(L::kDisplay).begin()[L::IndexOf(L::kDisplay, "Gamma")].section) == "Picture",
         "Display: Picture (brightness, gamma) after the screen rows");
   // Owner, 18 Oct (after task 222): Field of view, Motion blur and Camera shake (with its strength) moved to Display
@@ -540,7 +546,7 @@ void SettingsLayoutChecks() {
       const int at = L::IndexOf(p, label);
       return at < 0 ? std::string() : std::string(L::RowsOf(p).begin()[at].section);
     };
-    Check(in_order(L::kDisplay, {"VSync", "Frame rate", "HDR", "Field of view", "Motion blur", "Camera shake",
+    Check(in_order(L::kDisplay, {"VSync", "Frame rate", "Field of view", "Motion blur", "Camera shake",
                                  "Camera shake strength"}) &&
               section(L::kDisplay, "Field of view") == "Camera" && section(L::kDisplay, "Motion blur") == "Camera" &&
               section(L::kDisplay, "Camera shake strength") == "Camera" &&

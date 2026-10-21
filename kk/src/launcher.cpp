@@ -8,7 +8,6 @@
 #include "benchmark.h"
 #include "launcher_benchmark.h"
 #include "launcher_art.h"
-#include "hdr_display.h"
 #include "setup_compare.h"
 #include "workshop_art.h"
 #include "launcher_music.h"
@@ -1351,7 +1350,8 @@ class SettingsPages {
                                "Makes each frame wait for your screen's next refresh.",
                                "d3d12_allow_variable_refresh_rate_and_tearing", "Off", "On", /*invert=*/true));
     items.push_back(FrameRateItem());
-    if (FindFlag("present_hdr")) HdrItems(items);
+    // HDR (owner, 21 Oct, Beta 14): experimental, off by default, only in the F8 graphics panel
+    // (debug_overlay.cpp); no longer a row here, in the setup or in the pause menu.
     // Camera (owner, 18 Oct, after task 222): Field of view, Motion blur and Camera shake moved here from Gameplay
     // and Graphics; Performance metrics went to Gameplay. The pause menu's Display page follows.
     items.push_back(Section("Camera"));
@@ -1387,93 +1387,12 @@ class SettingsPages {
     return items;
   }
 
-  // Display > HDR output (owner, 17/18 Oct, HDR follows Windows; hdr_display.h): HDR follows Windows by
-  // default, with Peak brightness and Paper white from Windows HDR Calibration and Windows' SDR content
-  // brightness; On, Off and Manual levels are the player's overrides. The rows say what Windows reports.
-  // A choice that changes what the presenter is asked for: applied at once, not at the next refresh.
-  static Item& ApplyHdrAtOnce(Item& it) {
-    if (auto set = it.on_choice) it.on_choice = [set](int i) { set(i); hdr::Apply("setting"); };
-    if (auto reset = it.on_default) it.on_default = [reset] { reset(); hdr::Apply("setting"); };
-    return it;
-  }
-
-  void HdrItems(std::vector<Item>& items) {
-    hdr::ApplyIfStale();  // follows Windows (and the calibration app) while the page is open
-    const hdr::DisplayInfo d = hdr::LastDisplay();
-    auto nits = [](float value) { return std::to_string(int(std::lround(value))); };
-    items.push_back(Section("HDR output"));
-    {
-      Item it = CvarChoice("HDR",
-                           "Follow Windows uses HDR when Windows HDR is on for the screen the game is on. On always "
-                           "asks for HDR, which also needs Windows HDR. Off always uses SDR.",
-                           "kk_hdr", {{"Follow Windows", "auto"}, {"On", "on"}, {"Off", "off"}});
-      if (!d.detected) it.facts.push_back("Windows HDR could not be detected, so Follow Windows uses SDR.");
-      else if (d.hdr_on) it.facts.push_back("Windows HDR is on for this screen.");
-      else if (d.hdr_supported)
-        it.facts.push_back("Windows HDR is off for this screen. It can be turned on in Windows Settings > System > "
-                           "Display.");
-      else it.facts.push_back("Windows HDR is off for this screen.");
-      items.push_back(std::move(ApplyHdrAtOnce(it)));
-    }
-    if (!GetBool("present_hdr")) return;
-    const bool manual = Get("kk_hdr_levels") == "manual";
-    {
-      Item it = CvarChoice("HDR brightness",
-                           "Automatic takes Peak brightness from Windows HDR Calibration and Paper white from the SDR "
-                           "content brightness in Windows. Manual uses the sliders below.",
-                           "kk_hdr_levels", {{"Automatic (from Windows)", "auto"}, {"Manual", "manual"}});
-      switch (hdr::AutoPeakSource(d)) {
-        case hdr::PeakSource::kCalibration:
-          it.facts.push_back(F("Windows HDR Calibration: {0} nits peak brightness.", {nits(d.profile->max_nits)}));
-          break;
-        case hdr::PeakSource::kScreen:
-          it.facts.push_back(F("No Windows HDR Calibration found. The screen reports {0} nits peak brightness.",
-                               {nits(d.dxgi_max_nits)}));
-          break;
-        case hdr::PeakSource::kDefault:
-          it.facts.push_back(F("No peak brightness found, so {0} nits is used.", {nits(hdr::kPeakDefault)}));
-          break;
-      }
-      if (d.sdr_white_nits >= hdr::kPaperMin)
-        it.facts.push_back(F("SDR content brightness in Windows: {0} nits.", {nits(d.sdr_white_nits)}));
-      else
-        it.facts.push_back(F("SDR content brightness in Windows not found, so {0} nits is used.",
-                             {nits(hdr::kPaperDefault)}));
-      items.push_back(std::move(ApplyHdrAtOnce(it)));
-    }
-    auto value = [](float v) { return std::to_string(int(std::lround(v))) + " nits"; };
-    constexpr const char* kSetByWindows = "Set from Windows. Choose Manual under HDR brightness to change it.";
-    {
-      Item it = CvarSlider("Peak brightness (nits)", "Highlight ceiling, limited to the display's reported peak brightness.",
-                           "present_hdr_peak", 80, 10000, 20, value);
-      items.push_back(std::move(Disable(it, !manual, kSetByWindows)));
-    }
-    {
-      Item it = CvarSlider("Paper white (nits)", "Brightness of neutral whites and menus. Limited by peak brightness.",
-                           "present_hdr_paper_white", 80, 500, 10, value);
-      items.push_back(std::move(Disable(it, !manual, kSetByWindows)));
-    }
-#if defined(_WIN32)
-    if (!in_game_) {  // the launcher only (not in the pause menu: the app takes the whole screen)
-      const bool installed = hdr::CalibrationAppInstalled();
-      Item it = ActionItem("Open Windows HDR Calibration",
-                           installed ? "Opens the Windows HDR Calibration app to measure your screen. The values here "
-                                       "are read again when you come back."
-                                     : "Opens the free Windows HDR Calibration app in the Microsoft Store. Install it, "
-                                       "then select this again to measure your screen.",
-                           "", [] { hdr::OpenCalibrationApp(); });
-      items.push_back(std::move(it));
-    }
-#endif
-  }
-
   // Display > Picture (owner, 18 Oct; GitHub issue #44): brightness and gamma of the game's picture, applied
   // by the renderer as it shows each frame (native-renderer/backend/picture_adjust.h), so they change at once
   // in the launcher and in the pause menu. Only the game's picture changes: the launcher, the menus and the
-  // overlays stay as they are. The defaults are the game's own picture; with HDR, white stays at Paper white.
+  // overlays stay as they are. The defaults are the game's own picture (with HDR, white stays at Paper white).
   void PictureItems(std::vector<Item>& items) {
     items.push_back(Section("Picture"));
-    const bool hdr = GetBool("present_hdr");
     {
       Item it = CvarSlider("Brightness",
                            "Raises or lowers the darkest parts of the game's picture. Higher shows more in dark "
@@ -1483,7 +1402,6 @@ class SettingsPages {
                              const int n = int(std::lround(v));
                              return n > 0 ? "+" + std::to_string(n) : std::to_string(n);
                            });
-      if (hdr) it.facts.push_back("With HDR, white stays at the Paper white brightness.");
       items.push_back(std::move(it));
     }
     {
@@ -1501,7 +1419,6 @@ class SettingsPages {
         std::snprintf(b, sizeof(b), "%.2f", std::clamp(std::round(v * 20.0f) / 20.0f, 0.5f, 1.5f));
         Set("kk_gamma", b);
       };
-      if (hdr) it.facts.push_back("With HDR, white stays at the Paper white brightness.");
       items.push_back(std::move(it));
     }
   }
@@ -5931,7 +5848,6 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
       case kDisplay:
         return {"fullscreen", "kk_fullscreen_mode", "window_width", "window_height", "monitor", "kk_frame_rate",
                 "d3d12_allow_variable_refresh_rate_and_tearing", "present_letterbox", "kk_brightness", "kk_gamma",
-                "kk_hdr", "kk_hdr_levels", "present_hdr", "present_hdr_peak", "present_hdr_paper_white",
                 "kk_performance_metrics"};
       case kGraphics:
         return {"kk_original_look", "kk_modern_settings", "kk_graphics_preset", "native_backend", "kk_renderer",
