@@ -6,6 +6,7 @@
 
 #include <array>
 #include <filesystem>
+#include <memory>
 #include <mutex>
 #include <vector>
 
@@ -43,6 +44,9 @@ class LauncherSounds {
     int wait = 0;  // output frames before it starts
   };
   static void Feed(void* self, SDL_AudioStream* stream, int additional, int total);
+  struct Device;
+  void OpenDevice();
+  SDL_AudioStream* Stream() const;
 
   std::array<Clip, 3> clips_;  // move, select, back
   std::array<double, size_t(ui::Sound::kCount)> last_{};
@@ -51,6 +55,7 @@ class LauncherSounds {
   std::vector<float> mix_;  // the audio thread's
   SDL_AudioStream* stream_ = nullptr;
   bool audio_ready_ = false;
+  std::shared_ptr<Device> device_;
 };
 
 }  // namespace kk

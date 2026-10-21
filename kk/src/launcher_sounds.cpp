@@ -1,8 +1,10 @@
 #include "launcher_sounds.h"
 
 #include <algorithm>
+#include <atomic>
 #include <chrono>
 #include <cstdlib>
+#include <thread>
 
 #include <SDL3/SDL.h>
 
@@ -48,6 +50,24 @@ double Now() {
 
 }  // namespace
 
+struct LauncherSounds::Device {
+  explicit Device(LauncherSounds* target) : owner(target) {}
+  std::mutex mutex;
+  LauncherSounds* owner;
+  std::atomic<SDL_AudioStream*> ready{nullptr};
+  SDL_AudioStream* stream = nullptr;
+  bool initialized = false;
+  ~Device() {
+    if (stream) SDL_DestroyAudioStream(stream);
+    if (initialized) SDL_QuitSubSystem(SDL_INIT_AUDIO);
+  }
+  static void Feed(void* user, SDL_AudioStream* stream, int additional, int total) {
+    auto* device = static_cast<Device*>(user);
+    std::lock_guard lock(device->mutex);
+    if (device->owner) LauncherSounds::Feed(device->owner, stream, additional, total);
+  }
+};
+
 LauncherSounds::LauncherSounds(const std::filesystem::path& game_dir) {
   const auto sounds = ReadGameSounds(game_dir, {kMoveKey, kSelectKey, kBackKey});
   for (size_t i = 0; i < clips_.size(); ++i) {
@@ -67,24 +87,58 @@ LauncherSounds::LauncherSounds(const std::filesystem::path& game_dir) {
     REXLOG_WARN("KK: launcher sounds: the game's menu sounds weren't found");
     return;
   }
-  if (!SDL_InitSubSystem(SDL_INIT_AUDIO)) return;
-  audio_ready_ = true;
-  const SDL_AudioSpec spec{SDL_AUDIO_F32, 1, kRate};
-  stream_ = SDL_OpenAudioDeviceStream(SDL_AUDIO_DEVICE_DEFAULT_PLAYBACK, &spec, &LauncherSounds::Feed, this);
-  if (!stream_) {
-    REXLOG_WARN("KK: launcher sounds: no audio device ({})", SDL_GetError());
-    return;
-  }
-  SDL_ResumeAudioStreamDevice(stream_);
+  OpenDevice();
+}
+
+void LauncherSounds::OpenDevice() {
+  device_ = std::make_shared<Device>(this);
+  std::thread([device = device_] {
+    const auto start = std::chrono::steady_clock::now();
+#if defined(KK_DEV_TOOLS)
+    if (const char* d = std::getenv("KK_DEV_UI_AUDIO_OPEN_DELAY"); d && std::atoi(d) > 0)
+      std::this_thread::sleep_for(std::chrono::seconds(std::atoi(d)));
+    // Device-free lifetime test (this SDK has no SDL dummy audio backend).
+    if (const char* test = std::getenv("KK_DEV_UI_AUDIO_MEMORY_STREAM"); test && *test == '1') {
+      const SDL_AudioSpec spec{SDL_AUDIO_F32, 1, kRate};
+      device->stream = SDL_CreateAudioStream(&spec, &spec);
+    } else
+#endif
+    {
+      device->initialized = SDL_InitSubSystem(SDL_INIT_AUDIO);
+      if (device->initialized) {
+        const SDL_AudioSpec spec{SDL_AUDIO_F32, 1, kRate};
+        device->stream = SDL_OpenAudioDeviceStream(SDL_AUDIO_DEVICE_DEFAULT_PLAYBACK, &spec, &Device::Feed, device.get());
+      }
+    }
+    if (!device->stream) {
+      REXLOG_WARN("KK: launcher sounds: no audio device ({})", SDL_GetError());
+      return;
+    }
+    if (device->initialized) SDL_ResumeAudioStreamDevice(device->stream);
+    device->ready.store(device->stream, std::memory_order_release);
+    REXLOG_INFO("KK: launcher sounds: device ready on worker after {:.3f} s",
+                std::chrono::duration<double>(std::chrono::steady_clock::now() - start).count());
+  }).detach();
+  REXLOG_INFO("KK: launcher sounds: device open queued on worker");
+}
+
+SDL_AudioStream* LauncherSounds::Stream() const {
+  return device_ ? device_->ready.load(std::memory_order_acquire) : stream_;
 }
 
 LauncherSounds::~LauncherSounds() {
+  if (device_) {
+    // Disconnect first. A pending open owns the gate until it can close its
+    // device; neither a late callback nor closing the launcher waits on open.
+    std::lock_guard lock(device_->mutex);
+    device_->owner = nullptr;
+  }
   if (stream_) SDL_DestroyAudioStream(stream_);
   if (audio_ready_) SDL_QuitSubSystem(SDL_INIT_AUDIO);
 }
 
 void LauncherSounds::SetVolume(float volume) {
-  if (stream_) SDL_SetAudioStreamGain(stream_, std::clamp(volume, 0.0f, 1.0f));
+  if (auto* stream = Stream()) SDL_SetAudioStreamGain(stream, std::clamp(volume, 0.0f, 1.0f));
 }
 
 void LauncherSounds::Play(ui::Sound sound, float value, float volume) {
@@ -94,7 +148,7 @@ void LauncherSounds::Play(ui::Sound sound, float value, float volume) {
   static const bool log = std::getenv("KK_DEV_SOUNDS_LOG") != nullptr;
   if (log) REXLOG_INFO("KK dev: sound {} ({:.2f}, volume {:.2f})", i, value, volume);
 #endif
-  if (!stream_ || i >= std::size(kUses) || volume <= 0) return;
+  if (!Stream() || i >= std::size(kUses) || volume <= 0) return;
   const Use& use = kUses[i];
   const Clip& clip = clips_[use.clip];
   if (clip.pcm.empty()) return;
@@ -111,7 +165,7 @@ void LauncherSounds::Play(ui::Sound sound, float value, float volume) {
 
 void LauncherSounds::PlayDing(float volume) {
   SetVolume(volume);
-  if (!stream_ || volume <= 0) return;
+  if (!Stream() || volume <= 0) return;
   const Clip& clip = clips_[kSelectClip];
   if (clip.pcm.empty()) return;
   std::lock_guard<std::mutex> hold(lock_);
