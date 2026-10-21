@@ -9,8 +9,8 @@
 namespace nr {
 
 // --native_shadow_quality: original (the game's 832x832 shadow maps, one hard comparison per pixel),
-// high (shadow maps at twice the resolution, a wide rotated PCF kernel), ultra (the same
-// resolution, PCSS: the penumbra widens with the distance to the blocker).
+// high (shadow maps at twice the resolution, a wide rotated PCF kernel), ultra (shadow maps at 1.5 times
+// the resolution, PCSS: the penumbra widens with the distance to the blocker).
 enum class ShadowQuality : uint8_t { kOriginal, kHigh, kUltra };
 // --native_water_reflections: original (the game's planar reflection and environment colour) or ssr
 // (screen-space reflections from the scene at the fog pass, falling back to the game's).

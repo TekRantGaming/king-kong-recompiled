@@ -518,7 +518,7 @@ REXCVAR_DEFINE_STRING(native_upscaler_rules, "", "Native renderer",
 // look keeps them there.
 REXCVAR_DEFINE_STRING(native_shadow_quality, "original", "Native renderer",
                       "Shadows: original (the game's 832x832 shadow maps, hard edges), high (shadow maps at twice "
-                      "the resolution, soft edges from a wide rotated filter) or ultra (four times the resolution, "
+                      "the resolution, soft edges from a wide rotated filter) or ultra (1.5 times the resolution, "
                       "edges that soften with the distance to what casts the shadow). native_shadow_scale, when "
                       "set, still sets the shadow maps' resolution")
     .lifecycle(rex::cvar::Lifecycle::kHotReload);

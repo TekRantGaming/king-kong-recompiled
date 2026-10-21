@@ -8,7 +8,8 @@ and a clearly useful shaft improvement still need verification. GI's preset defa
 `codex/REPORT-101.md` records the per-effect HIDE verdicts, pictures, costs and remaining gaps.
 This section supersedes the implementation details and timer scope in the historical sections below.
 
-- Shadows retain 2x maps for High and Ultra and the existing finer screen-space mask. High uses four
+- Shadows retain 2x maps for High; Ultra uses 1.5x maps (Beta 14, task 348a: 2x before; its PCSS penumbra is
+  measured in guest texels, so the coarser texels are blurred away; 0.08 ms less) and the finer screen-space mask. High uses four
   bilinear PCF gathers over 0.6 guest texels. Ultra uses four blocker-search gathers over three guest
   texels and eight filter gathers, with a 0.35-2 guest-texel penumbra. Softness still scales the kernels.
   Receiver-plane correction now includes each of the four texels in a gather, in both blocker search
