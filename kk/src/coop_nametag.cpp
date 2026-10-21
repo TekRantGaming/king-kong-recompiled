@@ -52,6 +52,15 @@ void NormalCamera(const uint8_t* b, uint32_t actor, uint32_t caller) {
   }
   std::lock_guard lock(mutex); normal = next;
 }
+std::optional<float> ViewPitch(const uint8_t* b, uint32_t level) {
+  Normal n;
+  { std::lock_guard lock(mutex); n = normal; }
+  if (!n.time || Now()-n.time > .15 || n.level != level || !PoseAddress(n.actor, 28) ||
+      hfr::Load32(b,n.actor+12) != n.matrix || !PoseAddress(n.matrix,64)) return {};
+  const float x=-hfr::LoadF(b,n.matrix+16), y=-hfr::LoadF(b,n.matrix+20), z=-hfr::LoadF(b,n.matrix+24);
+  if (!std::isfinite(x) || !std::isfinite(y) || !std::isfinite(z)) return {};
+  return std::atan2(z,std::hypot(x,y));
+}
 bool BeginView(const uint8_t* b, uint32_t view, uint32_t caller) {
   if (!REXCVAR_GET(kk_coop_enabled) || caller != 0x8287390C) return false;
   pending.reset(); have_projection = false;

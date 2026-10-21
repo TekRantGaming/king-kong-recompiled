@@ -99,6 +99,7 @@ inline float FontScale(float distance) { return std::clamp(1.f-distance/110.f, .
 // Called only by the existing guest hooks. All reads are synchronous; the UI
 // receives a mutex-protected value copy with no guest addresses.
 void NormalCamera(const uint8_t* base, uint32_t actor, uint32_t caller);
+std::optional<float> ViewPitch(const uint8_t* base, uint32_t level);
 bool BeginView(const uint8_t* base, uint32_t view, uint32_t caller);
 void ProjectionPush(const uint8_t* base, uint32_t matrix);
 void EndView(const uint8_t* base);

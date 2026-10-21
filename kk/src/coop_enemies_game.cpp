@@ -1650,6 +1650,7 @@ const char* EndShot(const uint8_t* b, bool fired) {
   // A confirmed native gun ray is also evidence of firing. Do not require an
   // ammo delta to forward misses or a real shot whose ammo was replenished.
   if (!fired && !s.shot_resolved) return "no-native-shot";
+  PartnerAnimationShot(s.shot.weapon);
   if (!ValidShotIntent(s.shot)) return "invalid-intent";
   if (!SubmitShotIntent(s.shot, s.shot_inventory)) { s.shots.Reject(ShotReject::Queue); return "queue-refused"; }
   return nullptr;
@@ -2384,6 +2385,12 @@ REX_HOOK_RAW(sub_82715AC8) {
   if (observe && ctx.r3.u32) kk::coop::Spawned(base, spawner, source, ctx.r3.u32);
 }
 REX_HOOK_RAW(sub_82696A28) {
+  if (kk::PartnerBodySuppressShot(base)) {
+    // Shot intents already own damage. A proxy may play recoil but must not
+    // spend another player's ammo or enqueue another hit through an event.
+    ctx.r3.u64=0;
+    return;
+  }
   const char* reason = kk::coop::BeginShot(base);
   const bool observe = reason == nullptr;
   const auto game = kk::hfr::Load32(base, 0x82CC97C0);

@@ -42,7 +42,10 @@ bool ValidPose(const PlayerPose& p) {
   return std::isfinite(p.time) && p.time >= 0 && p.time < 1e12 && std::isfinite(p.x) && std::isfinite(p.y) &&
       std::isfinite(p.z) && std::isfinite(p.facing) && std::isfinite(p.speed) &&
       std::abs(p.x) < 1000000 && std::abs(p.y) < 1000000 && std::abs(p.z) < 1000000 &&
-      std::abs(p.speed) < 10000 && std::abs(p.facing) <= 3.1416f;
+      std::abs(p.speed) < 10000 && std::abs(p.facing) <= 3.1416f &&
+      std::isfinite(p.vx) && std::isfinite(p.vy) && std::isfinite(p.pitch) &&
+      std::abs(p.vx) < 1000 && std::abs(p.vy) < 1000 && std::abs(p.pitch) <= 1.571f &&
+      p.weapon <= 4 && p.crouched <= 1 && p.airborne <= 1 && p.fire_weapon <= 4 && (!p.fire || p.fire_weapon);
 }
 bool ReasonValid(RejectReason r) { return r >= RejectReason::Protocol && r <= RejectReason::Handshake; }
 void WriteWorld(Writer& w, const EnemyWorld& v) { w.U(v.level, 4); w.U(v.start, 4); w.U(v.serial, 4); }
@@ -345,6 +348,9 @@ bool Encode(const Message& m, std::vector<uint8_t>& out) {
         payload.U(std::bit_cast<uint32_t>(v), 4);
       payload.U(m.pose.action, 2);
       payload.U(m.pose.item, 1);
+      for (float v : {m.pose.vx, m.pose.vy, m.pose.pitch}) payload.U(std::bit_cast<uint32_t>(v), 4);
+      payload.U(m.pose.weapon, 1); payload.U(m.pose.crouched | (m.pose.airborne<<1), 1);
+      payload.U(m.pose.fire, 4); payload.U(m.pose.fire_weapon, 1);
       break;
     case MessageType::HelloAck: case MessageType::Bye: break;
     case MessageType::EnemySnapshot:
@@ -527,6 +533,13 @@ bool Decode(std::span<const uint8_t> bytes, Message& out) {
       m.pose.speed = std::bit_cast<float>(uint32_t(r.U(4)));
       m.pose.action = uint16_t(r.U(2));
       m.pose.item = uint8_t(r.U(1));
+      m.pose.vx = std::bit_cast<float>(uint32_t(r.U(4)));
+      m.pose.vy = std::bit_cast<float>(uint32_t(r.U(4)));
+      m.pose.pitch = std::bit_cast<float>(uint32_t(r.U(4)));
+      m.pose.weapon = uint8_t(r.U(1));
+      { const auto stance=r.U(1); if (stance>3) return false;
+        m.pose.crouched=uint8_t(stance&1); m.pose.airborne=uint8_t(stance>>1); }
+      m.pose.fire = uint32_t(r.U(4)); m.pose.fire_weapon = uint8_t(r.U(1));
       if (!ValidPose(m.pose)) return false;
       break;
     case MessageType::HelloAck: case MessageType::Bye: break;

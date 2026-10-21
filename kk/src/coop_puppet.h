@@ -2,6 +2,7 @@
 
 // Pure policy shared by the shipping/dev driver and SDK/game-free unit tests.
 #include "coop_session.h"
+#include <algorithm>
 #include <array>
 #include <cstddef>
 #include <cmath>
@@ -19,6 +20,17 @@ uint32_t AnimationLayerHeader(uint32_t layer, Pointer pointer) {
 template<class Pointer>
 uint32_t AnimationEventHeader(uint32_t animation, Pointer pointer) {
   return AnimationLayerHeader(pointer(animation, 132, 8), pointer);
+}
+// 82850100 checks the action's byte item count before indexing 20-byte items.
+template<class Byte, class Pointer>
+uint32_t AnimationItemHeader(uint32_t items, uint32_t item, Byte byte, Pointer pointer) {
+  if (!items || item >= byte(items)) return 0;
+  return pointer(pointer(items,20*item+4,8),0,20);
+}
+template<class Byte, class Pointer>
+uint32_t AnimationItemDescriptor(uint32_t items, uint32_t item, Byte byte, Pointer pointer) {
+  // The layer holds the address of the resource pointer, not its value.
+  return AnimationItemHeader(items,item,byte,pointer) ? items+20*item+4 : 0;
 }
 // Shared resources (AI model/action table) are intentionally absent. Every
 // mutable component of an engine-created body must belong to the new body.
@@ -45,12 +57,10 @@ constexpr float kIdleSpeed = .1f;
 struct Action {
   uint16_t action = 0;
   uint8_t item = 0;
-  float speed = 0;  // Horizontal speed actually observed with this tuple on this rig.
+  float speed = 0;  // Native horizontal speed, normalized to the driver's 60 fps layer rate.
+  float yaw = 0;    // Natural travel heading relative to body forward, for observed gaits.
 };
-inline std::optional<Action> ChooseAction(float speed, std::span<const Action> observed, bool native_copy = false) {
-  // Source gaits do not prove a duplicated rig can switch its item/action bank.
-  // Rigid stand-ins keep their validated tuple while following partner position.
-  if (native_copy) return {};
+inline std::optional<Action> ChooseAction(float speed, std::span<const Action> observed) {
   if (!std::isfinite(speed)) return {};
   speed = std::abs(speed);
   std::optional<Action> best;
@@ -61,6 +71,70 @@ inline std::optional<Action> ChooseAction(float speed, std::span<const Action> o
   }
   return best;
 }
+// H_exec_select_action's NPC branches (826A9B30, 826AA83C, 826A918C).
+// The player-only 40/50 series is deliberately excluded. Callers resolve the
+// loaded rig's action/item resource, including on independent native copies.
+inline uint16_t HumanAction(uint8_t weapon, bool moving, bool crouched, bool firing) {
+  if (crouched) {
+    if (firing && weapon) return weapon >= 3 ? 36 : 26;
+    return moving ? (weapon >= 3 ? 37 : 27) : (weapon >= 3 ? 36 : 26);
+  }
+  // 826A928C selects the stationary armed stance. 14/164/162 and 28/38
+  // belong to the vars+2976 hit-reaction branch, not to gunfire.
+  if (firing && weapon) return weapon >= 3 ? 150 : weapon==2 ? 165 : 11;
+  return moving ? 10 : 0;
+}
+// Use the native armed stance on a confirmed shot, falling back to another
+// loaded gun's aim. Recoil events are separate from the base action selector.
+// Item resolution belongs to the rig; never reuse an item from another bank.
+template<class LoadedItem>
+std::optional<Action> FireAction(uint8_t weapon, bool crouched, LoadedItem loaded) {
+  const uint16_t preferred = HumanAction(weapon ? weapon : 1,false,crouched,true);
+  if (auto item=loaded(preferred)) return Action{preferred,*item,0};
+  for (const uint16_t action : {11,165,150,26,36})
+    if (auto item=loaded(action)) return Action{action,*item,0};
+  return {};
+}
+struct Gait { Action clip; float yaw = 0; bool crouched = false; };
+struct GaitChoice { Action clip; float facing = 0; bool directional = false; };
+inline std::optional<GaitChoice> ChooseGait(float vx, float vy, float view, bool crouched,
+                                          std::span<const Gait> gaits) {
+  const float speed=std::hypot(vx,vy), direction=std::atan2(vy,vx);
+  if (!std::isfinite(speed) || speed<kIdleSpeed || !std::isfinite(view)) return {};
+  std::optional<GaitChoice> best;
+  float score=1000;
+  for (const auto& gait : gaits) {
+    if (gait.crouched!=crouched || !std::isfinite(gait.clip.speed) || gait.clip.speed<kIdleSpeed) continue;
+    const float error=std::abs(std::remainder(direction-view-gait.yaw,6.283185307f));
+    const float rank=error+0.1f*std::abs(std::log(speed/gait.clip.speed));
+    if (rank>=score) continue;
+    score=rank;
+    // Without a matching strafe/back clip, face the travel direction. The root
+    // clip's own heading is subtracted, so its feet still move the correct way.
+    best=GaitChoice{gait.clip,error<.65f ? view : direction-gait.yaw,error<.65f};
+  }
+  return best;
+}
+struct AnimationDrive {
+  float speed = 0, fire_left = 0, land_left = 0;
+  bool moving = false, have_fire = false, new_shot = false, was_airborne = false, have_airborne = false;
+  uint32_t last_fire = 0;
+  void Update(const PlayerPose& p, float dt) {
+    dt = std::clamp(dt,0.f,.1f);
+    const float target = std::min(std::hypot(p.vx,p.vy),20.f);
+    speed += (target-speed)*(1-std::exp(-dt*14.f));
+    moving = speed > (moving ? .08f : .18f);
+    fire_left = std::max(0.f,fire_left-dt); new_shot = false;
+    land_left=std::max(0.f,land_left-dt);
+    if (have_airborne && was_airborne && !p.airborne) land_left=.5f;
+    was_airborne=p.airborne; have_airborne=true;
+    if (have_fire && p.fire != last_fire && uint32_t(p.fire-last_fire) < 0x80000000u) {
+      fire_left = .35f; new_shot = true; last_fire = p.fire;
+    }
+    if (!have_fire) last_fire = p.fire;
+    have_fire = true;
+  }
+};
 struct Point { float x = 0, y = 0, z = 0; };
 struct Step { Point target; bool teleport = false; };
 inline std::optional<Step> ClampStep(Point from, Point target) {

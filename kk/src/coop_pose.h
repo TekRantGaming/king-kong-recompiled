@@ -10,6 +10,25 @@ struct PoseRead {
   std::optional<PlayerPose> pose;
   const char* failure = "not-published";  // Static labels only, safe to copy between threads.
 };
+struct PoseVelocity {
+  std::optional<PlayerPose> anchor;
+  float vx = 0, vy = 0;
+  void Clear() { anchor.reset(); vx=vy=0; }
+  void Apply(PlayerPose& p) {
+    const double dt=anchor ? p.time-anchor->time : 0;
+    if (!anchor || anchor->level!=p.level || dt<0 || dt>.25) {
+      anchor=p; vx=vy=0;
+    } else if (dt>=.05) {
+      const float dx=p.x-anchor->x, dy=p.y-anchor->y;
+      vx=dx/float(dt); vy=dy/float(dt);
+      if (std::hypot(dx,dy)>5 || std::hypot(vx,vy)>30) vx=vy=0;
+      anchor=p;
+    }
+    // Repeated render/input callbacks can be much closer than a physics step.
+    // Hold the last 50 ms estimate instead of amplifying a single position update.
+    p.vx=vx; p.vy=vy;
+  }
+};
 inline bool PoseAddress(uint32_t a, uint32_t size = 4) {
   return a >= 0x40000000 && a <= 0xA0000000 - size && (a & 3) == 0;
 }
@@ -17,7 +36,7 @@ inline bool PoseAddress(uint32_t a, uint32_t size = 4) {
 template <class U32, class U16, class F32>
 PoseRead ReadJackPose(U32 load32, U16 load16, F32 loadf, double now) {
   const uint32_t g = load32(0x82CC97C0);
-  if (!PoseAddress(g, 0x1C)) return {{}, "globals-span"};
+  if (!PoseAddress(g, 13132)) return {{}, "globals-span"};
   // 0x828E3B48 is the load-page mode, retained after --kk_start, not a busy flag.
   // The universe request and loading-screen thread describe an actual load.
   if (load32(g + 4) != 0) return {{}, "level-request"};
@@ -45,6 +64,17 @@ PoseRead ReadJackPose(U32 load32, U16 load16, F32 loadf, double now) {
   const float fx = -loadf(matrix + 16), fy = -loadf(matrix + 20);
   if (!std::isfinite(fx) || !std::isfinite(fy) || std::hypot(fx, fy) < .1f) return {{}, "facing"};
   p.facing = std::atan2(fy, fx); p.speed = loadf(vars + 11668);
+  const uint32_t weapon = load32(g + 13128);
+  p.weapon = weapon <= 4 ? uint8_t(weapon) : 0;
+  p.crouched = load32(vars + 2912) != 0;
+  // H's contact update retains last-ground-Z minus current-Z at +13268
+  // (826A159C), and clears it on a floor contact (826A1214). Its NPC airborne
+  // clip uses the one-unit threshold (826A80B4). The contact list itself is
+  // transient between physics passes, so absence from it is not an air state.
+  if (PoseAddress(vars,13272)) {
+    const float height=loadf(vars+13268);
+    p.airborne=std::isfinite(height) && std::abs(height)>1.f && std::abs(height)<10000.f;
+  }
   const uint32_t animation_base = load32(actor + 20);
   if (PoseAddress(animation_base)) {
     const uint32_t animation = load32(animation_base);
