@@ -227,7 +227,11 @@ int main() {
   Equals("native_ao_samples", "3");
   Equals("native_ao_quality", "auto");
   Equals("kk_frame_rate", "30");
+#if defined(_WIN32)
+  Equals("native_backend", "d3d12");  // task 350a: DirectX 12 is the default on Windows
+#else
   Equals("native_backend", "auto");
+#endif
   Equals("native_upscaler", "dlss");
   Equals("native_gi", "high");
   Equals("native_gi_distance", "far");
@@ -525,7 +529,7 @@ int main() {
     rex::cvar::LoadConfig(config);
     MigrateSettings(config);
     Equals("native_gi", p.gi);
-    Equals("kk_settings_version", "3");
+    Equals("kk_settings_version", "4");
     Equals("kk_render_quality", p.quality);
     Equals("native_shadow_quality", "high");
     Check(!std::filesystem::exists(config.string() + ".bak"), "valid version 2 is not mistaken for unread settings");
@@ -581,7 +585,7 @@ int main() {
   Equals("present_effect", "bilinear");
   Equals("kk_render_quality", "native");
   Equals("kk_frame_rate", "144");
-  Equals("kk_settings_version", "3");
+  Equals("kk_settings_version", "4");
   // A failed config load still must not overwrite the player's settings.
   rex::cvar::ResetAllToDefaults();
   const std::string unread = "kk_settings_version = 2\ninvalid settings\n";
@@ -593,7 +597,7 @@ int main() {
   rex::cvar::ResetAllToDefaults();
   ApplyPortDefaults();
   MigrateSettings(dir / "new-install.toml");
-  Equals("kk_settings_version", "3");
+  Equals("kk_settings_version", "4");
   InitializeHardwareRecommendation(dir / "new-install.toml", 1920, 1080);
   Equals("native_gi", "high");
   Check(!std::filesystem::exists(dir / "new-install.toml"), "migration does not create a new-install config early");
@@ -627,6 +631,70 @@ int main() {
   ApplyRenderPreset(2560, 1080);
   Equals("native_display_aspect", "2560x1080");
   Check(std::abs(UltrawideFactor() - float(2560.0 / 1080.0 / (16.0 / 9.0))) < 1e-5f, "auto at 2560x1080: factor 1.333");
+  // Task 350a: DirectX 12 is the default graphics API on Windows; a settings file from before Beta 14 (version 3 or
+  // older) moves to it once, before the renderer starts; the player's later choice stays. Linux keeps Vulkan.
+  {
+    auto load = [&](const std::string& text) {
+      std::ofstream(config) << text;
+      rex::cvar::ResetAllToDefaults();
+      ApplyPortDefaults();
+      rex::cvar::LoadConfig(config);
+    };
+    auto file_text = [&] {
+      std::ifstream in(config);
+      return std::string((std::istreambuf_iterator<char>(in)), {});
+    };
+#if defined(_WIN32)
+    for (const char* old : {"vulkan", "auto"}) {
+      for (const char* version : {"2", "3"}) {
+        load(std::string("kk_settings_version = ") + version + "\nnative_backend = \"" + old + "\"\n");
+        Equals("native_backend", old);
+        Check(MigrateGraphicsApi(), "a file from before Beta 14 moves to DirectX 12");
+        Equals("native_backend", "d3d12");
+        MigrateSettings(config);
+        Equals("kk_settings_version", "4");
+        Equals("native_backend", "d3d12");
+        Check(file_text().find("native_backend") == std::string::npos, "DirectX 12 is the default: not written");
+        Check(file_text().find("kk_settings_version = 4") != std::string::npos, "the migration is recorded");
+      }
+      // The next start: the player picks Vulkan by hand, and it stays.
+      rex::cvar::SetFlagByName("native_backend", "vulkan");
+      Check(SaveSettings(config), "save a Vulkan choice made after the update");
+      load(file_text());
+      Check(!MigrateGraphicsApi(), "once only");
+      MigrateSettings(config);
+      Equals("native_backend", "vulkan");
+    }
+    load("kk_settings_version = 3\nnative_backend = \"d3d12\"\n");
+    Check(!MigrateGraphicsApi(), "already DirectX 12: nothing to do");
+    Equals("native_backend", "d3d12");
+    load("kk_settings_version = 3\n");
+    Check(rex::cvar::SetFlagFromCommandLine("native_backend", "vulkan"), "command-line API");
+    Check(!MigrateGraphicsApi(), "a command-line API is this run's own");
+    Equals("native_backend", "vulkan");
+    rex::cvar::ResetAllToDefaults();
+    ApplyPortDefaults();
+    Check(!MigrateGraphicsApi(), "a new install is on DirectX 12 already");
+    Equals("native_backend", "d3d12");
+#else
+    load("kk_settings_version = 3\nnative_backend = \"vulkan\"\n");
+    Check(!MigrateGraphicsApi(), "Linux keeps Vulkan");
+    Equals("native_backend", "vulkan");
+    rex::cvar::ResetAllToDefaults();
+    ApplyPortDefaults();
+    Equals("native_backend", "auto");
+#endif
+  }
+  // Task 350a: the setup again gives an existing install a new install's recommendation (the first-setup policy),
+  // whatever tier it had.
+  rex::cvar::ResetAllToDefaults();
+  ApplyPortDefaults();
+  rex::cvar::SetFlagByName("kk_hardware_tier", "high");
+  fake = {{GpuVendor::kNvidia, "NVIDIA GeForce RTX 4050 Laptop GPU", 8 * GiB}, 12, 32 * GiB};
+  ApplyFirstSetupHardwareRecommendation(1920, 1080);
+  Equals("kk_hardware_tier", "low");
+  Equals("native_upscaler_quality", "performance");
+  Equals("native_gi", "low");
   rex::cvar::ResetAllToDefaults();
   std::cout << "PASS: " << checks << " hardware/settings checks; evidence " << dir.string() << '\n';
 }

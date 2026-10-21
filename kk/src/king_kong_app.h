@@ -383,6 +383,9 @@ class KingKongApp : public rex::ReXApp {
   void OnPreSetup(rex::RuntimeConfig& config) override {
     // SetupPresentation precedes OnFinalizePaths in the SDK. Arm before either provider or game GPU setup.
     user_data_root_ = user_data_root();
+    // Task 350a: DirectX 12 on Windows for a settings file from before Beta 14, once: before the renderer reads
+    // native_backend, and before startup recovery puts a fallback (Vulkan when DirectX 12 cannot start) over it.
+    kk::MigrateGraphicsApi();
     kk::startup::Configure(user_data_root_);
     kk::ApplyVSyncSettings();
     {  // before the runtime reads the shader cache: drop records a finished-early write damaged

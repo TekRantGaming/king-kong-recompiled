@@ -163,6 +163,14 @@ void InitializeHardwareRecommendation(const std::filesystem::path& config_path, 
 // Recommended refreshes defaults only; explicit player settings always win.
 // first_setup selects the task 338 policy only while assigning a new install's tier.
 void ApplyHardwareRecommendation(bool detect, int width, int height, bool first_setup = false);
+// Task 350a: the recommendation a new install gets (its tier detected with the first-setup policy), for an existing
+// install going through the first-time setup again (setup_again.h) after its settings went back to the defaults.
+void ApplyFirstSetupHardwareRecommendation(int width, int height);
+// Task 350a (owner, 21 Oct): DirectX 12 is the default graphics API on Windows, for existing installs too. Once, for
+// a settings file from before Beta 14 (kk_settings_version under 4), native_backend becomes d3d12; the player's
+// later choices stay. Call after the settings file is read and before the renderer starts (it reads native_backend
+// only then), before startup recovery applies a fallback. Nothing on Linux (Vulkan). True if it changed the API.
+bool MigrateGraphicsApi();
 
 // The default upscaler (Beta 3, docs/upscalers.md "The default"): with the native renderer, the best
 // temporal upscaler this PC runs (native_upscaler): DLSS on an NVIDIA card that supports it, FSR 4 on
@@ -182,7 +190,8 @@ void ApplyUpscalerDefaults();
 // The launcher's answer: "none" or the upscalers offered ("dlss,fsr3,xess"). Applies the defaults.
 void SetOfferedUpscalers(const std::string& offered);
 // Once the settings file is read: brings one from an older version up to date
-// (preserving explicit choices; version 3 enables GI for old presets) and saves
+// (preserving explicit choices; version 3 enables GI for old presets; version 4 is
+// DirectX 12 on Windows, MigrateGraphicsApi, done before the renderer starts) and saves
 // it; a new install just gets the current defaults.
 void MigrateSettings(const std::filesystem::path& config_path);
 // Beta 9: an old Show FPS (kk_show_fps = true) becomes Performance metrics "fps" (run after the settings load).

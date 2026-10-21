@@ -128,9 +128,9 @@ inline constexpr Help kHelp[] = {
       {"Custom", "Your own mix of the settings below."}}},
     {"Recommended", C::kUnset, C::kUnset, A::kNone, nullptr, {}},
     {"Graphics API", C::kVaries, C::kUnset, A::kAuto, nullptr,
-     {{"Auto", "Uses Vulkan."},
-      {"Vulkan", "Works on every graphics card the game supports."},
-      {"DirectX 12", "Needed for AMD FSR 4. Try it if Vulkan gives you problems."}}},
+     {{"Auto", "Uses Vulkan."},  // Linux only; task 350a: Windows offers DirectX 12 (recommended) and Vulkan
+      {"DirectX 12", "Recommended on Windows, and needed for AMD FSR 4. If it cannot start, the game uses Vulkan."},
+      {"Vulkan", "Works on every graphics card the game supports."}}},
     {"Upscaler", C::kLow, C::kLow, A::kAuto,
      "DLSS, FSR 4, FSR 3.1 and XeSS rebuild detail from several frames and smooth edges too. Only those your "
      "graphics card runs are listed.",

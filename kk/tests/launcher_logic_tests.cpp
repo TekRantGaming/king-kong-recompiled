@@ -17,6 +17,7 @@
 #include "cheats.h"
 #include "startup_recovery_state.h"
 #include "amd_shader_cache.h"
+#include "setup_again.h"
 
 #include <bit>
 #include <cstdio>
@@ -690,6 +691,51 @@ void WorkshopChecks() {
 
 // Task 228: the launcher's start marker (startup_recovery_state.h) and emptying the AMD driver
 // shader caches (amd_shader_cache.h), in a made-up local app data folder.
+// Task 350a: DirectX 12 first on Windows, Vulkan when it cannot start; everyone through the setup once more.
+void SetupAgainChecks() {
+  namespace sa = kk::setup_again;
+  Check(sa::kRound >= 1, "Beta 14's round is 1 or later");
+  Check(sa::Due(true, 0, false), "an existing install that has not had the round goes through the setup again");
+  Check(!sa::Due(true, sa::kRound, false), "once had, never again (the player's later choices stay)");
+  Check(!sa::Due(false, 0, false), "a fresh install has its own first-time setup instead");
+  Check(!sa::Due(true, 0, true), "automated test runs keep their settings");
+  // What the setup's pages show goes back to the defaults ...
+  for (const char* name : {"native_backend", "kk_graphics_preset", "kk_original_look", "native_gi", "native_upscaler",
+                           "kk_render_quality", "native_shadow_quality", "native_water_reflections",
+                           "native_volumetrics", "ao_mode", "kk_frame_rate", "fullscreen", "kk_fullscreen_mode",
+                           "kk_hdr", "kk_fov", "kk_motion_blur", "kk_camera_shake", "kk_button_prompts",
+                           "kk_pad_prompts", "mnk_mode", "kk_camera_sensitivity", "kk_map_a", "kk_deadzone"})
+    Check(sa::Resets(name, "KK"), name);
+  Check(sa::Resets("keybind_a", "Input/Keybinds/Controller"), "the keyboard bindings go back too");
+  // ... and the rest stays: installed downloads, the game files, audio, gameplay, cheats, setup records.
+  for (const char* name : {"native_texture_pack", "native_texture_pack_folder", "kk_texture_pack_own_folder",
+                           "kk_ps2_cutscenes", "kk_ps2_movie_folder", "game_data_root", "kk_upscalers_offered",
+                           "kk_launcher_music", "kk_launcher_music_volume", "kk_skip_intros", "user_language",
+                           "kk_cheats", "kk_cheat_infinite_ammo", "kk_achievement_toasts", "kk_performance_metrics",
+                           "kk_setup_version", "kk_setup_again", "kk_settings_version", "kk_shaders_prepared",
+                           "kk_last_version", "kk_update_channel", "kk_mods", "gpu_plugin", "kk_renderer"})
+    Check(!sa::Resets(name, "KK"), name);
+
+  // Startup recovery with DirectX 12 preferred: a DirectX 12 that cannot start switches to Vulkan (Windows), and
+  // Vulkan failing too ends the chain; on Linux DirectX 12 is never a renderer.
+  const fs::path dir = fs::temp_directory_path() /
+      ("kk-recovery-d3d12-" + std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()));
+  kk::startup::RecoveryState state(dir);
+  state.preferred = state.selected = "d3d12";
+#if defined(__linux__)
+  Check(!state.Advance("could not start"), "Linux: DirectX 12 is not a native API");
+#else
+  Check(state.Advance("could not start"), "a DirectX 12 failure is recorded");
+  Check(state.selected == "vulkan", "DirectX 12 could not start: Vulkan");
+  Check(state.reason.find("DirectX 12") == 0 && state.reason.find("Using Vulkan") != std::string::npos,
+        "the notice names both APIs");
+  kk::startup::RecoveryState loaded(dir);
+  Check(loaded.Load() && loaded.preferred == "d3d12" && loaded.selected == "vulkan", "the fallback is kept");
+  Check(state.Advance("could not start"), "Vulkan failing as well is recorded");
+  Check(state.selected == "failed", "both failed: the chain ends");
+#endif
+}
+
 void LauncherGuardChecks() {
   using kk::startup::LauncherGuard;
   const fs::path dir = fs::temp_directory_path() /
@@ -903,6 +949,7 @@ int main() {
   ExtrasChecks();
   ShaderProgressChecks();
   ShaderPreparedChecks();
+  SetupAgainChecks();
   SettingsLayoutChecks();
   WhatsNewChecks();
   AllSavesChecks();

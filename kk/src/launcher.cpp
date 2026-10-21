@@ -19,6 +19,7 @@
 #include "loading_loop.h"
 #include "startup_movies.h"
 #include "startup_movies_logic.h"
+#include "setup_again.h"
 #include "notify_logic.h"
 #include "system_notify.h"
 #include "ps2_movies.h"
@@ -2090,20 +2091,29 @@ class SettingsPages {
       Item api;
       api.type = ItemType::kChoice;
       api.label = "Graphics API";
+      const std::string backend = Get("native_backend");
 #if defined(__linux__)
       api.description = "How the renderer talks to your graphics card.";
       api.options = {"Auto", "Vulkan"};
-#else
-      api.description = "How the renderer talks to your graphics card.";
-      api.options = {"Auto", "Vulkan", "DirectX 12"};
-#endif
-      const std::string backend = Get("native_backend");
-      api.index = backend == "auto" ? 0 : backend == "vulkan" ? 1 : backend == "d3d12" ? 2 : -1;
-      api.value_text = backend;
+      api.index = backend == "auto" ? 0 : backend == "vulkan" ? 1 : -1;
       api.default_text = "Auto";
+#else
+      // Task 350a (owner, 21 Oct): DirectX 12 is the recommended API and the default on Windows; Vulkan is the
+      // other choice and the fallback when DirectX 12 cannot start. "auto" (the renderer's own, Vulkan) is not
+      // offered any more: a value of it from the command line shows as Vulkan, which it runs.
+      api.description = "How the renderer talks to your graphics card.";
+      api.options = {"DirectX 12 (recommended)", "Vulkan"};
+      api.index = backend == "d3d12" ? 0 : backend == "vulkan" || backend == "auto" ? 1 : -1;
+      api.default_text = "DirectX 12 (recommended)";
+#endif
+      api.value_text = backend;
       api.on_choice = [](int i) {
         startup::ManualChoice();  // the player's choice wins over a startup fallback
-        Set("native_backend", i == 0 ? "auto" : i == 1 ? "vulkan" : "d3d12");
+#if defined(__linux__)
+        Set("native_backend", i == 0 ? "auto" : "vulkan");
+#else
+        Set("native_backend", i == 0 ? "d3d12" : "vulkan");
+#endif
         ApplyUpscalerDefaults();
       };
       api.on_default = [] {
@@ -2679,6 +2689,12 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
     LoadArt();
     // Installed before the launcher took its art from the game files: take it now.
     if (files_ok_ && !art::HasLauncherArt(ArtDir())) StartArtExtraction(false);
+    {
+      // An install that has run before (a settings file, or a version remembered): not a fresh one. Decided now,
+      // before this start writes the settings file and kk_last_version (task 350a, StartFullSetup).
+      std::error_code config_ec;
+      existing_install_ = !Get("kk_last_version").empty() || std::filesystem::exists(paths_.config_path, config_ec);
+    }
     // The native renderer's shaders (native_shaders.h): checked each time the launcher opens, built
     // in the background from the game files when missing or stale, and built again in full after
     // every update (a version this launcher hasn't run: an update, a beta, a channel switch), shown by
@@ -2710,7 +2726,21 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
       }
       // ... then the texture pack and PS2 cutscene pages, the graphics pages and the rest, as after an install.
       if (first_start) StartFullSetup(false);  // saved below with kk_last_version
-      if (updated && NativeShaderPack::Wanted()) {
+      // Task 350a (owner, 21 Oct): updating to Beta 14 takes every existing player through the first-time setup once
+      // more, from the new defaults (setup_again.h); the game files page is skipped (they are here). The shaders this
+      // update prepares (both packs: the DirectX 12 one too) show as the setup's shader step, not the after-update
+      // screen, and Skip all lets them carry on in the background as in a first setup.
+      const bool again = !first_start && setup_again::Due(existing_install_, GetInt("kk_setup_again"),
+                                                         std::getenv("KK_AUTOPLAY") != nullptr);
+      if (again) {
+        if (NativeShaderPack::Wanted() && native_pack_.Busy()) setup_shaders_ = true;
+        REXLOG_INFO("KK: setup again (round {}, kk_setup_again {}): the first-time setup from the new defaults{}",
+                    setup_again::kRound, GetInt("kk_setup_again"),
+                    setup_shaders_ ? ", the shaders as its first step" : ", shaders already prepared");
+        StartFullSetup(false);  // saved below with kk_last_version (or at once: SaveSettings after it)
+        SaveSettings(paths_.config_path);
+      }
+      if (updated && NativeShaderPack::Wanted() && !again) {
         update_shaders_ = true;
         REXLOG_INFO("KK: first start of v{} (last v{}): the native renderer's shaders are built again", KK_VERSION,
                     Get("kk_last_version"));
@@ -4813,8 +4843,21 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
   // preset, and the global illumination of that preset), 60 FPS and Strong GTAO, set now so a setup left half
   // way still plays Remastered. A player who had the setup on an older build (a reinstall, kk_setup_version
   // 'waiting' or a version) keeps the settings they chose. The setup also stands in for the New screen.
+  // Task 350a: an existing install that has not had this round of the setup again (setup_again.h) starts it from the
+  // new defaults too: its Display, Graphics and Controls settings and button prompts back to their defaults first
+  // (ResetForSetupAgain), then Remastered as for a new install. Once started the round counts as had (as a new
+  // install's setup does): closing the launcher half way does not reset the settings again.
   void StartFullSetup(bool save = true) {
-    if (Get("kk_setup_version").empty()) {
+    if (setup_again::Due(existing_install_, GetInt("kk_setup_again"), std::getenv("KK_AUTOPLAY") != nullptr)) {
+      ResetForSetupAgain();
+      ApplyRemastered(true);
+      REXLOG_INFO("KK: setup again: new defaults (native_backend={} kk_frame_rate={} native_gi={} tier {} preset '{}' "
+                  "render {} upscaler {} / {})",
+                  FindFlag("native_backend") ? Get("native_backend") : std::string("-"), Get("kk_frame_rate"),
+                  FindFlag("native_gi") ? Get("native_gi") : std::string("-"), Get("kk_hardware_tier"),
+                  Get("kk_graphics_preset"), Get("kk_render_quality"),
+                  FindFlag("native_upscaler") ? Get("native_upscaler") : std::string("-"), Get("present_effect"));
+    } else if (Get("kk_setup_version").empty()) {
       ApplyRemastered(true);
       REXLOG_INFO("KK: setup: new install: Remastered defaults (kk_frame_rate={} ao_strength={} native_gi={} tier {})",
                   Get("kk_frame_rate"), Get("ao_strength"), FindFlag("native_gi") ? Get("native_gi") : std::string("-"),
@@ -4824,10 +4867,33 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
                   Get("kk_setup_version"));
     }
     Set("kk_setup_version", KK_VERSION);
+    SetInt("kk_setup_again", setup_again::kRound);  // a new install's setup counts as this round too
     update_new_ = false;
     gfx_from_new_ = false;
     if (save) SaveSettings(paths_.config_path);  // the constructor saves later (a saved file now would look like an update)
     AskContentInSetup();
+  }
+
+  // Task 350a: the settings the setup's pages show, back to their defaults (setup_again::Resets), and the hardware
+  // recommendation a new install gets. Saves, the game files, the texture pack and the PS2 cutscenes, Audio,
+  // Gameplay, Cheats and Advanced stay. A startup fallback in force (DirectX 12 could not start here) keeps its API.
+  void ResetForSetupAgain() {
+    const bool fallback = !startup::Message().empty();
+    std::string changed;
+    for (auto& e : rex::cvar::GetRegistry()) {
+      if (e.type == rex::cvar::FlagType::Command || !setup_again::Resets(e.name, e.category)) continue;
+      if (e.source == rex::cvar::Source::kCommandLine || e.source == rex::cvar::Source::kEnvironment) continue;
+      if (fallback && e.name == "native_backend") continue;
+      if (e.getter() != e.default_value) changed += (changed.empty() ? "" : " ") + e.name + "=" + e.getter();
+      rex::cvar::ResetToDefault(e.name);
+    }
+    REXLOG_INFO("KK: setup again: back to the defaults from: {}{}", changed.empty() ? "(all at their defaults)" : changed,
+                fallback ? "; the graphics API kept (a startup fallback is in force)" : "");
+    const auto output = PrimaryScreenSize();
+    ApplyFirstSetupHardwareRecommendation(output.first, output.second);
+    ++g_changes;
+    ApplyRendererChoice();
+    if (cb_.set_fullscreen) cb_.set_fullscreen(GetBool("fullscreen"));
   }
 
   // The first-time setup's content steps (setup-flow.md 3 and 4): the cutscene page only where the PS2
@@ -8471,6 +8537,7 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
   int pack_installed_ = -1;        // -1: not read yet
   bool waiting_for_pack_ = false;  // Play was pressed during the download
   NativeShaderPack native_pack_;      // the native renderer's shaders (native_shaders.h)
+  bool existing_install_ = false;     // task 350a: run before this start (StartFullSetup, setup_again.h)
   bool setup_shaders_ = false;        // being prepared as the install's last step
   bool update_shaders_ = false;       // built again in full after an update (DrawShaderScreen)
   bool rebuild_shaders_screen_ = false;  // Graphics > Rebuild shaders: the shader screen until it's done

@@ -310,10 +310,31 @@
     if (page == 0) {
       if (!NativeRendererAvailable() || !UsingNativeRenderer() || !FindFlag("native_backend")) return cards;
       const std::string backend = Get("native_backend");
+#if !defined(__linux__)
+      // Task 350a (owner, 21 Oct): DirectX 12 is the recommended API on Windows, Vulkan the other choice and the
+      // fallback when DirectX 12 cannot start.
+      GfxCard dx;
+      dx.label = "DirectX 12";
+      dx.caption = "Recommended";
+      dx.text = "The recommended graphics API on Windows. If it cannot start, the game uses Vulkan.";
+      dx.selected = backend == "d3d12";
+      dx.pick = [] {
+        if (Get("native_backend") == "d3d12") return;
+        startup::ManualChoice();
+        Set("native_backend", "d3d12");
+        ApplyUpscalerDefaults();
+      };
+      cards.push_back(std::move(dx));
+#endif
       GfxCard vk;
       vk.label = "Vulkan";
+#if defined(__linux__)
       vk.caption = "Recommended";
       vk.text = "The recommended graphics API. It works on every graphics card the game supports.";
+#else
+      vk.caption = "If DirectX 12 has problems";
+      vk.text = "Works on every graphics card the game supports. Try it if DirectX 12 gives you problems.";
+#endif
       vk.selected = backend == "auto" || backend == "vulkan";
       vk.pick = [] {
         if (Get("native_backend") != "d3d12") return;  // Auto is Vulkan
@@ -322,19 +343,6 @@
         ApplyUpscalerDefaults();
       };
       cards.push_back(std::move(vk));
-#if !defined(__linux__)
-      GfxCard dx;
-      dx.label = "DirectX 12";
-      dx.caption = "Needed for AMD FSR 4";
-      dx.text = "Also works well, and AMD FSR 4 needs it.";
-      dx.selected = backend == "d3d12";
-      dx.pick = [] {
-        startup::ManualChoice();
-        Set("native_backend", "d3d12");
-        ApplyUpscalerDefaults();
-      };
-      cards.push_back(std::move(dx));
-#endif
       return cards;
     }
     if (page != 1 || !HasTemporalSetting() || !UsingNativeRenderer() || GetBool("kk_original_look")) return cards;
