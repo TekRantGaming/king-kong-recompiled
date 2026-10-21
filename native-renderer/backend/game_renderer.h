@@ -743,12 +743,6 @@ class GameRenderer {
   uint64_t chapter_texture_attempts_ = 0, chapter_texture_matches_ = 0, chapter_texture_stale_ = 0;
   uint64_t chapter_texture_idle_ = 0;
   uint32_t chapter_texture_screen_ = 0, chapter_texture_state_ = 0;
-  uint32_t chapter_scan_cursor_ = 0x40000000;
-  bool chapter_scan_low_ = false;
-  uint64_t chapter_scan_jobs_ = 0, chapter_scan_headers_ = 0;
-  std::chrono::steady_clock::time_point chapter_scan_quiet_{};
-  bool chapter_scan_ready_ = false;
-  std::atomic<bool> chapter_discover_allowed_{false};
   nvrhi::CommandListHandle chapter_texture_list_;
   nvrhi::EventQueryHandle chapter_texture_query_;
   bool chapter_texture_submitted_ = false;

@@ -40,30 +40,6 @@ int main() {
   for (size_t i = 0; i < live.size(); ++i) live[i] = uint8_t(i * 17 + i / 257);
   kknr::GuestMemory memory{live.data(), live.size(), 0};
   nr::ChapterTexturePrepare worker;
-  for (bool cancel : {false, true}) {
-    std::vector<uint8_t> headers(65536);
-    nr::StoreBE32(headers.data() + 0x120, 0x01030000);  // archive headers need not own a reference yet
-    for (unsigned i = 0; i < 6; ++i) nr::StoreBE32(headers.data() + 0x130 + 4 * i, relocated.words[i]);
-    auto job = std::make_unique<nr::ChapterTexturePrepare::Job>();
-    job->scan = true;
-    job->scan_begin = 0x40000000;
-    job->scan_end = 0x40010000;
-    job->layouts = {nr::ChapterTextureLayout(fetch)};
-    job->copy = [&](uint32_t at, void* out, uint32_t n) {
-      if (uint64_t(at) + n > 0x40010000 || at < 0x40000000) return false;
-      std::memcpy(out, headers.data() + at - 0x40000000, n);
-      return true;
-    };
-    job->cancelled = [cancel] { return cancel; };
-    worker.Start(std::move(job));
-    std::unique_ptr<nr::ChapterTexturePrepare::Job> done;
-    const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(5);
-    while (!(done = worker.Take()) && std::chrono::steady_clock::now() < deadline)
-      std::this_thread::sleep_for(std::chrono::milliseconds(1));
-    check(bool(done), "discovery completes");
-    check(done->discovered.size() == (cancel ? 0u : 1u), "discovery obeys layout and cancellation");
-    if (!cancel) check(done->discovered[0] == 0x40000120, "relocated live header discovered");
-  }
   for (bool match : {true, false}) {
     auto job = std::make_unique<nr::ChapterTexturePrepare::Job>();
     job->fetch = relocated;

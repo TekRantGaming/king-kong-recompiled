@@ -5,9 +5,7 @@
 #include <condition_variable>
 #include <mutex>
 #include <thread>
-#include <unordered_set>
 #include "backend/thread_scheduling.h"
-#include "backend/guest_memory.h"
 #include "kknr/resident_snapshot.h"
 
 namespace nr {
@@ -69,12 +67,7 @@ class ChapterTexturePrepare {
     uint64_t generation = 0, hash = 0;
     uint64_t allocation_bytes = 0;
     bool matched = false, converted = false;
-    bool scan = false;
-    uint32_t scan_begin = 0, scan_end = 0;
-    std::function<bool(uint32_t, void*, uint32_t)> copy;
-    std::function<bool()> cancelled;
-    std::vector<kknr::TextureKey> layouts;
-    std::vector<uint32_t> discovered;
+
   };
   ChapterTexturePrepare() : thread_([this] { Run(); }) {}
   ~ChapterTexturePrepare() {
@@ -105,50 +98,16 @@ class ChapterTexturePrepare {
       busy_ = true;
       lock.unlock();
       try {
-        if (job->scan) {
-          Discover(*job);
-        } else {
         job->hash = job->snapshot.Hash();
         job->matched = std::find(job->expected.begin(), job->expected.end(), job->hash) != job->expected.end();
         if (job->matched)
           job->converted = kknr::ConvertTexture(job->snapshot.Relocate(job->fetch), job->snapshot.memory,
                                                job->data, nullptr, job->options);
         if (job->data.bytes.size() > kMaxBytes) { job->data = {}; job->converted = false; }
-        }
       } catch (...) { job->converted = false; }
       lock.lock();
       ready_ = std::move(job);
       busy_ = false;
-    }
-  }
-  static void Discover(Job& job) {
-    std::unordered_set<uint32_t> first_words;
-    for (const auto& key : job.layouts) first_words.insert(key.words[0]);
-    std::vector<uint8_t> bytes(65536);
-    auto inspect = [&](uint32_t address, uint32_t size) {
-      for (uint32_t at = 0; at + 40 <= size; at += 4) {
-        const auto* p = bytes.data() + at;
-        const uint32_t common = LoadBE32(p);
-        if (((common >> 16) & 7) != 3) continue;
-        const uint32_t word0 = LoadBE32(p + 16) & ~(0x1FFu << 10);
-        if (!first_words.contains(word0)) continue;
-        const auto fetch = kknr::TextureFetch::FromGuest(p + 16);
-        if (fetch.Type() != 2) continue;
-        const auto layout = ChapterTextureLayout(fetch);
-        if (std::find(job.layouts.begin(), job.layouts.end(), layout) == job.layouts.end()) continue;
-        if (job.discovered.size() < 1024) job.discovered.push_back(address + at);
-      }
-    };
-    for (uint32_t address = job.scan_begin; address < job.scan_end;) {
-      if (job.cancelled && job.cancelled()) return;
-      const uint32_t size = std::min(65536u, job.scan_end - address);
-      if (job.copy(address, bytes.data(), size)) inspect(address, size);
-      else for (uint32_t page = 0; page < size; page += 4096) {
-        if (job.cancelled && job.cancelled()) return;
-        const uint32_t n = std::min(4096u, size - page);
-        if (job.copy(address + page, bytes.data(), n)) inspect(address + page, n);
-      }
-      address += size;
     }
   }
   std::mutex mutex_;
