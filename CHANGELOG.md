@@ -13,6 +13,7 @@ version's notes the first time you start it.
 - **A rare crash at the start on some NVIDIA graphics cards**: the launcher now checks which upscalers your PC offers before it opens its window, and remembers the answer until your graphics card, driver or the game changes. The first start after such a change opens a second or two later.
 
 ### Changed
+- **Smoother chapter starts after the PS2 cutscenes**: while a story cutscene plays, the game now prepares most of the next chapter's textures, so far fewer have to load in the first minute of play.
 - **Lighter defaults on weak hardware**: the first setup picks a lighter preset for handhelds, integrated graphics, entry gaming laptops and PCs with little video memory. Existing players keep their settings.
 - **Medium preset**: uses the original shadows, which saves a lot of graphics time on mid-range PCs. High and Ultra are unchanged.
 - **More graphics prepared ahead of time**: the shipped list now has 16,285 graphics pipelines (1,588 more), from players who share them with Online players on, so fewer things hitch the first time you see them.
