@@ -136,7 +136,7 @@ int main() {
     {GpuVendor::kAmd, "AMD Custom GPU 0405", 16, 8, 32, true, 0},
     {GpuVendor::kAmd, "AMD Custom GPU 0932", 16, 8, 32, true, 0},
     {GpuVendor::kNvidia, "RTX 3060", 6, 8, 32, false, 0},
-    {GpuVendor::kNvidia, "RTX 3060", 12, 6, 32, false, 0},
+    {GpuVendor::kNvidia, "RTX 3060", 12, 6, 32, false, 2},  // 6 cores and a strong GPU: not Low
     {GpuVendor::kNvidia, "RTX 4070 Ti", 12, 8, 32, false, 2},
     {GpuVendor::kIntel, "Intel Arc A770", 16, 8, 32, false, 2},
     {GpuVendor::kIntel, "Intel Arc B580", 12, 8, 32, false, 2},
