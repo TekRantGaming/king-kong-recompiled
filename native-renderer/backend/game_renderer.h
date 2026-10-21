@@ -1415,6 +1415,9 @@ class GameRenderer {
   // they changed (and once per command list).
   std::array<float, 1024> last_vs_ = {}, last_ps_ = {};
   std::array<uint8_t, 4096> last_vs_raw_ = {}, last_ps_raw_ = {};  // the guest bytes of those
+  // Counts the changes of last_vs_raw_ (task 351: the motion recording's camera register search is done
+  // again only when the vertex constants changed since the draw it was last done for).
+  uint64_t vs_constants_generation_ = 0;
   kkshaders::DrawConstants last_draw_ = {};
   bool constants_valid_ = false;
   nvrhi::ICommandList* constants_list_ = nullptr;
@@ -1439,6 +1442,18 @@ class GameRenderer {
   bool frame_trace_checked_ = false;
   std::chrono::steady_clock::time_point frame_trace_last_{};
   double frame_motion_ms_ = 0, frame_sdk_ms_ = 0, frame_target_ms_last_ = 0;
+  // Task 351 (KK_DEV_DLSS_LOG only): the render thread's time in the game's draws, the motion
+  // recording, the camera vote (with last frame's constants looked up) and draw counts.
+  double frame_draw_ms_ = 0, frame_motion_record_ms_ = 0, frame_motion_vote_ms_ = 0;
+  double frame_motion_find_ms_ = 0, frame_motion_submit_ms_ = 0, frame_draw_motion_ms_ = 0;
+  uint32_t frame_draw_calls_ = 0;
+  bool trace_draw_motion_ = false;  // this draw was recorded for the motion pass
+  struct TraceTimer {
+    double* sink;
+    std::chrono::steady_clock::time_point start;
+    explicit TraceTimer(double* s) : sink(s), start(s ? std::chrono::steady_clock::now() : std::chrono::steady_clock::time_point{}) {}
+    ~TraceTimer() { if (sink) *sink += std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - start).count(); }
+  };
   uint64_t frame_resource_creations_ = 0;
   uint64_t frame_skips_ = 0;
   mutable std::mutex stutter_mutex_;

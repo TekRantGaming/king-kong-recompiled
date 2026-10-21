@@ -24,6 +24,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <fstream>
+#include <optional>
 #include <sstream>
 
 #include "backend/ao_camera.h"
@@ -444,7 +445,10 @@ void GameRenderer::UpscaleRecordMotion(const DrawCall& call, const dev::DeviceVi
                                        const nvrhi::DrawArguments& args, bool indexed) {
   GameUpscale& u = *upscale_;
   if (u.upscaled || u.motion_draws.size() >= 8192) return;
-  GameUpscale::MotionDraw m;
+  TraceTimer record_timer(frame_trace_ ? &frame_motion_record_ms_ : nullptr);
+  trace_draw_motion_ = frame_trace_ != nullptr;
+  // Made in place (task 351: moving it in copied its 4 KiB of constants once more).
+  GameUpscale::MotionDraw& m = u.motion_draws.emplace_back();
   const AnnNormalLayout* ann_normal = nullptr;
   m.previous_tessellation_flags = tessellation_previous_flags_;
   if (record.flags & kRecordTessellation) {
@@ -492,7 +496,14 @@ void GameRenderer::UpscaleRecordMotion(const DrawCall& call, const dev::DeviceVi
   m.vs = vs;
   std::memcpy(m.constants.data(), last_vs_.data(), sizeof(float) * 1024);
   float rows[16];
-  m.wvp_register = FindAoPerspectiveRegister(d.at(dev::kVsConstants), rows);
+  if (!u.wvp_known || u.wvp_generation != vs_constants_generation_) {
+    // The constants (d's, which last_vs_raw_ holds since this draw's upload) changed since the last search.
+    u.wvp_register = FindAoPerspectiveRegister(d.at(dev::kVsConstants), u.wvp_rows);
+    u.wvp_generation = vs_constants_generation_;
+    u.wvp_known = true;
+  }
+  m.wvp_register = u.wvp_register;
+  std::memcpy(rows, u.wvp_rows, sizeof(rows));
   m.dc = dc;
   m.pipeline = MotionPipelineRecord(record, uint32_t(nvrhi::Format::RG16_FLOAT));
   const uint64_t motion_key = PipelineKey(m.pipeline);
@@ -525,7 +536,6 @@ void GameRenderer::UpscaleRecordMotion(const DrawCall& call, const dev::DeviceVi
   }
   ++u.stats.motion_draws;
   if (m.camera_only) ++u.stats.motion_rewritten;
-  u.motion_draws.push_back(std::move(m));
 }
 
 namespace {
@@ -758,43 +768,81 @@ void GameRenderer::UpscaleMotionPass(nvrhi::ICommandList* cl, HostTarget* depth_
   }
   const bool vulkan = device_->getGraphicsAPI() == nvrhi::GraphicsAPI::VULKAN;
   const nvrhi::TextureDesc& md = u.motion->getDesc();
+  // Task 351: draws in a row often share their shader, pipeline and constants (a field of grass: a
+  // thousand draws a frame in Ann's chapter). What the last draw found or wrote is used again for them:
+  // the same pipeline (only one that was found), and no new version of a volatile buffer whose contents
+  // the last draw already wrote in this list (the game's draws skip unchanged constants the same way).
+  const GameUpscale::MotionDraw* last_drawn = nullptr;  // whose constants the volatile buffers hold
+  const VsConstants* last_prev = nullptr;
+  float last_param3 = 0.0f;
+  const GameShader* memo_vs = nullptr;
+  const PipelineRecord* memo_record = nullptr;
+  nvrhi::IShader* memo_mvs = nullptr;
+  nvrhi::IGraphicsPipeline* memo_pipeline = nullptr;
+  uint64_t completions = stats_.volatile_completions;
   for (const GameUpscale::MotionDraw& m : u.motion_draws) {
     if (m.camera_only && (u.config.debug & 1024)) continue;  // debugging: their camera motion only
     const VsConstants* prev = PreviousConstants(u, m);
     if (!prev) continue;
-    nvrhi::IShader* mvs = (m.pipeline.flags&kRecordTessellation) ? m.vs->handle.Get() : shaders_->MotionVariant(*m.vs);
-    if (!mvs) {
-      ++u.stats.motion_waiting;
-      continue;
-    }
-    PipelineRecord r = m.pipeline;
-    r.depth_format = uint32_t(depth_target->format);
-    const uint64_t key = PipelineKey(r);
+    const bool tessellated = (m.pipeline.flags & kRecordTessellation) != 0;
+    nvrhi::IShader* mvs = nullptr;
     nvrhi::IGraphicsPipeline* pipeline = nullptr;
-    if (auto known = pipelines_.find(key); known != pipelines_.end()) {
-      pipeline = known->second;
+    if (memo_pipeline && memo_vs == m.vs.get() && *memo_record == m.pipeline) {
+      mvs = memo_mvs;
+      pipeline = memo_pipeline;
     } else {
-      nvrhi::GraphicsPipelineDesc pd;
-      nvrhi::FramebufferInfo fbi;
-      BuildPipelineDesc(r, mvs, u.object_ps, pd, fbi);
-      if (!pd.bindingLayouts.empty()) pd.bindingLayouts[0] = u.motion_layout;
-      pipeline = GetPipeline(pd, fbi, key, PipelineDemand::kOptional);
+      mvs = tessellated ? m.vs->handle.Get() : shaders_->MotionVariant(*m.vs);
+      if (!mvs) {
+        ++u.stats.motion_waiting;
+        continue;
+      }
+      PipelineRecord r = m.pipeline;
+      r.depth_format = uint32_t(depth_target->format);
+      const uint64_t key = PipelineKey(r);
+      if (auto known = pipelines_.find(key); known != pipelines_.end()) {
+        pipeline = known->second;
+      } else {
+        nvrhi::GraphicsPipelineDesc pd;
+        nvrhi::FramebufferInfo fbi;
+        BuildPipelineDesc(r, mvs, u.object_ps, pd, fbi);
+        if (!pd.bindingLayouts.empty()) pd.bindingLayouts[0] = u.motion_layout;
+        pipeline = GetPipeline(pd, fbi, key, PipelineDemand::kOptional);
+      }
+      if (!pipeline) {
+        ++u.stats.motion_waiting;
+        continue;
+      }
+      memo_vs = m.vs.get();
+      memo_record = &m.pipeline;
+      memo_mvs = mvs;
+      memo_pipeline = pipeline;
     }
-    if (!pipeline) {
-      ++u.stats.motion_waiting;
-      continue;
-    }
-    kkshaders::MotionConstants mc;
-    std::memcpy(mc.previous, prev->data(), sizeof(mc.previous));
-    mc.params[0] = 0.5f * float(md.width);
-    mc.params[1] = 0.5f * float(md.height);
-    mc.params[2] = vulkan ? 1.0f : -1.0f;
-    mc.params[3] = 0.0f;
-    if (m.pipeline.flags&kRecordTessellation) std::memcpy(&mc.params[3],&m.previous_tessellation_flags,sizeof(uint32_t));
+    float param3 = 0.0f;
+    if (tessellated) std::memcpy(&param3, &m.previous_tessellation_flags, sizeof(uint32_t));
+    std::optional<TraceTimer> submit_timer;
+    if (frame_trace_) submit_timer.emplace(&frame_motion_submit_ms_);
     if (!NoteVolatileDraw(cl, true)) continue;  // within the volatile versions (task 154)
-    cl->writeBuffer(u.motion_vs_constants, m.constants.data(), sizeof(float) * 1024);
-    cl->writeBuffer(u.motion_draw_constants, &m.dc, sizeof(m.dc));
-    cl->writeBuffer(u.motion_constants, &mc, sizeof(mc));
+    if (stats_.volatile_completions != completions) {
+      // The list was completed and opened again: every volatile buffer is written again.
+      completions = stats_.volatile_completions;
+      last_drawn = nullptr;
+    }
+    if (!last_drawn || std::memcmp(last_drawn->constants.data(), m.constants.data(), sizeof(float) * 1024) != 0)
+      cl->writeBuffer(u.motion_vs_constants, m.constants.data(), sizeof(float) * 1024);
+    if (!last_drawn || std::memcmp(&last_drawn->dc, &m.dc, sizeof(m.dc)) != 0)
+      cl->writeBuffer(u.motion_draw_constants, &m.dc, sizeof(m.dc));
+    if (!last_drawn || last_prev != prev || std::memcmp(&last_param3, &param3, sizeof(float)) != 0) {
+      kkshaders::MotionConstants mc;
+      std::memcpy(mc.previous, prev->data(), sizeof(mc.previous));
+      mc.params[0] = 0.5f * float(md.width);
+      mc.params[1] = 0.5f * float(md.height);
+      mc.params[2] = vulkan ? 1.0f : -1.0f;
+      mc.params[3] = param3;
+      cl->writeBuffer(u.motion_constants, &mc, sizeof(mc));
+    }
+    last_drawn = &m;
+    last_prev = prev;
+    last_param3 = param3;
     nvrhi::GraphicsState gs;
     gs.pipeline = pipeline;
     gs.framebuffer = fb;
@@ -903,13 +951,19 @@ void GameRenderer::RunUpscale(nvrhi::ICommandList* cl, UpscaleFrameTracker::Trig
   if (!have_depth) ++u.stats.no_depth;
   // The camera: the draws that met again vote.
   uint32_t matched = 0, changed = 0, objects = 0, objects_matched = 0;
+  std::optional<TraceTimer> vote_timer;
+  if (frame_trace_) vote_timer.emplace(&frame_motion_vote_ms_);
   for (const GameUpscale::MotionDraw& m : u.motion_draws) {
     if (!m.camera_only) ++objects;
+    std::optional<TraceTimer> find_timer;
+    if (frame_trace_) find_timer.emplace(&frame_motion_find_ms_);
     const VsConstants* prev = PreviousConstants(u, m);
+    find_timer.reset();
     if (!prev) continue;
     ++matched;
     if (!m.camera_only) ++objects_matched;
-    if (std::memcmp(prev->data(), m.constants.data(), sizeof(float) * 1024) != 0) {
+    // Only the debug logs read `changed` (task 351: 4 KiB compared per draw for nothing otherwise).
+    if ((u.config.debug & (16 | 128)) && std::memcmp(prev->data(), m.constants.data(), sizeof(float) * 1024) != 0) {
       ++changed;
       if ((u.config.debug & 128) && changed <= 3) {
         // Which registers changed (debugging the camera vote).
@@ -931,6 +985,7 @@ void GameRenderer::RunUpscale(nvrhi::ICommandList* cl, UpscaleFrameTracker::Trig
       u.vote.Offer(&m.constants[size_t(m.wvp_register) * 4], &(*prev)[size_t(m.wvp_register) * 4]);
   }
   u.stats.motion_matched += matched;
+  vote_timer.reset();
   Mat4 reprojection;
   const bool camera = u.screen_valid && u.vote.Result(reprojection);
   if (u.config.debug & 128) {

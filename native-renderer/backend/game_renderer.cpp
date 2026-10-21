@@ -1022,21 +1022,27 @@ void GameRenderer::EndFrame() {
     frame_trace_checked_ = true;
     if (const char* path = std::getenv("KK_DEV_DLSS_LOG"); path && *path) {
       frame_trace_ = std::fopen(path, "w");
-      if (frame_trace_) std::fprintf(frame_trace_, "frame,wall_s,interval_ms,pipeline_wait_ms,motion_cpu_ms,sdk_cpu_ms,target_cpu_ms,resource_creations,skipped_draws\n");
+      if (frame_trace_) std::fprintf(frame_trace_, "frame,wall_s,interval_ms,pipeline_wait_ms,motion_cpu_ms,sdk_cpu_ms,target_cpu_ms,resource_creations,skipped_draws,draw_ms,draws,motion_record_ms,motion_vote_ms,motion_draws,motion_find_ms,motion_submit_ms,draw_motion_ms\n");
     }
   }
   if (frame_trace_) {
     const auto now = std::chrono::steady_clock::now();
     const double interval = frame_trace_last_ == std::chrono::steady_clock::time_point{} ? 0 :
         std::chrono::duration<double, std::milli>(now - frame_trace_last_).count();
-    std::fprintf(frame_trace_, "%llu,%.6f,%.6f,%.6f,%.6f,%.6f,%.6f,%llu,%llu\n",
+    std::fprintf(frame_trace_, "%llu,%.6f,%.6f,%.6f,%.6f,%.6f,%.6f,%llu,%llu,%.6f,%u,%.6f,%.6f,%zu,%.6f,%.6f,%.6f\n",
         static_cast<unsigned long long>(frame_), std::chrono::duration<double>(now.time_since_epoch()).count(),
         interval, frame_stutter_wait_ms_, frame_motion_ms_, frame_sdk_ms_, stats_.target_ms - frame_target_ms_last_,
-        static_cast<unsigned long long>(frame_resource_creations_), static_cast<unsigned long long>(frame_skips_));
+        static_cast<unsigned long long>(frame_resource_creations_), static_cast<unsigned long long>(frame_skips_),
+        frame_draw_ms_, frame_draw_calls_, frame_motion_record_ms_, frame_motion_vote_ms_,
+        upscale_ ? upscale_->motion_draws.size() : size_t(0), frame_motion_find_ms_, frame_motion_submit_ms_,
+        frame_draw_motion_ms_);
     frame_trace_last_ = now;
     if (frame_ % 300 == 0) std::fflush(frame_trace_);
   }
   frame_motion_ms_ = frame_sdk_ms_ = 0;
+  frame_draw_ms_ = frame_motion_record_ms_ = frame_motion_vote_ms_ = 0;
+  frame_motion_find_ms_ = frame_motion_submit_ms_ = frame_draw_motion_ms_ = 0;
+  frame_draw_calls_ = 0;
   frame_resource_creations_ = 0;
   frame_target_ms_last_ = stats_.target_ms;
   {
@@ -2118,6 +2124,19 @@ bool HudDrawCoversWidth(const DrawCall& c, const dev::DeviceView& d, bool* reada
 }  // namespace
 
 void GameRenderer::Draw(nvrhi::ICommandList* cl, const DrawCall& call) {
+  struct DrawTrace {
+    GameRenderer* game;
+    std::chrono::steady_clock::time_point start;
+    ~DrawTrace() {
+      if (!game) return;
+      const double ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - start).count();
+      game->frame_draw_ms_ += ms;
+      if (game->trace_draw_motion_) game->frame_draw_motion_ms_ += ms;
+      game->trace_draw_motion_ = false;
+      ++game->frame_draw_calls_;
+    }
+  } draw_trace{frame_trace_ ? this : nullptr,
+               frame_trace_ ? std::chrono::steady_clock::now() : std::chrono::steady_clock::time_point{}};
   struct UploadGuard {
     GameRenderer* game;
     ~UploadGuard() { game->resource_prepare_call_ = nullptr; game->FlushUploads(); }
@@ -2616,11 +2635,12 @@ void GameRenderer::Draw(nvrhi::ICommandList* cl, const DrawCall& call) {
                     const nvrhi::BufferHandle& buffer) {
     const uint8_t* raw = d.at(base);
     const bool changed = UpdateShaderConstants(raw, last_raw, last);
-    if (!changed && !new_list) return;
+    if (!changed && !new_list) return changed;
     cl->writeBuffer(buffer, last.data(), sizeof(last));
     stats_.upload_bytes += sizeof(last);
+    return changed;
   };
-  upload(dev::kVsConstants, last_vs_raw_, last_vs_, vs_constants_);
+  if (upload(dev::kVsConstants, last_vs_raw_, last_vs_, vs_constants_)) ++vs_constants_generation_;
   upload(dev::kPsConstants, last_ps_raw_, last_ps_, ps_constants_);
   constants_valid_ = true;
   constants_list_ = cl;
