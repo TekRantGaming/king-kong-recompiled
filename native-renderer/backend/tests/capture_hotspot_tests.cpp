@@ -1,4 +1,5 @@
 #include "backend/tests/prototype_device_capture.h"
+#include "backend/tests/prototype_avx2_hotspots.h"
 #include "backend/render_thread.h"
 #include "backend/tests/check.h"
 #include "backend/tests/hotspot_bench.h"
@@ -21,16 +22,28 @@ NR_NOINLINE void NewCapture(const uint8_t* live, uint8_t* sent, bool all,
                             std::vector<uint16_t>& out, std::vector<uint8_t>& bytes) {
   nr::test::prototype::CaptureDeviceImage(live, sent, all, out, bytes);
 }
+NR_NOINLINE void AvxCapture(const uint8_t* live, uint8_t* sent, bool all,
+                           std::vector<uint16_t>& out, std::vector<uint8_t>& bytes) {
+#if NR_HOTSPOT_AVX2
+  if (nr::test::prototype::Avx2Available()) {
+    nr::test::prototype::Avx2Capture(live, sent, all, out, bytes);
+    return;
+  }
+#endif
+  OldCapture(live, sent, all, out, bytes);
+}
 
 TEST(CaptureDeviceBytesAndBlockOrderMatchForRandomAndEveryBoundary) {
-  std::array<uint8_t, 20608> live{}, a{}, b{};
-  std::vector<uint16_t> ab, bb;
-  std::vector<uint8_t> ad, bd;
+  std::array<uint8_t, 20608> live{}, a{}, b{}, c{};
+  std::vector<uint16_t> ab, bb, cb;
+  std::vector<uint8_t> ad, bd, cd;
   auto check = [&](bool all) {
-    ab.clear(); bb.clear(); ad.clear(); bd.clear();
+    ab.clear(); bb.clear(); ad.clear(); bd.clear(); cb.clear(); cd.clear();
     OldCapture(live.data(), a.data(), all, ab, ad);
     NewCapture(live.data(), b.data(), all, bb, bd);
+    AvxCapture(live.data(), c.data(), all, cb, cd);
     CHECK(a == b); CHECK(ab == bb); CHECK(ad == bd);
+    CHECK(a == c); CHECK(ab == cb); CHECK(ad == cd);
   };
   check(true); check(false);
   for (const auto& block : ThreadedSink::DeviceBlocks()) {
@@ -50,6 +63,7 @@ TEST(CaptureDeviceBytesAndBlockOrderMatchForRandomAndEveryBoundary) {
 int main(int argc, char** argv) {
   if (nr::test::RunAll(1, argv)) return 1;
   if (!nr::test::BenchmarkRequested(argc, argv)) return 0;
+  std::printf("AVX2 path %s\n", nr::test::prototype::Avx2Available() ? "available" : "unavailable");
   constexpr unsigned calls = 300000;
   for (unsigned changed : {0u, 1u, 4u, 64u}) {
     auto run = [&](auto fn) {
@@ -69,5 +83,7 @@ int main(int argc, char** argv) {
     };
     const std::string name = "capture-device-" + std::to_string(changed) + "-changed-blocks";
     nr::test::Benchmark(name.c_str(), calls, [&] { return run(OldCapture); }, [&] { return run(NewCapture); });
+    if (nr::test::prototype::Avx2Available())
+      nr::test::Benchmark((name + "-avx2").c_str(), calls, [&] { return run(OldCapture); }, [&] { return run(AvxCapture); });
   }
 }
