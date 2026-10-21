@@ -21,14 +21,25 @@ inline Kind KindForStart(const std::string& open_on) {
 
 constexpr float kMinSeconds = 3.0f;     // on screen at least this long, so the notice can be read (owner)
 constexpr float kFadeSeconds = 0.5f;    // the fade into the launcher
-constexpr float kSceneWaitSeconds = 20.0f;  // a scene that is not up by then: the launcher shows its pictures
+// Task 349c (owner, 21 Oct): the loop stays until the live menu scene is up. An attempt that has not got the scene
+// up this long after its start failed: the launcher starts again for a second attempt (a new process: the game
+// cannot start twice in one), and only when that one fails too do the pictures show.
+constexpr float kSceneAttemptSeconds = 30.0f;
 
-// Whether the loop may start fading out after `shown` seconds on screen. `scene_expected`: the live menu scene
-// was started for this launcher; `scene_ready`: it is up (menu_scene::Ready).
-inline bool MayEnd(float shown, bool scene_expected, bool scene_ready) {
-  if (shown < kMinSeconds) return false;
-  if (!scene_expected) return true;
-  return scene_ready || shown >= kSceneWaitSeconds;
+enum class SceneStep {
+  kWait,      // keep the loop up
+  kEnd,       // fade into the launcher (the scene is up, or none was started)
+  kRetry,     // this attempt failed: start the launcher again for the second attempt
+  kPictures,  // the second attempt failed too: fade into the launcher's pictures
+};
+// `shown`: seconds the loop has been on screen; `scene_expected`: the live menu scene was started for this launcher;
+// `scene_ready`: it is up (menu_scene::Ready); `since_start`: seconds since its start; `second_attempt`: this
+// launcher is already the second attempt.
+inline SceneStep Step(float shown, bool scene_expected, bool scene_ready, float since_start, bool second_attempt) {
+  if (shown < kMinSeconds) return SceneStep::kWait;
+  if (!scene_expected || scene_ready) return SceneStep::kEnd;
+  if (since_start < kSceneAttemptSeconds) return SceneStep::kWait;
+  return second_attempt ? SceneStep::kPictures : SceneStep::kRetry;
 }
 
 // The loop's cover (1 opaque .. 0 gone) `since_end` seconds after it started fading (< 0: not fading yet).

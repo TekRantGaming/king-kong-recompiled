@@ -2787,7 +2787,9 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
     // Task 332: opened from the desktop with the setup done, the startup movies first (unless kk_skip_intros), then
     // the save notice loop; task 331: otherwise the owner's loading loop from the first frame (decoding starts now,
     // while the scene starts).
-    if (startup_movies::AtLauncherStart(open_on, files_ok_, InSetup(), GetBool("kk_skip_intros"))) {
+    // Task 349c: a launcher started again for the scene's second attempt does not play them again.
+    if (!menu_scene::SecondAttempt() &&
+        startup_movies::AtLauncherStart(open_on, files_ok_, InSetup(), GetBool("kk_skip_intros"))) {
       StartStartupMovies("the launcher opened");
     } else {
       if (open_on.empty())
@@ -2801,6 +2803,7 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
       else
         StartLoadingLoop(open_on);
     }
+    loop_open_on_ = open_on;  // task 349c: the second attempt opens as this one did
     MaybeStartScene(!open_on.empty());  // back from the game (or a restart): before the first frame
     saved_changes_ = seen_changes_ = g_changes;
     StartHeartbeat();
@@ -2925,6 +2928,11 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
     if (leaving_) {  // the game is starting in a new process (StartGame): the backdrop only, the music fading
       if (music_) music_->Update(0.0f, io.DeltaTime);
       FadeSceneSound(0.0f, io.DeltaTime);  // task 330: the scene's sound fades with it
+      // Task 349c: starting again for the scene's second attempt: the loading loop stays until the new window shows.
+      if (scene_retrying_ && DrawLoadingLoop(dl, io.DeltaTime)) {
+        ImGui::End();
+        return;
+      }
       DrawBackdrop(dl);
       ImGui::End();
       return;
@@ -6509,10 +6517,18 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
     if (!loop_) return false;
     rex::ui::ImmediateTexture* frame = loop_->Frame(dt);
     loop_wait_ += std::clamp(dt, 0.0f, 0.1f);
-    if (!frame && (loop_->Failed() || loop_wait_ > loading_loop::kMinSeconds)) {
-      REXLOG_INFO("KK loading loop: not shown ({})", loop_->Failed() ? "it cannot be played" : "no picture in time");
-      loop_.reset();
-      return false;
+    if (!frame && !loop_black_ && (loop_->Failed() || loop_wait_ > loading_loop::kMinSeconds)) {
+      // Task 349c: with the scene starting, a plain black cover in its place until the scene is up (never the
+      // pictures); without one, the launcher at once.
+      const bool scene_coming = loop_scene_ || scene_start_pending_;
+      REXLOG_INFO("KK loading loop: not shown ({}){}", loop_->Failed() ? "it cannot be played" : "no picture in time",
+                  scene_coming ? "; a black cover until the scene is up" : "");
+      if (!scene_coming) {
+        loop_.reset();
+        return false;
+      }
+      loop_black_ = true;
+      loop_first_ = ImGui::GetTime();
     }
     // On screen since its first picture, in real time (the scene's start holds the UI thread with it on screen).
     if (frame && loop_first_ < 0) {
@@ -6521,10 +6537,27 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
     }
     loop_shown_ = loop_first_ < 0 ? 0.0f : float(ImGui::GetTime() - loop_first_);
     const bool scene_ready = menu_scene::Active() && menu_scene::Ready();
-    if (loop_end_ < 0 && loading_loop::MayEnd(loop_shown_, loop_scene_, scene_ready)) {
+    // Task 349c (owner, 21 Oct): up until the scene is up; an attempt not up in 30 s starts the launcher again for a
+    // second attempt; only a second attempt that fails too fades into the pictures.
+    const float since_start = scene_started_at_ < 0 ? 0.0f : float(ImGui::GetTime() - scene_started_at_);
+    const loading_loop::SceneStep step =
+        loop_end_ >= 0 || scene_start_pending_ || scene_retrying_
+            ? loading_loop::SceneStep::kWait
+            : loading_loop::Step(loop_shown_, loop_scene_, scene_ready, since_start, menu_scene::SecondAttempt());
+    if (step == loading_loop::SceneStep::kRetry && !RetrySceneStart()) {
+      menu_scene::NoteAttemptFailed();
+      REXLOG_WARN("KK loading loop: the scene is not up after {:.0f} s and cannot be tried again here: the pictures",
+                  since_start);
+      loop_end_ = 0;
+    } else if (step == loading_loop::SceneStep::kPictures) {
+      menu_scene::NoteAttemptFailed();
+      REXLOG_WARN("KK loading loop: the second attempt's scene is not up after {:.0f} s either: fading into the "
+                  "pictures", since_start);
+      loop_end_ = 0;
+    } else if (step == loading_loop::SceneStep::kEnd) {
       loop_end_ = 0;
       REXLOG_INFO("KK loading loop: fading into the launcher after {:.1f} s ({})", loop_shown_,
-                  !loop_scene_ ? "no live scene: the pictures" : scene_ready ? "the scene is up" : "the scene is not up yet");
+                  !loop_scene_ ? "no live scene" : "the scene is up");
     } else if (loop_end_ >= 0) {
       loop_end_ += std::clamp(dt, 0.0f, 0.1f);
     }
@@ -6606,7 +6639,6 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
     f.shaders_prepared = ShadersPreparedForThisVersion();
     f.shader_job = native_pack_.Busy() || update_shaders_ || setup_shaders_ || rebuild_shaders_screen_;
     f.setup = InSetup() || update_new_ || ShaderScreen();
-    f.low_end = Get("kk_hardware_tier") == "low";
     return f;
   }
   void MaybeStartScene(bool before_first_frame) {
@@ -6616,19 +6648,60 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
     scene_retry_ = r != menu_scene::Reason::kLive && menu_scene::MayStartLater(r);
     if (r != menu_scene::Reason::kLive || !cb_.start_scene) return;
     loop_scene_ = true;  // task 331: a loading loop on screen waits for it (loading_loop_logic.h)
+    scene_started_at_ = ImGui::GetTime();  // task 349c: its attempt's clock (loading_loop_logic.h Step)
     cb_.start_scene(before_first_frame);
+  }
+  // Task 349c: the attempt failed (not up in time): the launcher starts again as it opened (a new process: the game
+  // cannot start twice in one) for the second attempt, its loop over this one's until its window has drawn.
+  bool RetrySceneStart() {
+    if (!cb_.restart_launcher || menu_scene::SecondAttempt() || scene_retrying_) return false;
+    scene_retrying_ = true;
+    menu_scene::NoteAttemptFailed();
+    REXLOG_WARN("KK menu scene: not up after {:.0f} s: the launcher starts again for a second attempt",
+                float(ImGui::GetTime() - scene_started_at_));
+    SaveIfChanged();
+    input_.Release();
+    StopHeartbeat();
+    leaving_ = true;
+    modal_.open = false;
+    const std::string open = loop_open_on_ == "rebuild" ? std::string() : loop_open_on_;
+    std::wstring args = L"--kk_menu_scene_retry=true";
+    if (!open.empty()) args += L" --kk_launcher_open=" + std::wstring(open.begin(), open.end());
+    if (loop_saved_) args += L" --kk_launcher_saved=true";
+    cb_.restart_launcher(args);
+    return true;
   }
   // Back on Home after the setup, an install, the New in this update screen or a shader preparation: the scene
   // starts now (checked about once a second; the runtime's start pauses the launcher about 1.5 s once).
   void TickSceneStart() {
     // Task 332: not while the startup movies play (the scene's start pauses the launcher): it waits for them.
     if (!scene_retry_ || menu_scene::Active() || leaving_ || played_ || modal_.open || page_ != kHome || MoviesPending()) return;
+    // Task 349c: the loading loop first; the scene starts once its first picture is on screen (the start pauses
+    // the launcher about 1.5 s), so the launcher's pictures never show while it comes up.
+    if (scene_start_pending_) {
+      if (loop_ && loop_first_ < 0) return;
+      scene_start_pending_ = false;
+      MaybeStartScene(false);
+      return;
+    }
     if (ImGui::GetTime() < scene_retry_at_) return;
     scene_retry_at_ = ImGui::GetTime() + 1.0;
     const menu_scene::Reason r = menu_scene::Decide(SceneFacts());
     if (r == menu_scene::Reason::kLive) {
-      REXLOG_INFO("KK menu scene: the setup and the shaders are done; starting the scene now");
-      MaybeStartScene(false);
+      REXLOG_INFO("KK menu scene: the setup and the shaders are done; the save notice loop, then the scene");
+      if (!loop_ || loop_end_ >= 0) {
+        loop_.reset();
+        loop_first_ = -1;
+        loop_end_ = -1.0f;
+        loop_wait_ = 0.0f;
+        loop_shown_ = 0.0f;
+        loop_black_ = false;
+        loop_saved_ = false;
+        loop_tip_.clear();
+        loop_kind_ = loading_loop::Kind::kNotice;
+        loop_ = std::make_unique<LoadingLoop>(immediate_, LoadingLoopFile(loop_kind_));
+      }
+      scene_start_pending_ = true;
     } else if (!menu_scene::MayStartLater(r)) {
       scene_retry_ = false;
       REXLOG_INFO("KK menu scene: {}", menu_scene::ReasonText(r));
@@ -8355,6 +8428,11 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
   std::unique_ptr<LoadingLoop> loop_;
   loading_loop::Kind loop_kind_ = loading_loop::Kind::kNone;
   bool loop_scene_ = false;   // the live menu scene was started for this launcher: the loop waits for it
+  bool loop_black_ = false;   // task 349c: the loop's video cannot show: a black cover while the scene starts
+  std::string loop_open_on_;  // task 349c: --kk_launcher_open of this launcher (its second attempt opens the same)
+  double scene_started_at_ = -1;  // task 349c: ImGui time of the scene's start (its attempt's clock)
+  bool scene_start_pending_ = false;  // task 349c: the scene starts once the loop's first picture is on screen
+  bool scene_retrying_ = false;       // task 349c: the launcher is starting again for the second attempt
   bool loop_saved_ = false;   // "Game saved at your last checkpoint."
   std::string loop_tip_;      // this time's tip (translated)
   float loop_shown_ = 0.0f;   // seconds on screen (from its first picture)
