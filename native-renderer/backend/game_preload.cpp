@@ -28,6 +28,7 @@ void GameRenderer::PrepareChapterTextures() {
   }();
   if (!enabled || !resource_loading_ || !options_.upload_submit || pack_pressure_) return;
   const MemoryBudget budget = options_.memory_budget ? options_.memory_budget() : MemoryBudget{};
+  if (!budget.valid || !budget.budget) return;  // optional uploads need a known live margin
   if (MemoryPressure(budget) || (budget.valid &&
       (budget.usage >= budget.budget || budget.budget - budget.usage <
        MemoryBudgetReserve(budget.budget) + ChapterTexturePrepare::kMaxBytes))) return;
