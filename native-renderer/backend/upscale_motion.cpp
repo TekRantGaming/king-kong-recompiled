@@ -234,6 +234,12 @@ const VsConstants* MotionHistory::FindPrevious(const MotionDrawKey& key, uint32_
   if (nan_first) {
     best = 0;
     best_d = INFINITY;
+    // A NaN in this draw's own constants makes every sum NaN (every float is measured, or shared
+    // and folded in): none wins, draw 0, without measuring them all (task 351: half the plants of
+    // Ann's chapter carry one).
+    bool current_nan = false;
+    for (const float f : current) current_nan |= f != f;
+    if (current_nan) return &s->constants[0];
   }
   if (n >= kIndexedSearchMin) {
     // Task 351: many draws of one key (Ann's chapter: hundreds of plants, each its own world matrix)
@@ -344,7 +350,11 @@ void MotionHistory::BuildIndex(const Slot& s) {
       s.index.clear();
       return;
     }
-    s.index.emplace_back(v, uint32_t(i));
+    // A draw with a NaN anywhere has a NaN sum against any draw (every float is measured, or
+    // shared and folded in): it never wins, so it is left out of the index.
+    bool nan = false;
+    for (const float f : s.constants[i]) nan |= f != f;
+    if (!nan) s.index.emplace_back(v, uint32_t(i));
   }
   std::sort(s.index.begin(), s.index.end(), [](const auto& a, const auto& b) {
     return a.first < b.first || (a.first == b.first && a.second < b.second);
