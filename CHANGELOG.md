@@ -3,7 +3,7 @@
 Every release of the King Kong PC port, newest first. The launcher shows this on its About page, and a
 version's notes the first time you start it.
 
-## v2.0.0-beta.14 (unreleased)
+## v2.0.0-beta.14 (21 October 2026)
 
 **Beta 14**: fixes and performance, from the beta channel (**About** > **Change version**). Your saves and settings are kept. Windows only for this beta.
 
@@ -19,7 +19,7 @@ version's notes the first time you start it.
 - **Lighter defaults on weak hardware**: the first setup picks a lighter preset for handhelds, integrated graphics, entry gaming laptops and PCs with little video memory. Existing players keep their settings.
 - **Medium preset**: uses the original shadows, which saves a lot of graphics time on mid-range PCs. High and Ultra are unchanged.
 - **Less work for your CPU**: parts of the renderer that run for every draw are faster, with exactly the same picture.
-- **More graphics prepared ahead of time**: the shipped list now has 16,292 graphics pipelines (1,595 more), from players who share them with Online players on, so fewer things hitch the first time you see them.
+- **More graphics prepared ahead of time**: the shipped list now has 16,293 graphics pipelines (1,596 more), from players who share them with Online players on, so fewer things hitch the first time you see them.
 
 ## v2.0.0-beta.13 (20 October 2026)
 
