@@ -68,6 +68,79 @@ TEST(MotionSharedRangesAreInvalidatedWhenStorageIsRecycled) {
   }
 }
 
+// Task 351: keys with many draws (Ann's plants: hundreds of draws of one key, each its own world
+// matrix, counts changing with culling) take the indexed search; it must give the old answers,
+// ties (first of equals), duplicates, signed zeros, NaN/Inf in other floats and in the indexed one.
+TEST(MotionIndexedSearchMatchesOldForManyDraws) {
+  std::mt19937 rng(351);
+  const uint32_t odd[] = {0x80000000, 0x7f800000, 0xff800000, 0x7fc01234, 0x00000001};
+  for (unsigned pass = 0; pass < 400; ++pass) {
+    MotionHistory next;
+    nr::test::ReferenceMotionHistory old;
+    MotionDrawKey key; key.vs_hash = 351 + pass;
+    old.BeginFrame(20); next.BeginFrame(20);
+    const unsigned count = 24 + rng() % (pass % 4 == 0 ? 700 : 160);
+    const bool coarse = pass % 3 == 0;  // values on a small grid: many equal sums
+    const unsigned span = 4 + rng() % 120;  // the floats that differ between draws
+    const unsigned first = rng() % (1024 - span);
+    auto value = [&](float scale) { return coarse ? float(int(rng() % 4)) : (float(int(rng() % 20001) - 10000) / 10000.0f) * scale; };
+    std::vector<VsConstants> data(count);
+    VsConstants common{};
+    for (auto& f : common) f = float(int(rng() % 8) - 4) * 0.5f;
+    for (unsigned d = 0; d < count; ++d) {
+      auto& c = data[d];
+      c = common;
+      const float x = value(60.0f), z = value(40.0f);
+      for (unsigned i = first; i < first + span; ++i) c[i] = (i % 7 == 3) ? x : (i % 7 == 5) ? z : value(1.0f);
+      if (pass % 5 == 1 && d % 9 == 0) c[first + rng() % span] = std::bit_cast<float>(odd[rng() % std::size(odd)]);
+      if (d > 0 && rng() % 6 == 0) c = data[rng() % d];  // duplicates
+    }
+    for (auto& c : data) { old.Record(key, c); next.Record(key, c); }
+    old.BeginFrame(21); next.BeginFrame(21);
+    const unsigned now = count + (rng() % 41) - 20;  // culling changed the count
+    for (unsigned q = 0; q < 300; ++q) {
+      auto cur = data[rng() % count];
+      switch (q % 6) {
+        case 0: break;  // an exact match
+        case 1: for (unsigned i = first; i < first + span; i += 3) cur[i] += value(0.01f); break;  // the camera moved
+        case 2: cur[first + rng() % span] = value(60.0f); break;
+        case 3: for (unsigned i = first; i < first + span; ++i) cur[i] = value(30.0f); break;  // a new draw
+        case 4: cur[first + rng() % span] = std::bit_cast<float>(odd[rng() % std::size(odd)]); break;
+        case 5: cur[rng() % 1024] += 0.25f; break;
+      }
+      const unsigned ordinal = rng() % (now + 3);
+      const auto* a = old.FindPrevious(key, ordinal, cur, now);
+      const auto* b = next.FindPrevious(key, ordinal, cur, now);
+      CHECK(a && b && std::memcmp(a->data(), b->data(), sizeof(VsConstants)) == 0);
+    }
+  }
+}
+
+template<class History>
+NR_NOINLINE uint64_t AnnPlantsRun(const MotionData& instances, bool move_camera) {
+  // Hundreds of draws of one key with their own matrices, a few culled each frame (the count changes).
+  History h;
+  uint64_t sum = 0;
+  for (uint64_t frame = 0; frame < 40; ++frame) {
+    h.BeginFrame(frame);
+    MotionDrawKey key; key.vs_hash = 0xA837405414F63CB9ull;
+    for (unsigned i = 0; i < instances.size(); ++i) {
+      if ((i + frame) % 17 == 0) continue;  // culled this frame
+      auto c = instances[i];
+      if (move_camera) for (unsigned k = 0; k < 16; ++k) c[k] += float(frame) * 0.001f;
+      h.Record(key, c);
+    }
+    uint32_t ordinal = 0;
+    for (unsigned i = 0; i < instances.size(); ++i) {
+      if ((i + frame) % 17 == 0) continue;
+      auto c = instances[i];
+      if (move_camera) for (unsigned k = 0; k < 16; ++k) c[k] += float(frame) * 0.001f;
+      if (const auto* p = h.FindPrevious(key, ordinal++, c, h.CountThisFrame(key))) sum += std::bit_cast<uint32_t>((*p)[34]);
+    }
+  }
+  return sum;
+}
+
 template<class History>
 NR_NOINLINE uint64_t MotionRun(const MotionData& constants, bool move_camera) {
   History h;
@@ -120,6 +193,21 @@ int main(int argc, char** argv) {
     if (moving) for (auto& c : current) c[0] += 0.125f;
     nr::test::Benchmark(moving ? "motion-lookup-moving-camera" : "motion-lookup-static-camera", 1000 * 256,
       [&] { return LookupRun(old, current); }, [&] { return LookupRun(next, current); });
+  }
+  {
+    // Task 351: 440 plants of one key, each its own world matrix (Ann's chapter, as logged).
+    std::mt19937 rng(351);
+    MotionData plants(440);
+    for (auto& c : plants) {
+      c.fill(0.5f);
+      const float x = float(rng() % 60000) / 1000.0f - 30.0f, z = float(rng() % 50000) / 1000.0f - 25.0f;
+      for (unsigned k = 0; k < 16; ++k) c[k] = float(k % 4) * 0.25f + x * 0.001f + z * 0.0007f;
+      for (unsigned k = 32; k < 48; ++k) c[k] = k % 4 == 3 ? (k < 36 ? x : k < 40 ? 0.0f : z) : float(rng() % 1000) / 1000.0f;
+    }
+    for (bool moving : {false, true})
+      nr::test::Benchmark(moving ? "motion-ann-440-moving-camera" : "motion-ann-440-static-camera", 40 * 440,
+        [&] { return AnnPlantsRun<nr::test::ReferenceMotionHistory>(plants, moving); },
+        [&] { return AnnPlantsRun<MotionHistory>(plants, moving); });
   }
   // A control case with no shared finite ranges: the optional cache must not rely on sparse data.
   for (unsigned i = 0; i < 256; ++i)

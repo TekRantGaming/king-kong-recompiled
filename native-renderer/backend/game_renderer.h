@@ -1415,6 +1415,9 @@ class GameRenderer {
   // they changed (and once per command list).
   std::array<float, 1024> last_vs_ = {}, last_ps_ = {};
   std::array<uint8_t, 4096> last_vs_raw_ = {}, last_ps_raw_ = {};  // the guest bytes of those
+  // Counts the changes of last_vs_raw_ (task 351: the motion recording's camera register search is done
+  // again only when the vertex constants changed since the draw it was last done for).
+  uint64_t vs_constants_generation_ = 0;
   kkshaders::DrawConstants last_draw_ = {};
   bool constants_valid_ = false;
   nvrhi::ICommandList* constants_list_ = nullptr;

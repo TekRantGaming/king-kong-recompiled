@@ -123,6 +123,7 @@ void MotionHistory::Recycle(Map& m, bool drop_unused) {
       s.constants.clear();
       s.next_guess = 0;
       s.common_prefix = SIZE_MAX;
+      s.index_built = false;
     }
     it = list.empty() ? m.erase(it) : std::next(it);
   }
@@ -234,6 +235,43 @@ const VsConstants* MotionHistory::FindPrevious(const MotionDrawKey& key, uint32_
       if (const double d = distance(i, best_d, false); d < best_d) best_d = d, best = i;
     return &s->constants[best];
   }
+  if (n >= kIndexedSearchMin) {
+    // Task 351: many draws of one key (Ann's chapter: hundreds of plants, each its own world matrix)
+    // made this search measure every draw for every draw, milliseconds a frame whenever culling
+    // changed their number. The answer does not change: a draw's sum is at least its difference in
+    // any one float (the terms are never negative and rounding is monotonic), so a draw whose
+    // difference in the indexed float is more than the best sum cannot win, and one equal to it can
+    // only win when it comes earlier. The draws are measured from the nearest in that float outwards,
+    // each against the best so far, and the winner is the same smallest sum and first of equals.
+    if (!s->index_built) BuildIndex(*s);
+    if (s->index_column >= 0 && std::isfinite(current[size_t(s->index_column)])) {
+      const float cur = current[size_t(s->index_column)];
+      const auto& idx = s->index;
+      size_t right = size_t(std::lower_bound(idx.begin(), idx.end(), cur,
+                                             [](const std::pair<float, uint32_t>& e, float v) { return e.first < v; }) -
+                            idx.begin());
+      size_t left = right;  // the left side's next is idx[left - 1]
+      const auto bound = [&](size_t j) { return std::fabs(double(idx[j].first) - double(cur)); };
+      while (left > 0 || right < idx.size()) {
+        const double lb_left = left > 0 ? bound(left - 1) : INFINITY;
+        const double lb_right = right < idx.size() ? bound(right) : INFINITY;
+        const bool take_left = lb_left < lb_right;
+        const double lb = take_left ? lb_left : lb_right;
+        if (!(lb <= best_d)) break;  // both sides are past the best sum (each side's bounds only grow)
+        const size_t i = take_left ? idx[--left].second : idx[right++].second;
+        if (i == first) continue;  // measured in full above
+        const bool earlier = i < best;
+        if (lb == best_d && !earlier) continue;  // at best a tie, and a later draw loses ties
+        const double d = distance(i, best_d, earlier);
+        if (d < best_d || (earlier && d == best_d)) {
+          best_d = d;
+          best = i;
+        }
+      }
+      s->next_guess = best + 1;
+      return &s->constants[best];
+    }
+  }
   for (size_t i = 0; i < n && best_d > 0; ++i) {
     if (i == first) continue;
     const bool earlier = i < best;
@@ -255,6 +293,57 @@ const VsConstants* MotionHistory::FindPrevious(const MotionDrawKey& key, uint32_
   return &s->constants[best];
 }
 
+void MotionHistory::BuildIndex(const Slot& s) {
+  // Which float: one every draw has finite, that many draws do not share, spread widest (a few
+  // dozen draws sampled; a float most draws share would leave the search measuring most of them).
+  s.index_built = true;
+  s.index_column = -1;
+  s.index.clear();
+  const size_t n = s.constants.size();
+  const size_t lo = std::min(s.common_prefix, s.constants[0].size());
+  const size_t hi = std::max(lo, s.common_suffix);
+  constexpr size_t kSamples = 32;
+  const size_t step = std::max<size_t>(1, n / kSamples);
+  float sample[kSamples];
+  double best_spread = 0;
+  int column = -1;
+  for (size_t k = lo; k < hi; ++k) {
+    size_t m = 0;
+    bool finite = true;
+    for (size_t i = 0; i < n && m < kSamples; i += step) {
+      const float v = s.constants[i][k];
+      if (!std::isfinite(v)) {
+        finite = false;
+        break;
+      }
+      sample[m++] = v;
+    }
+    if (!finite || m < 8) continue;
+    std::sort(sample, sample + m);
+    size_t distinct = 1;
+    for (size_t j = 1; j < m; ++j) distinct += sample[j] != sample[j - 1];
+    if (distinct * 4 < m * 3) continue;
+    const double spread = double(sample[m - 1 - m / 10]) - double(sample[m / 10]);
+    if (spread > best_spread) {
+      best_spread = spread;
+      column = int(k);
+    }
+  }
+  if (column < 0) return;
+  s.index.reserve(n);
+  for (size_t i = 0; i < n; ++i) {
+    const float v = s.constants[i][size_t(column)];
+    if (!std::isfinite(v)) {
+      s.index.clear();
+      return;
+    }
+    s.index.emplace_back(v, uint32_t(i));
+  }
+  std::sort(s.index.begin(), s.index.end(), [](const auto& a, const auto& b) {
+    return a.first < b.first || (a.first == b.first && a.second < b.second);
+  });
+  s.index_column = column;
+}
 // ---------------------------------------------------------------- camera vote
 
 void CameraReprojectionVote::BeginFrame(uint64_t frame) {
@@ -262,6 +351,7 @@ void CameraReprojectionVote::BeginFrame(uint64_t frame) {
   frame_ = frame;
   candidates_.clear();
   offers_ = 0;
+  last_.valid = false;
 }
 
 bool CameraReprojectionVote::Close(const Mat4& a, const Mat4& b) {
@@ -274,6 +364,25 @@ bool CameraReprojectionVote::Close(const Mat4& a, const Mat4& b) {
 }
 
 void CameraReprojectionVote::Offer(const float current_rows[16], const float previous_rows[16]) {
+  if (last_.valid && std::memcmp(last_.current, current_rows, sizeof(last_.current)) == 0 &&
+      std::memcmp(last_.previous, previous_rows, sizeof(last_.previous)) == 0) {
+    // The same offer again: what the code below would do with it. The candidates before the one it
+    // joined have not changed (their first member never does) and still do not match; the one it
+    // joined (or started: Close(r, r) holds) still matches first; a full list still has no room.
+    if (!last_.counted) return;
+    ++offers_;
+    if (last_.candidate >= 0) {
+      Candidate& c = candidates_[size_t(last_.candidate)];
+      ++c.votes;
+      for (int i = 0; i < 16; ++i) c.sum[i] += last_.r[i];
+    }
+    return;
+  }
+  last_.valid = true;
+  std::memcpy(last_.current, current_rows, sizeof(last_.current));
+  std::memcpy(last_.previous, previous_rows, sizeof(last_.previous));
+  last_.counted = false;
+  last_.candidate = -1;
   Mat4 cur_inv;
   if (!Mat4Invert(Mat4FromRows(current_rows), cur_inv)) return;
   Mat4 r = Mat4Multiply(Mat4FromRows(previous_rows), cur_inv);
@@ -284,16 +393,23 @@ void CameraReprojectionVote::Offer(const float current_rows[16], const float pre
     for (double& v : r) v *= inv;
   }
   ++offers_;
-  for (Candidate& c : candidates_) {
+  last_.counted = true;
+  last_.r = r;
+  for (size_t k = 0; k < candidates_.size(); ++k) {
+    Candidate& c = candidates_[k];
     if (Close(c.m, r)) {
       ++c.votes;
       // The members' mean: each draw's matrix carries the rounding of its float constants (worst for
       // objects far from the world's origin), which averages out.
       for (int i = 0; i < 16; ++i) c.sum[i] += r[i];
+      last_.candidate = int(k);
       return;
     }
   }
-  if (candidates_.size() < 16) candidates_.push_back({r, r, 1});
+  if (candidates_.size() < 16) {
+    candidates_.push_back({r, r, 1});
+    last_.candidate = int(candidates_.size() - 1);
+  }
 }
 
 bool CameraReprojectionVote::Result(Mat4& reprojection, uint32_t* votes, uint32_t* offers) const {

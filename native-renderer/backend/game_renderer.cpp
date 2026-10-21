@@ -2635,11 +2635,12 @@ void GameRenderer::Draw(nvrhi::ICommandList* cl, const DrawCall& call) {
                     const nvrhi::BufferHandle& buffer) {
     const uint8_t* raw = d.at(base);
     const bool changed = UpdateShaderConstants(raw, last_raw, last);
-    if (!changed && !new_list) return;
+    if (!changed && !new_list) return changed;
     cl->writeBuffer(buffer, last.data(), sizeof(last));
     stats_.upload_bytes += sizeof(last);
+    return changed;
   };
-  upload(dev::kVsConstants, last_vs_raw_, last_vs_, vs_constants_);
+  if (upload(dev::kVsConstants, last_vs_raw_, last_vs_, vs_constants_)) ++vs_constants_generation_;
   upload(dev::kPsConstants, last_ps_raw_, last_ps_, ps_constants_);
   constants_valid_ = true;
   constants_list_ = cl;
