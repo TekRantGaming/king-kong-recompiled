@@ -191,6 +191,10 @@ bool GameRenderer::LoadResourceList(const std::string& path) {
 void GameRenderer::PollResourcePreload(nvrhi::ICommandList* cl) {
   if (resource_poll_frame_ == frame_) return;
   resource_poll_frame_ = frame_;
+  if (const uint64_t clip = ChapterTextureClip().load(std::memory_order_acquire)) {
+    PreloadResources(cl, true, uint32_t(clip >> 32), uint32_t(clip));
+    return;
+  }
   // loading_fix.cpp and play_session.cpp: the loading thread, its state, and
   // the universe's requested map/start. Never change these guest variables.
   const auto* screen = memory_.Virtual(0x82D64080);

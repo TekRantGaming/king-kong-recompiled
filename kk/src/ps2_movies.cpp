@@ -23,6 +23,7 @@
 #pragma comment(lib, "shell32.lib")
 #else
 #include <cstdio>
+#include <dlfcn.h>
 #endif
 
 #include <SDL3/SDL.h>
@@ -66,6 +67,28 @@ REXCVAR_DEFINE_BOOL(kk_ps2_cutscene_load_during, true, "KK/Gameplay",
 REXCVAR_DECLARE(bool, audio_mute);
 
 namespace kk::movies {
+namespace {
+void TextureClipLoading(uint32_t level, uint32_t start, bool active) {
+  using Notify = void (*)(uint32_t, uint32_t, uint32_t);
+  static const auto notify = []() -> Notify {
+#if defined(_WIN32)
+    for (const char* name : {"rexgpu-nativerd.dll", "rexgpu-native.dll", "rexgpu-natived.dll"})
+      if (HMODULE module = GetModuleHandleA(name))
+        if (auto fn = GetProcAddress(module, "nr_clip_texture_loading")) return reinterpret_cast<Notify>(fn);
+#else
+    for (const char* name : {"librexgpu-nativerd.so", "librexgpu-native.so", "librexgpu-natived.so"}) {
+      if (void* module = dlopen(name, RTLD_NOW | RTLD_NOLOAD)) {
+        auto fn = reinterpret_cast<Notify>(dlsym(module, "nr_clip_texture_loading"));
+        dlclose(module);
+        if (fn) return fn;
+      }
+    }
+#endif
+    return nullptr;
+  }();
+  if (notify) notify(level, start, active ? 1u : 0u);
+}
+}
 namespace {
 constexpr int kRate = kAudioRate, kChannels = kAudioChannels;
 
@@ -514,6 +537,7 @@ bool BeforeLoad(const uint8_t* base, uint32_t g, bool starting, bool leaving) {
     // parked in this static would call std::terminate if the program ended while the level loads.
     worker.detach();
     pending = PendingClip{job, std::thread{}, started};
+    TextureClipLoading(uint32_t(to), Word(base, g + 12), true);
     REXLOG_INFO("PS2 movie: the level loads during the clip (kk_ps2_cutscene_load_during){}",
                 holding_audio ? "; the game's sound is held until it ends" : "");
     return true;
@@ -530,6 +554,7 @@ void AfterLoad() {
   const bool clip_over = clip.job->done.load();
   WaitForClip(clip.job, clip.worker, clip.started);
   HoldGameAudio(false);
+  TextureClipLoading(0, 0, false);
   const auto now = std::chrono::steady_clock::now();
   REXLOG_INFO("PS2 movie: level loaded {:.2f} s into the clip; {}", std::chrono::duration<double>(loaded - clip.started).count(),
               clip_over ? "the clip had already ended (the loading screen showed after it)"
@@ -538,6 +563,7 @@ void AfterLoad() {
 }
 
 void Shutdown() {
+  TextureClipLoading(0, 0, false);
 #if defined(KK_DEV_TOOLS)
   DevStopPreparationTrace();
 #endif

@@ -10,6 +10,13 @@
 
 namespace nr {
 
+// The universe may finish its loading-screen draws before its restored clip
+// ends. Keep this preparation request alive until AfterLoad releases the clip.
+inline std::atomic<uint64_t>& ChapterTextureClip() {
+  static std::atomic<uint64_t> request{0};
+  return request;
+}
+
 inline kknr::TextureFetch ChapterTextureFetch(kknr::TextureFetch fetch) {
   // SetTexture (82118F78) converts the CPU-view addresses in the object to
   // physical GPU addresses. The E view has an extra 4 KiB host offset; simply

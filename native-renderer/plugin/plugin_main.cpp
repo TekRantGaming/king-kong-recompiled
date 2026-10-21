@@ -672,6 +672,10 @@ extern "C" REX_GPU_PLUGIN_EXPORT void nr_texture_preload_object(uint32_t object)
   nr::TextureCreationInbox().Push(object);
 }
 
+extern "C" REX_GPU_PLUGIN_EXPORT void nr_clip_texture_loading(uint32_t level, uint32_t start, uint32_t active) {
+  nr::ChapterTextureClip().store(active ? (uint64_t(level) << 32) | start : 0, std::memory_order_release);
+}
+
 // The launcher's prewarm (native_prewarm.h).
 extern "C" REX_GPU_PLUGIN_EXPORT uint32_t nr_prewarm_start(const NrPrewarmRequest* request) {
   if (!request || request->size < sizeof(NrPrewarmRequest) || request->version != NR_PREWARM_VERSION) {
