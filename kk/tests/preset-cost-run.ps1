@@ -3,8 +3,9 @@ param([ValidateSet('matrix','focused','scale','benchmark','capture')][string]$Mo
       [ValidateSet('vulkan','d3d12')][string]$Api='vulkan',
       [int]$Chapter=8, [string]$Scale='1.5', [int]$Repeat=1,
       [datetime]$NotBefore=[datetime]::MinValue,
-      [ValidateSet('quality','balanced','performance')][string]$Quality='balanced',
-      [ValidateSet('quality','balanced','performance')][string]$DeckAfter='performance')
+      [ValidateSet('quality','balanced','performance')][string]$Quality='quality',
+      [ValidateSet('quality','balanced','performance')][string]$DeckAfter='quality',
+      [ValidateSet('original','high')][string]$MediumBeforeShadows='original')
 $ErrorActionPreference='Stop'
 $workspace=(Resolve-Path (Join-Path $PSScriptRoot '../..')).Path
 $runs='F:\KK-native-renderer\runs'
@@ -77,12 +78,24 @@ if ($Mode -eq 'matrix') {
     }
     $plan.Add("control-B-$trial 6 40 1 $baseline native_upscaler_quality=quality")
   }
+} elseif ($Mode -eq 'scale') {
+  # Same plain bilinear path on both sides isolates internal resolution from
+  # DLSS's mode-dependent reconstruction. Output stays at 1920x1080.
+  for ($trial=1; $trial -le 3; ++$trial) {
+    $base="$baseline native_upscaler=bilinear"
+    $plan.Add("control-A-$trial 6 40 1 $base native_upscaler_quality=native")
+    foreach ($side in $(if ($trial -eq 2) { @('B','A') } else { @('A','B') })) {
+      $q=if ($side -eq 'A') { 'native' } else { 'quality' }
+      $plan.Add("scale-$side-$trial 6 40 1 $base native_upscaler_quality=$q")
+    }
+    $plan.Add("control-B-$trial 6 40 1 $base native_upscaler_quality=native")
+  }
 } elseif ($Mode -eq 'capture') {
   $snapshots=@(
     @('low-before','native_gi=low native_gi_distance=near anisotropic_override=2 native_upscaler_quality=performance'),
     @('low-after','native_gi=low native_gi_distance=near anisotropic_override=2 native_upscaler_quality=performance'),
-    @('medium-before','native_upscaler_quality=quality'),
-    @('medium-after',"native_upscaler_quality=$Quality"),
+    @('medium-before',"native_upscaler_quality=quality native_shadow_quality=$MediumBeforeShadows"),
+    @('medium-after',"native_upscaler_quality=$Quality native_shadow_quality=original"),
     @('deck-before','native_gi=low native_gi_distance=near anisotropic_override=2 native_upscaler_quality=quality'),
     @('deck-after',"native_gi=low native_gi_distance=near anisotropic_override=2 native_upscaler_quality=$DeckAfter")
   )
@@ -98,10 +111,29 @@ $env:KK_DEV_SCRIPT='0:SKIP/4'
 $env:KK_DEV_GFX_FINISH="$root\plan.txt,$root\captures"
 $env:KK_DEV_GFX_FINISH_START='12'
 if ($Mode -eq 'capture') {
-  # Bounded capture only: hold the same world moment without using this clock for timing.
-  $env:KK_DEV_FORCE_DT='0.000001'
-  $env:KK_DEV_FORCE_DT_AT='12'
-  $env:KK_DEV_GFX_FINISH_START='14'
+  # Photo mode hides the graphics panel, including FinishTick. The existing
+  # pause action thread can set flags while photo mode takes the paused frames.
+  # Pictures only: never use a paused scene's timings as performance evidence.
+  $env:KK_DEV_GFX_FINISH=$null
+  $pauseSteps=[Collections.Generic.List[string]]::new()
+  $photoSteps=[Collections.Generic.List[string]]::new()
+  $pauseSteps.Add('10:open')
+  foreach ($step in '12:enter','14:panel:0','15:pos') { $photoSteps.Add($step) }
+  for ($i=0; $i -lt $snapshots.Count; ++$i) {
+    $at=16+7*$i
+    foreach ($kv in ("$baseline $($snapshots[$i][1])" -split ' ')) {
+      $pauseSteps.Add(('{0}:set={1}' -f $at,$kv))
+    }
+    $photoSteps.Add(('{0}:shot:{1}' -f ($at+3),$snapshots[$i][0]))
+  }
+  $photoSteps.Add('55:pos')
+  $photoSteps.Add('56:done')
+  $env:KK_DEV_PAUSE_ACTIONS=$pauseSteps -join ','
+  $env:KK_DEV_PHOTO_STEPS=$photoSteps -join ','
+  $env:KK_DEV_PHOTO_DIR="$root\captures"
+  New-Item -ItemType Directory -Path $env:KK_DEV_PHOTO_DIR -Force | Out-Null
+  @{pause=$env:KK_DEV_PAUSE_ACTIONS;photo=$env:KK_DEV_PHOTO_STEPS} |
+      ConvertTo-Json | Set-Content "$root\capture-plan.json"
 }
 $args=@('--fullscreen=false','--window_width=1280','--window_height=720','--kk_fullscreen_mode=desktop',
  '--kk_startup_child=true',
@@ -112,7 +144,7 @@ $args=@('--fullscreen=false','--window_width=1280','--window_height=720','--kk_f
  '--native_ao_gpu_time=true','--native_gi_gpu_time=true','--native_upscaler_gpu_time=true','--native_lighting_gpu_time=true')
 if ($Mode -in 'matrix','capture') { $args+=@('--native_upscaler=dlss','--kk_frame_rate=60') }
 elseif ($Mode -eq 'focused') { $args+=@('--native_upscaler=dlss','--kk_frame_rate=0') }
-elseif ($Mode -eq 'scale') { $args+=@('--native_upscaler=off',"--native_render_scale=$Scale") }
+elseif ($Mode -eq 'scale') { $args+=@('--native_upscaler=bilinear','--kk_frame_rate=0') }
 else {
   foreach ($name in 'KK_DEV_AUTOSKIP','KK_DEV_SCRIPT','KK_DEV_FORCE_DT','KK_DEV_FORCE_DT_AT',
                    'KK_DEV_GFX_FINISH','KK_DEV_GFX_FINISH_START') {
@@ -167,7 +199,7 @@ try {
   "RUN $root PID $($game.Id)"
   $watch=[Diagnostics.Stopwatch]::StartNew()
   $otherCheck=-30.0
-  $limit=if ($Mode -in 'matrix','focused') { 1500 } elseif ($Mode -eq 'benchmark') { 600 } else { 180 }
+  $limit=if ($Mode -in 'matrix','focused','scale') { 1500 } elseif ($Mode -eq 'benchmark') { 600 } else { 180 }
   while (!$game.HasExited -and $watch.Elapsed.TotalSeconds -lt $limit) {
     if ($watch.Elapsed.TotalSeconds - $otherCheck -ge 10) {
       $otherCheck=$watch.Elapsed.TotalSeconds
@@ -185,7 +217,8 @@ try {
         break
       }
     }
-    $finished=if ($Mode -eq 'benchmark') { 'KK benchmark: complete, status' } else { 'KK gfx finish: done' }
+    $finished=if ($Mode -eq 'benchmark') { 'KK benchmark: complete, status' }
+              elseif ($Mode -eq 'capture') { 'KK photo test: DONE' } else { 'KK gfx finish: done' }
     if ((Test-Path "$root\run.log") -and (Select-String -Path "$root\run.log" -SimpleMatch $finished -Quiet)) { break }
     Start-Sleep -Seconds 2
   }
