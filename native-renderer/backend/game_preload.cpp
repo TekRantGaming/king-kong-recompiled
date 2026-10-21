@@ -111,9 +111,12 @@ void GameRenderer::PrepareChapterTextures() {
   }
   auto incoming = TextureCreationInbox().Take();
   for (const auto object : incoming) {
-    if (chapter_candidates_.size() >= 4096) break;
-    if (std::find(chapter_candidates_.begin(), chapter_candidates_.end(), object) == chapter_candidates_.end())
-      chapter_candidates_.push_back(object);
+    if (std::find(chapter_candidates_.begin(), chapter_candidates_.end(), object) != chapter_candidates_.end()) continue;
+    if (chapter_candidates_.size() < 4096) chapter_candidates_.push_back(object);
+    else {  // Recent creations must not be crowded out by old gameplay notifications.
+      chapter_candidate_cursor_ %= chapter_candidates_.size();
+      chapter_candidates_[chapter_candidate_cursor_++] = object;
+    }
   }
   if (chapter_candidates_.empty() || preload_records_.empty() ||
       preload_reserved_bytes_ >= ChapterPreloadBytes() || (chapter_textures_ && chapter_textures_->Busy())) return;
