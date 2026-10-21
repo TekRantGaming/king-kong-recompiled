@@ -22,6 +22,8 @@ REX_EXTERN(__imp__sub_82448E08);
 REX_EXTERN(__imp__sub_8256C3F8);
 REX_EXTERN(__imp__sub_82552200);
 REX_EXTERN(__imp__sub_82515CF0);
+REX_EXTERN(__imp__sub_82516128);
+REX_EXTERN(__imp__sub_8271CCB8);
 REX_EXTERN(__imp__sub_82543478);
 REX_EXTERN(__imp__sub_82574D80);
 REX_EXTERN(__imp__sub_826F9DC0);
@@ -42,6 +44,7 @@ using namespace hfr;
 constexpr uint32_t kDoorGamePtr=0x82CC8F40;
 struct Binding : objects::Binding {
   uint64_t hold_tick=0;
+  uint64_t damage_tick=0;
   float x=0,y=0,z=0;
   struct Hit { ObjectState raw; double until=0; };
   std::deque<Hit> pending_hits;
@@ -619,6 +622,7 @@ void Door(PPCContext& ctx,uint8_t* b) {
 }
 void Breakable(PPCContext& ctx,uint8_t* b) {
   auto* o=state.ready && Shared() ? Current(b,ObjectKind::Breakable) : nullptr;
+  if (o) o->damage_tick=state.ai_tick;
   __imp__sub_82515CF0(ctx,b);
   // Capture the final native damage in the same call, before a later frame
   // retires an exploded obstacle from the full registry.
@@ -627,6 +631,55 @@ void Breakable(PPCContext& ctx,uint8_t* b) {
   if (o && !state.host && Components(b,*o)) if (const auto* s=state.replica.Find(o->kind,o->source))
     if (s->value && Load32(b,o->vars+552)>=s->value) state.observed_change=true;
 #endif
+}
+void ReplayBreakables(PPCContext& ctx,uint8_t* b) {
+  if (state.host) return;
+  for (auto& [actor,o] : state.bindings) {
+    if (o.kind!=ObjectKind::Breakable || !Valid(b,o) || Match(o.source,o.kind)!=&o ||
+        o.damage_tick==state.ai_tick) continue;
+    const auto* s=state.replica.Find(o.kind,o.source);
+    if (!s || !objects::DamageDelta(Load32(b,o.vars+552),s->value)) continue;
+    const auto track=objects::BreakableConsumer([&](uint32_t a){ return Load32(b,a); },
+        [&](uint32_t a){ return Load16(b,a); },o.ai);
+    if (!track || (!track->init && !Load32(b,o.vars+556))) continue;
+    // A privately reloaded prop can remain outside the native active AI list.
+    // Wake only its own init/Go callback through the native track dispatcher.
+    // Init advances its own scheduler block and registers parts/grid/capability.
+    // A later initialized Go consumes only the missing absolute host damage.
+    const auto sp=ctx.r1.u32;
+    if ((sp&15) || sp<0x40014000 || sp>=0xA0000000) continue;
+    uint8_t scratch[16384]; const auto start=sp-sizeof(scratch); const PPCContext saved=ctx;
+    std::memcpy(scratch,b+start,sizeof(scratch));
+    constexpr uint32_t globals[]{0x82CCBF58,0x82CCBF5C,0x82CCBF60,0x82CCBF64,0x82CCBF68,0x82CCBF6C,0x82CCBF70};
+    uint32_t values[7]; for (unsigned i=0;i<7;++i) values[i]=Load32(b,globals[i]);
+    ctx.r1.u64=start+12288; std::memset(b+start+12288,0,4096); Store32(b,start+12288,sp);
+    Store32(b,0x82CCBF64,o.ai); Store32(b,0x82CCBF68,o.ai);
+    Store32(b,0x82CCBF6C,o.actor); Store32(b,0x82CCBF70,o.actor);
+    Store32(b,0x82CCBF58,track->slot);
+    ctx.r3.u64=track->block; ctx.r4.u64=o.ai+(track->slot+1)*4; ctx.r5.u64=0;
+    const auto before=Load32(b,o.vars+552);
+    __imp__sub_8271CCB8(ctx,b);
+    const auto result=ctx.r3.u32;
+    // Checkpoint init can remove every part and the obstacle, then return1
+    // before computing maximum556 or ever entering Go. Keep that native
+    // geometry cleanup and restore only its absolute semantic damage counter.
+    const bool terminal=track->init && result==1 && objects::BreakableCheckpointGone(
+        [&](uint32_t a){ return Load32(b,a); },o.actor,o.vars);
+    if (terminal) {
+      Store32(b,o.vars+552,s->value); Store32(b,o.vars+560,uint32_t(s->position)); ++state.applied;
+    }
+    for (unsigned i=0;i<7;++i) Store32(b,globals[i],values[i]);
+    std::memcpy(b+start,scratch,sizeof(scratch)); ctx=saved; o.damage_tick=state.ai_tick;
+    if (Trace()) REXLOG_INFO("KK dev object private replay: id={:016X} init={} slot={} result={} terminal={} damage={}->{} host={} maximum={} flags={:08X} capability={}",
+        o.source,track->init,track->slot,result,terminal,before,Load32(b,o.vars+552),s->value,Load32(b,o.vars+556),Load32(b,o.actor+4),Load32(b,o.vars+564));
+#if defined(KK_DEV_TOOLS)
+    if (Load32(b,o.vars+552)>=s->value) state.observed_change=true;
+#endif
+  }
+}
+void BreakableInit(PPCContext& ctx,uint8_t* b) {
+  if (auto* o=state.ready && Shared() ? Current(b,ObjectKind::Breakable) : nullptr) o->damage_tick=state.ai_tick;
+  __imp__sub_82516128(ctx,b);
 }
 void DoorUpdate(PPCContext& ctx,uint8_t* b) {
   auto* o=state.ready && Shared() ? Current(b,ObjectKind::Door) : nullptr;
@@ -940,6 +993,7 @@ void ObjectsBeforeAi(PPCContext& ctx,uint8_t* b,uint32_t w) {
 }
 void ObjectsAfterAi(PPCContext& ctx,uint8_t* b,uint32_t w) {
   if (!state.ready || w!=state.world || !Shared()) return;
+  ReplayBreakables(ctx,b);
   IdleDoors(ctx,b);
   const auto now=Now();
   if (state.host && now>=state.next_sample) {
@@ -985,6 +1039,11 @@ void ObjectsAfterAi(PPCContext& ctx,uint8_t* b,uint32_t w) {
       if (o.kind==ObjectKind::Door) REXLOG_INFO("KK dev object door callbacks: role={} id={:016X} init={} wait={} loop={} update={} holds={} context-misses={} dt={} duration={} fraction={} endpoint={}",
           state.host ? "host" : "guest",o.source,o.init_calls,o.wait_calls,o.loop_calls,o.update_calls,
           o.hold_calls,o.context_misses,LoadF(b,0x82C636E0),LoadF(b,o.vars+1088),LoadF(b,o.vars+1084),Load32(b,o.vars+1096));
+      if (o.kind==ObjectKind::Door) REXLOG_INFO("KK dev object door geometry: role={} id={:016X} translate={} rotate={} target={:08X} pos=({:.3f},{:.3f},{:.3f})",
+          state.host ? "host" : "guest",o.source,Load32(b,o.vars+560),Load32(b,o.vars+564),Load32(b,o.vars+364),
+          LoadF(b,o.matrix+48),LoadF(b,o.matrix+52),LoadF(b,o.matrix+56));
+      if (o.kind==ObjectKind::Breakable) REXLOG_INFO("KK dev object breakable consumer: role={} id={:016X} maximum={} init={} go={} consumed={}",
+          state.host ? "host" : "guest",o.source,Load32(b,o.vars+556),Track(b,o.ai,0x82516128),Track(b,o.ai,0x82515CF0),o.damage_tick==state.ai_tick);
       if (o.kind==ObjectKind::Door && !o.lever_logged) {
         bool logged=false;
         for (unsigned i=0;i<8;++i) if (const auto ext=Lever(b,o,i)) {
@@ -1014,6 +1073,7 @@ REX_HOOK_RAW(sub_824ADD48) { kk::coop::Damage(ctx,base); }
 REX_HOOK_RAW(sub_8256C3F8) { kk::coop::Door(ctx,base); }
 REX_HOOK_RAW(sub_82552200) { kk::coop::DoorUpdate(ctx,base); }
 REX_HOOK_RAW(sub_82515CF0) { kk::coop::Breakable(ctx,base); }
+REX_HOOK_RAW(sub_82516128) { kk::coop::BreakableInit(ctx,base); }
 REX_HOOK_RAW(sub_82543478) { kk::coop::DoorWait(ctx,base); }
 REX_HOOK_RAW(sub_82574D80) { kk::coop::DoorInit(ctx,base); }
 REX_HOOK_RAW(sub_826F9DC0) { kk::coop::DoorStop(ctx,base); }

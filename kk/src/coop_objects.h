@@ -8,6 +8,34 @@
 
 namespace kk::coop::objects {
 constexpr size_t kQueue=kObjectQueue, kCensus=kObjectCensus;
+struct BreakableTrack { uint32_t block=0,slot=0; bool init=false; };
+// Only these two recovered callbacks may be woken by a retained outcome.
+// The native dispatcher needs this AI's own state word and slot, not the outer AI's.
+template<class Read,class ReadHalf> std::optional<BreakableTrack> BreakableConsumer(Read read,ReadHalf half,uint32_t ai) {
+  if (!PoseAddress(ai,88)) return {};
+  const auto first=half(ai+80),last=half(ai+82);
+  if (first>last || last>=5) return {};
+  std::optional<BreakableTrack> found;
+  for (uint32_t slot=first;slot<=last;++slot) {
+    const auto block=read(ai+(slot+6)*4);
+    if (!PoseAddress(block,24)) continue;
+    const auto fn=read(block+20);
+    if (fn!=0x82516128 && fn!=0x82515CF0) continue;
+    if (found) return {}; // No guessed choice between competing consumers.
+    found=BreakableTrack{block,slot,fn==0x82516128};
+  }
+  return found;
+}
+// Native82516128 takes its terminal cleanup branch for this registered cap bit.
+// Native82714E40 marks the obstacle itself with BOTH queued-removal flags only
+// after the initializer has visited its parts. This is not a raw damage latch.
+template<class Read> bool BreakableCheckpointGone(Read read,uint32_t actor,uint32_t vars) {
+  if (!PoseAddress(actor,32) || !PoseAddress(vars,580)) return false;
+  const auto cap=read(vars+564),bank=read(0x82CC92F8);
+  if (cap<201 || cap>=1500 || (read(actor+4)&0x00600000)!=0x00600000 ||
+      !PoseAddress(bank,(771+(cap>>5))*4)) return false;
+  return (read(bank+(770+(cap>>5))*4)&(1u<<(cap&31)))!=0;
+}
 // Native stop 826F9DC0 supports five slots. Never use an outer actor's current
 // index, an unrelated track or a malformed scheduler range for a side call.
 template<class Read,class ReadHalf> std::vector<unsigned> DoorSlots(Read read,ReadHalf half,uint32_t ai) {

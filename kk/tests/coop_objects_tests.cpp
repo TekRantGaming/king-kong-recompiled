@@ -40,6 +40,23 @@ void Policies() {
   const auto schedule=[&](uint32_t a){ auto it=scheduler.find(a); return it==scheduler.end() ? 0u : it->second; };
   Check(objects::DoorSlots(schedule,schedule,0x42000000)==std::vector<unsigned>({2,3}),
       "isolated endpoint retires only the bound door's own known tracks");
+  Check(!objects::BreakableConsumer(schedule,schedule,0x42000000),"door/human callbacks cannot be woken as breakables");
+  scheduler[0x43000114]=0x82516128;
+  const auto consumer=objects::BreakableConsumer(schedule,schedule,0x42000000);
+  Check(consumer && consumer->init && consumer->slot==2 && consumer->block==0x43000100,
+      "private replay selects the obstacle's own initializer and state word");
+  scheduler[0x43000214]=0x82515CF0;
+  Check(!objects::BreakableConsumer(schedule,schedule,0x42000000),"ambiguous native consumers are refused");
+  scheduler[0x43000114]=0x82543478; scheduler[0x43000214]=0x82574D80;
+  std::map<uint32_t,uint32_t> checkpoint{{0x44000234,201},{0x82CC92F8,0x45000000},
+      {0x42001004,0x00600000},{0x45000c20,1u<<9}};
+  const auto checkpoint_read=[&](uint32_t a){ const auto it=checkpoint.find(a); return it==checkpoint.end() ? 0u : it->second; };
+  Check(objects::BreakableCheckpointGone(checkpoint_read,0x42001000,0x44000000),
+      "native checkpoint terminal cleanup admits semantic damage restoration");
+  checkpoint[0x42001004]=0x00400000;
+  Check(!objects::BreakableCheckpointGone(checkpoint_read,0x42001000,0x44000000),"one removal flag alone cannot certify native terminal cleanup");
+  checkpoint[0x42001004]=0x00600000; checkpoint[0x45000c20]=0;
+  Check(!objects::BreakableCheckpointGone(checkpoint_read,0x42001000,0x44000000),"terminal replay requires this object's exact native checkpoint bit");
   scheduler[0x42000052]=5;
   Check(objects::DoorSlots(schedule,schedule,0x42000000).empty(),"native stop cannot address a sixth slot");
   scheduler[0x42000052]=0;
