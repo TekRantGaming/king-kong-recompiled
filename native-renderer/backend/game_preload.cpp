@@ -143,7 +143,8 @@ void GameRenderer::PrepareChapterTextures() {
   // Each request scans at most 32 MiB using fault-safe copies. No render-thread
   // memory sweep, waiting, or publication based on a header alone.
   auto discover = [&] {
-    if (const char* value = std::getenv("KK341_DISCOVER"); value && *value == '0') return false;
+    const char* value = std::getenv("KK341_DISCOVER");
+    if (!value || *value != '1') return false;  // investigation only; prefer actual header notifications
     if (!chapter_scan_ready_) return false;
     if (!chapter_scan_low_ && chapter_scan_cursor_ >= 0xC0000000) {
       chapter_scan_low_ = true;
@@ -199,7 +200,10 @@ void GameRenderer::PrepareChapterTextures() {
       output += ((uint64_t(std::max(plan.width >> level, 1u)) + format.block_size - 1) / format.block_size) *
                 ((uint64_t(std::max(plan.height >> level, 1u)) + format.block_size - 1) / format.block_size) *
                 format.bytes_per_block * std::max(plan.depth >> level, 1u) * plan.layers;
-    if (output < UploadBatch::kMinBytes || output > ChapterTexturePrepare::kMaxBytes ||
+    // Conservative placement alignment also permits small originals in this
+    // asynchronous path (the joined first-use batch's 64 KiB floor does not apply).
+    output = (output + 65535) & ~uint64_t(65535);
+    if (!output || output > ChapterTexturePrepare::kMaxBytes ||
         output > ChapterPreloadBytes() - preload_reserved_bytes_) continue;
     const auto ranges = kknr::GetTextureRanges(fetch, options);
     kknr::GuestRange source[2] = {{ranges.base, ranges.base_bytes}, {ranges.mip, ranges.mip_bytes}};

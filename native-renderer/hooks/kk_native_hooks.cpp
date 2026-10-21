@@ -221,7 +221,7 @@ REX_HOOK_RAW(sub_82118A68) {
 
 // The archive path also constructs a header around already-loaded physical
 // data without calling CreateTexture. sub_8220B1C8 copies ten words to stack
-// argument +124 after filling the base/mip addresses (generated body +0x1C8).
+// argument +124 after filling the base/mip addresses (copy loop at 0x8220B3A8).
 REX_EXTERN(__imp__sub_8220B1C8);
 REX_HOOK_RAW(sub_8220B1C8) {
   const auto* p = base + ctx.r1.u32 + 124;
