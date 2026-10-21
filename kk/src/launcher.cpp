@@ -20,6 +20,7 @@
 #include "startup_movies.h"
 #include "startup_movies_logic.h"
 #include "setup_again.h"
+#include "hardware_recommendation.h"
 #include "notify_logic.h"
 #include "system_notify.h"
 #include "ps2_movies.h"
@@ -4850,6 +4851,7 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
     if (setup_again::Due(existing_install_, GetInt("kk_setup_again"), std::getenv("KK_AUTOPLAY") != nullptr)) {
       ResetForSetupAgain();
       ApplyRemastered(true);
+      ApplyRecommendedPreset();
       REXLOG_INFO("KK: setup again: new defaults (native_backend={} kk_frame_rate={} native_gi={} tier {} preset '{}' "
                   "render {} upscaler {} / {})",
                   FindFlag("native_backend") ? Get("native_backend") : std::string("-"), Get("kk_frame_rate"),
@@ -4858,6 +4860,7 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
                   FindFlag("native_upscaler") ? Get("native_upscaler") : std::string("-"), Get("present_effect"));
     } else if (Get("kk_setup_version").empty()) {
       ApplyRemastered(true);
+      ApplyRecommendedPreset();
       REXLOG_INFO("KK: setup: new install: Remastered defaults (kk_frame_rate={} ao_strength={} native_gi={} tier {})",
                   Get("kk_frame_rate"), Get("ao_strength"), FindFlag("native_gi") ? Get("native_gi") : std::string("-"),
                   Get("kk_hardware_tier"));
@@ -4871,6 +4874,21 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
     gfx_from_new_ = false;
     if (save) SaveSettings(paths_.config_path);  // the constructor saves later (a saved file now would look like an update)
     AskContentInSetup();
+  }
+
+  // Task 350a (coordinator, 21 Oct): the first-time setup starts on a named preset, the one the hardware tier
+  // recommends (setup_again::RecommendedPreset), applied whole like a choice on the Preset row: every row of it
+  // matches and the Preset row shows its name, not Custom. The frame rate (60) and the look stay ApplyRemastered's.
+  void ApplyRecommendedPreset() {
+    const std::string tier = Get("kk_hardware_tier");
+    const bool deck = DetectHardware().steam_deck;
+    const std::string_view label = setup_again::RecommendedPreset(tier, deck);
+    for (int i = 0; i < kGraphicsPresetCount; ++i)
+      if (label == kGraphicsPresets[i].label) ApplyGraphicsPreset(i);
+    ++g_changes;
+    const int now = MatchGraphicsPreset();
+    REXLOG_INFO("KK: setup: starts on the {} preset (tier '{}'{}); the Preset row shows {}", label, tier,
+                deck ? ", Steam Deck" : "", now >= 0 ? kGraphicsPresets[now].label : "Custom");
   }
 
   // Task 350a: the settings the setup's pages show, back to their defaults (setup_again::Resets), and the hardware

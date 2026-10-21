@@ -52,4 +52,13 @@ inline bool Resets(std::string_view name, std::string_view category) {
   return name.substr(0, 7) == "kk_map_" || category == "Input/Keybinds/Controller";
 }
 
+// The named preset the first-time setup (fresh, or again) starts on (coordinator, 21 Oct): the one the hardware
+// tier recommends, applied whole (graphics_presets.h), so the Preset row shows its name and not Custom.
+inline std::string_view RecommendedPreset(std::string_view tier, bool steam_deck) {
+  if (steam_deck) return "Steam Deck";
+  if (tier == "low") return "Low";
+  if (tier == "high") return "High";
+  return "Medium";  // "mid", or no tier
+}
+
 }  // namespace kk::setup_again

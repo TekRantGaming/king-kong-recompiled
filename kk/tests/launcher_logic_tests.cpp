@@ -823,6 +823,17 @@ void SetupAgainChecks() {
                            "kk_pad_prompts", "mnk_mode", "kk_camera_sensitivity", "kk_map_a", "kk_deadzone"})
     Check(sa::Resets(name, "KK"), name);
   Check(sa::Resets("keybind_a", "Input/Keybinds/Controller"), "the keyboard bindings go back too");
+  // The setup starts on the named preset the tier recommends, one of the preset table's.
+  Check(sa::RecommendedPreset("low", false) == "Low", "low tier: Low");
+  Check(sa::RecommendedPreset("mid", false) == "Medium", "mid tier: Medium");
+  Check(sa::RecommendedPreset("high", false) == "High", "high tier: High");
+  Check(sa::RecommendedPreset("", false) == "Medium", "no tier: Medium");
+  Check(sa::RecommendedPreset("low", true) == "Steam Deck", "a Steam Deck: Steam Deck");
+  for (const char* tier : {"low", "mid", "high"}) for (bool deck : {false, true}) {
+    bool found = false;
+    for (const auto& p : kk::kGraphicsPresets) found = found || sa::RecommendedPreset(tier, deck) == p.label;
+    Check(found, "the recommended preset is in the preset table");
+  }
   // ... and the rest stays: installed downloads, the game files, audio, gameplay, cheats, setup records.
   for (const char* name : {"native_texture_pack", "native_texture_pack_folder", "kk_texture_pack_own_folder",
                            "kk_ps2_cutscenes", "kk_ps2_movie_folder", "game_data_root", "kk_upscalers_offered",
