@@ -315,6 +315,10 @@ void InitDiagnostics() {
     }
     // The SDK's normal categories share their output sinks and flush level.
     // Keep custom category routing unchanged if an embedding supplies it.
+    // Built-ins are lazy: register them before changing automatic flushes,
+    // including categories whose first message is emitted during gameplay.
+    for (const auto category : {rex::log::core(), rex::log::cpu(), rex::log::apu(), rex::log::gpu(),
+                                rex::log::krnl(), rex::log::sys(), rex::log::fs()}) (void)category;
     const auto logger = rex::GetLogger();
     auto outputs = logger->sinks();
     const auto flush_level = logger->flush_level();
