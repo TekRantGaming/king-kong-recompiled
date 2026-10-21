@@ -901,9 +901,10 @@ void ObjectsAfterAi(PPCContext&,uint8_t* b,uint32_t w) {
       const auto human=Ptr(b,Ptr(b,Ptr(b,hero,24,8),4,88),64,13388);
       const auto game=Load32(b,0x82CC97C0); // actual cheats/firearm inventory cache
       if (matrix && human && PoseAddress(game,13652))
-        REXLOG_INFO("KK dev object player: role={} pos=({:.3f},{:.3f},{:.3f}) mode={} paired={:08X} marker={:08X} weapon={} ammo={}/{}/{}/{}",
+        REXLOG_INFO("KK dev object player: role={} pos=({:.3f},{:.3f},{:.3f}) mode={} paired={:08X} marker={:08X} weapon={} ammo={}/{}/{}/{} facing={:.3f}/{:.3f} use={} cutscene={} condition={}",
             state.host ? "host" : "guest",LoadF(b,matrix+48),LoadF(b,matrix+52),LoadF(b,matrix+56),Load32(b,human+2712),
-            Load32(b,human+13376),Load32(b,human+13380),Load32(b,game+13128),Load32(b,game+13432),Load32(b,game+13504),Load32(b,game+13576),Load32(b,game+13648));
+            Load32(b,human+13376),Load32(b,human+13380),Load32(b,game+13128),Load32(b,game+13432),Load32(b,game+13504),Load32(b,game+13576),Load32(b,game+13648),
+            -LoadF(b,matrix+16),-LoadF(b,matrix+20),use_until.load(std::memory_order_relaxed)>=now,observer::InCutscene(b),int(LocalPlayerCondition(b).value_or(PlayerCondition::Dead)));
     }
     if (Trace()) for (auto& [actor,o] : state.bindings) if (Valid(b,o) && Match(o.source,o.kind)==&o) {
       if (details++>=32 && !state.debug_sources.contains(o.source)) continue;
