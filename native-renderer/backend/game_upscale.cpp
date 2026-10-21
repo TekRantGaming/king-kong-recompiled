@@ -1172,18 +1172,23 @@ void GameRenderer::PostSplitMark(nvrhi::ICommandList* cl, uint64_t bucket, const
   post_split_open_ = b.timer.get();
 }
 
-void GameRenderer::PostSplitTarget(nvrhi::ICommandList* cl, const HostTarget* t) {
+void GameRenderer::PostSplitTarget(nvrhi::ICommandList* cl, const HostTarget* t, char kind, uint64_t shader) {
   if (!PostSplitOn() || !t) return;
-  if (!upscale_ || !upscale_->upscaled) {
-    PostSplitMark(cl, 1, "0 the scene, before the upscale point");
-    return;
-  }
+  // Before the upscale point by target; after it by target, kind (draw, clear, resolve) and pixel shader.
+  const bool after = upscale_ && upscale_->upscaled;
+  if (!after) kind = 0, shader = 0;
   const uint32_t pitch = uint32_t((t->key >> 16) & 0x3FFF), format = uint32_t((t->key >> 40) & 0xFF);
-  const uint64_t bucket = 0x100ull | uint64_t(pitch) << 8 | uint64_t(format) << 24 | uint64_t(t->depth) << 32 |
-                          uint64_t(t->host_width) << 40;
-  char what[96];
-  std::snprintf(what, sizeof(what), "2 after the upscale point: pitch %u format %u %s %ux%u", pitch, format,
-                t->depth ? "depth" : "colour", t->host_width, t->host_height);
+  uint64_t bucket = 0x100ull | uint64_t(pitch) << 8 | uint64_t(format) << 24 | uint64_t(t->depth) << 32 |
+                    uint64_t(t->host_width) << 40 | uint64_t(after) << 60;
+  bucket = Mix64(Mix64(bucket, uint64_t(uint8_t(kind))), shader) | 0x100;
+  char what[128];
+  if (after)
+    std::snprintf(what, sizeof(what), "2 after the upscale point: pitch %u format %u %s %ux%u %s %016llx", pitch, format,
+                  t->depth ? "depth" : "colour", t->host_width, t->host_height,
+                  kind == 'd' ? "draw ps" : kind == 'c' ? "clear" : "resolve", static_cast<unsigned long long>(shader));
+  else
+    std::snprintf(what, sizeof(what), "0 before it: pitch %u format %u %s %ux%u", pitch, format,
+                  t->depth ? "depth" : "colour", t->host_width, t->host_height);
   PostSplitMark(cl, bucket, what);
 }
 

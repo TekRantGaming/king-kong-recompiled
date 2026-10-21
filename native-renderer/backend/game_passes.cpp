@@ -264,7 +264,7 @@ void GameRenderer::Clear(nvrhi::ICommandList* cl, const ClearCall& call) {
                         std::max(s.height, existing ? existing->height : 0u));
     }
   }
-  PostSplitTarget(cl, colors[0] ? colors[0] : depth);  // dev aid (KK_DEV_POST_SPLIT)
+  PostSplitTarget(cl, colors[0] ? colors[0] : depth, 'c');  // dev aid (KK_DEV_POST_SPLIT)
   if (scene_ao_) AoClearHook(call, depth);  // AO hook (game_ao.cpp): the scene's depth is cleared
   if (scene_gi_) GiClearHook(call, depth);  // GI hook (game_gi.cpp)
   if (scene_cel_) CelClearHook(call, depth);  // Cel hook (game_cel.cpp)
@@ -406,7 +406,7 @@ void GameRenderer::Resolve(nvrhi::ICommandList* cl, const ResolveCall& call) {
       return;
     }
   }
-  PostSplitTarget(cl, source);  // dev aid (KK_DEV_POST_SPLIT)
+  PostSplitTarget(cl, source, 'r');  // dev aid (KK_DEV_POST_SPLIT)
   int32_t sx = 0, sy = 0, w = int32_t(s.width), h = int32_t(s.height);
   if (call.has_rect) {
     sx = call.rect[0];

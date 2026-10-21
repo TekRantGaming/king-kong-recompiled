@@ -2262,7 +2262,7 @@ void GameRenderer::Draw(nvrhi::ICommandList* cl, const DrawCall& call) {
     if (want_color[i].used) colors[i] = GetTarget(false, want_color[i].base, pitch, want_color[i].format, height);
   }
   if (want_depth.used) depth = GetTarget(true, want_depth.base, pitch, want_depth.format, height);
-  PostSplitTarget(cl, colors[0] ? colors[0] : colors[1] ? colors[1] : depth);  // dev aid (KK_DEV_POST_SPLIT)
+  PostSplitTarget(cl, colors[0] ? colors[0] : colors[1] ? colors[1] : depth, 'd', ps ? ps->ucode_hash : 0);  // dev aid (KK_DEV_POST_SPLIT)
   bool any = depth != nullptr;
   for (HostTarget* c : colors) any = any || c;
   if (!any) {

@@ -189,6 +189,9 @@ GameRenderer::HostTarget* GameRenderer::GetTarget(bool depth, uint32_t edram_bas
     }
   }
   if (!slot) ++stats_.edram_targets;
+  if (PostSplitOn())  // dev aid (KK_DEV_POST_SPLIT)
+    Logf(LogLevel::kInfo, "rexgpu-native: frame split: new target pitch %u format %u %s %ux%u (%s generation)", pitch,
+         format, depth ? "depth" : "colour", t->host_width, t->host_height, out ? "output" : "input");
   slot = std::move(t);
   slot->used_frame = frame_;
   if (upscale_) {
