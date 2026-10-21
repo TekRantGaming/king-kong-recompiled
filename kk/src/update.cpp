@@ -30,7 +30,11 @@ namespace {
 namespace fs = std::filesystem;
 
 // The folders an update may write to, relative to the program (never game/).
-const char* const kUpdatedDirs[] = {"", "glyphs", "launcher_art"};
+const char* const kUpdatedDirs[] = {"", "glyphs", "launcher_art", "launcher", "mods-builtin"};
+
+// Updaters up to Beta 14 copy only the program folder's own files, glyphs/ and launcher_art/, so the
+// release also carries launcher/ and mods-builtin/ in this zip at the top; the first start unpacks it.
+constexpr const char* kExtraFilesZip = "update-extra-files.zip";
 
 // The string value of the first "key": "value" in a JSON text (no escapes needed for ours).
 std::string JsonString(const std::string& json, const std::string& key, size_t from = 0, size_t* at = nullptr) {
@@ -331,9 +335,25 @@ void CleanUpAfterUpdate() {
   };
   for (auto& e : fs::directory_iterator(exe_dir, ec))  // the program's own folder, not game/
     if (e.is_regular_file()) clean(e.path());
-  for (const char* d : {"glyphs", "launcher_art"})
-    for (auto& e : fs::recursive_directory_iterator(exe_dir / d, ec))
-      if (e.is_regular_file()) clean(e.path());
+  for (const char* d : kUpdatedDirs)
+    if (*d)
+      for (auto& e : fs::recursive_directory_iterator(exe_dir / d, ec))
+        if (e.is_regular_file()) clean(e.path());
+#if defined(_WIN32)
+  // Unpack the files an older updater left out (kExtraFilesZip). Kept for the next start if it fails.
+  const fs::path extra = exe_dir / kExtraFilesZip;
+  if (fs::exists(extra, ec)) {
+    wchar_t system_dir[MAX_PATH];
+    GetSystemDirectoryW(system_dir, MAX_PATH);
+    const std::wstring tar = std::wstring(system_dir) + L"\\tar.exe";
+    if (RunAndWait(L"\"" + tar + L"\" -xf \"" + extra.wstring() + L"\" -C \"" + exe_dir.wstring() + L"\"")) {
+      fs::remove(extra, ec);
+      REXLOG_INFO("KK: update: unpacked {}", kExtraFilesZip);
+    } else {
+      REXLOG_WARN("KK: update: could not unpack {}; trying again next start", kExtraFilesZip);
+    }
+  }
+#endif
 }
 
 }  // namespace kk
