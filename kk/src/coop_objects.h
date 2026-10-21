@@ -142,6 +142,13 @@ inline uint32_t DamageDelta(uint32_t local,uint32_t authority) {
 }
 // Native time advances only while the host door runs. Heartbeat expiry and an
 // explicit release reset progress; packet duplication never advances the clock.
+inline bool NearLever(float dx,float dy,float dz,float fx,float fy) {
+  if (!std::isfinite(dx) || !std::isfinite(dy) || !std::isfinite(dz) ||
+      !std::isfinite(fx) || !std::isfinite(fy) || std::abs(dz)>1.5f ||
+      std::hypot(dx,dy,dz)>2) return false;
+  const auto distance=std::hypot(dx,dy),length=std::hypot(fx,fy);
+  return length>.1f && (distance<.1f || (dx*fx+dy*fy)>=.5f*distance*length);
+}
 class LeverHold {
  public:
   void Touch(bool holding,double now) {

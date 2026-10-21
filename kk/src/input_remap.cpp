@@ -32,6 +32,7 @@
 #include "settings.h"
 #include "freecam.h"
 #include "coop_observer.h"
+#include "coop_objects_game.h"
 #if defined(KK_DEV_TOOLS)
 #include "coop_runtime.h"
 #endif
@@ -215,6 +216,13 @@ REX_HOOK_RAW(sub_821074E8) {
   const uint32_t user = ctx.r3.u32;
   const uint32_t state_ptr = ctx.r4.u32;
   __imp__sub_821074E8(ctx, base);
+  struct ObjectPadRead {
+    uint32_t user; const uint8_t* state; PPCContext& ctx;
+    ~ObjectPadRead() {
+      kk::coop::ObjectsPad(user,state,ctx.r3.u32==0 &&
+          !kk::freecam::Active() && !kk::menu_scene::Active());
+    }
+  } object_pad_read{user,state_ptr ? base+state_ptr : nullptr,ctx};
   if (kk::input_diag::Enabled() && !user)
     kk::input_diag::Begin(user, ctx.r3.u32, state_ptr && !ctx.r3.u32 ? base + state_ptr : nullptr,
         int32_t(LoadBE<uint32_t>(base+0x82C63704)),LoadBE<uint32_t>(base+0x82CCAE2C));

@@ -47,6 +47,9 @@ void Policies() {
   hold.seconds=2; Check(ValidObjectRequest(hold),"installed lever release admitted");
   hold.seconds=3; Check(!ValidObjectRequest(hold),"unknown lever operation refused");
   objects::LeverHold timer;
+  Check(objects::NearLever(1,0,1,1,0),"use fallback accepts a nearby facing installed marker");
+  Check(!objects::NearLever(1,0,1,-1,0) && !objects::NearLever(1,0,2,1,0) &&
+      !objects::NearLever(3,0,0,1,0),"use fallback refuses behind, other floor and distant markers");
   timer.Touch(true,1);
   for (int i=0;i<4;++i) Check(!timer.Step(1,.05f,.25f),"hold uses native simulation time");
   Check(timer.Step(1,.05f,.25f) && !timer.Step(1,.05f,.25f),"one endpoint per continuous hold");

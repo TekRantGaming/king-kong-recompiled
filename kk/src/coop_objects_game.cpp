@@ -4,6 +4,8 @@
 #include "coop_objects.h"
 #include "coop_runtime.h"
 #include "coop_pose.h"
+#include "coop_enemies_game.h"
+#include "coop_observer.h"
 #include "hfr.h"
 #include "settings.h"
 #include <rex/hook.h>
@@ -13,6 +15,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <set>
+#include <atomic>
 
 REX_EXTERN(__imp__sub_824ADD48);
 REX_EXTERN(__imp__sub_8256C3F8);
@@ -75,6 +78,7 @@ struct State {
   std::set<uint32_t> scan_seen;
 #endif
 } state;
+std::atomic<double> use_until{0};
 thread_local uint32_t stop_actor=0,stop_ai=0;
 struct DoorStopGuard {
   uint32_t actor=stop_actor,ai=stop_ai;
@@ -260,9 +264,29 @@ void Holds(const uint8_t* b) {
   const auto human=Track(b,ai,0x826718B8) ? Ptr(b,ai,64,13388) : 0;
   const auto paired=human ? Load32(b,human+13376) : 0,marker=human ? Load32(b,human+13380) : 0;
   const auto paired_ext=Ptr(b,paired,24,42);
+  Binding* use_door=nullptr; unsigned use_slot=0; float nearest=3;
+  const auto condition=LocalPlayerCondition(b);
+  if (human && matrix && use_until.load(std::memory_order_relaxed)>=now &&
+      condition && *condition!=PlayerCondition::Dead && !observer::Active() && !observer::InCutscene(b)) {
+    // Permitted fallback for player paths that never enter H_ETAT_Ia_porte:
+    // hold native Use (RT without aim) close to, and facing, one installed marker.
+    // Only own filtered input and own pose are observed. No human field is set.
+    for (auto& [actor,o] : state.bindings) {
+      if (o.kind!=ObjectKind::Door || !Valid(b,o) || Match(o.source,o.kind)!=&o ||
+          Load32(b,o.vars)!=2 || LoadF(b,o.vars+1084)>=1) continue;
+      for (unsigned i=0;i<8;++i) if (const auto ext=Lever(b,o,i)) {
+        const auto m=Ptr(b,Load32(b,o.vars+640+4*i),12,64);
+        if (!m || !(Load16(b,ext+40)&1)) continue;
+        const auto dx=LoadF(b,m+48)-LoadF(b,matrix+48),dy=LoadF(b,m+52)-LoadF(b,matrix+52),dz=LoadF(b,m+56)-LoadF(b,matrix+56);
+        if (!objects::NearLever(dx,dy,dz,-LoadF(b,matrix+16),-LoadF(b,matrix+20))) continue;
+        const auto distance=std::hypot(dx,dy,dz);
+        if (distance<nearest) { nearest=distance; use_door=&o; use_slot=i; }
+      }
+    }
+  }
   for (auto& [actor,o] : state.bindings) {
     if (o.kind!=ObjectKind::Door || !Valid(b,o) || Match(o.source,o.kind)!=&o || Load32(b,o.vars)!=2) continue;
-    uint32_t mask=0;
+    uint32_t mask=use_door==&o ? 1u<<use_slot : 0;
     if (matrix && paired_ext && (Load16(b,paired_ext+40)&0x80) && LoadF(b,o.vars+1084)<1) {
       for (unsigned i=0;i<8;++i) if (const auto ext=Lever(b,o,i)) {
         const auto m=Ptr(b,Load32(b,o.vars+640+4*i),12,64);
@@ -290,8 +314,8 @@ void Holds(const uint8_t* b) {
       // No human state is written. The log also establishes whether the named
       // IA hold contract is actually reached by the local player at runtime.
       static uint64_t logged=0;
-      if (logged++<128) REXLOG_INFO("KK dev object native hold: role={} id={:016X} mask={} human-mode={}",
-          state.host ? "host" : "guest",o.source,mask,human ? Load32(b,human+2712) : 0);
+      if (logged++<128) REXLOG_INFO("KK dev object native hold: role={} id={:016X} mask={} human-mode={} origin={}",
+          state.host ? "host" : "guest",o.source,mask,human ? Load32(b,human+2712) : 0,use_door==&o ? "filtered-use" : "native-paired");
     }
     o.observed_hold=mask;
   }
@@ -755,6 +779,10 @@ void PickupProbe(PPCContext& ctx,uint8_t* b) {
 }
 #endif
 } // namespace
+void ObjectsPad(uint32_t user,const uint8_t* pad,bool connected) {
+  if (user) return;
+  use_until.store(connected && pad && pad[7]>30 && pad[6]<=30 ? Now()+.2 : 0,std::memory_order_relaxed);
+}
 void ObjectsFirearm(const PPCContext& input,const uint8_t* b) {
   if (!Trace() || !state.ready || !Shared() || input.r6.u32!=Load32(b,0x82CCBF7C)) return;
   const auto caller=uint32_t(input.lr);
