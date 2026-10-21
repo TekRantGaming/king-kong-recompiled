@@ -1234,6 +1234,7 @@ class GameRenderer {
   void FlushSamplers();
   void PublishEffectTimes();
   uint64_t effects_frame_ = UINT64_MAX;
+  std::string effects_heavy_;  // task 354: the effects whose switch makes or frees GPU resources (UpdateEffects)
   std::future<std::unique_ptr<SceneGi>> gi_build_;
   std::future<std::unique_ptr<SceneLighting>> lighting_build_;
   std::future<PreparedUpscaler> upscale_build_;
