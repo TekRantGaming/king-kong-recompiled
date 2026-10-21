@@ -176,9 +176,7 @@ void GameRenderer::PrepareChapterTextures() {
     const auto object = chapter_candidates_[chapter_candidate_cursor_++];
     uint8_t header[40];
     if (!memory_.CopyVirtual(object, header, sizeof(header)) || ((LoadBE32(header) >> 16) & 7) != 3) continue;
-    auto fetch = kknr::TextureFetch::FromGuest(header + 16);
-    fetch.words[1] = (fetch.words[1] & 0xFFF) | fetch.BaseAddress();
-    fetch.words[5] = (fetch.words[5] & 0xFFF) | fetch.MipAddress();
+    const auto fetch = ChapterTextureFetch(kknr::TextureFetch::FromGuest(header + 16));
     if (fetch.Type() != 2) continue;
     const auto layout = ChapterTextureLayout(fetch);
     auto job = std::make_unique<ChapterTexturePrepare::Job>();

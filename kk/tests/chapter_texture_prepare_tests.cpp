@@ -12,6 +12,15 @@ int main() {
   fetch.words[2] = 127 | (127u << 13);
   fetch.words[3] = kknr::kSwizzleXYZW << 1;
   fetch.words[5] = 1u << 9;
+  for (const uint32_t view : {0u, 0xA0000000u, 0xC0000000u, 0xE0000000u}) {
+    auto header = fetch;
+    header.words[1] |= view;
+    header.words[5] |= view | 0x3000;
+    const auto physical = nr::ChapterTextureFetch(header);
+    check(physical.BaseAddress() == 0x1000 + (view == 0xE0000000 ? 0x1000 : 0), "base physical view offset");
+    check(physical.MipAddress() == 0x3000 + (view == 0xE0000000 ? 0x1000 : 0), "mip physical view offset");
+    check((physical.words[1] & 0xFFF) == (fetch.words[1] & 0xFFF), "address conversion preserves format");
+  }
   auto relocated = fetch;
   relocated.words[1] += 0x20000;
   check(nr::ChapterTextureLayout(fetch) == nr::ChapterTextureLayout(relocated), "relocation preserves layout");

@@ -12,6 +12,18 @@
 
 namespace nr {
 
+inline kknr::TextureFetch ChapterTextureFetch(kknr::TextureFetch fetch) {
+  // SetTexture (82118F78) converts the CPU-view addresses in the object to
+  // physical GPU addresses. The E view has an extra 4 KiB host offset; simply
+  // clearing the high three bits addresses the preceding page instead.
+  for (const unsigned word : {1u, 5u}) {
+    const uint32_t value = fetch.words[word];
+    const uint32_t offset = ((value >> 20) + 0x200) & 0x1000;
+    fetch.words[word] = (value + offset) & 0x1FFFFFFF;
+  }
+  return fetch;
+}
+
 inline kknr::TextureKey ChapterTextureLayout(kknr::TextureFetch fetch) {
   auto key = kknr::MakeTextureKey(fetch);
   key.words[1] &= 0xFFF;
