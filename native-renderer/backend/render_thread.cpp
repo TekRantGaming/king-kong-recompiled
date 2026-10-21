@@ -5,6 +5,7 @@
 #include <string>
 
 #include "backend/cpu_profile.h"
+#include "backend/device_capture.h"
 #include "backend/gpu_loss.h"
 #include "backend/guest_device.h"
 #include "backend/thread_scheduling.h"
@@ -120,16 +121,18 @@ bool ThreadedSink::CaptureDevice(Command& c, uint32_t device) {
   // Comparing only the parts the renderer reads: the library's dirty bits and counters change at
   // every call elsewhere.
   const bool all = sent_device_address_ != device;
-  const std::vector<DeviceBlock>& blocks = DeviceBlocks();
-  uint8_t* sent = sent_device_.data();
-  for (size_t i = 0; i < blocks.size(); ++i) {
-    const DeviceBlock& b = blocks[i];
-    const bool same = !all && (b.size == 64 ? SameBytes64(live + b.offset, sent + b.offset)
-                                            : std::memcmp(live + b.offset, sent + b.offset, b.size) == 0);
-    if (same) continue;
-    std::memcpy(sent + b.offset, live + b.offset, b.size);
-    c.device_blocks.push_back(uint16_t(i));
-    c.device_bytes.insert(c.device_bytes.end(), live + b.offset, live + b.offset + b.size);
+  if (!TryCaptureDeviceAvx2(live, sent_device_.data(), all, c.device_blocks, c.device_bytes)) {
+    const std::vector<DeviceBlock>& blocks = DeviceBlocks();
+    uint8_t* sent = sent_device_.data();
+    for (size_t i = 0; i < blocks.size(); ++i) {
+      const DeviceBlock& b = blocks[i];
+      const bool same = !all && (b.size == 64 ? SameBytes64(live + b.offset, sent + b.offset)
+                                              : std::memcmp(live + b.offset, sent + b.offset, b.size) == 0);
+      if (same) continue;
+      std::memcpy(sent + b.offset, live + b.offset, b.size);
+      c.device_blocks.push_back(uint16_t(i));
+      c.device_bytes.insert(c.device_bytes.end(), live + b.offset, live + b.offset + b.size);
+    }
   }
   sent_device_address_ = device;
   c.device_address = device;

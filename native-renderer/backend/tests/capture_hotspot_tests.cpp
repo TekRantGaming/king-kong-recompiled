@@ -24,12 +24,7 @@ NR_NOINLINE void NewCapture(const uint8_t* live, uint8_t* sent, bool all,
 }
 NR_NOINLINE void AvxCapture(const uint8_t* live, uint8_t* sent, bool all,
                            std::vector<uint16_t>& out, std::vector<uint8_t>& bytes) {
-#if NR_HOTSPOT_AVX2
-  if (nr::test::prototype::Avx2Available()) {
-    nr::test::prototype::Avx2Capture(live, sent, all, out, bytes);
-    return;
-  }
-#endif
+  if (nr::TryCaptureDeviceAvx2(live, sent, all, out, bytes)) return;
   OldCapture(live, sent, all, out, bytes);
 }
 
