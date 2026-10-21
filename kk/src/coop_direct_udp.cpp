@@ -8,10 +8,6 @@
 #include <map>
 #include <random>
 #include <utility>
-#if defined(KK_DEV_TOOLS)
-#include <cstdio>
-#include <cstdlib>
-#endif
 #ifdef _WIN32
 #define WIN32_LEAN_AND_MEAN
 #define NOMINMAX
@@ -86,7 +82,11 @@ bool SameAddress(const sockaddr_storage& a, const sockaddr_storage& b) {
 class Udp final : public DirectUdpTransport {
  public:
   explicit Udp(DirectUdpOptions options) : options_(std::move(options)) {
-
+    auto& simulation=options_.simulation;
+    if (!std::isfinite(simulation.delay_ms) || !std::isfinite(simulation.jitter_ms) ||
+        !std::isfinite(simulation.loss_percent) || simulation.delay_ms<0 || simulation.delay_ms>2000 ||
+        simulation.jitter_ms<0 || simulation.jitter_ms>simulation.delay_ms ||
+        simulation.loss_percent<0 || simulation.loss_percent>50) simulation={};
     if (!network_.ok || !options_.port || !ValidJoinCode(options_.join_code)) return;
     std::random_device random;
     nonce_=(uint64_t(random())<<32)^random(); if (!nonce_) nonce_=1;

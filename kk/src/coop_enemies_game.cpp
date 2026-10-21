@@ -1950,7 +1950,9 @@ bool EnemyDevWorldDrift(uint8_t* base) {
     const auto* binding=CanonicalBinding(base,e.id);
     const auto auth=s.authority.find(e.id);
     if (!binding || auth==s.authority.end() || auth->second.Frozen() || !auth->second.Accepts(e)) continue;
-    StoreF(base,binding->vars+LifeOffset(binding->id.family),e.life+20);
+    const auto cell=LifeCell(base,*binding);
+    if (!cell) continue;
+    StoreF(base,cell,NativeLife(binding->id.family,e.life+20));
     REXLOG_INFO("KK dev desync: injected native enemy health drift {:.1f} -> {:.1f}",e.life,e.life+20);
     return true;
   }
@@ -2066,8 +2068,11 @@ std::vector<WorldEnemy> EnemyWorldDigest(const uint8_t* b) {
     auto* a=AuthorityFor(local); if (!a || r.kind==EnemyEventKind::Removed) continue;
     auto e=r.enemy;
     for (const auto& [actor,binding]:s.bindings) if (binding.id==local && ValidBinding(b,binding)) {
-      e.life=LoadF(b,binding.vars+LifeOffset(local.family));
-      if (const auto offset=SecondaryLifeOffset(local.family)) e.secondary_life=LoadF(b,binding.vars+offset);
+      Binding observed; EnemyState current;
+      if (Read(b,actor,observed,current)) {
+        e.life=current.life;
+        e.secondary_life=current.secondary_life;
+      }
       break;
     }
     if (!ValidEnemy(e)) continue;
@@ -2092,9 +2097,9 @@ desync::Evidence EnemyCompareDigest(uint8_t* b,const desync::State& state,bool r
     const auto auth=s.authority.find(h.id);
     if (auth==s.authority.end() || auth->second.owner!=h.owner || auth->second.generation!=h.generation ||
         auth->second.Frozen()) continue;
-    const float life=LoadF(b,binding->vars+LifeOffset(binding->id.family));
-    const auto offset=SecondaryLifeOffset(binding->id.family);
-    const float secondary=offset ? LoadF(b,binding->vars+offset) : 0;
+    Binding observed; EnemyState current;
+    if (!Read(b,binding->actor,observed,current)) continue;
+    const float life=current.life,secondary=current.secondary_life;
     if (!rough(h.life,life) && !rough(h.secondary_life,secondary)) continue;
     // Digest values can be old by the time the sweep completes. Repair only
     // from the normal fresh replicated stream, preserving terminal-event wins.
@@ -2112,7 +2117,8 @@ desync::Evidence EnemyCompareDigest(uint8_t* b,const desync::State& state,bool r
     const auto id=Canonical(binding.id); const auto auth=s.authority.find(id);
     if (!id.source || host_ids.contains(id) || auth==s.authority.end() || auth->second.dead ||
         auth->second.owner!=EnemyOwner::Host || auth->second.Frozen() || !ValidBinding(b,binding)) continue;
-    if (LoadF(b,binding.vars+LifeOffset(binding.id.family))>0) missing(id);
+    Binding observed; EnemyState current;
+    if (Read(b,actor,observed,current) && current.life>0) missing(id);
   }
   return result;
 }

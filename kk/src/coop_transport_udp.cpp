@@ -11,7 +11,9 @@ void ConfigureDevUdpSimulation(DirectUdpOptions& options) {
   // Each peer has a different deterministic sequence, including lost ACKs.
   if (const char* env=std::getenv("KK_DEV_UDP_SIM")) {
     UdpSimulation sim;
-    if (std::sscanf(env,"%lf,%lf,%lf",&sim.delay_ms,&sim.jitter_ms,&sim.loss_percent)==3 &&
+    const bool parsed=std::sscanf(env,"%lf,%lf,%lf",&sim.delay_ms,&sim.jitter_ms,&sim.loss_percent)==3 ||
+        std::sscanf(env,"%lf:%lf:%lf",&sim.delay_ms,&sim.jitter_ms,&sim.loss_percent)==3;
+    if (parsed &&
         std::isfinite(sim.delay_ms) && std::isfinite(sim.jitter_ms) && std::isfinite(sim.loss_percent) &&
         sim.delay_ms>=0 && sim.delay_ms<=1000 && sim.jitter_ms>=0 && sim.jitter_ms<=500 &&
         sim.loss_percent>=0 && sim.loss_percent<=50) {

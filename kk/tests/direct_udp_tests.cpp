@@ -262,10 +262,10 @@ void ReliabilityAndFlood() {
   Check(count==40,"all reliable samples delivered");
 }
 }
-void SimulationIntegration() {
-  DirectUdpOptions h{true,"127.0.0.1",next_port++,"TEST23"}; h.simulation={150,30,3};
+void SimulationIntegration(double delay=150,double jitter=30,double loss=3) {
+  DirectUdpOptions h{true,"127.0.0.1",next_port++,"TEST23"}; h.simulation={delay,jitter,loss,72};
   auto a=CreateDirectUdp(h);
-  DirectUdpOptions j{false,"127.0.0.1",a->LocalPort(),"TEST23"}; j.simulation={150,30,3};
+  DirectUdpOptions j{false,"127.0.0.1",a->LocalPort(),"TEST23"}; j.simulation={delay,jitter,loss,73};
   auto b=CreateDirectUdp(j);
   CoopSession host(Config(Role::Host),*a),guest(Config(Role::Guest),*b);
   desync::Assembly assembly; desync::Guard guard;
@@ -316,5 +316,6 @@ void SimulationIntegration() {
 int main() {
   Codec(); Limits(); Bounds(); WRONG2(); Integration("127.0.0.1"); Integration("::1"); ReliabilityAndFlood(); WanShots();
   SimulationIntegration();
+  SimulationIntegration(250,80,5);
   std::puts("Direct UDP codec, code, rate, IPv4/IPv6, readiness, save/load, poses and single-peer checks passed");
 }
