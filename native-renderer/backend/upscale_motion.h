@@ -80,6 +80,8 @@ class MotionHistory {
     mutable size_t next_guess = 0;
     // How many leading floats all its draws share (bit for bit; SIZE_MAX: not measured yet).
     mutable size_t common_prefix = SIZE_MAX;
+    mutable size_t common_suffix = 1024;  // first float of the shared suffix
+    mutable bool prefix_finite = false, suffix_finite = false;
   };
   using Map = std::unordered_map<uint64_t, std::vector<Slot>>;  // hash -> keys with that hash
   static const Slot* Find(const Map& m, const MotionDrawKey& key);

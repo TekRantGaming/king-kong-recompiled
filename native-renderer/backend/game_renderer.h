@@ -87,6 +87,7 @@ inline bool TessellationBenchRequested() {
 class GameRenderer {
   friend struct MemoryMigrationTestAccess;
   friend struct TexturePackTestAccess;
+  friend struct VertexViewTestAccess;
  public:
   struct Options {
     bool tessellation_supported = false;

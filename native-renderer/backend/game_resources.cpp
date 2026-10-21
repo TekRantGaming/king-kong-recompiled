@@ -739,7 +739,7 @@ bool GameRenderer::MakeHostBuffer(HostBuffer* host, const nvrhi::BufferDesc& des
 }
 
 nvrhi::BindingSetItem GameRenderer::VertexView(const HostBuffer* host) const {
-  if (!host->range.valid()) return VertexView(host);
+  if (!host->range.valid()) return nvrhi::BindingSetItem::RawBuffer_SRV(host->slot, host->buffer);
   return nvrhi::BindingSetItem::RawBuffer_SRV(host->slot, host->buffer,
                                               nvrhi::BufferRange(host->range.allocation.offset, host->view_bytes));
 }

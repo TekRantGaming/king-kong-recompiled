@@ -182,10 +182,30 @@ const VsConstants* MotionHistory::FindPrevious(const MotionDrawKey& key, uint32_
       p = k;
     }
     s->common_prefix = p;
+    s->prefix_finite = std::all_of(c0.begin(), c0.begin() + p, [](float f) { return std::isfinite(f); });
+    size_t tail = c0.size() - p;  // the suffix need not overlap the already measured prefix
+    for (size_t i = 1; i < n && tail; ++i) {
+      const VsConstants& c = s->constants[i];
+      size_t k = 0;
+      while (k < tail && std::memcmp(&c[c.size() - 1 - k], &c0[c0.size() - 1 - k], sizeof(float)) == 0) ++k;
+      tail = k;
+    }
+    s->common_suffix = c0.size() - tail;
+    s->suffix_finite = std::all_of(c0.end() - tail, c0.end(), [](float f) { return std::isfinite(f); });
   }
   const size_t prefix = s->common_prefix;
   double prefix_d = 0;
-  for (size_t k = 0; k < prefix; ++k) prefix_d += std::fabs(double(s->constants[0][k]) - double(current[k]));
+  const VsConstants& c0 = s->constants[0];
+  if (!s->prefix_finite || std::memcmp(c0.data(), current.data(), prefix * sizeof(float)) != 0)
+    for (size_t k = 0; k < prefix; ++k) prefix_d += std::fabs(double(c0[k]) - double(current[k]));
+  // Equal finite floats contribute +0. Skipping only a shared, byte-identical suffix leaves all
+  // nonzero additions in exactly their old order, including ties and early exits. NaN/Inf must
+  // take the original path: even identical infinities subtract to NaN.
+  size_t end = current.size();
+  const size_t suffix = s->common_suffix;
+  if (s->suffix_finite && std::memcmp(c0.data() + suffix, current.data() + suffix,
+                                    (end - suffix) * sizeof(float)) == 0)
+    end = std::max(prefix, suffix);
   const auto distance = [&](size_t i, double limit, bool equal_continues) {
     const auto go = [&](double d) { return d < limit || (equal_continues && d == limit); };
     // The shared part: the same partial sums for every draw, so stopping inside it is stopping
@@ -197,7 +217,7 @@ const VsConstants* MotionHistory::FindPrevious(const MotionDrawKey& key, uint32_
     }
     double d = prefix_d;
     const VsConstants& c = s->constants[i];
-    for (size_t k = prefix; k < c.size() && go(d); ++k) d += std::fabs(double(c[k]) - double(current[k]));
+    for (size_t k = prefix; k < end && go(d); ++k) d += std::fabs(double(c[k]) - double(current[k]));
     return d;
   };
   size_t best = first;

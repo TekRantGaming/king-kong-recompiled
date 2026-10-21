@@ -4,6 +4,7 @@
 #endif
 #include "plugin/native_benchmark_stats.h"
 #include "backend/gpu_loss.h"
+#include "backend/shader_constants.h"
 #include "backend/resource_upload_workers.h"
 #include "backend/upload_batch.h"
 #include "kkshaders/tessellation.h"
@@ -2612,13 +2613,7 @@ void GameRenderer::Draw(nvrhi::ICommandList* cl, const DrawCall& call) {
   auto upload = [&](uint32_t base, std::array<uint8_t, 4096>& last_raw, std::array<float, 1024>& last,
                     const nvrhi::BufferHandle& buffer) {
     const uint8_t* raw = d.at(base);
-    bool changed = false;
-    for (uint32_t block = 0; block < 4096; block += 64) {
-      if (SameBytes64(raw + block, last_raw.data() + block)) continue;
-      changed = true;
-      std::memcpy(last_raw.data() + block, raw + block, 64);
-      for (uint32_t i = block / 4; i < block / 4 + 16; ++i) last[i] = LoadBEFloat(raw + i * 4);
-    }
+    const bool changed = UpdateShaderConstants(raw, last_raw, last);
     if (!changed && !new_list) return;
     cl->writeBuffer(buffer, last.data(), sizeof(last));
     stats_.upload_bytes += sizeof(last);
