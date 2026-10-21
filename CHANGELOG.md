@@ -13,6 +13,7 @@ version's notes the first time you start it.
 - **Graphics presets now set every graphics setting**, including shadows, water reflections and light shafts: High gives High shadows, water reflections and low light shafts; Ultra gives Ultra shadows, water reflections and high light shafts. Changing any one setting shows Custom.
 
 ### Fixed
+- **The game closing by itself at the start on some PCs** (seen on Intel UHD Graphics): the check of which upscalers your PC offers now runs on its own, so a graphics library that fails during the check only turns that upscaler off.
 - **Stutter in busy scenes with DLSS, FSR and XeSS, such as Ann's chapter**: the work that prepares motion information for the upscaler grew much faster than the number of objects on screen. It now takes a fraction of the time, with exactly the same result: in our test of Ann's chapter, frames over 20 ms dropped from about 210 to 3.
 - **The live main menu now always loads behind the loading screen**, including on the Steam Deck and after setup or an update. A slow or failed start tries again instead of falling back to the slideshow of pictures.
 - **Up to a 10 second freeze at the start when Windows was slow to open the sound device**: the game, the menu music and the button sounds now open their sound in the background, so the game keeps running while Windows gets the device ready.
