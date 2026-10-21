@@ -18,6 +18,7 @@
 
 #include <cstdint>
 #include <string>
+#include <unordered_map>
 #include <vector>
 
 namespace nr {
@@ -93,6 +94,9 @@ class AoRuleTable {
 
  private:
   std::vector<AoRule> rules_;
+  // Indexes, rather than pointers, survive copying/moving a table. Each list is in rule order.
+  std::unordered_map<uint64_t, std::vector<size_t>> ps_rules_;
+  std::vector<size_t> any_ps_rules_;
 };
 
 // The main scene target through one frame.
