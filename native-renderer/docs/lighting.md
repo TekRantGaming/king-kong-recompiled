@@ -158,8 +158,10 @@ Facts the design rests on:
 **Resolution.** `high` sets the shadow maps' scale to 2 (1664x1664), `ultra` to 4 (3328x3328), through the existing
 shadow scale (`--native_shadow_scale`, which still wins when set; a shadow scale of exactly 1 gives way to the
 quality's, because the soft shadows need the render scale aware shaders). Both also draw the screen-space shadow's
-targets (the pitch psshadowquad draws into, recognised at its first draw) at twice the render scale: the mask becomes
-1280x960 at render scale 1, as fine as the frame. Everything that reads the mask samples it with normalised
+targets (the pitch psshadowquad draws into, recognised at its first draw) at 1.5 times the render scale (with an
+upscaler, its input scale): the mask becomes 960x720 at render scale 1, as tall as the frame (Beta 14, task 348a;
+twice the render scale before, 1280x960: after the game's blur of the mask no visible difference, and 0.4 ms less
+GPU time at 4K DLSS Quality). Everything that reads the mask samples it with normalised
 coordinates or VPOS (aware), so a finer mask is only finer.
 
 **Filtering.** The game's three psshadowquad shaders are drawn with replacements of the renderer's own

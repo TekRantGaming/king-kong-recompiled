@@ -1083,11 +1083,14 @@ class GameRenderer {
   // The shadow maps' scale (host texels per guest texel).
   float LightingShadowScale() const;
   // The soft shadows: the pitch of the target the game's screen-space shadow (psshadowquad) draws into
-  // (640 wide, 640x480 used, for a 1280x720 frame) gets kLightingMaskScale times the render scale.
+  // (640 wide, 640x480 used, for a 1280x720 frame) gets kLightingMaskScale times the render scale
+  // (with an upscaler, its input scale). 1.5 (Beta 14, task 348a; 2 before): the mask is as tall as the
+  // scene and three quarters of its width, after the game's blur no visible change, 0.4 ms less GPU time
+  // at 4K DLSS Quality (mask 0.68 -> 0.40 ms, blur and composite 0.30 -> 0.18 ms).
   void LightingNoteShadowMask(const GameShader& ps, uint32_t pitch);
   // The texture a resolve made that fetch constant `slot` reads (null for anything else).
   nvrhi::ITexture* LightingResolvedTexture(const dev::DeviceView& d, uint32_t slot);
-  static constexpr float kLightingMaskScale = 2.0f;
+  static constexpr float kLightingMaskScale = 1.5f;
   std::unordered_set<uint32_t> lighting_mask_pitches_;
   nvrhi::BufferHandle lighting_constants_;  // b5 (kkshaders/lighting.h)
   struct LightingState {
