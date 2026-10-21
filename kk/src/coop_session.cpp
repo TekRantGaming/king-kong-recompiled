@@ -18,7 +18,7 @@ const char* StateName(SessionState s) {
 const char* RejectName(RejectReason r) {
   switch (r) {
     case RejectReason::None: return "";
-    case RejectReason::Protocol: return "different protocol";
+    case RejectReason::Protocol: return "different co-op version; both players need the same build";
     case RejectReason::Version: return "different game version";
     case RejectReason::Build: return "different build";
     case RejectReason::GameplayMods: return "different gameplay mods";
@@ -48,11 +48,28 @@ std::optional<PlayerPose> PoseBuffer::Sample(double now) const {
     p.time = target;
     p.x += (b.x - a.x) * t; p.y += (b.y - a.y) * t; p.z += (b.z - a.z) * t;
     p.speed += (b.speed - a.speed) * t;
+    p.vx += (b.vx - a.vx) * t; p.vy += (b.vy - a.vy) * t;
+    p.pitch += (b.pitch - a.pitch) * t;
     p.facing += std::remainder(b.facing - a.facing, 6.28318530718f) * t;
-    if (t >= .5f) { p.action = b.action; p.item = b.item; }
+    // Discrete events use the same delayed timeline as the rendered body.
+    if (t >= .5f) { p.action = b.action; p.item = b.item; p.weapon = b.weapon; p.crouched = b.crouched; p.airborne = b.airborne; }
+    if (t >= 1.f) { p.fire = b.fire; p.fire_weapon = b.fire_weapon; }
     return p;
   }
   return poses_.back().pose;  // hold, never extrapolate through a wall
+}
+std::optional<PlayerPose> PoseBuffer::At(double time, uint32_t level) const {
+  if (!std::isfinite(time)) return {};
+  const PlayerPose* nearest = nullptr;
+  for (const auto& entry : poses_) {
+    const auto& p = entry.pose;
+    if (p.level != level) continue;
+    if (!nearest || std::abs(p.time-time) < std::abs(nearest->time-time)) nearest = &p;
+  }
+  // Use the sender's clock only. A WAN shot must not be compared with the
+  // render-delayed current pose after the player has moved away from it.
+  if (!nearest || std::abs(nearest->time-time) > .5) return {};
+  return *nearest;
 }
 CoopSession::CoopSession(SessionConfig c, ICoopTransport& t, StateCallback f)
     : config_(std::move(c)), transport_(t), changed_(std::move(f)), epoch_(config_.epoch) {
@@ -64,6 +81,7 @@ void CoopSession::Transition(SessionState s) {
   if (s != SessionState::Connected) {
     cameras_.Clear(); local_camera_.reset(); sent_camera_cut_.reset();
     poses_.Clear(); enemies_.Clear(); outgoing_shots_.clear(); incoming_shots_.clear();
+    outgoing_receipts_.clear(); incoming_receipts_.clear();
     remote_inventory_.reset(); sent_cheats_.reset();
     local_inventory_.reset(); sent_inventory_.reset();
     outgoing_combat_.clear(); incoming_combat_.clear();
@@ -129,10 +147,10 @@ void CoopSession::Receive(const Message& m, double now) {
           if (state_!=SessionState::Connected || ObjectSender(m.type,config_.role)) return;
           if (incoming_objects_.size()>=kObjectQueue) { End(now); return; }
           incoming_objects_.push_back(m); break;
-        case MessageType::StoryEvent: case MessageType::TriggerRequest:
+        case MessageType::StoryEvent: case MessageType::TriggerRequest: case MessageType::WorldDigest:
           if (state_!=SessionState::Connected || StorySender(m.type,config_.role)) return;
-          if (incoming_story_.size()>=kStoryQueue) { End(now); return; }
-          incoming_story_.push_back(m); break;
+          if (!RetainStoryMessage(incoming_story_,m)) { End(now); return; }
+          break;
         case MessageType::OwnershipChange:
           if (state_ != SessionState::Connected || OwnershipSender(m.ownership.phase, config_.role)) return;
           if (incoming_ownership_.size() >= kMaxEnemies*2) { End(now); return; }
@@ -178,11 +196,17 @@ void CoopSession::Receive(const Message& m, double now) {
           } else for (const auto& e : m.enemies.enemies)
             if ((e.owner == EnemyOwner::Host) == (config_.role == Role::Host)) return;
           enemies_.Receive(m, now); break;
+        case MessageType::ShotReceipt:
+          if (state_!=SessionState::Connected || config_.role!=Role::Guest) return;
+          if (incoming_receipts_.size()<kMaxQueuedShots) incoming_receipts_.push_back(m.shot_receipt);
+          else ++malformed_;
+          break;
         case MessageType::ShotIntent:
           if (state_ != SessionState::Connected) return;
           // The game-thread validator owns sequence rejection and its reason
           // counter. Never silently apply or discard a replay in a second policy.
-          if (incoming_shots_.size() < kMaxQueuedShots) incoming_shots_.push_back({m.shot, now, remote_inventory_});
+          if (incoming_shots_.size() < kMaxQueuedShots)
+            incoming_shots_.push_back({m.shot, now, remote_inventory_, poses_.At(m.shot.time, m.shot.world.level)});
           else ++malformed_;
           break;
         default:
@@ -329,12 +353,22 @@ void CoopSession::Tick(double now, const std::optional<PlayerPose>& local, const
       if (!Send(m, true)) break;
       outgoing_shots_.pop_front(); ++sent;
     }
+    for (unsigned n=0;n<8 && !outgoing_receipts_.empty();++n) {
+      Message receipt; receipt.type=MessageType::ShotReceipt; receipt.shot_receipt=outgoing_receipts_.front();
+      if (!Send(receipt,true)) break;
+      outgoing_receipts_.pop_front();
+    }
   }
 }
 bool CoopSession::QueueShot(const PendingShot& shot) {
   if (state_ != SessionState::Connected ||
       !ValidPendingShot(shot) || outgoing_shots_.size() >= kMaxQueuedShots) return false;
   outgoing_shots_.push_back(shot); return true;
+}
+bool CoopSession::QueueShotReceipt(const ShotReceipt& receipt) {
+  if (state_!=SessionState::Connected || config_.role!=Role::Host || !ValidShotReceipt(receipt) ||
+      outgoing_receipts_.size()>=kMaxQueuedShots) return false;
+  outgoing_receipts_.push_back(receipt); return true;
 }
 void CoopSession::PublishInventory(const InventoryState& inventory) {
   if (state_ == SessionState::Connected && ValidInventory(inventory)) local_inventory_ = inventory;
@@ -365,6 +399,7 @@ std::vector<Message> CoopSession::TakeObjects() {
 bool CoopSession::QueueStory(const Message& m) {
   if (state_!=SessionState::Connected || !IsStoryMessage(m.type) || m.epoch!=epoch_ ||
       !StorySender(m.type,config_.role) || outgoing_story_.size()>=kStoryQueue) return false;
+  if (m.type==MessageType::WorldDigest && outgoing_story_.size()>=kStoryQueue/4) return false;
   std::vector<uint8_t> bytes; if (!Encode(m,bytes)) return false;
   outgoing_story_.push_back(m); return true;
 }
@@ -383,6 +418,7 @@ std::vector<ReceivedCombat> CoopSession::TakeCombat() {
 }
 std::vector<Message> CoopSession::TakeFlow() { auto out = std::move(incoming_flow_); incoming_flow_.clear(); return out; }
 std::vector<ReceivedShot> CoopSession::TakeShots() { auto out = std::move(incoming_shots_); incoming_shots_.clear(); return out; }
+std::vector<ShotReceipt> CoopSession::TakeShotReceipts() { auto out=std::move(incoming_receipts_); incoming_receipts_.clear(); return out; }
 void CoopSession::End(double) {
   if (!config_.enabled || state_ == SessionState::Idle || state_ == SessionState::Ended) return;
   Message bye; bye.type = MessageType::Bye; Send(bye, true);

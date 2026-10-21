@@ -3,6 +3,8 @@
 #include <algorithm>
 #include <cmath>
 #include <optional>
+#include <deque>
+#include <map>
 
 namespace kk::coop {
 struct PendingShot { ShotIntent intent; InventoryState inventory; };
@@ -11,8 +13,12 @@ inline bool ValidPendingShot(const PendingShot& shot) {
       shot.inventory.world == shot.intent.world && shot.inventory.weapon == shot.intent.weapon &&
       shot.inventory.time == shot.intent.time;
 }
-struct ReceivedShot { ShotIntent intent; double received = 0; std::optional<InventoryState> inventory; };
-enum class ShotReject : uint8_t { None, Bounds, World, Sequence, Stale, Weapon, Rate, Origin, Target, Distance, Aim, Engine, Queue, Late, Count };
+struct ReceivedShot {
+  ShotIntent intent;
+  double received = 0;
+  std::optional<InventoryState> inventory;
+  std::optional<PlayerPose> peer; // Historical shooter pose in the shooter's clock domain.
+};
 inline const char* ShotRejectName(ShotReject r) {
   switch (r) {
     case ShotReject::None: return "none";
@@ -72,10 +78,13 @@ class ShotValidator {
     }
     if (!rounds_) return ShotReject::Weapon;
     if (ShotDistance(s.origin, {peer->x, peer->y, peer->z}) > 4) return ShotReject::Origin;
-    // Two-shot burst permits network batching; sustained fire is bounded by both clocks.
+    // Reliable delivery can batch a quarter second of gunfire after jitter or
+    // retransmission. Bound that burst while retaining sender cadence checks.
     const double interval = ShotInterval(s.weapon);
     if (fired_ && (s.time < last_time_ || s.time-last_time_ < interval-.005)) return ShotReject::Rate;
-    tokens_ = std::min(2., tokens_ + std::max(0., now-last_arrival_)/interval);
+    const double capacity = std::ceil(.5/interval)+2;
+    if (!fired_) tokens_ = capacity;
+    tokens_ = std::min(capacity, tokens_ + std::max(0., now-last_arrival_)/interval);
     last_arrival_ = now;
     if (tokens_ < 1) return ShotReject::Rate;
     tokens_ -= 1; last_time_ = s.time; fired_ = true; --rounds_;
@@ -102,4 +111,35 @@ inline ShotReject ValidateShotHit(const ShotIntent& shot, const ShotHit& hit, co
   if (target.life <= 0) return ShotReject::Late;
   return ShotReject::None;
 }
+// A guest fires at an interpolated host snapshot. Keep a bounded host-owned
+// history for latency compensation instead of widening the six-unit hit bound.
+class ShotTargetHistory {
+ public:
+  void Observe(const EnemyState& target, double now) {
+    if (!ValidEnemy(target) || !std::isfinite(now)) return;
+    if (!targets_.contains(target.id) && targets_.size() >= kMaxEnemies) return;
+    auto& samples = targets_[target.id];
+    if (!samples.empty() && now-samples.back().time < .04) return;
+    samples.push_back({now,target});
+    while (samples.size()>24 || now-samples.front().time>1) samples.pop_front();
+  }
+  ShotReject Validate(const ShotIntent& shot, const ShotHit& hit, const EnemyState& current, double now) const {
+    const auto reason = ValidateShotHit(shot,hit,current);
+    if (reason != ShotReject::Distance || !std::isfinite(now)) return reason;
+    const auto found=targets_.find(hit.id);
+    if (found==targets_.end()) return reason;
+    for (const auto& sample:found->second) {
+      if (now<sample.time || now-sample.time>.75 || sample.target.generation!=current.generation ||
+          sample.target.owner!=current.owner) continue;
+      auto target=sample.target;
+      target.life=current.life; // A delayed shot can never revive or re-kill a tombstone.
+      const auto prior=ValidateShotHit(shot,hit,target);
+      if (prior==ShotReject::None || prior==ShotReject::Late) return prior;
+    }
+    return reason;
+  }
+ private:
+  struct Sample { double time; EnemyState target; };
+  std::map<EnemyId,std::deque<Sample>> targets_;
+};
 } // namespace kk::coop

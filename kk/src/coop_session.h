@@ -22,6 +22,7 @@ class PoseBuffer {
  public:
   void Push(PlayerPose pose, double received);
   std::optional<PlayerPose> Sample(double now) const;
+  std::optional<PlayerPose> At(double time, uint32_t level) const;
   void Clear() { poses_.clear(); }
  private:
   struct Entry { PlayerPose pose; double received; };
@@ -64,6 +65,8 @@ class CoopSession {
   void PublishInventory(const InventoryState& inventory);
   std::optional<CheatSet> HostCheats() const { return host_cheats_; }
   std::vector<ReceivedShot> TakeShots();
+  bool QueueShotReceipt(const ShotReceipt& receipt);
+  std::vector<ShotReceipt> TakeShotReceipts();
   uint64_t ShotsSent() const { return shots_sent_; }
   bool QueueFlow(const Message& message);
   std::vector<Message> TakeFlow();
@@ -105,6 +108,8 @@ class CoopSession {
   uint64_t enemies_sent_ = 0;
   std::deque<PendingShot> outgoing_shots_;
   std::vector<ReceivedShot> incoming_shots_;
+  std::deque<ShotReceipt> outgoing_receipts_;
+  std::vector<ShotReceipt> incoming_receipts_;
   uint64_t shots_sent_ = 0;
   std::optional<CheatSet> host_cheats_, sent_cheats_;
   std::optional<InventoryState> remote_inventory_;
@@ -132,15 +137,29 @@ inline bool OwnershipSender(OwnershipPhase phase, Role role) {
   return (phase == OwnershipPhase::Prepare || phase == OwnershipPhase::Commit) == (role == Role::Host);
 }
 inline bool StorySender(MessageType type, Role role) {
-  return (type==MessageType::StoryEvent && role==Role::Host) ||
+  return ((type==MessageType::StoryEvent || type==MessageType::WorldDigest) && role==Role::Host) ||
       (type==MessageType::TriggerRequest && role==Role::Guest);
+}
+// A periodic digest is replaceable evidence, unlike a numbered story action.
+// A paused/loading game may drop a whole sweep, but must retain real actions
+// and must not end a healthy session because optional observations filled it.
+inline bool RetainStoryMessage(std::vector<Message>& queue,const Message& message) {
+  if (queue.size()>=kStoryQueue) {
+    if (message.type==MessageType::WorldDigest) return true;
+    const auto observation=std::find_if(queue.begin(),queue.end(),[](const auto& m) { return m.type==MessageType::WorldDigest; });
+    if (observation==queue.end()) return false;
+    queue.erase(observation);
+  }
+  queue.push_back(message); return true;
 }
 class StoryMailbox {
  public:
   bool Submit(Message m) {
-    if (!IsStoryMessage(m.type) || !m.epoch || !ValidStoryEvent(m.story) ||
+    if (!IsStoryMessage(m.type) || !m.epoch ||
+        (m.type==MessageType::WorldDigest ? !ValidWorldDigest(m.digest) : !ValidStoryEvent(m.story)) ||
         (m.type==MessageType::TriggerRequest && !ValidStoryRequest(m.story.phase))) return false;
     std::lock_guard lock(mutex_);
+    if (m.type==MessageType::WorldDigest && outgoing_.size()>=kStoryQueue/4) return false;
     if (outgoing_.size()>=kStoryQueue) return false;
     outgoing_.push_back(std::move(m)); return true;
   }
@@ -158,8 +177,7 @@ class StoryMailbox {
       outgoing_.pop_front();
     }
     for (auto& m : session.TakeStory()) {
-      if (incoming_.size()>=kStoryQueue) { session.End(0); incoming_.clear(); outgoing_.clear(); break; }
-      incoming_.push_back(std::move(m));
+      if (!RetainStoryMessage(incoming_,m)) { session.End(0); incoming_.clear(); outgoing_.clear(); break; }
     }
   }
  private:
@@ -340,6 +358,15 @@ class CombatMailbox {
 // Both workers share the same bounded value-only handoff. No guest memory here.
 class ShotMailbox {
  public:
+  bool SubmitReceipt(const ShotReceipt& receipt) {
+    if (!ValidShotReceipt(receipt)) return false;
+    std::lock_guard lock(mutex_);
+    if (outgoing_receipts_.size()>=kMaxQueuedShots) return false;
+    outgoing_receipts_.push_back(receipt); return true;
+  }
+  std::vector<ShotReceipt> TakeReceipts() {
+    std::lock_guard lock(mutex_); auto out=std::move(incoming_receipts_); incoming_receipts_.clear(); return out;
+  }
   bool Submit(const PendingShot& shot) {
     std::lock_guard lock(mutex_);
     if (!ValidPendingShot(shot) || outgoing_.size() >= kMaxQueuedShots) return false;
@@ -352,18 +379,26 @@ class ShotMailbox {
   std::vector<ReceivedShot> Take() {
     std::lock_guard lock(mutex_); auto out = std::move(incoming_); incoming_.clear(); return out;
   }
-  void Clear() { std::lock_guard lock(mutex_); outgoing_.clear(); incoming_.clear(); inventory_.reset(); }
+  void Clear() {
+    std::lock_guard lock(mutex_); outgoing_.clear(); incoming_.clear(); inventory_.reset();
+    outgoing_receipts_.clear(); incoming_receipts_.clear();
+  }
   void Exchange(CoopSession& session) {
     if (session.State() != SessionState::Connected) { Clear(); return; }
     std::lock_guard lock(mutex_);
     if (inventory_) { session.PublishInventory(*inventory_); inventory_.reset(); }
     while (!outgoing_.empty() && session.QueueShot(outgoing_.front())) outgoing_.pop_front();
     for (auto& shot : session.TakeShots()) if (incoming_.size() < kMaxQueuedShots) incoming_.push_back(std::move(shot));
+    while (!outgoing_receipts_.empty() && session.QueueShotReceipt(outgoing_receipts_.front())) outgoing_receipts_.pop_front();
+    for (auto& receipt:session.TakeShotReceipts())
+      if (incoming_receipts_.size()<kMaxQueuedShots) incoming_receipts_.push_back(std::move(receipt));
   }
  private:
   std::mutex mutex_;
   std::deque<PendingShot> outgoing_;
   std::vector<ReceivedShot> incoming_;
+  std::deque<ShotReceipt> outgoing_receipts_;
+  std::vector<ShotReceipt> incoming_receipts_;
   std::optional<InventoryState> inventory_;
 };
 }  // namespace kk::coop

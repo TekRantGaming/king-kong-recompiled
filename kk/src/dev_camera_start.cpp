@@ -3,6 +3,8 @@
 // KK_DEV_FACE_PARTNER=<seconds>[:<repeat seconds>] separately turns Jack and his
 // normal first-person camera toward a fresh same-level co-op partner, with level
 // pitch and no position writes. Due requests wait for a usable pose/camera.
+// KK_DEV_FACE_PARTNER_PITCH=1 frames the partner's chest from the actual camera
+// eye, useful for animation evidence on slopes. It never moves either player.
 // KK_DEV_FACE_ENEMY=<seconds>[:<repeat seconds>] takes precedence and aims at
 // the nearest matched live enemy on the guest, including pitch at camera commit.
 // KK_DEV_FACE_POINT=seconds:repeat,x,y,z aims this same native camera at a
@@ -129,12 +131,17 @@ void DevFacePartnerCamera(PPCContext& ctx, uint8_t* base) {
       !coop::PoseAddress(Load32(base, camera + 12), 64) ||
       forward != ctx.r1.u32 + 112 || !coop::PoseAddress(forward, 12) || up != cm + 208) return;
   const auto matrix = Load32(base, camera+12);
-  const coop::ShotVector eye = (f.enemy || f.point_set) ? coop::ShotVector{LoadF(base, matrix+48), LoadF(base, matrix+52), LoadF(base, matrix+56)} :
+  static const bool body_pitch=[] {
+    const char* v=std::getenv("KK_DEV_FACE_PARTNER_PITCH"); return v && *v=='1';
+  }();
+  const bool pitch_target=f.enemy || f.point_set || body_pitch;
+  const coop::ShotVector eye = pitch_target ? coop::ShotVector{LoadF(base, matrix+48), LoadF(base, matrix+52), LoadF(base, matrix+56)} :
       coop::ShotVector{local.pose->x, local.pose->y, local.pose->z};
   auto target = f.point_set ? std::optional<coop::ShotVector>{f.point} : f.enemy ? coop::EnemyAimTarget(base, eye) :
-      std::optional<coop::ShotVector>{coop::ShotVector{snapshot.partner->x, snapshot.partner->y, eye.z}};
+      std::optional<coop::ShotVector>{coop::ShotVector{snapshot.partner->x, snapshot.partner->y,
+          body_pitch ? snapshot.partner->z+1.2f : eye.z}};
   if (!target) return; // Due requests wait for a matched live enemy and normal Jack camera.
-  const float dx = target->x - eye.x, dy = target->y - eye.y, dz = (f.enemy || f.point_set) ? target->z-eye.z : 0;
+  const float dx = target->x - eye.x, dy = target->y - eye.y, dz = pitch_target ? target->z-eye.z : 0;
   const float horizontal = std::hypot(dx, dy);
   const float distance = std::hypot(horizontal, dz);
   // An overlapping partner has no useful yaw. Keep the due request pending.

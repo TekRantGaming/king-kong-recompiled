@@ -1,4 +1,5 @@
 #include "coop_direct_udp.h"
+#include "coop_desync.h"
 #include "coop_session.h"
 #include "coop_flow.h"
 #include <array>
@@ -29,12 +30,41 @@ SessionConfig Config(Role role,std::string code="TEST23") {
   return config;
 }
 uint16_t next_port=31780;
-std::unique_ptr<DirectUdpTransport> Host(std::string address="127.0.0.1") {
+std::unique_ptr<DirectUdpTransport> Host(std::string address="127.0.0.1", UdpSimulation simulation={}) {
   for (int i=0;i<100;++i) {
-    auto host=CreateDirectUdp({true,address,next_port++,"TEST23"});
+    auto host=CreateDirectUdp({true,address,next_port++,"TEST23",simulation});
     if (host->State()==TransportState::Ready) return host;
   }
   Check(false,"bind loopback host"); return {};
+}
+void WanShots() {
+  auto a=Host("127.0.0.1",{250,80,5,68});
+  auto b=CreateDirectUdp({false,"127.0.0.1",a->LocalPort(),"TEST23",{250,80,5,69}});
+  CoopSession host(Config(Role::Host),*a),guest(Config(Role::Guest),*b);
+  double now=100;
+  constexpr double guest_clock_offset=12345;
+  for(int i=0;i<1000;++i,now+=.01) {host.Tick(now);guest.Tick(now+guest_clock_offset);}
+  Check(host.State()==SessionState::Connected && guest.State()==SessionState::Connected,"WAN handshake with delay jitter and loss");
+  unsigned received=0,confirmed=0; ShotValidator validator;
+  for(int i=0;i<1000;++i,now+=.01) {
+    const double guest_now=now+guest_clock_offset;
+    PlayerPose peer{guest_now,101,float(i)*.32f};
+    if(i<200 && i%20==0) {
+      ShotIntent shot{{101,1,1},uint32_t(i/20+1),1,guest_now,{peer.x,0,1},{1,0,0},{}};
+      InventoryState inventory{shot.world,guest_now,1}; inventory.ammo[0]=50;
+      Check(guest.QueueShot({shot,inventory}),"queue actual WAN shot");
+    }
+    host.Tick(now);guest.Tick(guest_now,peer);
+    for(const auto& shot:host.TakeShots()) {
+      Check(shot.peer && validator.Validate(shot,{101,1,1},shot.peer,now)==ShotReject::None,
+          "moving WAN shooter and inventory accepted with independent PC clocks"); ++received;
+      Check(host.QueueShotReceipt({shot.intent.world,shot.intent.number,ShotReject::None,false}),"host queues WAN verdict");
+    }
+    for(const auto& receipt:guest.TakeShotReceipts()) {
+      Check(receipt.number==++confirmed && receipt.reason==ShotReject::None,"guest receives ordered host verdict despite WAN loss");
+    }
+  }
+  Check(received==10 && confirmed==10 && (a->Stats().resent || b->Stats().resent),"all WAN reliable shots and host verdicts delivered once despite real datagram loss");
 }
 void Codec() {
   Message hello; hello.hello=Compatible(); std::vector<uint8_t> legacy,bytes;
@@ -66,7 +96,7 @@ void Bounds() {
   Message hello; hello.hello=Compatible(); hello.join_code="TEST23";
   std::vector<uint8_t> bytes; Check(Encode(hello,bytes),"bounded packet fixture");
   for (int i=0;i<64;++i) Check(host->Send(bytes,true),"bounded reliable queue accepts window");
-  Check(!host->Send(bytes,true) && host->State()==TransportState::Failed,"reliable overflow fails instead of losing ordered data");
+  Check(!host->Send(bytes,true) && host->State()==TransportState::Ready,"full reliable window backpressures without losing data or disconnecting");
   host->Close(); Check(host->State()==TransportState::Closed && !host->Send(bytes,false),"closed transport inert");
   Check(CreateDirectUdp({true,"127.0.0.1",0,"TEST23"})->State()==TransportState::Failed,"zero port rejected");
   Check(CreateDirectUdp({true,"127.0.0.1",31779,"short"})->State()==TransportState::Failed,"short code rejected before binding");
@@ -232,7 +262,60 @@ void ReliabilityAndFlood() {
   Check(count==40,"all reliable samples delivered");
 }
 }
+void SimulationIntegration(double delay=150,double jitter=30,double loss=3) {
+  DirectUdpOptions h{true,"127.0.0.1",next_port++,"TEST23"}; h.simulation={delay,jitter,loss,72};
+  auto a=CreateDirectUdp(h);
+  DirectUdpOptions j{false,"127.0.0.1",a->LocalPort(),"TEST23"}; j.simulation={delay,jitter,loss,73};
+  auto b=CreateDirectUdp(j);
+  CoopSession host(Config(Role::Host),*a),guest(Config(Role::Guest),*b);
+  desync::Assembly assembly; desync::Guard guard;
+  uint32_t sweep=0; unsigned digests=0; double next=16;
+  bool burst_queued=false,burst_received=false;
+  std::deque<Message> burst;
+  enemies::Frame frame; frame.world={101,1,1};
+  EnemyState enemy{{777,0,EnemyFamily::Raptor},1,2,3,0,100};
+  frame.records.push_back({enemy,EnemyEventKind::Spawned});
+  for (double now=1;now<121;now+=.01) {
+    frame.time=now;
+    host.Tick(now,PlayerPose{now,101,1,2,3,0,0},&frame);
+    guest.Tick(now,PlayerPose{now,101,4,2,3,0,0});
+    if (now>10) Check(host.State()==SessionState::Connected && guest.State()==SessionState::Connected,"150/30/3 never Lost");
+    if (now>=10 && !burst_queued && host.State()==SessionState::Connected) {
+      burst_queued=true; ++sweep;
+      for (uint16_t part=0;part<256;++part) {
+        Message m; m.type=MessageType::WorldDigest; m.epoch=host.Epoch();
+        auto& p=m.digest; p.generation=1; p.level=101; p.start=1; p.checkpoint=1; p.sweep=sweep;
+        p.captured=now;
+        p.enemy_world={101,1,1};
+        p.part=part; p.parts=256; p.script_count=kStorySnapshotScripts;
+        for (size_t i=0;i<kDigestScriptsPerPage;++i) p.scripts.push_back({1+part*kDigestScriptsPerPage+i,99,1,0,1});
+        burst.push_back(std::move(m));
+      }
+    }
+    while (!burst.empty() && host.QueueStory(burst.front())) burst.pop_front();
+    if (now>=next && host.State()==SessionState::Connected) {
+      next=now+3; Message m; m.type=MessageType::WorldDigest; m.epoch=host.Epoch();
+      m.digest.generation=1; m.digest.level=101; m.digest.start=1; m.digest.checkpoint=1;
+      m.digest.sweep=++sweep; m.digest.enemy_count=1;
+      m.digest.captured=now;
+      m.digest.enemy_world={101,1,1};
+      m.digest.enemies.push_back({enemy.id,EnemyOwner::Host,0,100,0});
+      Check(host.QueueStory(m) && !guest.QueueStory(m),"digest direction enforced on real UDP");
+    }
+    for (const auto& m:guest.TakeStory()) if (auto complete=assembly.Push(m.digest,now)) {
+      Check(desync::FreshForPose(complete->header,guest.Partner(now)),"150/30/3 complete sweeps remain fresh against host poses");
+      if (complete->scripts.size()==kStorySnapshotScripts) burst_received=true;
+      ++digests; const auto remote=guest.Enemies(now); desync::Evidence evidence;
+      evidence.structural=remote.records.size()!=1;
+      evidence.quiet=!remote.records.empty() && remote.records[0].enemy.life!=100;
+      Check(guard.Observe(1,101,1,evidence,now)==desync::Tier::None,"150/30/3 no false recovery and enemies agree");
+    }
+  }
+  Check(burst_received && digests>=30 && a->Stats().resent>0 && b->Stats().resent>0,"maximum census, latency, loss, ACK and digest paths exercised");
+}
 int main() {
-  Codec(); Limits(); Bounds(); WRONG2(); Integration("127.0.0.1"); Integration("::1"); ReliabilityAndFlood();
+  Codec(); Limits(); Bounds(); WRONG2(); Integration("127.0.0.1"); Integration("::1"); ReliabilityAndFlood(); WanShots();
+  SimulationIntegration();
+  SimulationIntegration(250,80,5);
   std::puts("Direct UDP codec, code, rate, IPv4/IPv6, readiness, save/load, poses and single-peer checks passed");
 }

@@ -50,6 +50,8 @@ class SteamRuntime final : public ISocialService {
   void PublishCheats(CheatSet cheats);
   void PublishInventory(const InventoryState& inventory);
   std::vector<ReceivedShot> TakeShots();
+  bool SubmitShotReceipt(const ShotReceipt& receipt);
+  std::vector<ShotReceipt> TakeShotReceipts();
   bool SubmitCombat(Message message, double now);
   std::vector<ReceivedCombat> TakeCombat();
   void ClearCombat();

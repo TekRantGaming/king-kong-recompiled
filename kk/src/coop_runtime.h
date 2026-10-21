@@ -45,6 +45,7 @@ bool SessionDevObjectReload(uint8_t* base); // private guest recovery, never a s
 // Private death/catch-up reload does not advance the shared load barrier or enemy visit.
 bool SessionPrivateReload();
 bool SessionCheckpointCatchup();  // game thread, host-checkpoint private load/placement
+uint32_t SessionNativeCheckpoint(); // actual loaded/taken checkpoint, not the retry-save mirror
 void SessionReviveBeforeAi(PPCContext& ctx, uint8_t* base);
 int SessionCheats();  // -1 outside a C24 launch, otherwise immutable host settings
 void StopSessionFlow();
@@ -74,6 +75,8 @@ void PublishInventoryState(const InventoryState& inventory);
 // UI/game callers publish own choices and apply the worker's value-only overlay.
 void RefreshSessionCheats();
 std::vector<ReceivedShot> TakeShotIntents();
+bool SubmitShotReceipt(const ShotReceipt& receipt);
+std::vector<ShotReceipt> TakeShotReceipts();
 void SetShotCounters(ShotCounters counters);
 bool SubmitCombat(Message message, double now);
 std::vector<ReceivedCombat> TakeCombat();
@@ -95,6 +98,7 @@ struct PuppetSnapshot {
 };
 PuppetSnapshot PartnerBodySnapshot();
 void SetPartnerBodyDriven(bool driven);
+void PartnerAnimationShot(uint8_t weapon); // Game thread, confirmed local native shot only.
 // Game-thread copied head anchor; cleared whenever body driving stops.
 void SetPartnerHead(std::optional<ShotVector> head, uint32_t level);
 #if defined(KK_DEV_TOOLS)

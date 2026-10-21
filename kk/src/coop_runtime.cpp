@@ -6,6 +6,7 @@
 #include "coop_nametag.h"
 #include "coop_observer.h"
 #include "coop_story_game.h"
+#include "coop_desync_game.h"
 #include "settings.h"
 #include "steam_runtime.h"
 #include "social_fake.h"
@@ -31,6 +32,7 @@
 #include "mods.h"
 #include "photo_mode.h"
 #include "play_internal.h"
+#include "ps2_movies.h"
 #include "ui_paint.h"
 #include "coop_enemies_game.h"
 #include "coop_partner_body.h"
@@ -41,6 +43,8 @@ REXCVAR_DEFINE_STRING(kk_coop_policy_override, "", "KK/Debug", "Chapter policies
     .debug_only().lifecycle(rex::cvar::Lifecycle::kInitOnly);
 REXCVAR_DEFINE_STRING(kk_coop_dev, "", "KK/Debug", "Local co-op test link: host:<port> or join:<port>")
     .debug_only().lifecycle(rex::cvar::Lifecycle::kInitOnly);
+REXCVAR_DEFINE_BOOL(kk_coop_debug_overlay, false, "KK/Debug", "Show detailed co-op diagnostics during gameplay")
+    .debug_only();
 REXCVAR_DEFINE_BOOL(kk_steam_selftest, false, "KK/Debug", "Test Steam services and exit without starting a game")
     .debug_only().lifecycle(rex::cvar::Lifecycle::kInitOnly);
 REXCVAR_DEFINE_BOOL(kk_steam_loopback_test, false, "KK/Debug", "Probe Steam self-send for every co-op message and exit")
@@ -62,13 +66,22 @@ std::unique_ptr<ISocialPreview> social_preview;
 bool configured = false;
 using Clock = std::chrono::steady_clock;
 double Now() { return std::chrono::duration<double>(Clock::now().time_since_epoch()).count(); }
+uint32_t animation_fire = 0;
+uint8_t animation_weapon = 0;
 // Same validated reader in runtime and sparse-memory unit tests.
 PoseRead ReadJack(const uint8_t* base) {
   if (!base) return {{}, "no-base"};
   if (play::CoverScreen()) return {{}, "cover"};
-  return ReadJackPose([base](uint32_t a) { return hfr::Load32(base, a); },
+  auto read = ReadJackPose([base](uint32_t a) { return hfr::Load32(base, a); },
       [base](uint32_t a) { return hfr::Load16(base, a); },
       [base](uint32_t a) { return hfr::LoadF(base, a); }, Now());
+  static PoseVelocity velocity;
+  if (!read.pose) { velocity.Clear(); return read; }
+  auto& p = *read.pose;
+  velocity.Apply(p);
+  if (const auto pitch = nametag::ViewPitch(base,p.level)) p.pitch = *pitch;
+  p.fire = animation_fire; p.fire_weapon = animation_weapon;
+  return read;
 }
 struct View {
   Role role = Role::Host;
@@ -109,6 +122,9 @@ class Service {
   ~Service() { Stop(); }
   void Start(SessionConfig config, DirectUdpOptions options, bool direct = false) {
     if (running_.exchange(true)) return;
+#if defined(KK_DEV_TOOLS)
+    ConfigureDevUdpSimulation(options);
+#endif
     stop_ = false;
     direct_ = direct; local_ready_ = remote_ready_ = starting_ = code_rejected_ = open_failed_ = false;
     choice_ = {};
@@ -289,6 +305,8 @@ class Service {
   void PublishCheats(CheatSet cheats) { std::lock_guard lock(mutex_); local_cheats_ = cheats; }
   void PublishInventory(const InventoryState& inventory) { shots_.PublishInventory(inventory); }
   std::vector<ReceivedShot> TakeShots() { return shots_.Take(); }
+  bool SubmitReceipt(const ShotReceipt& receipt) { return shots_.SubmitReceipt(receipt); }
+  std::vector<ShotReceipt> TakeReceipts() { return shots_.TakeReceipts(); }
   bool SubmitCombat(Message m, double now) { return combat_.Submit(std::move(m), now); }
   std::vector<ReceivedCombat> TakeCombat() { return combat_.Take(); }
   void ClearCombat() { combat_.Clear(); }
@@ -360,25 +378,32 @@ class PartnerOverlay final : public rex::ui::ImGuiDialog {
   void OnDraw(ImGuiIO& io) override {
     service.LogDiagnostics();
     if (REXCVAR_GET(kk_coop_enabled)) {
+      // Movies can run inside the synchronous loader, before Loaded/LoadRelease
+      // or another GameFrame. Never put session UI over their presenter.
+      if (movies::LoaderWaiting()) return;
       const auto flow=SessionFlowSnapshot();
       if (flow.active && (*flow.status || observer::Active())) {
         auto* draw=ImGui::GetForegroundDrawList();
         const bool waiting=flow.phase!=FlowPhase::Playing ||
             (!flow.host && (flow.policy==ChapterPolicy::Observer || observer::Active()) && observer::StatusScreen());
-        if (waiting && !play::PauseMenuOpen() && !play::GamePausePageUp())
-          draw->AddRectFilled(ImVec2(0,0),ImGui::GetIO().DisplaySize,IM_COL32(10,12,16,255));
-        char status[256];
+        // Flow phase describes peer synchronization, not what is on screen.
+        // Native intro movies also play inside uni_go while phase is Loading.
+        // Keep every wait/fallback non-occluding, even without a camera tick.
         std::string line=flow.phase==FlowPhase::Playing && !flow.host &&
             (flow.policy==ChapterPolicy::Observer || observer::Active()) ? observer::Status() : flow.status;
         if (flow.phase==FlowPhase::Waiting) {
           const auto social=Social().Snapshot();
           for (const auto& member : social.members) if (member.id!=social.self) { line="Waiting for "+member.name+" to finish this chapter..."; break; }
         }
-        std::snprintf(status,sizeof(status),"%s\nHost chapter %d | level %u | checkpoint %u",line.c_str(),
-            FlowChapter(flow.world.level)+1,flow.world.level,flow.checkpoint);
-        draw->AddText(ImVec2(36,40),IM_COL32(240,240,240,255),status);
+        const auto* vp=ImGui::GetMainViewport();
+        const float size=std::clamp(io.DisplaySize.y/720.f,.65f,1.5f)*16.f;
+        const ImVec2 pos(vp->Pos.x+12,vp->Pos.y+12);
+        draw->PushClipRect(pos,ImVec2(vp->Pos.x+io.DisplaySize.x-12,pos.y+size+2),true);
+        draw->AddText(ImGui::GetFont(),size,pos,IM_COL32(240,240,240,110),line.c_str());
+        draw->PopClipRect();
         if (waiting || observer::Active() || flow.policy!=ChapterPolicy::Together) return;
       }
+      if (observer::CutsceneActive()) return;
       if (MoveToPartnerOffered()) {
         ImGui::SetNextWindowPos(ImVec2(24,190),ImGuiCond_Always);
         ImGui::SetNextWindowBgAlpha(.9f);
@@ -417,50 +442,56 @@ class PartnerOverlay final : public rex::ui::ImGuiDialog {
     if (Now() - v.updated > .5 && v.state != SessionState::Ended) return;
 #if defined(KK_DEV_TOOLS)
     char text[256];
-    std::snprintf(text, sizeof(text), "Co-op %s: %s | %.0f ms | loss %.1f%% | invalid %llu | %s",
-        v.role == Role::Host ? "host" : "guest", StateName(v.state), v.stats.ping_ms, v.stats.loss * 100,
-        static_cast<unsigned long long>(v.stats.malformed), RejectName(v.rejection));
     auto* dl = ImGui::GetForegroundDrawList();
-    dl->AddText(ImVec2(24, 64), IM_COL32(255, 230, 170, 255), text);
-    const float status_distance = v.local && v.partner && v.local->level == v.partner->level ?
-        PartnerDistance(*v.local, *v.partner) : -1;
-    std::snprintf(text, sizeof(text), "Pose: %s (%s) | sent %llu recv %llu | level %s | distance %.1f",
-        v.local ? "yes" : "no", v.local_failure,
-        static_cast<unsigned long long>(v.poses.sent), static_cast<unsigned long long>(v.poses.received),
-        v.poses.remote_level ? std::to_string(*v.poses.remote_level).c_str() : "none", status_distance);
-    dl->AddText(ImVec2(24, 88), IM_COL32(255, 230, 170, 255), text);
-    enemies::Counters counts;
-    { std::lock_guard lock(enemy_status_mutex); counts = enemy_status; }
-    std::snprintf(text, sizeof(text), "Enemies: owned-by-me %u | owned-by-partner %u | matched %u | unmatched %u | driven %u",
-        counts.owned_me, counts.owned_partner, counts.matched, counts.unmatched, counts.driven);
-    dl->AddText(ImVec2(24, 112), IM_COL32(255, 230, 170, 255), text);
-    ShotCounters shots;
-    { std::lock_guard lock(enemy_status_mutex); shots = shot_status; }
-    std::snprintf(text, sizeof(text), "Shots: sent %llu | applied %llu | late %llu | rejected %llu (%s)",
-        static_cast<unsigned long long>(v.shots_sent), static_cast<unsigned long long>(shots.applied),
-        static_cast<unsigned long long>(shots.late),
-        static_cast<unsigned long long>(shots.rejected), ShotRejectName(shots.last));
-    dl->AddText(ImVec2(24, 136), IM_COL32(255, 230, 170, 255), text);
+    // Some native openings animate Jack through his normal camera, so they
+    // cannot be identified from scripted camera packets. Keep diagnostics opt-in.
+    if (REXCVAR_GET(kk_coop_debug_overlay)) {
+      std::snprintf(text, sizeof(text), "Co-op %s: %s | %.0f ms | loss %.1f%% | invalid %llu | %s",
+          v.role == Role::Host ? "host" : "guest", StateName(v.state), v.stats.ping_ms, v.stats.loss * 100,
+          static_cast<unsigned long long>(v.stats.malformed), RejectName(v.rejection));
+      dl->AddText(ImVec2(24, 64), IM_COL32(255, 230, 170, 255), text);
+      const float status_distance = v.local && v.partner && v.local->level == v.partner->level ?
+          PartnerDistance(*v.local, *v.partner) : -1;
+      std::snprintf(text, sizeof(text), "Pose: %s (%s) | sent %llu recv %llu | level %s | distance %.1f",
+          v.local ? "yes" : "no", v.local_failure,
+          static_cast<unsigned long long>(v.poses.sent), static_cast<unsigned long long>(v.poses.received),
+          v.poses.remote_level ? std::to_string(*v.poses.remote_level).c_str() : "none", status_distance);
+      dl->AddText(ImVec2(24, 88), IM_COL32(255, 230, 170, 255), text);
+      enemies::Counters counts;
+      { std::lock_guard lock(enemy_status_mutex); counts = enemy_status; }
+      std::snprintf(text, sizeof(text), "Enemies: owned-by-me %u | owned-by-partner %u | matched %u | unmatched %u | driven %u",
+          counts.owned_me, counts.owned_partner, counts.matched, counts.unmatched, counts.driven);
+      dl->AddText(ImVec2(24, 112), IM_COL32(255, 230, 170, 255), text);
+      ShotCounters shots;
+      { std::lock_guard lock(enemy_status_mutex); shots = shot_status; }
+      std::snprintf(text, sizeof(text), "Shots: sent %llu | applied %llu | late %llu | rejected %llu (%s)",
+          static_cast<unsigned long long>(v.shots_sent), static_cast<unsigned long long>(shots.applied),
+          static_cast<unsigned long long>(shots.late),
+          static_cast<unsigned long long>(shots.rejected), ShotRejectName(shots.last));
+      dl->AddText(ImVec2(24, 136), IM_COL32(255, 230, 170, 255), text);
+    }
 #else
     auto* dl = ImGui::GetForegroundDrawList();
 #endif
     if (v.state != SessionState::Connected || !v.local || !v.partner || v.local->level != v.partner->level ||
         freecam::Active()) return;
 #if defined(KK_DEV_TOOLS)
-    const float dx = v.partner->x - v.local->x, dy = v.partner->y - v.local->y;
-    const float partner_distance = PartnerDistance(*v.local, *v.partner);
-    const float angle = std::remainder(std::atan2(dy, dx) - v.local->facing, 6.28318530718f);
-    const char* directions[] = {"ahead", "ahead-left", "left", "behind-left", "behind", "behind-right", "right", "ahead-right"};
-    const int sector = (int(std::lround(angle / .7853981634f)) + 8) % 8;
-    if (PartnerHere(partner_distance)) std::snprintf(text, sizeof(text), "Partner: here");
-    else std::snprintf(text, sizeof(text), "Partner: %.0f m, %s (Jack facing)", partner_distance, directions[sector]);
-    if (partner_body_driven.load()) {
-      const size_t used = std::char_traits<char>::length(text);
-      std::snprintf(text + used, sizeof(text) - used, " (body)");
+    if (REXCVAR_GET(kk_coop_debug_overlay)) {
+      const float dx = v.partner->x - v.local->x, dy = v.partner->y - v.local->y;
+      const float partner_distance = PartnerDistance(*v.local, *v.partner);
+      const float angle = std::remainder(std::atan2(dy, dx) - v.local->facing, 6.28318530718f);
+      const char* directions[] = {"ahead", "ahead-left", "left", "behind-left", "behind", "behind-right", "right", "ahead-right"};
+      const int sector = (int(std::lround(angle / .7853981634f)) + 8) % 8;
+      if (PartnerHere(partner_distance)) std::snprintf(text, sizeof(text), "Partner: here");
+      else std::snprintf(text, sizeof(text), "Partner: %.0f m, %s (Jack facing)", partner_distance, directions[sector]);
+      if (partner_body_driven.load()) {
+        const size_t used = std::char_traits<char>::length(text);
+        std::snprintf(text + used, sizeof(text) - used, " (body)");
+      }
+      dl->AddText(ImVec2(24, 160), IM_COL32(180, 255, 210, 255), text);
+      std::snprintf(text,sizeof(text),"Tag camera: %s",nametag::Status());
+      dl->AddText(ImVec2(24, 184), IM_COL32(180, 255, 210, 255), text);
     }
-    dl->AddText(ImVec2(24, 160), IM_COL32(180, 255, 210, 255), text);
-    std::snprintf(text,sizeof(text),"Tag camera: %s",nametag::Status());
-    dl->AddText(ImVec2(24, 184), IM_COL32(180, 255, 210, 255), text);
 #endif
     const auto camera = nametag::Snapshot();
     if (!camera || Now()-camera->time > .15 || camera->level != v.local->level) return;
@@ -681,6 +712,7 @@ void GameFrame(uint8_t* base) {
   RefreshSessionCheats();
   kk::PartnerBodyGameFrame(base);
   StoryGameFrame(base);
+  WorldGuardFrame(base);
   if (!REXCVAR_GET(kk_coop_enabled)) { observer::GameFrame(base); return; }
   SessionReloadFrame(base);
   observer::GameFrame(base);
@@ -761,6 +793,14 @@ std::vector<ReceivedShot> TakeShotIntents() {
   return steam ? steam->TakeShots() : std::vector<ReceivedShot>{};
 }
 void SetShotCounters(ShotCounters counts) { std::lock_guard lock(enemy_status_mutex); shot_status = counts; }
+bool SubmitShotReceipt(const ShotReceipt& receipt) {
+  if (service.Running()) return service.SubmitReceipt(receipt);
+  return steam && steam->SubmitShotReceipt(receipt);
+}
+std::vector<ShotReceipt> TakeShotReceipts() {
+  if (service.Running()) return service.TakeReceipts();
+  return steam ? steam->TakeShotReceipts() : std::vector<ShotReceipt>{};
+}
 bool SubmitCombat(Message message, double now) {
   if (!EnemyConnectionReady()) return false;
   if (service.Running()) return service.SubmitCombat(std::move(message), now);
@@ -812,6 +852,10 @@ PuppetSnapshot PartnerBodySnapshot() {
   const auto flow=SessionFlowSnapshot();
   if (flow.active && (flow.phase!=FlowPhase::Playing || flow.policy!=ChapterPolicy::Together)) return {};
   return {true, Now() - v.updated <= .5, v.state, v.local, v.partner};
+}
+void PartnerAnimationShot(uint8_t weapon) {
+  if (weapon < 1 || weapon > 4) return;
+  ++animation_fire; animation_weapon = weapon;
 }
 void SetPartnerBodyDriven(bool driven) {
   partner_body_driven.store(driven);

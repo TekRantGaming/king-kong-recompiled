@@ -16,7 +16,7 @@ void Codec() {
     if (type==MessageType::ObjectRequest && kind==ObjectKind::Breakable) { m.object.value=0x800010; m.object.position=42; m.object.seconds=.125f; }
     if (type==MessageType::ObjectState && kind==ObjectKind::Door) { m.object.position=.375f; m.object.seconds=2.5f; m.object.value=511; }
     std::vector<uint8_t> bytes; Check(Encode(m,bytes),"object encodes");
-    Check(bytes.size()==kHeaderBytes+33 && bytes[5]==17,"bounded protocol 17 object wire");
+    Check(bytes.size()==kHeaderBytes+33 && bytes[5]==kProtocolVersion,"bounded protocol 18 object wire");
     Message out; Check(Decode(bytes,out) && out.object==m.object,"object round trip");
     for (size_t i=0;i<bytes.size();++i) {
       Message sentinel; sentinel.sequence=123;

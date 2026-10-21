@@ -19,14 +19,14 @@ Message Packet(MessageType type=MessageType::StoryEvent,uint32_t number=1) {
 }
 std::vector<uint8_t> Wire(const Message& m) { std::vector<uint8_t> bytes; Check(Encode(m,bytes),"valid fixture encodes"); return bytes; }
 void Codec() {
-  static_assert(kProtocolVersion==17);
+  static_assert(kProtocolVersion==18);
   static_assert(uint16_t(MessageType::StoryEvent)==29 && uint16_t(MessageType::TriggerRequest)==30);
   for (auto phase : {StoryPhase::Armed,StoryPhase::Started,StoryPhase::Advance,StoryPhase::Finished,StoryPhase::Recovery,StoryPhase::Checksum}) {
     for (auto type : {MessageType::StoryEvent,MessageType::TriggerRequest}) {
       if (type==MessageType::TriggerRequest && !ValidStoryRequest(phase)) continue;
       auto m=Packet(type); m.story=Event(0x12345678,phase);
       auto bytes=Wire(m); Message out;
-      Check(bytes.size()==kHeaderBytes+37 && bytes[5]==kProtocolVersion && bytes[7]==uint8_t(type),"bounded v17 story wire");
+      Check(bytes.size()==kHeaderBytes+37 && bytes[5]==kProtocolVersion && bytes[7]==uint8_t(type),"bounded v18 story wire");
       Check(bytes[kHeaderBytes+8]==0x12 && bytes[kHeaderBytes+11]==0x78 &&
           bytes[kHeaderBytes+12]==1 && bytes[kHeaderBytes+19]==0xef,"network byte order, including 64-bit identity");
       Check(Decode(bytes,out) && out.story==m.story && out.epoch==17 && Wire(out)==bytes,"exact canonical story round trip");
@@ -419,7 +419,7 @@ void TransportAndMailbox() {
   auto gc=hc; gc.role=Role::Guest; gc.epoch=0;
   CoopSession host(hc,ht),guest(gc,gt);
   for (int i=0;i<20;++i) { host.Tick(i*.01); guest.Tick(i*.01); }
-  Check(host.State()==SessionState::Connected && guest.State()==SessionState::Connected,"real v14 session handshake");
+  Check(host.State()==SessionState::Connected && guest.State()==SessionState::Connected,"real v18 session handshake");
   StoryMailbox hm,gm;
   Check(hm.Submit(Packet()),"host game-thread submits copied event");
   hm.Exchange(host); ht.blocked=true; host.Tick(.21); guest.Tick(.21); gm.Exchange(guest);

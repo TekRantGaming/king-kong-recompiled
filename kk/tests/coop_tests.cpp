@@ -81,7 +81,7 @@ struct Pair {
   }
 };
 void Protocol() {
-  static_assert(kProtocolVersion == 17);
+  static_assert(kProtocolVersion == 18);
   constexpr std::array types{MessageType::Hello, MessageType::HelloAck, MessageType::Reject,
       MessageType::Ping, MessageType::Pong, MessageType::PlayerPose, MessageType::Bye,
       MessageType::EnemySnapshot, MessageType::EnemyEvent, MessageType::ShotIntent,
@@ -92,10 +92,10 @@ void Protocol() {
       MessageType::OwnershipChange,
       MessageType::PlayerDowned, MessageType::PlayerRevived,
       MessageType::CameraPose, MessageType::CameraCut, MessageType::StoryEvent, MessageType::TriggerRequest,
-      MessageType::ObjectState, MessageType::ObjectRequest};
+      MessageType::WorldDigest, MessageType::ShotReceipt, MessageType::ObjectState, MessageType::ObjectRequest};
   for (size_t i = 0; i < types.size(); ++i) {
     const auto type = types[i];
-    Check(uint16_t(type) == i+1, "protocol 17 message IDs have no collisions or gaps");
+    Check(uint16_t(type) == i+1, "protocol 18 message IDs have no collisions or gaps");
     Check(IsFlowMessage(type) == ((i >= 12 && i <= 20) || i == 24 || i == 25), "flow includes life events and excludes combat and cameras");
     Message input;
     input.type = type; input.sequence = 0x12345678; input.epoch = 0x0123456789ABCDEFull;
@@ -119,10 +119,13 @@ void Protocol() {
     input.camera.generation=9; input.camera.level=101; input.camera.cut=1;
     input.story={9,101,1,123,456,1,kStoryRecords,StoryPhase::Armed};
     input.object={9,101,1,123,ObjectKind::Breakable,1};
+    input.shot_receipt={{101,1,1},1,ShotReject::Origin,false};
+    input.digest.generation=9; input.digest.level=101; input.digest.sweep=1;
+    input.digest.enemy_world={101,0,1};
     const auto bytes = Packet(input);
     Check(bytes[0] == 'K' && bytes[1] == 'K' && bytes[2] == 'C' && bytes[3] == '1', "wire magic");
     Check(bytes[4] == 0 && bytes[5] == kProtocolVersion && bytes[6] == 0 && bytes[7] == i+1,
-        "protocol 17 and message ID in wire header");
+        "protocol 18 and message ID in wire header");
     Check(bytes[8] == 0x12 && bytes[11] == 0x78 && bytes[12] == 1 && bytes[19] == 0xEF,
         "header byte order independent of host endianness");
     Message output;
@@ -174,7 +177,7 @@ void Protocol() {
 void IntegratedMessageRouting() {
   Pair pair; pair.Pump(0,.2);
   Check(pair.host.State()==SessionState::Connected && pair.guest.State()==SessionState::Connected,
-      "protocol 17 integration handshake");
+      "protocol 18 integration handshake");
   const EnemyState enemy{{123,0,EnemyFamily::Raptor},1,2,3,0,50};
   Message ownership; ownership.type=MessageType::OwnershipChange; ownership.epoch=pair.host.Epoch();
   ownership.ownership={{101,1,1},OwnershipPhase::Prepare,1,EnemyOwner::Guest,enemy};
@@ -284,7 +287,7 @@ void Handshake() {
   for (RejectReason reason : {RejectReason::Protocol, RejectReason::Version, RejectReason::Build,
       RejectReason::GameplayMods}) {
     auto c = Compatible();
-    if (reason == RejectReason::Protocol) ++c.protocol;
+    if (reason == RejectReason::Protocol) --c.protocol; // Previous C70 peers use 15.
     if (reason == RejectReason::Version) c.version += "-different";
     if (reason == RejectReason::Build) c.build += "-different";
     if (reason == RejectReason::GameplayMods) c.gameplay_digest += "-different";
@@ -322,14 +325,50 @@ void Timeouts() {
   Check(failed.host.State() == SessionState::Ended, "failed transport ends session");
 }
 void Poses() {
+  PoseVelocity velocity;
+  PlayerPose sampled;
+  sampled.level=201; velocity.Apply(sampled);
+  sampled.time=.001; sampled.x=.03f; velocity.Apply(sampled);
+  Check(!sampled.vx,"sub-physics callbacks cannot amplify displacement");
+  sampled.time=.05; sampled.x=.2f; velocity.Apply(sampled);
+  Check(Near(sampled.vx,4),"velocity averages across the physics sampling window");
+  sampled.time=.051; velocity.Apply(sampled);
+  Check(Near(sampled.vx,4),"velocity holds between samples instead of flickering to idle");
+  sampled.time=.101; velocity.Apply(sampled);
+  Check(!sampled.vx,"stationary position settles to zero velocity");
+  sampled.time=.16; sampled.x=20; velocity.Apply(sampled);
+  Check(!sampled.vx,"teleport never drives a running gait");
+  sampled.time=.22; sampled.x=20.2f; ++sampled.level; velocity.Apply(sampled);
+  Check(!sampled.vx,"new level clears the velocity anchor");
+  Message extended; extended.type=MessageType::PlayerPose;
+  extended.pose.vx=3; extended.pose.vy=-2; extended.pose.pitch=.6f;
+  extended.pose.weapon=4; extended.pose.crouched=1; extended.pose.airborne=1; extended.pose.fire=17; extended.pose.fire_weapon=2;
+  Message decoded;
+  Check(Decode(Packet(extended),decoded) && decoded.pose.fire==17 && decoded.pose.fire_weapon==2 &&
+      decoded.pose.weapon==4 && decoded.pose.crouched==1 && decoded.pose.airborne==1 && Near(decoded.pose.pitch,.6) && Near(decoded.pose.vy,-2),
+      "animation pose fields survive the wire");
+  std::vector<uint8_t> invalid;
+  extended.pose.airborne=2;
+  Check(!Encode(extended,invalid),"invalid airborne state rejected");
+  extended.pose.airborne=1;
+  for (float value : {std::numeric_limits<float>::quiet_NaN(), 1000.f}) {
+    extended.pose.vx=value; Check(!Encode(extended,invalid), "invalid animation velocity rejected");
+  }
+  extended.pose.vx=0; extended.pose.pitch=2;
+  Check(!Encode(extended,invalid), "invalid view pitch rejected");
+  extended.pose.pitch=0; extended.pose.weapon=5;
+  Check(!Encode(extended,invalid), "unknown weapon rejected");
   PoseBuffer buffer;
   Check(!buffer.Sample(0), "empty interpolation buffer");
   PlayerPose a{1000, 101, 0, 2, 3, 3.10f, 4, 10}, b = a;
   b.time = 1000.2; b.x = 20; b.facing = -3.10f; b.action = 20; b.item = 7;
+  b.vx=4; b.pitch=1; b.fire=1; b.fire_weapon=2;
   buffer.Push(a, 1); buffer.Push(b, 1.2);
   auto middle = buffer.Sample(1.2);
   Check(middle && Near(middle->x, 10) && std::abs(middle->facing) > 3,
       "100 ms interpolation, independent remote clock and shortest facing arc");
+  Check(middle && Near(middle->vx,2) && Near(middle->pitch,.5) && middle->fire==0 && buffer.Sample(1.3)->fire==1,
+      "animation velocity and pitch interpolate; shot waits for its pose time");
   Check(buffer.Sample(1.19)->action == a.action && buffer.Sample(1.19)->item == a.item &&
       buffer.Sample(1.21)->action == b.action && buffer.Sample(1.21)->item == b.item,
       "interpolation changes diagnostic action/item together, without blending IDs");
@@ -392,6 +431,19 @@ void PoseReadingAndDisplay() {
   Check(pose.pose && pose.pose->level == 201 && pose.pose->x == 3 &&
       std::string_view(pose.failure) == "ok", "retained load-page mode does not suppress a loaded Jack");
   Check(pose.pose->action == 123 && pose.pose->item == 0xAB, "read diagnostic action and big-endian item byte");
+  Check(!read().pose->airborne,"cleared native flight height stays grounded");
+  floats[vars+13268]=1;
+  Check(!read().pose->airborne,"native one-unit flight threshold excludes small steps");
+  floats[vars+13268]=1.2f;
+  Check(read().pose->airborne,"native fall height publishes airborne state");
+  floats[vars+13268]=-1.2f;
+  Check(read().pose->airborne,"rising above the last floor also uses the airborne clip");
+  floats[vars+13268]=std::numeric_limits<float>::quiet_NaN();
+  Check(!read().pose->airborne,"invalid flight height cannot invent a jump");
+  floats[vars+13268]=0;
+  words[0x82CC97C0] = 0x9fffe000;
+  check("globals-span"); // Weapon sampling also needs the far end of G to be readable.
+  words[0x82CC97C0] = g;
   words[g + 4] = 1; words[actor] = 1;
   check("level-request");  // First failure, before touching the actor.
   words[g + 4] = 0; words[actor] = 0;
@@ -426,6 +478,19 @@ void Disabled() {
 }
 void PuppetPolicies() {
   using namespace kk::coop::puppet;
+  std::map<uint32_t,uint32_t> weapon_memory{{0x82CC8848,0x40000000},{0x82CC97C0,0x50000000},
+      {0x40000000+4*(3+3281),2},{0x50000000+4*(3+3281),1}};
+  const auto weapon_word=[&](uint32_t p) { return weapon_memory.at(p); };
+  const auto weapon_address=[](uint32_t p,uint32_t n) { return p==0x40000000 && n==13176; };
+  Check(HumanWeapon(3,weapon_word,weapon_address)==2,
+      "body weapon follows the native character bank, not universe request globals");
+  Check(!HumanWeapon(0,weapon_word,weapon_address) && !HumanWeapon(13,weapon_word,weapon_address),
+      "invalid character slots never index a weapon bank");
+  weapon_memory[0x82CC8848]=0;
+  Check(!HumanWeapon(3,weapon_word,weapon_address),"absent native bank never reaches a table read");
+  weapon_memory[0x82CC8848]=0x40000000;
+  weapon_memory[0x40000000+4*(3+3281)]=999;
+  Check(!HumanWeapon(3,weapon_word,weapon_address),"unknown native gun cannot choose an animation");
   std::map<uint32_t, uint32_t> animation_memory{{100 + 132, 300}, {300 + 4, 400}, {400, 500}};
   const auto pointer = [&](uint32_t p, uint32_t off, uint32_t) {
     // Invalid or absent pointers must never cause the next memory read.
@@ -435,6 +500,17 @@ void PuppetPolicies() {
   };
   Check(AnimationEventHeader(100, pointer) == 500, "complete animation event metadata remains usable");
   Check(AnimationLayerHeader(300, pointer) == 500, "root motion resolves a complete layer header");
+  animation_memory[600+4]=700; animation_memory[700]=800;
+  animation_memory[600+24]=900; animation_memory[900]=1000;
+  const auto two_items=[](uint32_t) { return 2u; };
+  Check(AnimationItemHeader(600,0,two_items,pointer)==800 &&
+      AnimationItemHeader(600,1,two_items,pointer)==1000,"loaded action variants resolve independently");
+  Check(!AnimationItemHeader(600,2,two_items,pointer) &&
+      !AnimationItemHeader(600,UINT32_MAX,two_items,pointer),"native item count bounds animation requests");
+  const auto descriptor=AnimationItemDescriptor(600,1,two_items,pointer);
+  animation_memory[1104]=descriptor;
+  Check(descriptor==624 && AnimationLayerHeader(1100,pointer)==900,
+      "scratch root layer points to the item pointer field, not the resource or track array");
   for (const auto address : {232u, 304u, 400u}) {
     const auto saved = animation_memory[address]; animation_memory[address] = 0;
     Check(!AnimationEventHeader(100, pointer), "missing animation metadata returns no event instead of reading null");
@@ -461,8 +537,55 @@ void PuppetPolicies() {
   std::array<uint32_t, 3> all_hidden{8, 8, 9};
   Check(FilterActors(all_hidden, hidden) == 0, "volume query can exclude every spawned result");
   const Action observed[] = {{41, 3, 0}, {22, 3, 1}, {35, 4, 4}};
-  Check(!ChooseAction(0, observed, true) && !ChooseAction(4, observed, true),
-      "native rigid copy does not switch to a source-only idle, gait or item bank");
+  AnimationDrive drive;
+  PlayerPose motion; motion.vx=4; motion.fire=10; motion.fire_weapon=2;
+  drive.Update(motion,.05f);
+  Check(drive.moving && !drive.new_shot, "late binding never replays old shots");
+  motion.fire=12; drive.Update(motion,.05f);
+  Check(drive.new_shot && drive.fire_left > 0, "lost pose recovers cumulative shots once");
+  drive.Update(motion,.05f);
+  Check(!drive.new_shot, "same shot never restarts again");
+  motion.fire=11; drive.Update(motion,.05f);
+  motion.fire=12; drive.Update(motion,.05f);
+  Check(!drive.new_shot, "arrival jitter cannot replay a confirmed shot");
+  motion.vx=0;
+  for (unsigned i=0;i<20;++i) drive.Update(motion,.05f);
+  Check(!drive.moving && !drive.fire_left, "stop settles to idle and recoil expires");
+  motion.airborne=1; drive.Update(motion,.05f);
+  motion.airborne=0; drive.Update(motion,.05f);
+  Check(drive.land_left>0,"native airborne to grounded edge starts a landing clip");
+  AnimationDrive late_air; late_air.Update(motion,.05f);
+  Check(!late_air.land_left,"joining an already grounded partner never invents a landing");
+  Check(HumanAction(1,false,false,false)!=HumanAction(1,true,false,false) &&
+      HumanAction(3,true,false,true)!=HumanAction(1,true,false,true), "native motion and weapon firing differ");
+  Check(HumanAction(2,true,true,false)!=HumanAction(2,true,true,true),"crouched motion and fire use separate native actions");
+  Check(HumanAction(2,false,false,true)==165 && HumanAction(1,false,false,true)==11,
+      "native machine-gun aim state differs from revolver");
+  const auto carl=[](uint16_t action)->std::optional<uint8_t> {
+    return action==11 ? std::optional<uint8_t>{2} : std::nullopt;
+  };
+  const auto fallback=FireAction(2,false,carl);
+  Check(fallback && fallback->action==11 && fallback->item==2,
+      "missing machine-gun bank uses loaded revolver aim and its own variant");
+  Check(FireAction(2,true,carl)->action==11,"crouched missing weapon still has an aim visual");
+  Check(!FireAction(2,false,[](uint16_t a)->std::optional<uint8_t> {
+    return a==14 || a==164 || a==162 || a==28 || a==38 ? std::optional<uint8_t>{0} : std::nullopt;
+  }),"hit reactions must never masquerade as gunfire");
+  Check(!FireAction(2,false,[](uint16_t)->std::optional<uint8_t> { return {}; }),
+      "empty action bank cannot manufacture an unloaded clip");
+  const Gait directional[] = {{{10,0,3},0,false},{{42,1,2},1.570796327f,false},
+      {{43,2,1.5f},3.141592654f,false},{{27,0,1},0,true}};
+  auto gait=ChooseGait(0,2,0,false,directional);
+  Check(gait && gait->clip.action==42 && gait->clip.item==1 && gait->directional && Near(gait->facing,0),
+      "loaded strafe keeps view yaw and native speed");
+  gait=ChooseGait(-1.5f,0,0,false,directional);
+  Check(gait && gait->clip.action==43 && gait->directional && Near(gait->facing,0),
+      "loaded backward gait keeps the body facing the view");
+  gait=ChooseGait(0,2,0,false,std::span(directional,1));
+  Check(gait && !gait->directional && Near(gait->facing,1.570796327f),
+      "missing strafe turns a forward-only body into its travel direction");
+  Check(ChooseGait(1,0,0,true,directional)->clip.action==27,"crouch uses its own calibrated gait");
+  Check(!ChooseGait(0,0,0,false,directional),"idle never chooses a directional gait");
   Check(ChooseAction(.09f, observed)->action == 41, "observed idle below threshold");
   Check(ChooseAction(.1f, observed)->action == 22, "threshold chooses observed moving tuple");
   Check(ChooseAction(1.2f, observed)->action == 22, "walk uses closest observed speed");
@@ -581,6 +704,17 @@ void PartnerSelection() {
   Check(!PreferStoryCopy(spare, false), "safe spare humans keep normal borrowing priority");
   const AutoCandidate safe_first[]{story, spare};
   Check(SelectBody(safe_first) == 1, "safe tiers always precede story borrowing");
+  auto animated=story; animated.actor=105; animated.animation_support=3; animated.distance=0;
+  const AutoCandidate banks[]{story,animated};
+  Check(SelectBody(banks)==1,"same safety prefers loaded movement and firing over distance");
+  const AutoCandidate still_safe[]{animated,spare};
+  Check(SelectBody(still_safe)==1,"animation bank never outranks a safer tier");
+  animated.cinematic=true;
+  const AutoCandidate still_quiet[]{animated,story};
+  Check(SelectBody(still_quiet)==1,"animation bank never outranks an inactive story state");
+  animated.cinematic=false; animated.mission_distance=9;
+  const AutoCandidate still_later[]{animated,story};
+  Check(SelectBody(still_later)==1,"animation bank never outranks distance from the current mission record");
   auto distant_record = story; distant_record.actor = 104; distant_record.mission_distance = 30;
   const AutoCandidate mission_rank[]{story, distant_record};
   Check(SelectBody(mission_rank) == 1, "tier A prefers references farther from the current record");

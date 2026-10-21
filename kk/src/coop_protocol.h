@@ -11,7 +11,7 @@
 
 namespace kk::coop {
 constexpr uint32_t kMagic = 0x4B4B4331;  // KKC1, network byte order throughout
-constexpr uint16_t kProtocolVersion = 17; // C71b raw obstacle hits; 16 reserved by C68b.
+constexpr uint16_t kProtocolVersion = 18; // World objects, digests, shot receipts and animated poses.
 constexpr size_t kMaxDisplayNameBytes = 32;
 // Valid UTF-8, no controls or invisible direction/line formatting, bounded at a codepoint.
 // Empty or wholly invalid input becomes "Partner". Never log the input or result.
@@ -24,7 +24,8 @@ enum class MessageType : uint16_t {
   Checkpoint = 18, ChapterFinished = 19, ReloadRequest = 20, FlowAbort = 21,
   DamageEvent = 22, PlayerStatus = 23, OwnershipChange = 24,
   PlayerDowned = 25, PlayerRevived = 26, CameraPose = 27, CameraCut = 28,
-  StoryEvent = 29, TriggerRequest = 30, ObjectState = 31, ObjectRequest = 32
+  StoryEvent = 29, TriggerRequest = 30, WorldDigest = 31, ShotReceipt = 32,
+  ObjectState = 33, ObjectRequest = 34
 };
 
 enum class ObjectKind : uint8_t { Breakable=1, Door=2 };
@@ -82,7 +83,7 @@ inline bool StorySnapshotEntry(StoryPhase phase) {
   return phase==StoryPhase::SnapshotIdle || phase==StoryPhase::SnapshotLoop || phase==StoryPhase::SnapshotFinished;
 }
 inline bool IsStoryMessage(MessageType t) {
-  return t == MessageType::StoryEvent || t == MessageType::TriggerRequest;
+  return t == MessageType::StoryEvent || t == MessageType::TriggerRequest || t == MessageType::WorldDigest;
 }
 
 // Session control is reliable and scoped by the packet epoch and a load generation.
@@ -128,6 +129,10 @@ struct PlayerPose {
   float x = 0, y = 0, z = 0, facing = 0, speed = 0;
   uint16_t action = 0;
   uint8_t item = 0;  // Diagnostic only: first-person IDs are not body animation IDs.
+  float vx = 0, vy = 0, pitch = 0;
+  uint8_t weapon = 0, crouched = 0, airborne = 0;
+  uint32_t fire = 0; // Cumulative confirmed native shots; survives unreliable pose loss.
+  uint8_t fire_weapon = 0;
 };
 // Native scene camera with the host lens, before aspect widening. Quaternion rotates the
 // guest right/forward/up basis. No native pointer or script address is on wire.
@@ -142,7 +147,13 @@ struct CameraPose {
   bool paused = false;
 };
 bool ValidCameraPose(const CameraPose& camera);
-enum class EnemyFamily : uint16_t { None, Raptor, Worm, Scorpion };
+enum class EnemyFamily : uint16_t {
+  None, Raptor, Worm, Scorpion, Crab, Bat, Centipede, Native, Marine, VRex,
+  SwampCrawler, SwampCrawlerSmall, Spider, Pny, Prey
+};
+inline bool ValidEnemyFamily(EnemyFamily family) {
+  return family >= EnemyFamily::Raptor && family <= EnemyFamily::Prey;
+}
 enum class EnemyOwner : uint8_t { Host, Guest };
 // source is a signature of family + authored spawn point, or spawner + template.
 // sequence is zero for authored actors, successful creation number for waves.
@@ -207,6 +218,15 @@ inline bool IsCombatMessage(MessageType t) {
   return t == MessageType::DamageEvent || t == MessageType::PlayerStatus;
 }
 struct ShotHit { EnemyId id; ShotVector point; uint32_t generation = 0; };
+enum class ShotReject : uint8_t { None, Bounds, World, Sequence, Stale, Weapon, Rate, Origin, Target, Distance, Aim, Engine, Queue, Late, Count };
+// Diagnostics only. queued means a native event was built, not a confirmed kill.
+struct ShotReceipt {
+  EnemyWorld world;
+  uint32_t number = 0;
+  ShotReject reason = ShotReject::None;
+  bool queued = false;
+};
+bool ValidShotReceipt(const ShotReceipt& receipt);
 struct InventoryState {
   EnemyWorld world;
   double time = 0;
@@ -244,6 +264,34 @@ struct EnemyEvent {
 };
 bool ValidEnemy(const EnemyState& enemy);
 bool ValidEnemyWorld(const EnemyWorld& world);
+// Extension mask is reserved for future world-object pages. Unknown extensions
+// are rejected until their codec/comparison rules are implemented.
+struct WorldScript {
+  uint64_t source=0,script=0;
+  uint32_t run=0,record=0;
+  uint8_t flags=0; // bit 0 started, bit 1 finished, bit 2 active native loop
+  auto operator<=>(const WorldScript&) const = default;
+};
+struct WorldEnemy {
+  EnemyId id;
+  EnemyOwner owner=EnemyOwner::Host;
+  uint32_t generation=0;
+  float life=0,secondary_life=0;
+  auto operator<=>(const WorldEnemy&) const = default;
+};
+constexpr size_t kDigestScriptsPerPage=16,kDigestEnemiesPerPage=12;
+struct WorldDigestPage {
+  uint32_t generation=0,level=0,start=0,checkpoint=0,sweep=0;
+  double captured=0; // host steady clock, compared only with the host's pose clock
+  EnemyWorld enemy_world; // native visit identity, retained across private reloads
+  uint64_t completed=0;
+  uint16_t part=0,parts=1,script_count=0,enemy_count=0;
+  uint32_t extensions=0;
+  std::vector<WorldScript> scripts;
+  std::vector<WorldEnemy> enemies;
+  auto operator<=>(const WorldDigestPage&) const = default;
+};
+bool ValidWorldDigest(const WorldDigestPage& page);
 struct Message {
   MessageType type = MessageType::Hello;
   uint16_t protocol = kProtocolVersion;
@@ -260,6 +308,7 @@ struct Message {
   EnemySnapshot enemies;
   EnemyEvent enemy_event;
   ShotIntent shot;
+  ShotReceipt shot_receipt;
   DamageEvent damage;
   PlayerStatus player_status;
   OwnershipChange ownership;
@@ -271,6 +320,7 @@ struct Message {
   PlayerLife life;
   StoryEvent story;
   ObjectState object;
+  WorldDigestPage digest;
 };
 // Encoders also reject invalid input. Decoding leaves out untouched on failure.
 bool Encode(const Message& message, std::vector<uint8_t>& out);

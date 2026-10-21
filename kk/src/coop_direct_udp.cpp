@@ -82,6 +82,11 @@ bool SameAddress(const sockaddr_storage& a, const sockaddr_storage& b) {
 class Udp final : public DirectUdpTransport {
  public:
   explicit Udp(DirectUdpOptions options) : options_(std::move(options)) {
+    auto& simulation=options_.simulation;
+    if (!std::isfinite(simulation.delay_ms) || !std::isfinite(simulation.jitter_ms) ||
+        !std::isfinite(simulation.loss_percent) || simulation.delay_ms<0 || simulation.delay_ms>2000 ||
+        simulation.jitter_ms<0 || simulation.jitter_ms>simulation.delay_ms ||
+        simulation.loss_percent<0 || simulation.loss_percent>50) simulation={};
     if (!network_.ok || !options_.port || !ValidJoinCode(options_.join_code)) return;
     std::random_device random;
     nonce_=(uint64_t(random())<<32)^random(); if (!nonce_) nonce_=1;
@@ -159,6 +164,10 @@ class Udp final : public DirectUdpTransport {
   void Poll(double now) override {
     if (state_!=TransportState::Ready || !std::isfinite(now)) return;
     now_=now; DrainOrdered();
+    for (auto it=delayed_.begin(); it!=delayed_.end();) {
+      if (it->due>now) { ++it; continue; }
+      SendDatagram(it->wire,it->address,it->length); it=delayed_.erase(it);
+    }
     for (int i=0; i<64; ++i) {
       std::array<uint8_t,kMaxPacketBytes+kWireHeader+1> wire{};
       sockaddr_storage from{}; AddressLength length=sizeof(from);
@@ -242,6 +251,7 @@ class Udp final : public DirectUdpTransport {
     if (socket_!=kInvalid) { CloseSocket(socket_); socket_=kInvalid; }
     state_=TransportState::Closed; peer_ready_=false;
     ready_.clear(); ordered_.clear(); pending_.clear();
+    delayed_.clear();
   }
  private:
   struct Pending { std::vector<uint8_t> wire; double last=-1; uint32_t attempts=0; };
@@ -255,7 +265,10 @@ class Udp final : public DirectUdpTransport {
   }
   bool Queue(std::span<const uint8_t> data,bool reliable,bool control) {
     if (state_!=TransportState::Ready || data.empty() || data.size()>kMaxPacketBytes) return false;
-    if (reliable && pending_.size()>=kWindow) { state_=TransportState::Failed; return false; }
+    // A WAN round trip can fill the reliable window during a save or digest
+    // sweep. The caller retains unsent data and retries after acknowledgements.
+    // Backpressure is not a broken connection and must not become Lost/Ended.
+    if (reliable && pending_.size()>=kWindow) return false;
     const uint32_t seq=reliable ? next_send_++ : 0;
     if (reliable && !seq) { state_=TransportState::Failed; return false; }
     auto wire=Wire(reliable ? 1 : 0,seq,control,data);
@@ -284,6 +297,18 @@ class Udp final : public DirectUdpTransport {
   }
   bool TransmitTo(std::span<const uint8_t> wire,const sockaddr_storage& address,AddressLength length) {
     if (!outgoing_.Take(now_)) return false;
+    const auto& sim=options_.simulation;
+    if (sim.delay_ms>0 || sim.jitter_ms>0 || sim.loss_percent>0) {
+      auto random=[&] { simulation_rng_=1664525u*simulation_rng_+1013904223u; return double(simulation_rng_)/4294967296.; };
+      if (random()*100<sim.loss_percent) { ++stats_.sent; return true; }
+      const double delay=std::max(0.,sim.delay_ms+(2*random()-1)*sim.jitter_ms)/1000.;
+      if (delayed_.size()>=512) return false;
+      delayed_.push_back({now_+delay,{wire.begin(),wire.end()},address,length});
+      return true;
+    }
+    return SendDatagram(wire,address,length);
+  }
+  bool SendDatagram(std::span<const uint8_t> wire,const sockaddr_storage& address,AddressLength length) {
     const int n=int(sendto(socket_,reinterpret_cast<const char*>(wire.data()),int(wire.size()),0,
         reinterpret_cast<const sockaddr*>(&address),length));
     if (n==int(wire.size())) { ++stats_.sent; return true; } return false;
@@ -301,6 +326,9 @@ class Udp final : public DirectUdpTransport {
   std::map<uint32_t,Pending> pending_;
   std::map<uint32_t,Incoming> ordered_;
   std::deque<std::vector<uint8_t>> ready_;
+  struct Delayed { double due; std::vector<uint8_t> wire; sockaddr_storage address; AddressLength length; };
+  std::deque<Delayed> delayed_;
+  uint32_t simulation_rng_=options_.simulation.seed;
 };
 } // namespace
 std::unique_ptr<DirectUdpTransport> CreateDirectUdp(DirectUdpOptions options) { return std::make_unique<Udp>(std::move(options)); }

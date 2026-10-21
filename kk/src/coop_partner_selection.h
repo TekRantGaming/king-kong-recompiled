@@ -1,4 +1,5 @@
 #pragma once
+#include <algorithm>
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
@@ -21,6 +22,7 @@ struct AutoCandidate {
   bool unscheduled_setters_and_draw_confirmed = false;
   bool other_human = false, current_script_use = false;
   uint32_t mission_distance = 104;
+  uint8_t animation_support = 0; // Loaded gait/fire and held gun; never overrides story safety.
 };
 inline const char* AutoReject(const AutoCandidate& c) {
   if (!c.actor || !c.natural_h) return "not-natural-H";
@@ -106,8 +108,18 @@ inline std::optional<std::size_t> SelectBody(std::span<const AutoCandidate> cand
   std::optional<std::size_t> best;
   for (std::size_t i = 0; i < candidates.size(); ++i) {
     const int score = BodyScore(candidates[i]);
-    if (score >= 0 && (!best || score > BodyScore(candidates[*best]) ||
-        (score == BodyScore(candidates[*best]) && candidates[i].actor < candidates[*best].actor))) best = i;
+    if (score < 0) continue;
+    bool better = !best;
+    if (best) {
+      const auto& a=candidates[i]; const auto& b=candidates[*best];
+      const int tier=BodyTier(a);
+      const bool same_safety=tier==BodyTier(b) && (tier<4 ||
+          ((!a.cinematic && !a.following)==(!b.cinematic && !b.following) &&
+           std::min(a.mission_distance,104u)==std::min(b.mission_distance,104u)));
+      better = same_safety && a.animation_support!=b.animation_support ? a.animation_support>b.animation_support :
+          score>BodyScore(b) || (score==BodyScore(b) && a.actor<b.actor);
+    }
+    if (better) best = i;
   }
   return best;
 }

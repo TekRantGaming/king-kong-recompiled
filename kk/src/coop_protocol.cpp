@@ -2,6 +2,7 @@
 #include "coop_combat.h"
 
 #include <bit>
+#include <algorithm>
 #include <cmath>
 #include <utility>
 
@@ -41,7 +42,10 @@ bool ValidPose(const PlayerPose& p) {
   return std::isfinite(p.time) && p.time >= 0 && p.time < 1e12 && std::isfinite(p.x) && std::isfinite(p.y) &&
       std::isfinite(p.z) && std::isfinite(p.facing) && std::isfinite(p.speed) &&
       std::abs(p.x) < 1000000 && std::abs(p.y) < 1000000 && std::abs(p.z) < 1000000 &&
-      std::abs(p.speed) < 10000 && std::abs(p.facing) <= 3.1416f;
+      std::abs(p.speed) < 10000 && std::abs(p.facing) <= 3.1416f &&
+      std::isfinite(p.vx) && std::isfinite(p.vy) && std::isfinite(p.pitch) &&
+      std::abs(p.vx) < 1000 && std::abs(p.vy) < 1000 && std::abs(p.pitch) <= 1.571f &&
+      p.weapon <= 4 && p.crouched <= 1 && p.airborne <= 1 && p.fire_weapon <= 4 && (!p.fire || p.fire_weapon);
 }
 bool ReasonValid(RejectReason r) { return r >= RejectReason::Protocol && r <= RejectReason::Handshake; }
 void WriteWorld(Writer& w, const EnemyWorld& v) { w.U(v.level, 4); w.U(v.start, 4); w.U(v.serial, 4); }
@@ -175,8 +179,11 @@ bool ValidFlowEvent(const FlowEvent& f) {
 bool ValidEnemyWorld(const EnemyWorld& w) {
   return w.level > 0 && w.level <= 100000 && w.start <= 10000 && w.serial > 0;
 }
+bool ValidShotReceipt(const ShotReceipt& r) {
+  return ValidEnemyWorld(r.world) && r.number && r.reason < ShotReject::Count;
+}
 bool ValidEnemy(const EnemyState& e) {
-  return e.id.source && e.id.family >= EnemyFamily::Raptor && e.id.family <= EnemyFamily::Scorpion &&
+  return e.id.source && ValidEnemyFamily(e.id.family) &&
       std::isfinite(e.x) && std::isfinite(e.y) && std::isfinite(e.z) && std::isfinite(e.facing) &&
       std::isfinite(e.life) && std::abs(e.x) < 1000000 && std::abs(e.y) < 1000000 &&
       std::abs(e.z) < 1000000 && std::abs(e.facing) <= 3.1416f && std::abs(e.life) < 1000000 &&
@@ -202,7 +209,7 @@ bool ValidShotIntent(const ShotIntent& s) {
   if (length < .99f || length > 1.01f) return false;
   for (size_t i = 0; i < s.hits.size(); ++i) {
     const auto& hit = s.hits[i];
-    if (!hit.id.source || hit.id.family < EnemyFamily::Raptor || hit.id.family > EnemyFamily::Scorpion || !Point(hit.point)) return false;
+    if (!hit.id.source || !ValidEnemyFamily(hit.id.family) || !Point(hit.point)) return false;
     for (size_t j = 0; j < i; ++j) if (s.hits[j].id == hit.id) return false;
   }
   return true;
@@ -224,6 +231,25 @@ bool ValidPlayerStatus(const PlayerStatus& p) {
   return ValidEnemyWorld(p.world) && p.incarnation && p.number &&
       p.condition >= PlayerCondition::Alive && p.condition <= PlayerCondition::Dead;
 }
+bool ValidWorldDigest(const WorldDigestPage& p) {
+  if (!p.generation || !p.level || p.level>100000 || p.start>10000 || p.checkpoint>10000 || !p.sweep ||
+      !p.parts || p.parts>256 || p.part>=p.parts || p.script_count>kStorySnapshotScripts || p.enemy_count>kMaxEnemies ||
+      p.extensions || !std::isfinite(p.captured) || p.captured<0 || p.captured>=1e12 ||
+      !ValidEnemyWorld(p.enemy_world) || p.enemy_world.level!=p.level || p.enemy_world.start!=p.start ||
+      p.scripts.size()>kDigestScriptsPerPage || p.enemies.size()>kDigestEnemiesPerPage ||
+      p.scripts.size()>p.script_count || p.enemies.size()>p.enemy_count ||
+      p.parts!=std::max<size_t>({1,(size_t(p.script_count)+15)/16,(size_t(p.enemy_count)+11)/12})) return false;
+  const auto expected=[](size_t total,size_t part,size_t per) { return std::min(per,total-std::min(total,part*per)); };
+  if (p.scripts.size()!=expected(p.script_count,p.part,kDigestScriptsPerPage) ||
+      p.enemies.size()!=expected(p.enemy_count,p.part,kDigestEnemiesPerPage)) return false;
+  for (const auto& s:p.scripts) if (!s.source || !s.script || s.record>kStoryRecords || s.flags>7 ||
+      (!s.run && s.flags)) return false;
+  for (const auto& e:p.enemies) if (!e.id.source || !ValidEnemyFamily(e.id.family) ||
+      e.owner>EnemyOwner::Guest || !std::isfinite(e.life) || std::abs(e.life)>=1000000 ||
+      !std::isfinite(e.secondary_life) || e.secondary_life<0 || e.secondary_life>=1000000 ||
+      (e.id.family!=EnemyFamily::Scorpion && e.secondary_life!=0)) return false;
+  return true;
+}
 bool Encode(const Message& m, std::vector<uint8_t>& out) {
   Writer payload;
   switch (m.type) {
@@ -232,6 +258,24 @@ bool Encode(const Message& m, std::vector<uint8_t>& out) {
       payload.U(m.object.generation,4); payload.U(m.object.level,4); payload.U(m.object.number,4);
       payload.U(m.object.source,8); payload.U(uint8_t(m.object.kind),1); payload.U(m.object.value,4);
       payload.U(std::bit_cast<uint32_t>(m.object.position),4); payload.U(std::bit_cast<uint32_t>(m.object.seconds),4); break;
+    case MessageType::WorldDigest: {
+      const auto& p=m.digest; if (!ValidWorldDigest(p)) return false;
+      for (uint32_t v:{p.generation,p.level,p.start,p.checkpoint,p.sweep}) payload.U(v,4);
+      payload.U(std::bit_cast<uint64_t>(p.captured),8);
+      WriteWorld(payload,p.enemy_world);
+      payload.U(p.completed,8);
+      for (uint16_t v:{p.part,p.parts,p.script_count,p.enemy_count}) payload.U(v,2);
+      payload.U(p.extensions,4); payload.U(p.scripts.size(),1); payload.U(p.enemies.size(),1);
+      for (const auto& s:p.scripts) {
+        payload.U(s.source,8); payload.U(s.script,8); payload.U(s.run,4); payload.U(s.record,4); payload.U(s.flags,1);
+      }
+      for (const auto& e:p.enemies) {
+        payload.U(e.id.source,8); payload.U(e.id.sequence,4); payload.U(uint16_t(e.id.family),2);
+        payload.U(uint8_t(e.owner),1); payload.U(e.generation,4);
+        payload.U(std::bit_cast<uint32_t>(e.life),4); payload.U(std::bit_cast<uint32_t>(e.secondary_life),4);
+      }
+      break;
+    }
     case MessageType::StoryEvent: case MessageType::TriggerRequest:
       if (!ValidStoryEvent(m.story) || (m.type == MessageType::TriggerRequest && !ValidStoryRequest(m.story.phase)) ||
           (m.type == MessageType::StoryEvent && m.story.phase==StoryPhase::SnapshotRequest)) return false;
@@ -325,6 +369,9 @@ bool Encode(const Message& m, std::vector<uint8_t>& out) {
         payload.U(std::bit_cast<uint32_t>(v), 4);
       payload.U(m.pose.action, 2);
       payload.U(m.pose.item, 1);
+      for (float v : {m.pose.vx, m.pose.vy, m.pose.pitch}) payload.U(std::bit_cast<uint32_t>(v), 4);
+      payload.U(m.pose.weapon, 1); payload.U(m.pose.crouched | (m.pose.airborne<<1), 1);
+      payload.U(m.pose.fire, 4); payload.U(m.pose.fire_weapon, 1);
       break;
     case MessageType::HelloAck: case MessageType::Bye: break;
     case MessageType::EnemySnapshot:
@@ -345,6 +392,11 @@ bool Encode(const Message& m, std::vector<uint8_t>& out) {
           m.enemy_event.kind < EnemyEventKind::Spawned || m.enemy_event.kind > EnemyEventKind::Removed) return false;
       WriteWorld(payload, m.enemy_event.world); payload.U(uint8_t(m.enemy_event.kind), 1);
       WriteEnemy(payload, m.enemy_event.enemy);
+      break;
+    case MessageType::ShotReceipt:
+      if (!ValidShotReceipt(m.shot_receipt)) return false;
+      WriteWorld(payload,m.shot_receipt.world); payload.U(m.shot_receipt.number,4);
+      payload.U(uint8_t(m.shot_receipt.reason),1); payload.U(m.shot_receipt.queued,1);
       break;
     case MessageType::ShotIntent:
       if (!ValidShotIntent(m.shot)) return false;
@@ -383,6 +435,27 @@ bool Decode(std::span<const uint8_t> bytes, Message& out) {
       m.object.position=std::bit_cast<float>(uint32_t(r.U(4))); m.object.seconds=std::bit_cast<float>(uint32_t(r.U(4)));
       if (!(m.type==MessageType::ObjectRequest ? ValidObjectRequest(m.object) : ValidObjectState(m.object))) return false;
       break;
+    case MessageType::WorldDigest: {
+      auto& p=m.digest;
+      p.generation=uint32_t(r.U(4)); p.level=uint32_t(r.U(4)); p.start=uint32_t(r.U(4));
+      p.checkpoint=uint32_t(r.U(4)); p.sweep=uint32_t(r.U(4)); p.captured=std::bit_cast<double>(r.U(8));
+      p.enemy_world=ReadWorld(r); p.completed=r.U(8);
+      p.part=uint16_t(r.U(2)); p.parts=uint16_t(r.U(2)); p.script_count=uint16_t(r.U(2)); p.enemy_count=uint16_t(r.U(2));
+      p.extensions=uint32_t(r.U(4)); const size_t scripts=r.U(1),enemies=r.U(1);
+      if (scripts>kDigestScriptsPerPage || enemies>kDigestEnemiesPerPage) return false;
+      for (size_t i=0;i<scripts;++i) {
+        WorldScript s; s.source=r.U(8); s.script=r.U(8); s.run=uint32_t(r.U(4)); s.record=uint32_t(r.U(4)); s.flags=uint8_t(r.U(1));
+        p.scripts.push_back(s);
+      }
+      for (size_t i=0;i<enemies;++i) {
+        WorldEnemy e; e.id={r.U(8),uint32_t(r.U(4)),EnemyFamily(r.U(2))};
+        e.owner=EnemyOwner(r.U(1)); e.generation=uint32_t(r.U(4));
+        e.life=std::bit_cast<float>(uint32_t(r.U(4))); e.secondary_life=std::bit_cast<float>(uint32_t(r.U(4)));
+        p.enemies.push_back(e);
+      }
+      if (!ValidWorldDigest(p)) return false;
+      break;
+    }
     case MessageType::StoryEvent: case MessageType::TriggerRequest:
       m.story.generation=uint32_t(r.U(4)); m.story.level=uint32_t(r.U(4)); m.story.number=uint32_t(r.U(4));
       m.story.source=r.U(8); m.story.script=r.U(8);
@@ -487,6 +560,13 @@ bool Decode(std::span<const uint8_t> bytes, Message& out) {
       m.pose.speed = std::bit_cast<float>(uint32_t(r.U(4)));
       m.pose.action = uint16_t(r.U(2));
       m.pose.item = uint8_t(r.U(1));
+      m.pose.vx = std::bit_cast<float>(uint32_t(r.U(4)));
+      m.pose.vy = std::bit_cast<float>(uint32_t(r.U(4)));
+      m.pose.pitch = std::bit_cast<float>(uint32_t(r.U(4)));
+      m.pose.weapon = uint8_t(r.U(1));
+      { const auto stance=r.U(1); if (stance>3) return false;
+        m.pose.crouched=uint8_t(stance&1); m.pose.airborne=uint8_t(stance>>1); }
+      m.pose.fire = uint32_t(r.U(4)); m.pose.fire_weapon = uint8_t(r.U(1));
       if (!ValidPose(m.pose)) return false;
       break;
     case MessageType::HelloAck: case MessageType::Bye: break;
@@ -508,6 +588,12 @@ bool Decode(std::span<const uint8_t> bytes, Message& out) {
       if (!ValidEnemyWorld(m.enemy_event.world) || !ValidEnemy(m.enemy_event.enemy) ||
           m.enemy_event.kind < EnemyEventKind::Spawned || m.enemy_event.kind > EnemyEventKind::Removed) return false;
       break;
+    case MessageType::ShotReceipt: {
+      m.shot_receipt.world=ReadWorld(r); m.shot_receipt.number=uint32_t(r.U(4));
+      m.shot_receipt.reason=ShotReject(r.U(1)); const auto queued=r.U(1);
+      if (queued>1 || !ValidShotReceipt(m.shot_receipt)) return false;
+      m.shot_receipt.queued=queued!=0; break;
+    }
     case MessageType::ShotIntent: {
       m.shot.world = ReadWorld(r); m.shot.number = uint32_t(r.U(4)); m.shot.weapon = uint8_t(r.U(1));
       m.shot.time = std::bit_cast<double>(r.U(8)); m.shot.origin = ReadVector(r); m.shot.direction = ReadVector(r);
