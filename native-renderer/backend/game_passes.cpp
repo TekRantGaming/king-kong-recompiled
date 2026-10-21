@@ -264,6 +264,7 @@ void GameRenderer::Clear(nvrhi::ICommandList* cl, const ClearCall& call) {
                         std::max(s.height, existing ? existing->height : 0u));
     }
   }
+  PostSplitTarget(cl, colors[0] ? colors[0] : depth);  // dev aid (KK_DEV_POST_SPLIT)
   if (scene_ao_) AoClearHook(call, depth);  // AO hook (game_ao.cpp): the scene's depth is cleared
   if (scene_gi_) GiClearHook(call, depth);  // GI hook (game_gi.cpp)
   if (scene_cel_) CelClearHook(call, depth);  // Cel hook (game_cel.cpp)
@@ -405,6 +406,7 @@ void GameRenderer::Resolve(nvrhi::ICommandList* cl, const ResolveCall& call) {
       return;
     }
   }
+  PostSplitTarget(cl, source);  // dev aid (KK_DEV_POST_SPLIT)
   int32_t sx = 0, sy = 0, w = int32_t(s.width), h = int32_t(s.height);
   if (call.has_rect) {
     sx = call.rect[0];
@@ -522,6 +524,12 @@ bool GameRenderer::Present(nvrhi::ICommandList* cl, uint32_t device, nvrhi::ITex
   // Upscalers (game_upscale.cpp): a scene that did not reach its upscale point is upscaled now; a frame
   // drawn at the input size without a scene is carried to the output size.
   if (upscale_) UpscaleBeginPresent(cl);
+  struct PostSplitEnd {
+    GameRenderer* r;
+    nvrhi::ICommandList* cl;
+    ~PostSplitEnd() { r->PostSplitFrameEnd(cl); }
+  } post_split_end{this, cl};  // dev aid (KK_DEV_POST_SPLIT)
+  PostSplitMark(cl, 3, "3 Present");
   if (frame_log_ && frame_log_->enabled()) LogSwap(d);
   const uint32_t back_buffer = d.u32(dev::kBackBuffer);
   const uint8_t* object = back_buffer ? memory_.Virtual(back_buffer) : nullptr;
