@@ -22,12 +22,10 @@ int main() {
   different.words[2] ^= 1;
   check(!(nr::ChapterTextureLayout(fetch) == nr::ChapterTextureLayout(different)), "size separates layouts");
   nr::ChapterTextureInbox inbox;
-  auto alias = fetch;
-  alias.words[1] |= 0xC0000000;
-  inbox.Push(alias.words);
+  inbox.Push(0x12340000);
   auto messages = inbox.Take();
-  check(messages.size() == 1 && kknr::MakeTextureKey(messages[0]) == kknr::MakeTextureKey(fetch), "physical aliases normalized");
-  for (unsigned i = 0; i < 5000; ++i) inbox.Push(fetch.words);
+  check(messages.size() == 1 && messages[0] == 0x12340000, "guest object delivered");
+  for (unsigned i = 0; i < 5000; ++i) inbox.Push(i + 1);
   check(inbox.Take().size() == 4096 && inbox.Take().empty(), "bounded inbox drains once");
   std::vector<uint8_t> live(0x50000);
   for (size_t i = 0; i < live.size(); ++i) live[i] = uint8_t(i * 17 + i / 257);

@@ -45,6 +45,7 @@ class RuntimeGuestMemory final : public GuestMemory {
   explicit RuntimeGuestMemory(rex::memory::Memory* memory) : memory_(memory) {}
   const uint8_t* Virtual(uint32_t address) const override;
   const uint8_t* Physical(uint32_t address) const override;
+  bool CopyVirtual(uint32_t address, void* output, uint32_t bytes) const override;
 
  private:
   rex::memory::Memory* memory_;

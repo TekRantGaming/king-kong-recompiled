@@ -16,27 +16,25 @@ inline kknr::TextureKey ChapterTextureLayout(kknr::TextureFetch fetch) {
   return key;
 }
 
-// Creation notifications contain only the fetch header, never guest pointers.
-// The bounded inbox is independent of the active renderer's lifetime.
+// Creation supplies guest object addresses; the loader may rewrite the header
+// after CreateTexture (for example replacing its temporary RGBA layout with BC).
+// Reading a candidate later must use the optional, fault-safe live-memory copy.
 class ChapterTextureInbox {
  public:
-  void Push(const uint32_t* words) {
-    auto fetch = kknr::TextureFetch::FromWords(words);
-    fetch.words[1] = (fetch.words[1] & 0xFFF) | fetch.BaseAddress();
-    fetch.words[5] = (fetch.words[5] & 0xFFF) | fetch.MipAddress();
-    if (fetch.Type() != 2) return;
+  void Push(uint32_t object) {
+    if (!object) return;
     std::lock_guard lock(mutex_);
-    if (pending_.size() < 4096) pending_.push_back(fetch);
+    if (pending_.size() < 4096) pending_.push_back(object);
   }
-  std::vector<kknr::TextureFetch> Take() {
+  std::vector<uint32_t> Take() {
     std::lock_guard lock(mutex_);
-    std::vector<kknr::TextureFetch> result;
+    std::vector<uint32_t> result;
     result.swap(pending_);
     return result;
   }
  private:
   std::mutex mutex_;
-  std::vector<kknr::TextureFetch> pending_;
+  std::vector<uint32_t> pending_;
 };
 inline ChapterTextureInbox& TextureCreationInbox() {
   static ChapterTextureInbox inbox;
@@ -54,6 +52,7 @@ class ChapterTexturePrepare {
     kknr::TextureOptions options;
     kknr::HostTextureData data;
     uint64_t generation = 0, hash = 0;
+    uint64_t allocation_bytes = 0;
     bool matched = false, converted = false;
   };
   ChapterTexturePrepare() : thread_([this] { Run(); }) {}

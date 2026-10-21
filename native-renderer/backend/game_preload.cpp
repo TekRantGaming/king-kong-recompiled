@@ -11,7 +11,12 @@ void GameRenderer::IdleTexturePreload() {
   if (!resource_loading_) return;
   const auto* screen = memory_.Virtual(0x82D64080);
   const auto* state = memory_.Virtual(0x82D6408C);
-  if (!screen || !state || !LoadBE32(screen) || (LoadBE32(state) != 1 && LoadBE32(state) != 2)) return;
+  ++chapter_texture_idle_;
+  chapter_texture_screen_ = screen ? LoadBE32(screen) : UINT32_MAX;
+  chapter_texture_state_ = state ? LoadBE32(state) : UINT32_MAX;
+  // The original loader clears these guest flags before its wait for the clip
+  // ends. resource_loading_ remains true until the first real game frame polls
+  // the request again; use that lifetime for the idle clip preparation too.
   PrepareChapterTextures();
 }
 
@@ -33,6 +38,7 @@ void GameRenderer::PrepareChapterTextures() {
     chapter_texture_submitted_ = false;
   }
   if (chapter_textures_) if (auto job = chapter_textures_->Take()) {
+    if (job->matched) ++chapter_texture_matches_;
     ProcessInvalidations();
     auto* entry = textures_.Find(job->fetch);
     bool stale = job->generation != chapter_texture_generation_ || !entry || entry->host ||
@@ -44,7 +50,8 @@ void GameRenderer::PrepareChapterTextures() {
     }
     const auto alias = resolved_by_base_.find(job->fetch.BaseAddress());
     if (alias != resolved_by_base_.end() && alias->second->gpu_written) stale = true;
-    if (!stale && job->converted && job->data.bytes.size() <= ChapterPreloadBytes() -
+    if (stale) ++chapter_texture_stale_;
+    if (!stale && job->converted && job->allocation_bytes <= ChapterPreloadBytes() -
         std::min(preload_reserved_bytes_, ChapterPreloadBytes())) {
       if (!chapter_texture_list_) {
         nvrhi::CommandListParameters params;
@@ -63,6 +70,7 @@ void GameRenderer::PrepareChapterTextures() {
           chapter_texture_list_->setTextureState(host->texture, nvrhi::AllSubresources, nvrhi::ResourceStates::ShaderResource);
           chapter_texture_list_->close();
           options_.upload_submit(chapter_texture_list_);
+          device_->resetEventQuery(chapter_texture_query_);
           device_->setEventQuery(chapter_texture_query_, nvrhi::CommandQueue::Graphics);
           chapter_texture_submitted_ = true;
           host->preloaded = true;
@@ -80,7 +88,7 @@ void GameRenderer::PrepareChapterTextures() {
           ++stats_.prepared_resources;
           stats_.upload_bytes += job->data.bytes.size();
           stats_.preload_bytes += job->data.bytes.size();
-          preload_reserved_bytes_ += job->data.bytes.size();
+          preload_reserved_bytes_ += job->allocation_bytes;
           ++chapter_texture_uploads_;
           // The developer sampler must see uploads made while the game's frame
           // counter is parked under the clip, so they are excluded from play.
@@ -102,12 +110,10 @@ void GameRenderer::PrepareChapterTextures() {
     }
   }
   auto incoming = TextureCreationInbox().Take();
-  for (const auto& fetch : incoming) {
+  for (const auto object : incoming) {
     if (chapter_candidates_.size() >= 4096) break;
-    const auto key = kknr::MakeTextureKey(fetch);
-    if (std::none_of(chapter_candidates_.begin(), chapter_candidates_.end(), [&](const auto& known) {
-          return kknr::MakeTextureKey(known) == key;
-        })) chapter_candidates_.push_back(fetch);
+    if (std::find(chapter_candidates_.begin(), chapter_candidates_.end(), object) == chapter_candidates_.end())
+      chapter_candidates_.push_back(object);
   }
   if (chapter_candidates_.empty() || preload_records_.empty() ||
       preload_reserved_bytes_ >= ChapterPreloadBytes() || (chapter_textures_ && chapter_textures_->Busy())) return;
@@ -115,7 +121,13 @@ void GameRenderer::PrepareChapterTextures() {
   // per service call; unrelated headers are passed over without hashing.
   for (size_t i = 0; i < chapter_candidates_.size(); ++i) {
     if (chapter_candidate_cursor_ >= chapter_candidates_.size()) chapter_candidate_cursor_ = 0;
-    const auto fetch = chapter_candidates_[chapter_candidate_cursor_++];
+    const auto object = chapter_candidates_[chapter_candidate_cursor_++];
+    uint8_t header[40];
+    if (!memory_.CopyVirtual(object, header, sizeof(header)) || ((LoadBE32(header) >> 16) & 7) != 3) continue;
+    auto fetch = kknr::TextureFetch::FromGuest(header + 16);
+    fetch.words[1] = (fetch.words[1] & 0xFFF) | fetch.BaseAddress();
+    fetch.words[5] = (fetch.words[5] & 0xFFF) | fetch.MipAddress();
+    if (fetch.Type() != 2) continue;
     const auto layout = ChapterTextureLayout(fetch);
     auto job = std::make_unique<ChapterTexturePrepare::Job>();
     for (const auto& record : preload_records_) if (record.kind == ResourcePreloadRecord::Texture &&
@@ -131,7 +143,8 @@ void GameRenderer::PrepareChapterTextures() {
     if (!kknr::PlanHostTexture(fetch, plan, nullptr, options)) continue;
     const auto& format = kknr::GetHostFormatInfo(plan.format);
     uint64_t output = 0;
-    for (uint32_t level = plan.min_level; level < plan.levels; ++level)
+    // Count every allocated mip, including levels the conversion leaves zero.
+    for (uint32_t level = 0; level < plan.levels; ++level)
       output += ((uint64_t(std::max(plan.width >> level, 1u)) + format.block_size - 1) / format.block_size) *
                 ((uint64_t(std::max(plan.height >> level, 1u)) + format.block_size - 1) / format.block_size) *
                 format.bytes_per_block * std::max(plan.depth >> level, 1u) * plan.layers;
@@ -149,9 +162,11 @@ void GameRenderer::PrepareChapterTextures() {
     job->fetch = fetch;
     job->options = options;
     job->generation = chapter_texture_generation_;
+    job->allocation_bytes = output;
     if (!job->snapshot.Capture(source, physical_, job->source, ChapterTexturePrepare::kMaxBytes)) continue;
     if (!chapter_textures_) chapter_textures_ = std::make_unique<ChapterTexturePrepare>();
     chapter_textures_->Start(std::move(job));
+    ++chapter_texture_attempts_;
     break;
   }
 }
@@ -241,6 +256,9 @@ void GameRenderer::PreloadResources(nvrhi::ICommandList* cl, bool loading, uint3
   if (loading && (!resource_loading_ || changed)) {
     ++chapter_texture_generation_;
     chapter_texture_uploads_ = 0;
+    chapter_texture_attempts_ = chapter_texture_matches_ = chapter_texture_stale_ = chapter_texture_idle_ = 0;
+    chapter_candidates_.clear();
+    chapter_candidate_cursor_ = 0;
     // A different chapter: the previous one's unused pack replacements are freed after this load.
     if (changed) TexturePackLoadStarted();
     PipelineLevelLoading(level);  // task 276: level tags, its pipelines first, all workers while loading
@@ -286,6 +304,9 @@ void GameRenderer::PreloadResources(nvrhi::ICommandList* cl, bool loading, uint3
   } else if (!loading && resource_loading_) {
     Logf(LogLevel::kInfo, "rexgpu-native: chapter content preparation: level %u, %llu textures uploaded before play, %zu creation headers",
          preload_level_, static_cast<unsigned long long>(chapter_texture_uploads_), chapter_candidates_.size());
+    Logf(LogLevel::kInfo, "rexgpu-native: chapter content probe: attempts %llu matches %llu stale %llu idle %llu last screen %u state %u",
+         (unsigned long long)chapter_texture_attempts_, (unsigned long long)chapter_texture_matches_,
+         (unsigned long long)chapter_texture_stale_, (unsigned long long)chapter_texture_idle_, chapter_texture_screen_, chapter_texture_state_);
     TexturePackLoadEnded();
     PipelineLevelPlaying();  // task 276: fewer background workers while playing (native_pipeline_play_workers)
     // The universe can clear/change its request fields as loading ends. Keep

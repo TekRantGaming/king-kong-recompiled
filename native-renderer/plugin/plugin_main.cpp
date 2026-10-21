@@ -668,8 +668,8 @@ extern "C" REX_GPU_PLUGIN_EXPORT const NrApi* nr_get_api(void) {
 }
 
 // Optional creation-only notification, independent of the versioned draw API.
-extern "C" REX_GPU_PLUGIN_EXPORT void nr_texture_preload_hint(const uint32_t* words) {
-  if (words) nr::TextureCreationInbox().Push(words);
+extern "C" REX_GPU_PLUGIN_EXPORT void nr_texture_preload_object(uint32_t object) {
+  nr::TextureCreationInbox().Push(object);
 }
 
 // The launcher's prewarm (native_prewarm.h).

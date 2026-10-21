@@ -187,22 +187,22 @@ nr::hooks::GuestArgs ArgsFrom(const PPCContext& ctx) {
 NR_HOOK_LIST(NR_HOOK)
 
 // Creation is not a bind. Notify the optional loading service after the library
-// has filled in both addresses; it copies only these six words on this thread.
+// has filled in both addresses; it queues only the guest object address here.
 REX_EXTERN(__imp__sub_82118A68);
 REX_HOOK_RAW(sub_82118A68) {
   __imp__sub_82118A68(ctx, base);
   const NrApi* api = Api();
   if (!ctx.r3.u32 || !api || !api->is_active(api->self)) return;
-  using Notify = void (*)(const uint32_t*);
+  using Notify = void (*)(uint32_t);
   static const auto notify = []() -> Notify {
 #if defined(_WIN32)
     for (const char* name : {"rexgpu-nativerd.dll", "rexgpu-native.dll", "rexgpu-natived.dll"})
       if (HMODULE module = GetModuleHandleA(name))
-        if (auto fn = GetProcAddress(module, "nr_texture_preload_hint")) return reinterpret_cast<Notify>(fn);
+        if (auto fn = GetProcAddress(module, "nr_texture_preload_object")) return reinterpret_cast<Notify>(fn);
 #else
     for (const char* name : {"librexgpu-nativerd.so", "librexgpu-native.so", "librexgpu-natived.so"}) {
       if (void* module = dlopen(name, RTLD_NOW | RTLD_NOLOAD)) {
-        auto fn = reinterpret_cast<Notify>(dlsym(module, "nr_texture_preload_hint"));
+        auto fn = reinterpret_cast<Notify>(dlsym(module, "nr_texture_preload_object"));
         dlclose(module);
         if (fn) return fn;
       }
@@ -210,14 +210,7 @@ REX_HOOK_RAW(sub_82118A68) {
 #endif
     return nullptr;
   }();
-  if (notify) {
-    uint32_t words[6];
-    for (unsigned i = 0; i < 6; ++i) {
-      const auto* p = base + ctx.r3.u32 + 16 + i * 4;
-      words[i] = (uint32_t(p[0]) << 24) | (uint32_t(p[1]) << 16) | (uint32_t(p[2]) << 8) | p[3];
-    }
-    notify(words);
-  }
+  if (notify) notify(ctx.r3.u32);
 }
 
 // Checked at load: every hook has a table entry (Find would return null).

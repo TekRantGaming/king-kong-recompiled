@@ -737,9 +737,12 @@ class GameRenderer {
   static void ZeroUnwrittenSubresources(nvrhi::ICommandList* list, nvrhi::ITexture* texture,
                                         const kknr::HostTextureData& data);
   std::unique_ptr<ChapterTexturePrepare> chapter_textures_;
-  std::vector<kknr::TextureFetch> chapter_candidates_;
+  std::vector<uint32_t> chapter_candidates_;
   size_t chapter_candidate_cursor_ = 0;
   uint64_t chapter_texture_generation_ = 0, chapter_texture_uploads_ = 0;
+  uint64_t chapter_texture_attempts_ = 0, chapter_texture_matches_ = 0, chapter_texture_stale_ = 0;
+  uint64_t chapter_texture_idle_ = 0;
+  uint32_t chapter_texture_screen_ = 0, chapter_texture_state_ = 0;
   nvrhi::CommandListHandle chapter_texture_list_;
   nvrhi::EventQueryHandle chapter_texture_query_;
   bool chapter_texture_submitted_ = false;

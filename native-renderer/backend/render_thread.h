@@ -69,6 +69,9 @@ class SnapshotGuestMemory final : public GuestMemory {
   explicit SnapshotGuestMemory(const GuestMemory& live) : live_(live) {}
   const uint8_t* Virtual(uint32_t address) const override;
   const uint8_t* Physical(uint32_t address) const override { return live_.Physical(address); }
+  bool CopyVirtual(uint32_t address, void* output, uint32_t bytes) const override {
+    return live_.CopyVirtual(address, output, bytes);
+  }
   // The snapshot of the call the calling thread is running (null: live memory).
   static void SetCurrent(const GuestSnapshot* snapshot);
 
