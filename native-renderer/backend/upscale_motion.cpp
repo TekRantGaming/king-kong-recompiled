@@ -302,28 +302,43 @@ const VsConstants* MotionHistory::FindPrevious(const MotionDrawKey& key, uint32_
     // only win when it comes earlier. The draws are measured from the nearest in that float outwards,
     // each against the best so far, and the winner is the same smallest sum and first of equals.
     if (!s->index_built) BuildIndex(*s);
-    const float cur = s->index_column >= 0 ? current[size_t(s->index_column)] : 0.0f;
-    const auto& idx = s->index;
-    const auto bound = [&](size_t j) { return std::fabs(double(idx[j].first) - double(cur)); };
-    size_t right = 0;
-    bool use_index = s->index_column >= 0 && std::isfinite(cur);
-    if (use_index) {
-      right = size_t(std::lower_bound(idx.begin(), idx.end(), cur,
-                                      [](const std::pair<float, uint32_t>& e, float v) { return e.first < v; }) -
-                     idx.begin());
+    // The index whose window (the draws within the best sum so far in its float) is narrowest.
+    int pick = -1;
+    size_t pick_right = 0, pick_count = SIZE_MAX;
+    for (int x = 0; x < s->index_count; ++x) {
+      const float cx = current[size_t(s->index_column[x])];
+      if (!std::isfinite(cx)) continue;
+      const auto& ix = s->index[x];
+      const auto bx = [&](size_t j) { return std::fabs(double(ix[j].first) - double(cx)); };
+      const size_t r = size_t(std::lower_bound(ix.begin(), ix.end(), cx,
+                                               [](const std::pair<float, uint32_t>& e, float v) { return e.first < v; }) -
+                              ix.begin());
+      size_t count = ix.size();
       if (!nan_first) {
-        // When the best sum so far leaves most draws in the window (a camera cut: every draw far from
-        // last frame's), the in-order search below is cheaper (memory in order): the same answer.
-        size_t lo = 0, hi = right;  // first left entry within the window
-        while (lo < hi) { const size_t m = (lo + hi) / 2; if (bound(m) > best_d) lo = m + 1; else hi = m; }
-        size_t lo2 = right, hi2 = idx.size();  // first right entry past it
-        while (lo2 < hi2) { const size_t m = (lo2 + hi2) / 2; if (bound(m) <= best_d) lo2 = m + 1; else hi2 = m; }
-        if ((lo2 - lo) * 2 > idx.size()) use_index = false;
+        size_t lo = 0, hi = r;  // first left entry within the window
+        while (lo < hi) { const size_t m = (lo + hi) / 2; if (bx(m) > best_d) lo = m + 1; else hi = m; }
+        size_t lo2 = r, hi2 = ix.size();  // first right entry past it
+        while (lo2 < hi2) { const size_t m = (lo2 + hi2) / 2; if (bx(m) <= best_d) lo2 = m + 1; else hi2 = m; }
+        count = lo2 - lo;
       }
+      if (count < pick_count) pick = x, pick_right = r, pick_count = count;
     }
-    if (use_index) {
+    // A draw whose difference in one indexed float alone is more than the best sum cannot win.
+    const auto too_far = [&](size_t i) {
+      for (int x = 0; x < s->index_count; ++x) {
+        const size_t k = size_t(s->index_column[x]);
+        if (std::fabs(double(s->constants[i][k]) - double(current[k])) > best_d) return true;
+      }
+      return false;
+    };
+    // When most draws are in even the narrowest window, the in-order search below is cheaper (memory
+    // in order): the same answer.
+    if (pick >= 0 && (nan_first || pick_count * 2 <= s->index[pick].size())) {
+      const auto& idx = s->index[pick];
+      const float cur = current[size_t(s->index_column[pick])];
+      const auto bound = [&](size_t j) { return std::fabs(double(idx[j].first) - double(cur)); };
       bool has_best = !nan_first;
-      size_t left = right;  // the left side's next is idx[left - 1]
+      size_t right = pick_right, left = pick_right;  // the left side's next is idx[left - 1]
       while (left > 0 || right < idx.size()) {
         const double lb_left = left > 0 ? bound(left - 1) : INFINITY;
         const double lb_right = right < idx.size() ? bound(right) : INFINITY;
@@ -334,6 +349,7 @@ const VsConstants* MotionHistory::FindPrevious(const MotionDrawKey& key, uint32_
         if (i == first) continue;  // measured in full above (or its sum is not a number)
         const bool earlier = has_best && i < best;
         if (lb == best_d && !earlier) continue;  // at best a tie, and a later draw loses ties
+        if (too_far(i)) continue;
         const double d = distance(i, best_d, earlier);
         if (d < best_d || (earlier && d == best_d)) {
           best_d = d;
@@ -342,6 +358,26 @@ const VsConstants* MotionHistory::FindPrevious(const MotionDrawKey& key, uint32_
         }
       }
       if (!nan_first) s->next_guess = best + 1;
+      return &s->constants[best];
+    }
+    if (!nan_first && s->index_count) {
+      for (size_t i = 0; i < n && best_d > 0; ++i) {
+        if (i == first || too_far(i)) continue;
+        const bool earlier = i < best;
+        const double d = distance(i, best_d, earlier);
+        if (d < best_d || (earlier && d == best_d)) {
+          best_d = d;
+          best = i;
+        }
+      }
+      if (best_d == 0) {
+        for (size_t i = 0; i < best; ++i)
+          if (distance(i, 0, true) == 0) {
+            best = i;
+            break;
+          }
+      }
+      s->next_guess = best + 1;
       return &s->constants[best];
     }
   }
@@ -372,19 +408,18 @@ const VsConstants* MotionHistory::FindPrevious(const MotionDrawKey& key, uint32_
 }
 
 void MotionHistory::BuildIndex(const Slot& s) {
-  // Which float: one every draw has finite, that many draws do not share, spread widest (a few
+  // Which floats: ones every draw has finite, that many draws do not share, spread widest (a few
   // dozen draws sampled; a float most draws share would leave the search measuring most of them).
   s.index_built = true;
-  s.index_column = -1;
-  s.index.clear();
+  s.index_count = 0;
   const size_t n = s.constants.size();
   const size_t lo = std::min(s.common_prefix, s.constants[0].size());
   const size_t hi = std::max(lo, s.common_suffix);
   constexpr size_t kSamples = 32;
   const size_t step = std::max<size_t>(1, n / kSamples);
   float sample[kSamples];
-  double best_spread = 0;
-  int column = -1;
+  std::pair<double, int> top[Slot::kIndexes];  // (spread, float), widest first
+  int found = 0;
   for (size_t k = lo; k < hi; ++k) {
     size_t m = 0;
     bool finite = true;
@@ -402,29 +437,40 @@ void MotionHistory::BuildIndex(const Slot& s) {
     for (size_t j = 1; j < m; ++j) distinct += sample[j] != sample[j - 1];
     if (distinct * 4 < m * 3) continue;
     const double spread = double(sample[m - 1 - m / 10]) - double(sample[m / 10]);
-    if (spread > best_spread) {
-      best_spread = spread;
-      column = int(k);
+    if (!(spread > 0)) continue;
+    int at = found < Slot::kIndexes ? found++ : Slot::kIndexes;
+    if (at == Slot::kIndexes) {
+      if (!(spread > top[Slot::kIndexes - 1].first)) continue;
+      at = Slot::kIndexes - 1;
     }
+    while (at > 0 && top[at - 1].first < spread) {
+      top[at] = top[at - 1];
+      --at;
+    }
+    top[at] = {spread, int(k)};
   }
-  if (column < 0) return;
-  s.index.reserve(n);
+  // A draw with a NaN anywhere has a NaN sum against any draw (every float is measured, or shared
+  // and folded in): it never wins, so it is left out of the indexes.
+  std::vector<uint32_t> usable;
+  usable.reserve(n);
   for (size_t i = 0; i < n; ++i) {
-    const float v = s.constants[i][size_t(column)];
-    if (!std::isfinite(v)) {
-      s.index.clear();
-      return;
-    }
-    // A draw with a NaN anywhere has a NaN sum against any draw (every float is measured, or
-    // shared and folded in): it never wins, so it is left out of the index.
     bool nan = false;
     for (const float f : s.constants[i]) nan |= f != f;
-    if (!nan) s.index.emplace_back(v, uint32_t(i));
+    if (!nan) usable.push_back(uint32_t(i));
   }
-  std::sort(s.index.begin(), s.index.end(), [](const auto& a, const auto& b) {
-    return a.first < b.first || (a.first == b.first && a.second < b.second);
-  });
-  s.index_column = column;
+  for (int x = 0; x < found; ++x) {
+    const size_t column = size_t(top[x].second);
+    bool finite = true;
+    for (size_t i = 0; i < n && finite; ++i) finite = std::isfinite(s.constants[i][column]);
+    if (!finite) continue;
+    auto& ix = s.index[s.index_count];
+    ix.clear();
+    for (const uint32_t i : usable) ix.emplace_back(s.constants[i][column], i);
+    std::sort(ix.begin(), ix.end(), [](const auto& a, const auto& b) {
+      return a.first < b.first || (a.first == b.first && a.second < b.second);
+    });
+    s.index_column[s.index_count++] = int(column);
+  }
 }
 // ---------------------------------------------------------------- camera vote
 
