@@ -21,16 +21,13 @@ NR_NOINLINE bool NewConstants(const uint8_t* raw, std::array<uint8_t, 4096>& las
 }
 NR_NOINLINE bool AvxConstants(const uint8_t* raw, std::array<uint8_t, 4096>& last_raw,
                               std::array<float, 1024>& last) {
-#if NR_HOTSPOT_AVX2
-  if (nr::test::prototype::Avx2Available()) return nr::test::prototype::Avx2Constants(raw, last_raw, last);
-#endif
-  return OldConstants(raw, last_raw, last);
+  return nr::UpdateShaderConstants(raw, last_raw, last);
 }
 
 TEST(ConstantsConversionPreservesEveryBitAndChangedFlag) {
   std::array<uint8_t, 4096 + 32> source{};
-  std::array<uint8_t, 4096> old_raw{}, new_raw{}, avx_raw{};
-  std::array<float, 1024> old_out{}, new_out{}, avx_out{};
+  std::array<uint8_t, 4096> old_raw{}, new_raw{}, avx_raw{}, scalar_raw{};
+  std::array<float, 1024> old_out{}, new_out{}, avx_out{}, scalar_out{};
   std::mt19937 rng(340);
   const uint32_t edges[] = {0, 0x80000000, 0x7f800000, 0xff800000, 0x7fc01234, 0x7f801234,
                              1, 0x80000001, 0x7f7fffff, 0xff7fffff, 0x3f800000};
@@ -41,10 +38,13 @@ TEST(ConstantsConversionPreservesEveryBitAndChangedFlag) {
     const bool changed = OldConstants(raw, old_raw, old_out);
     CHECK(changed == NewConstants(raw, new_raw, new_out));
     CHECK(changed == AvxConstants(raw, avx_raw, avx_out));
+    CHECK(changed == nr::UpdateShaderConstantsScalar(raw, scalar_raw, scalar_out));
     CHECK(old_raw == new_raw);
     CHECK(old_raw == avx_raw);
+    CHECK(old_raw == scalar_raw);
     CHECK(std::memcmp(old_out.data(), new_out.data(), sizeof(old_out)) == 0);
     CHECK(std::memcmp(old_out.data(), avx_out.data(), sizeof(old_out)) == 0);
+    CHECK(std::memcmp(old_out.data(), scalar_out.data(), sizeof(old_out)) == 0);
     CHECK(!NewConstants(raw, new_raw, new_out));
     CHECK(!AvxConstants(raw, avx_raw, avx_out));
   }
