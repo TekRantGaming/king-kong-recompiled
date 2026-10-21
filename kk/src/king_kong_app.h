@@ -87,6 +87,8 @@ class KingKongApp : public rex::ReXApp {
  protected:
   bool OnWindowCloseRequested() override {
     // The SDK's accepted window close hard-exits without running our destructor.
+    // Task 349c: the window closed (X, Alt+F4) while the menu scene started is not a failed start.
+    kk::menu_scene::NoteClosing();
     kk::benchmark::Shutdown();
     kk::play::FlushRendererFiles();
     kk::startup::CleanExit();
