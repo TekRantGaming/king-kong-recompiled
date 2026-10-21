@@ -8,6 +8,21 @@
 
 namespace kk::coop::objects {
 constexpr size_t kQueue=kObjectQueue, kCensus=kObjectCensus;
+// Native stop 826F9DC0 supports five slots. Never use an outer actor's current
+// index, an unrelated track or a malformed scheduler range for a side call.
+template<class Read,class ReadHalf> std::vector<unsigned> DoorSlots(Read read,ReadHalf half,uint32_t ai) {
+  if (!PoseAddress(ai,88)) return {};
+  const auto first=half(ai+80),last=half(ai+82);
+  if (first>last || last>=5) return {};
+  std::vector<unsigned> out;
+  for (unsigned slot=first;slot<=last;++slot) {
+    const auto block=read(ai+(slot+6)*4);
+    if (!PoseAddress(block,24)) continue;
+    const auto fn=read(block+20);
+    if (fn==0x8256C3F8 || fn==0x82543478 || fn==0x82574D80) out.push_back(slot);
+  }
+  return out;
+}
 // The enqueue result must be NEW and name this exact local shooter's record.
 // Another environmental hit on the same obstacle cannot borrow its provenance.
 template<class Read> bool StrikeRecord(Read read,uint32_t output,uint64_t previous,
@@ -151,13 +166,16 @@ inline bool NearLever(float dx,float dy,float dz,float fx,float fy) {
 }
 class LeverHold {
  public:
+  bool Active(double now) const {
+    return std::isfinite(now) && last_>=0 && now>=last_ && now-last_<=.75;
+  }
   void Touch(bool holding,double now) {
     if (!holding || !std::isfinite(now)) { *this={}; return; }
     if (last_<0 || now<last_ || now-last_>.75) *this={};
     last_=now;
   }
   bool Step(double now,float dt,float duration) {
-    if (!std::isfinite(now) || last_<0 || now<last_ || now-last_>.75) { *this={}; return false; }
+    if (!Active(now)) { *this={}; return false; }
     if (done_ || !std::isfinite(dt) || dt<=0 || dt>.1f ||
         !std::isfinite(duration) || duration<0 || duration>3600) return false;
     // Native 8256D088 completes immediately for an authored zero duration.

@@ -34,6 +34,16 @@ void Codec() {
   Check(!Encode(m,bytes),"request cannot choose door progress");
 }
 void Policies() {
+  std::map<uint32_t,uint32_t> scheduler{{0x42000050,1},{0x42000052,3},
+      {0x4200001c,0x43000000},{0x42000020,0x43000100},{0x42000024,0x43000200},
+      {0x43000014,0x826718B8},{0x43000114,0x82543478},{0x43000214,0x82574D80}};
+  const auto schedule=[&](uint32_t a){ auto it=scheduler.find(a); return it==scheduler.end() ? 0u : it->second; };
+  Check(objects::DoorSlots(schedule,schedule,0x42000000)==std::vector<unsigned>({2,3}),
+      "isolated endpoint retires only the bound door's own known tracks");
+  scheduler[0x42000052]=5;
+  Check(objects::DoorSlots(schedule,schedule,0x42000000).empty(),"native stop cannot address a sixth slot");
+  scheduler[0x42000052]=0;
+  Check(objects::DoorSlots(schedule,schedule,0x42000000).empty(),"reversed native scheduler range refuses retirement");
   auto raw=Packet(MessageType::ObjectRequest).object;
   raw.value=0x800010; raw.position=6;
   Check(ValidObjectRequest(raw) && !ValidObjectState(raw),"raw hit is distinct from absolute damage");
@@ -51,6 +61,9 @@ void Policies() {
   Check(!objects::NearLever(1,0,1,-1,0) && !objects::NearLever(1,0,2,1,0) &&
       !objects::NearLever(3,0,0,1,0),"use fallback refuses behind, other floor and distant markers");
   timer.Touch(true,1);
+  Check(timer.Active(1) && timer.Active(1.75) && !timer.Active(1.751) &&
+      !timer.Active(.9) && !timer.Active(std::numeric_limits<double>::quiet_NaN()),
+      "isolated door endpoint requires a fresh monotonic hold");
   for (int i=0;i<4;++i) Check(!timer.Step(1,.05f,.25f),"hold uses native simulation time");
   Check(timer.Step(1,.05f,.25f) && !timer.Step(1,.05f,.25f),"one endpoint per continuous hold");
   timer.Touch(false,1.1); timer.Touch(true,2);

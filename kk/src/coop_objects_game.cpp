@@ -23,6 +23,7 @@ REX_EXTERN(__imp__sub_8256C3F8);
 REX_EXTERN(__imp__sub_82552200);
 REX_EXTERN(__imp__sub_82515CF0);
 REX_EXTERN(__imp__sub_82543478);
+REX_EXTERN(__imp__sub_82574D80);
 REX_EXTERN(__imp__sub_826F9DC0);
 REX_EXTERN(__imp__sub_82634428);
 #if defined(KK_DEV_TOOLS)
@@ -52,6 +53,9 @@ struct Binding : objects::Binding {
   float driven_position=-1;
   ObjectState last;
   bool sent=false,lever_logged=false;
+#if defined(KK_DEV_TOOLS)
+  uint32_t init_calls=0,wait_calls=0,loop_calls=0,update_calls=0,hold_calls=0,context_misses=0;
+#endif
 };
 struct State {
   uint64_t epoch=0;
@@ -471,44 +475,73 @@ void FinishLocalLever(uint8_t* b,Binding& o,uint32_t mask) {
   }
   o.local_levers&=~mask;
 }
-void RefreshDoor(PPCContext& ctx,uint8_t* b,Binding& o,const ObjectState& s) {
+// 826F9DC0 consumes only the current AI and track index. When servicing an
+// inactive door, select only its own recovered door track, never the outer AI's.
+void EndDoorTracks(PPCContext& ctx,uint8_t* b,const Binding& o) {
+  for (const auto slot : objects::DoorSlots([&](uint32_t a){ return Load32(b,a); },
+      [&](uint32_t a){ return Load16(b,a); },o.ai)) {
+    Store32(b,0x82CCBF58,slot);
+    __imp__sub_826F9DC0(ctx,b);
+  }
+}
+void RefreshDoor(PPCContext& ctx,uint8_t* b,Binding& o,const ObjectState& s,bool own_track=true) {
   if (Load32(b,0x82CCBF64)!=o.ai || Load32(b,0x82CCBF6C)!=o.actor) return;
   const bool ended=!(s.value&kDoorScheduled) && DoorScheduled(b,o.ai);
-  if (!ended && LoadF(b,o.vars+1084)==s.position && o.driven_position==s.position) return;
-  // This is called only in the door's own native loop/dispatcher context.
+  if (!ended && LoadF(b,o.vars+1084)==s.position && o.driven_position==s.position &&
+      (s.position!=1 || Load32(b,o.vars+1096)==1)) return;
+  // The caller supplies this validated door's AI/actor context. An isolated
+  // side call has no live door track index and must not stop the outer track.
   // Retain native geometry/grid/capability work and protect the hook caller's
   // volatile registers, stack scratch and dispatcher globals from the extra call.
   const auto sp=ctx.r1.u32;
   if ((sp&15) || sp<0x40014000 || sp>=0xA0000000) return;
   uint8_t scratch[16384]; const auto start=sp-sizeof(scratch); const PPCContext saved=ctx;
   std::memcpy(scratch,b+start,sizeof(scratch));
-  constexpr uint32_t globals[]{0x82CCBF5C,0x82CCBF60,0x82CCBF64,0x82CCBF68,0x82CCBF6C,0x82CCBF70};
-  uint32_t values[6]; for (unsigned i=0;i<6;++i) values[i]=Load32(b,globals[i]);
+  constexpr uint32_t globals[]{0x82CCBF58,0x82CCBF5C,0x82CCBF60,0x82CCBF64,0x82CCBF68,0x82CCBF6C,0x82CCBF70};
+  uint32_t values[7]; for (unsigned i=0;i<7;++i) values[i]=Load32(b,globals[i]);
   ctx.r1.u64=start+12288; std::memset(b+start+12288,0,4096); Store32(b,start+12288,sp);
   ApplyDoor(b,o,s);
   {
-    DoorStopGuard guard(o,s); __imp__sub_82552200(ctx,b);
-    if (ended && DoorScheduled(b,o.ai)) __imp__sub_826F9DC0(ctx,b);
+    auto guarded=s;
+    if (!own_track) guarded.value|=kDoorScheduled;
+    DoorStopGuard guard(o,guarded); __imp__sub_82552200(ctx,b);
+    if (ended && DoorScheduled(b,o.ai)) {
+      if (own_track) __imp__sub_826F9DC0(ctx,b);
+      else EndDoorTracks(ctx,b,o);
+    }
   }
-  for (unsigned i=0;i<6;++i) Store32(b,globals[i],values[i]);
+  for (unsigned i=0;i<7;++i) Store32(b,globals[i],values[i]);
   std::memcpy(b+start,scratch,sizeof(scratch)); ctx=saved; o.driven_position=s.position;
 #if defined(KK_DEV_TOOLS)
+  if (Trace() && s.position==1) REXLOG_INFO("KK dev object door endpoint: role={} id={:016X} fraction={} endpoint={} scheduled={}",
+      state.host ? "host" : "guest",o.source,LoadF(b,o.vars+1084),Load32(b,o.vars+1096),DoorScheduled(b,o.ai));
   if (!state.host && s.position==1 && Load32(b,o.vars+1096)==1) state.observed_change=true;
 #endif
 }
-void OpenHeldDoor(PPCContext& ctx,uint8_t* b,Binding& o) {
-  if (!state.host || !Components(b,o) || LoadF(b,o.vars+1084)>=1 ||
-      Load32(b,0x82CCBF64)!=o.ai || Load32(b,0x82CCBF6C)!=o.actor) return;
+void OpenHeldDoor(PPCContext& ctx,uint8_t* b,Binding& o,bool own_track=true) {
+  if (!state.host || !Components(b,o) || LoadF(b,o.vars+1084)>=1) return;
+  const auto now=Now();
+  bool active=false;
+  for (unsigned i=0;i<8;++i) active|=o.local_holds[i].Active(now) || o.remote_holds[i].Active(now);
+  if (!active) return;
+  if (Load32(b,0x82CCBF64)!=o.ai || Load32(b,0x82CCBF6C)!=o.actor) {
+#if defined(KK_DEV_TOOLS)
+    ++o.context_misses;
+#endif
+    return;
+  }
   // A native wait-to-loop transition may invoke both callbacks in one AI pass.
   if (o.hold_tick==state.ai_tick) return;
   o.hold_tick=state.ai_tick;
+#if defined(KK_DEV_TOOLS)
+  ++o.hold_calls;
+#endif
   // The wait track has not necessarily normalized its authored opening time.
   // Verified native leaf: only door timing fields and its extension flag change.
   if (LoadF(b,o.vars+1088)<=0) {
     const PPCContext saved=ctx; __imp__sub_82448E08(ctx,b); ctx=saved;
   }
   bool open=false;
-  const auto now=Now();
   const auto dt=LoadF(b,0x82C636E0),duration=LoadF(b,o.vars+1088);
   for (unsigned i=0;i<8;++i) {
     open|=o.local_holds[i].Step(now,dt,duration);
@@ -528,15 +561,39 @@ void OpenHeldDoor(PPCContext& ctx,uint8_t* b,Binding& o) {
     };
     const auto before=host_input();
     auto endpoint=Sample(b,o); endpoint.position=1; endpoint.value&=~kDoorScheduled;
-    RefreshDoor(ctx,b,o,endpoint);
+    RefreshDoor(ctx,b,o,endpoint,own_track);
     Observe(b,o);
     REXLOG_INFO("KK co-op objects: installed lever opened id={:016X} native-duration={} fraction={} endpoint={} host-jack-readable={} host-jack-unchanged={}",
         o.source,LoadF(b,o.vars+1088),LoadF(b,o.vars+1084),Load32(b,o.vars+1096),human!=0 && PoseAddress(game,17804),before==host_input());
   }
 }
+void IdleDoors(PPCContext& ctx,uint8_t* b) {
+  // Some authored doors remain dormant outside their story activation zone.
+  // A validated installed-lever hold may still complete their own one-way
+  // endpoint. The native update retains transforms, collision, grid and caps.
+  for (auto& [actor,o] : state.bindings) {
+    if (o.kind!=ObjectKind::Door || !Valid(b,o) || Match(o.source,o.kind)!=&o ||
+        Load32(b,o.vars)!=2 || Load32(b,o.vars+568)!=1 || Load32(b,o.vars+572)!=0 ||
+        !Lever(b,o,0)) continue;
+    bool ready=true;
+    for (unsigned slot=0;slot<Load32(b,o.vars+612);++slot)
+      ready&=Lever(b,o,slot)!=0 && Ptr(b,Load32(b,o.vars+620+4*slot),24,42)!=0;
+    if (!ready) continue;
+    const auto* authority=state.host ? nullptr : state.replica.Find(o.kind,o.source);
+    if (!state.host && (!authority || authority->position!=1)) continue;
+    const auto ai=Load32(b,0x82CCBF64),current_actor=Load32(b,0x82CCBF6C);
+    Store32(b,0x82CCBF64,o.ai); Store32(b,0x82CCBF6C,o.actor);
+    if (state.host) OpenHeldDoor(ctx,b,o,false);
+    else RefreshDoor(ctx,b,o,*authority,false);
+    Store32(b,0x82CCBF64,ai); Store32(b,0x82CCBF6C,current_actor);
+  }
+}
 void Door(PPCContext& ctx,uint8_t* b) {
   auto* o=state.ready && Shared() ? Current(b,ObjectKind::Door) : nullptr;
   if (!o) { __imp__sub_8256C3F8(ctx,b); return; }
+#if defined(KK_DEV_TOOLS)
+  ++o->loop_calls;
+#endif
   const auto* s=state.host ? nullptr : state.replica.Find(o->kind,o->source);
   if (!state.host && o->local_levers) {
     const auto done=s ? (s->position==1 ? o->local_levers : o->local_levers&s->value) : 0;
@@ -573,6 +630,9 @@ void Breakable(PPCContext& ctx,uint8_t* b) {
 }
 void DoorUpdate(PPCContext& ctx,uint8_t* b) {
   auto* o=state.ready && Shared() ? Current(b,ObjectKind::Door) : nullptr;
+#if defined(KK_DEV_TOOLS)
+  if (o) ++o->update_calls;
+#endif
   const auto* s=o && !state.host ? state.replica.Find(o->kind,o->source) : nullptr;
   if (s) ApplyDoor(b,*o,*s);
   // Geometry, nav-grid, capability bits and completed-lever cleanup remain
@@ -595,11 +655,20 @@ void DoorStop(PPCContext& ctx,uint8_t* b) {
 }
 void DoorWait(PPCContext& ctx,uint8_t* b) {
   auto* o=state.ready && Shared() ? Current(b,ObjectKind::Door) : nullptr;
+#if defined(KK_DEV_TOOLS)
+  if (o) ++o->wait_calls;
+#endif
   __imp__sub_82543478(ctx,b);
   if (o && Valid(b,*o)) {
     if (state.host) OpenHeldDoor(ctx,b,*o);
     else if (const auto* s=state.replica.Find(o->kind,o->source)) RefreshDoor(ctx,b,*o,*s);
   }
+}
+void DoorInit(PPCContext& ctx,uint8_t* b) {
+#if defined(KK_DEV_TOOLS)
+  if (auto* o=state.ready && Shared() ? Current(b,ObjectKind::Door) : nullptr) ++o->init_calls;
+#endif
+  __imp__sub_82574D80(ctx,b);
 }
 #if defined(KK_DEV_TOOLS)
 void ScanInventory(const uint8_t* b,uint32_t w) {
@@ -869,8 +938,9 @@ void ObjectsBeforeAi(PPCContext& ctx,uint8_t* b,uint32_t w) {
   PickupProbe(ctx,b);
 #endif
 }
-void ObjectsAfterAi(PPCContext&,uint8_t* b,uint32_t w) {
+void ObjectsAfterAi(PPCContext& ctx,uint8_t* b,uint32_t w) {
   if (!state.ready || w!=state.world || !Shared()) return;
+  IdleDoors(ctx,b);
   const auto now=Now();
   if (state.host && now>=state.next_sample) {
     state.next_sample=now+.1; const bool full=now>=state.next_full;
@@ -912,6 +982,9 @@ void ObjectsAfterAi(PPCContext&,uint8_t* b,uint32_t w) {
       REXLOG_INFO("KK dev object state: role={} id={:016X} kind={} local={}/{:.3f}/{:.3f} host={}/{:.3f} matched={}",
           state.host ? "host" : "guest",o.source,uint8_t(o.kind),local.value,local.position,local.seconds,
           authority ? authority->value : local.value,authority ? authority->position : local.position,state.host || authority!=nullptr);
+      if (o.kind==ObjectKind::Door) REXLOG_INFO("KK dev object door callbacks: role={} id={:016X} init={} wait={} loop={} update={} holds={} context-misses={} dt={} duration={} fraction={} endpoint={}",
+          state.host ? "host" : "guest",o.source,o.init_calls,o.wait_calls,o.loop_calls,o.update_calls,
+          o.hold_calls,o.context_misses,LoadF(b,0x82C636E0),LoadF(b,o.vars+1088),LoadF(b,o.vars+1084),Load32(b,o.vars+1096));
       if (o.kind==ObjectKind::Door && !o.lever_logged) {
         bool logged=false;
         for (unsigned i=0;i<8;++i) if (const auto ext=Lever(b,o,i)) {
@@ -942,4 +1015,5 @@ REX_HOOK_RAW(sub_8256C3F8) { kk::coop::Door(ctx,base); }
 REX_HOOK_RAW(sub_82552200) { kk::coop::DoorUpdate(ctx,base); }
 REX_HOOK_RAW(sub_82515CF0) { kk::coop::Breakable(ctx,base); }
 REX_HOOK_RAW(sub_82543478) { kk::coop::DoorWait(ctx,base); }
+REX_HOOK_RAW(sub_82574D80) { kk::coop::DoorInit(ctx,base); }
 REX_HOOK_RAW(sub_826F9DC0) { kk::coop::DoorStop(ctx,base); }
