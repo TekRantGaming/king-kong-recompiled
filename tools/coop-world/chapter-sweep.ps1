@@ -53,7 +53,9 @@ $exeSha = if ($WorldDiff) { (Get-FileHash -LiteralPath $exePath -Algorithm SHA25
 if ($WorldDiff) {
     $unexpected = @($sourceDirty | Where-Object { $_ -notmatch '^ M kk/(generated/rexglue\.cmake|king_kong_manifest\.toml)$' })
     if ($unexpected) { throw 'World sweep requires committed source. Generated CMake/manifest dirt is retained in evidence.' }
-    & git -C $Worktree diff --binary HEAD --output=(Join-Path $sweepDir 'source-dirty.diff')
+    $dirtyDiffPath=Join-Path $sweepDir 'source-dirty.diff'
+    & git -C $Worktree diff --binary HEAD "--output=$dirtyDiffPath"
+    if ($LASTEXITCODE -ne 0) { throw 'Could not retain the source dirty diff.' }
 }
 $records = @()
 for ($i = 0; $i -lt $entryList.Count; $i++) {

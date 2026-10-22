@@ -2065,6 +2065,7 @@ world::Json world::EnemySnapshot(const uint8_t* b,world::Capture& capture) {
     if (!ValidBinding(b,binding) || !Read(b,actor,observed,e)) {
       // A retired native binding has no readable life. Do not substitute the
       // authority's death flag or last outgoing/incoming health.
+      if (Member(b,s.world,actor,true)) capture.Error("enemy-native-binding-unreadable:"+Hex(Canonical(binding.id).source));
       continue;
     }
     bound.insert(actor);

@@ -40,7 +40,9 @@ struct Options {
     }
     if (const auto* r=std::getenv("KK_DEV_WORLD_ROUTE")) {
       char* end=nullptr; route=std::strtod(r,&end);
-      if (!end || *end || !std::isfinite(route) || route<0 || route>delay) return;
+      if (!end || *end || !std::isfinite(route) || route<0 || route>3600) {
+        REXLOG_WARN("KK dev world: invalid route duration"); return;
+      }
     }
     dir=std::filesystem::absolute(path).lexically_normal();
     auto normalized=dir.generic_string();
