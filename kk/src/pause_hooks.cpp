@@ -51,6 +51,7 @@
 #include <rex/input/mnk/mnk_input_driver.h>
 
 #include "hooks/kk_native_photo.h"
+#include "compare_capture.h"
 #include "pause_backdrop_logic.h"
 #include "pause_menu.h"
 #include "photo_mode.h"
@@ -446,6 +447,8 @@ void CreatePauseBackdrop(rex::ui::ImGuiDrawer* drawer, rex::ui::ImmediateDrawer*
 }
 
 void FilterPad(uint32_t user, uint8_t* state) {
+  // Task 354: the comparison capture's key pauses the game (Start, as the player would press it).
+  if (user == 0 && compare::PressStart()) state[5] |= 0x10;
   const uint16_t buttons = uint16_t(state[4] << 8 | state[5]);
   if (user == 0) g_raw_buttons = buttons;
   const bool menu = PauseMenuOpen();
