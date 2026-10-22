@@ -122,6 +122,11 @@ class Contract(unittest.TestCase):
         self.g["shared"]["enemies"]["initializing"] = 1
         self.assertEqual(self.result()["status"], "INVALID")
 
+    def test_absent_authority_is_observed_difference(self):
+        self.g["shared"]["enemies"]["rows"][E].update(owner="unassigned")
+        self.assertEqual(self.result()["status"], "DIFF")
+        self.assertEqual(self.result()["differences"][0]["key"], f"shared.enemies.rows.{E}.owner")
+
     def test_nonfinite_invalid(self):
         self.g["shared"]["enemies"]["rows"][E]["health"] = float("nan")
         self.assertEqual(self.result()["status"], "INVALID")
@@ -177,6 +182,19 @@ class Contract(unittest.TestCase):
         path.write_text('{"valid":true,"valid":false}', encoding="utf-8")
         with self.assertRaisesRegex(ValueError, "duplicate JSON key valid"):
             w.read(path)
+
+    def test_earlier_desync_retained_after_healing(self):
+        root = self.retained_series(lambda d: d["shared"]["enemies"]["rows"][E].update(health=40.))
+        for role in ("host", "guest"):
+            for i in range(3, 6):
+                d = fixture(role)
+                d.update(sample=i+1, captured_utc=1000.+i*2, playing_seconds=25.+i*2)
+                (root / role / f"world-g1-{i+1}.json").write_text(json.dumps(d), encoding="utf-8")
+        result = w.series(root / "host", root / "guest")
+        self.assertEqual(result["status"], "DIFF")
+        self.assertEqual(result["final_status"], "PARTIAL_EQUAL")
+        self.assertEqual(len(result["differences"]), 1)
+        self.assertEqual(result["observations"][-1]["status"], "PARTIAL_EQUAL")
 
 
 if __name__ == "__main__":

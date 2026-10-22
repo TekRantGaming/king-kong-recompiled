@@ -207,7 +207,7 @@ def series(host_dir, guest_dir, count=3, health_tol=0.01, max_skew=3.0):
         invalid["errors"] = ["missing peer snapshots"]
         return invalid
     hs, gs = stable_candidates(h, count, health_tol), stable_candidates(g, count, health_tol)
-    rejected = []
+    rejected, accepted = [], []
     candidates = sorted(((abs(a[0][1]["captured_utc"]-b[0][1]["captured_utc"]), a, b) for a in hs for b in gs), key=lambda p: p[0])
     for _, ((hp, hd), hw), ((gp, gd), gw) in candidates:
         result = compare(hd, gd, health_tol, max_skew)
@@ -215,8 +215,28 @@ def series(host_dir, guest_dir, count=3, health_tol=0.01, max_skew=3.0):
             result.update(host=hp, guest=gp, host_window=hw, guest_window=gw, quiet_samples=count,
                           identity=hd["identity"], watermark=hd["shared"]["story"]["watermark"],
                           host_samples=len(h), guest_samples=len(g))
-            return result
+            accepted.append(result)
+            continue
         rejected.extend(result["errors"])
+    if accepted:
+        # Keep every named mismatch observed in any settled pair, even if C72
+        # later heals it. Choose one nearest-time guest window per host sample.
+        nearest = {}
+        for result in accepted:
+            nearest.setdefault(result["host"], result)
+        observations = sorted(nearest.values(), key=lambda r: read(r["host"])["captured_utc"])
+        found = {}
+        for result in observations:
+            for diff in result["differences"]:
+                key = json.dumps(diff, sort_keys=True)
+                found.setdefault(key, diff)
+        selected = copy.deepcopy(next((r for r in observations if r["differences"]), observations[-1]))
+        selected["final_status"] = observations[-1]["status"]
+        selected["status"] = "DIFF" if found else selected["status"]
+        selected["differences"] = list(found.values())
+        selected["settled_comparisons"] = len(observations)
+        selected["observations"] = [{k: r[k] for k in ("host", "guest", "watermark", "status", "differences")} for r in observations]
+        return selected
     invalid["errors"] = sorted(set(rejected or ["no three fresh quiet native samples on each peer"]))
     invalid["native_errors"] = {"host": sorted(set(e for _, d in h for e in validate(d, "host"))),
                                 "guest": sorted(set(e for _, d in g for e in validate(d, "guest")))}

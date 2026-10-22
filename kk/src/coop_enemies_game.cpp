@@ -2090,7 +2090,8 @@ world::Json world::EnemySnapshot(const uint8_t* b,world::Capture& capture) {
     if (!initializing && !Read(b,actor,observed,e)) {
       capture.Error("enemy-native-health-unreadable:"+key); continue;
     }
-    if (!initializing && scheduled && !a) capture.Error("scheduled-enemy-owner-unresolved:"+key);
+    // Missing authority is observable state, not a failed native read. Keep
+    // 'unassigned' so a guest-only activation can produce a named mismatch.
     const auto cell=initializing ? 0:LifeCell(b,observed);
     const float native_life=initializing ? 0:StateLife(family) ? e.life:cell ? LoadF(b,cell):NAN;
     if (!std::isfinite(native_life)) capture.Error("enemy-native-health-unreadable:"+key);
@@ -2101,7 +2102,7 @@ world::Json world::EnemySnapshot(const uint8_t* b,world::Capture& capture) {
         {"health_kind",StateLife(family) ? "native-track-lifecycle":"native-scalar"},
         {"health",initializing ? Json():Json(native_life)},{"secondary_health",initializing ? Json():Json(e.secondary_life)},
         {"alive",initializing ? Json():Json(e.life>0)},{"owner",a ? a->owner==EnemyOwner::Host ? "host":"guest":"unassigned"},
-        {"owner_generation",a ? a->generation:0},{"native_state",state},
+        {"authority_present",a!=nullptr},{"owner_generation",a ? a->generation:0},{"native_state",state},
         {"scheduled",scheduled},{"position",Json::Array({x,y,z})}});
     if (!rows.emplace(key,row).second) capture.Error("enemy-id-collision:"+key);
   }

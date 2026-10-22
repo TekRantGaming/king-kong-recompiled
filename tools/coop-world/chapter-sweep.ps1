@@ -1,4 +1,4 @@
-﻿# Claude only: runs the existing two-window runner once per zero-based chapter entry.
+# Authorized task runner: runs the existing two-window runner once per zero-based chapter entry.
 # C76 authorized work mode: -WorldDiff -Checkpoints scores native WAN snapshots.
 # Examples: & .\chapter-sweep.ps1 -Entries 1,2,3 -Seconds 150
 # powershell -NoProfile -File .\chapter-sweep.ps1 -Entries '1,2,3'
@@ -41,6 +41,14 @@ $stamp = Get-Date -Format 'yyyyMMdd-HHmmss-fff'
 $sweepDir = Join-Path $coopRoot "runs\chapter-sweep-$stamp"
 New-Item -ItemType Directory -Path $sweepDir | Out-Null
 $manifestPath = Join-Path $sweepDir 'manifest.json'
+$harnessDir=Join-Path $sweepDir 'harness'
+New-Item -ItemType Directory -Path $harnessDir | Out-Null
+$toolHashes=[ordered]@{}
+foreach ($toolName in 'chapter-sweep.ps1','world-diff.py','world-sweep-score.py','coop-run.ps1') {
+    $toolPath=Join-Path $PSScriptRoot $toolName
+    Copy-Item -LiteralPath $toolPath -Destination $harnessDir
+    $toolHashes[$toolName]=(Get-FileHash -LiteralPath $toolPath -Algorithm SHA256).Hash.ToLowerInvariant()
+}
 $rules = @(Select-String -LiteralPath (Join-Path $Worktree 'kk\src\coop_flow.h') -Pattern '^\s*\{(\d+),ChapterPolicy::(\w+),' | ForEach-Object {
     [ordered]@{ level=[int]$_.Matches[0].Groups[1].Value; policy=$_.Matches[0].Groups[2].Value }
 })
@@ -74,6 +82,7 @@ $manifest = [ordered]@{
     source_branch = $sourceBranch; source_dirty = $sourceDirty; exe_sha256 = $exeSha
     protocol = 17; snapshot_schema = 1; fault_profile = '150,30,3'; fault_seeds = @(68,69)
     scenarios = $rules
+    harness_sha256 = $toolHashes; harness_sources = $harnessDir
 }
 function Save-Manifest { $manifest | ConvertTo-Json -Depth 8 | Set-Content -LiteralPath $manifestPath -Encoding UTF8 }
 Save-Manifest
@@ -105,7 +114,8 @@ try {
             $evidence=[ordered]@{ entry=$record.entry; start=$record.start; level=$record.level; policy=$record.policy
                 load_proof=$record.load_proof; source_commit=$sourceCommit; source_branch=$sourceBranch; source_dirty=$sourceDirty
                 exe_sha256=$exeSha; exe_path=$exePath; protocol=17; snapshot_schema=1; fault_profile='150,30,3'
-                fault_seeds=@(68,69); port=27080; roles=@('host','guest'); scenario=$scenario; flags=$hostArgs; runner=$runner }
+                fault_seeds=@(68,69); port=27080; roles=@('host','guest'); scenario=$scenario; flags=$hostArgs; runner=$runner
+                harness_sha256=$toolHashes; harness_sources=$harnessDir }
             $dirtyText=($sourceDirty -join ';')
             $envText += "|KK_DEV_UDP_SIM=150,30,3|KK_DEV_WORLD_DUMP=5,2,26|KK_DEV_WORLD_ROUTE=16|KK_DEV_WORLD_DIR=$($record.world_evidence)\host|KK_DEV_WORLD_COMMIT=$sourceCommit|KK_DEV_WORLD_DIRTY=$dirtyText|KK_DEV_WORLD_EXE_SHA256=$exeSha|KK_DEV_WORLD_SCENARIO=$scenario"
             $joinText += "|KK_DEV_WORLD_DIR=$($record.world_evidence)\guest"

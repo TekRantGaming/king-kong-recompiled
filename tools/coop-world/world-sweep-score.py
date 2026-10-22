@@ -31,7 +31,9 @@ def score(evidence_dir, run):
     for role, log_role in (("host", "host"), ("guest", "join")):
         paths = list((evidence_dir / role).glob("world-g*.json"))
         dumps = [w.read(p) for p in paths]
-        ids[role] = sorted({i for d in dumps if d.get("identity", {}).get("level") == evidence["level"] for i in d.get("native_checkpoint_ids", [])})
+        ids[role] = sorted({i for d in dumps if d.get("identity", {}).get("level") == evidence["level"]
+                            and not any("native-level-mismatch" in e or "native-load-not-ready" in e or "checkpoint-" in e for e in d.get("errors", []))
+                            for i in d.get("native_checkpoint_ids", [])})
         players = [d["local"]["player"] for d in dumps if d.get("local", {}).get("player")]
         movement = max((math.dist(a["position"], b["position"]) for a in players for b in players), default=0)
         shots = max((p.get("fire", 0) for p in players), default=0)
