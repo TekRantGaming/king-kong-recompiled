@@ -12,7 +12,7 @@ version's notes the first time you start it.
 - **Ready for the jump to v2.0.0.** The updater now also installs the new folders v2.0.0 brings (the launcher's videos and the mods that come with the game), so updating from the launcher gives you the complete new version.
 
 ### Full changelog
-- `countdown.cpp`: the launch time and title come from the website's `launch.json` (fetched in the background with a short timeout, kept in the settings as `kk_launch_utc` and `kk_launch_title` for offline starts); without it, the built-in 30 October 2026 18:00 UTC. In all five launcher languages.
+- `countdown.cpp`: the launch time and title come from the website's `launch.json` (fetched in the background with a short timeout, kept in the settings as `kk_launch_utc` and `kk_launch_title` for offline starts); without it, the launcher uses 30 October 2026 18:00 UTC. In all five launcher languages.
 - `update.cpp`: an update also writes the `launcher` and `mods-builtin` folders.
 - `toast.cpp`: achievement pop ups scale with the screen height (1x at 1080p).
 
