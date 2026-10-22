@@ -18,6 +18,7 @@
 #include "startup_recovery_state.h"
 #include "amd_shader_cache.h"
 #include "setup_again.h"
+#include "easter_egg_logic.h"
 
 #include <bit>
 #include <cstdio>
@@ -955,7 +956,41 @@ void KeyGlyphChecks() {
   Check(std::string(kMouseMove) == "Mouse_Simple" && PictureName("RMB") == kMouseRight, "mouse movement picture");
 }
 
+// Task 357: the controller code on Home (easter_egg_logic.h).
+void EasterEggCodeChecks() {
+  using kk::egg::Code;
+  using kk::egg::Pad;
+  using kk::egg::Step;
+  auto enter = [](Code& c, std::initializer_list<Pad> presses) {
+    Step last = Step::kNone;
+    for (Pad p : presses) last = c.Press(p);
+    return last;
+  };
+  const std::initializer_list<Pad> full = {Pad::kUp,   Pad::kUp,    Pad::kDown, Pad::kDown, Pad::kLeft, Pad::kRight,
+                                           Pad::kLeft, Pad::kRight, Pad::kB,    Pad::kA,    Pad::kStart};
+  Code c;
+  Check(enter(c, full) == Step::kComplete && c.progress() == 0, "the whole code completes and starts again");
+  Check(enter(c, full) == Step::kComplete, "the code works a second time");
+  Check(enter(c, {Pad::kUp, Pad::kUp, Pad::kUp, Pad::kDown, Pad::kDown, Pad::kLeft, Pad::kRight, Pad::kLeft, Pad::kRight,
+                  Pad::kB, Pad::kA, Pad::kStart}) == Step::kComplete,
+        "a third Up keeps Up, Up");
+  Check(enter(c, {Pad::kUp, Pad::kUp, Pad::kDown, Pad::kOther}) == Step::kNone && c.progress() == 0, "a wrong button resets");
+  Check(enter(c, {Pad::kUp, Pad::kUp, Pad::kDown, Pad::kDown, Pad::kLeft, Pad::kRight, Pad::kLeft, Pad::kRight, Pad::kA}) ==
+                Step::kNone && c.progress() == 0,
+        "A before B resets");
+  Check(enter(c, {Pad::kUp, Pad::kUp, Pad::kDown, Pad::kDown, Pad::kLeft, Pad::kRight, Pad::kLeft, Pad::kRight, Pad::kB,
+                  Pad::kA, Pad::kA}) == Step::kNone && c.progress() == 0,
+        "A instead of Start resets");
+  c.Reset();
+  Check(c.Press(Pad::kA) == Step::kNone && c.Press(Pad::kB) == Step::kNone && c.Press(Pad::kStart) == Step::kNone,
+        "A, B and Start out of the code act as usual");
+  Check(!kk::egg::Swallowed(Pad::kA, Step::kNone) && !kk::egg::Swallowed(Pad::kUp, Step::kMatched) &&
+            kk::egg::Swallowed(Pad::kB, Step::kMatched) && kk::egg::Swallowed(Pad::kStart, Step::kComplete),
+        "only B, A and Start of the code are kept from the launcher");
+}
+
 int main() {
+  EasterEggCodeChecks();
   // Extras playback does not set either story-movie flag. SKIP must still
   // send Start, and must stop sending it once playback ends.
   std::map<uint32_t, uint32_t> movie;

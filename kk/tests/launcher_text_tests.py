@@ -1029,7 +1029,8 @@ if '—' in new_src or '–' in new_src:
 
 # Job J5 part 3: the launcher's controllers press nothing while its window is not the active one (REPORT-188).
 ui_src = (src / 'launcher_ui.cpp').read_text(encoding='utf-8')
-if 'input_.set_pads_active(active);' not in launcher:
+# Task 357: and while the Easter egg game runs (its Start opens the launcher's pause panel over it).
+if 'input_.set_pads_active(active || egg_running_);' not in launcher:
     fail('the launcher does not tell its input whether its window is active')
 if 'if (!pads_active_)' not in ui_src or 'dir_stale_' not in ui_src:
     fail('the input does not ignore controllers while the window is not active')

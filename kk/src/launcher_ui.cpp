@@ -151,6 +151,11 @@ void Input::Inject(Action a, Device d) {
   pressed_[size_t(a)] = true;
   injected_ = true;
   device_ = d;
+  if (d != Device::kKeyboard) {  // task 357: as the controller's own press
+    static constexpr uint32_t kBits[kActionCount] = {kPadUp, kPadDown, kPadLeft, kPadRight, kPadLT, kPadRT, kPadA,
+                                                     kPadB,  kPadX,    kPadY,    kPadLB,    kPadRB, kPadStart};
+    pad_presses_ |= kBits[size_t(a)];
+  }
   if (d != Device::kKeyboard) pad_device_ = d;
   if (d != Device::kKeyboard) pad_style_ = d == Device::kPlayStation ? "ps5" : "xbox360";
 }
@@ -258,6 +263,15 @@ void Input::UpdateGamepads(double now) {
   }
   if (!pads_active_)
     for (size_t i = 0; i < 8; ++i) buttons_down_[i] = buttons_down_[i] || down[i];
+  // Task 357: the controller's new presses this frame (a direction once, however long it is held).
+  {
+    static constexpr uint32_t kDirBits[6] = {kPadUp, kPadDown, kPadLeft, kPadRight, kPadLT, kPadRT};
+    static constexpr uint32_t kButtonBits[8] = {kPadA, kPadB, kPadX, kPadY, kPadLB, kPadRB, kPadStart, kPadBack};
+    for (size_t i = 0; i < 6; ++i)
+      if (dir[i] && !dir_[i].held && pads_active_) pad_presses_ |= kDirBits[i];
+    for (size_t i = 0; i < 8; ++i)
+      if (down[i] && !buttons_down_[i]) pad_presses_ |= kButtonBits[i];
+  }
   // In game: the pad the game read (FeedPad), XInput's layout.
   if (now - fed_.at < 0.25) {
     const uint16_t b = fed_.buttons;
@@ -310,6 +324,7 @@ void Input::UpdateGamepads(double now) {
 
 void Input::Update() {
   pressed_ = {};
+  pad_presses_ = 0;
   injected_ = false;
   held_ = {};
   const double now = ImGui::GetTime();

@@ -338,6 +338,7 @@ class KingKongApp : public rex::ReXApp {
     cb.restore = [this] {
       if (window()) kk::RestoreNativeWindow(window()->GetNativeWindowHandle());
     };
+    cb.native_window = [this]() -> void* { return window() ? window()->GetNativeWindowHandle() : nullptr; };
     kk::hdr::SetWindowProvider([this]() -> void* { return window() ? window()->GetNativeWindowHandle() : nullptr; });
     // The Display page's Resolution list, made on a worker while the launcher opens (display_modes.h).
     kk::PrefetchDisplayModes(std::atoi(rex::cvar::GetFlagByName("monitor").c_str()), window());

@@ -128,6 +128,14 @@ class Input {
   // The program's own controllers press nothing while its window is not the active one; what is held as it
   // comes back counts only once let go and pressed again.
   void set_pads_active(bool on) { pads_active_ = on; }
+  // Task 357: what a controller newly pressed this frame (not repeats, not the keyboard): PadBit values.
+  // Injected controller presses (testing aid) count too.
+  enum PadBit : uint32_t {
+    kPadUp = 1u << 0, kPadDown = 1u << 1, kPadLeft = 1u << 2, kPadRight = 1u << 3,
+    kPadA = 1u << 4, kPadB = 1u << 5, kPadX = 1u << 6, kPadY = 1u << 7, kPadLB = 1u << 8, kPadRB = 1u << 9,
+    kPadStart = 1u << 10, kPadBack = 1u << 11, kPadLT = 1u << 12, kPadRT = 1u << 13,
+  };
+  uint32_t pad_presses() const { return pad_presses_; }
 
  private:
   using Repeat = DirectionRepeat;
@@ -157,6 +165,7 @@ class Input {
     double at = -1e9;
   } fed_;
   std::array<bool, 8> buttons_down_{};
+  uint32_t pad_presses_ = 0;
   // When each action was last held on a controller / pressed on the keyboard:
   // Steam's desktop controller layout also types keys for the controller's
   // buttons (arrows, Enter, Escape), and one press must count once.

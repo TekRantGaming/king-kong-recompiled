@@ -28,6 +28,7 @@ set(KINGKONG_SOURCES
     src/launcher_text.cpp
     src/launcher_music.cpp
     src/launcher_sounds.cpp
+    src/easter_egg.cpp
     src/launcher_benchmark.cpp
     src/game_sound.cpp
     src/steam_shortcut.cpp

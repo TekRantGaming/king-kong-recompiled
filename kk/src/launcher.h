@@ -46,6 +46,8 @@ struct LauncherCallbacks {
   // (a click on a notification: the window comes back and is asked to the front).
   std::function<std::pair<bool, bool>()> window_state;
   std::function<void()> restore;
+  // Task 357: the window's native handle (an HWND on Windows), to bring it in front over the Easter egg game.
+  std::function<void*()> native_window;
 };
 
 struct LauncherPaths {

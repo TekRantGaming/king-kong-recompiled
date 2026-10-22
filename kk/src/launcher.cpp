@@ -14,6 +14,8 @@
 #include "launcher_sounds.h"
 #include "launcher_text.h"
 #include "launcher_ui.h"
+#include "easter_egg.h"
+#include "easter_egg_logic.h"
 #include "menu_scene.h"
 #include "loading_loop.h"
 #include "startup_movies.h"
@@ -2909,7 +2911,7 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
       }
       if (const std::string summary = focus_log_.Summary(now_ms); !summary.empty()) REXLOG_INFO("{}", summary);
       pads_active_ = active;
-      input_.set_pads_active(active);
+      input_.set_pads_active(active || egg_running_);  // task 357: Start over the Easter egg
     }
     input_.Update();
     if (ui_sounds_) {
@@ -2924,6 +2926,12 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
     DevTour();
     DevInput();
 #endif
+    // Task 357: the Easter egg game is running: only its pause panel (Start) is drawn and answered.
+    if (egg_running_ && DrawEgg(dl, io)) {
+      ImGui::End();
+      NoteActivity(io);
+      return;
+    }
     // Back from a benchmark: its results page opens first (owner, 19 Oct: a pop-up covered it). Every pop-up
     // that opens by itself (update offer, What's new, the startup notices below) waits for a free moment, so
     // they come after the player closes the results.
@@ -3034,6 +3042,9 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
         open_benchmark_results_ = false;
         OpenBenchmarkResults();
       }
+      // Task 357: the controller code, on Home only.
+      if (!modal_.open && play_ == PlayView::kNone && page_ == kHome) EggCodeInput();
+      else egg_code_.Reset();
       if (!modal_.open) HandleGlobalInput();
       if (play_ != PlayView::kNone) {
         DrawPlayHeader(dl);
@@ -7358,6 +7369,148 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
     return true;
   }
 
+  // ------------------------------------------------------------ Easter egg ---
+  // Task 357 (owner, 22 Oct): on Home, a controller's Up, Up, Down, Down, Left, Right, Left, Right, B, A, Start
+  // starts the owner's little game (launcher\easter-egg\). While it runs the launcher keeps reading the
+  // controller: Start brings the launcher in front with a pause panel (Resume, Quit to main menu). Its music
+  // and sounds are silent meanwhile. Nothing on screen tells of the code.
+  void EggCodeInput() {
+    const uint32_t presses = input_.pad_presses();
+    if (!presses) return;
+    using P = egg::Pad;
+    struct Bit {
+      uint32_t bit;
+      P pad;
+      Action action;
+    };
+    static constexpr Bit kBits[] = {
+        {ui::Input::kPadUp, P::kUp, Action::kCount},      {ui::Input::kPadDown, P::kDown, Action::kCount},
+        {ui::Input::kPadLeft, P::kLeft, Action::kCount},  {ui::Input::kPadRight, P::kRight, Action::kCount},
+        {ui::Input::kPadB, P::kB, Action::kBack},         {ui::Input::kPadA, P::kA, Action::kAccept},
+        {ui::Input::kPadStart, P::kStart, Action::kPlay}, {ui::Input::kPadX, P::kOther, Action::kCount},
+        {ui::Input::kPadY, P::kOther, Action::kCount},    {ui::Input::kPadLB, P::kOther, Action::kCount},
+        {ui::Input::kPadRB, P::kOther, Action::kCount},   {ui::Input::kPadBack, P::kOther, Action::kCount},
+        {ui::Input::kPadLT, P::kOther, Action::kCount},   {ui::Input::kPadRT, P::kOther, Action::kCount},
+    };
+    for (const Bit& b : kBits) {
+      if (!(presses & b.bit)) continue;
+      const egg::Step step = egg_code_.Press(b.pad);
+      if (egg::Swallowed(b.pad, step)) input_.Consume(b.action);
+      if (step == egg::Step::kComplete) StartEgg();
+    }
+  }
+
+  void StartEgg() {
+    const std::filesystem::path exe = egg::AppPath();
+    std::error_code ec;
+    if (exe.empty() || !std::filesystem::is_regular_file(exe, ec)) {
+      REXLOG_WARN("KK: easter egg: launcher\\easter-egg is missing; nothing started");
+      return;
+    }
+    if (!egg_) egg_ = std::make_unique<egg::Process>();
+    if (!egg_->Start(exe)) return;
+    egg_running_ = true;
+    egg_paused_ = egg_quitting_ = false;
+  }
+
+  static double SteadySeconds() {
+    return std::chrono::duration<double>(std::chrono::steady_clock::now().time_since_epoch()).count();
+  }
+
+  // TickState (also from the heartbeat while nothing is drawn): the game ended (by itself, or Quit to main menu,
+  // which ends it if it has not closed after 3 s): Home again, the launcher in front.
+  void TickEgg() {
+    if (!egg_running_) return;
+    if (egg_ && egg_->Running()) {
+      if (!egg_quitting_ || SteadySeconds() - egg_close_at_ < 3.0) return;
+      REXLOG_INFO("KK: easter egg did not close within 3 s: ending it");
+      egg_->Terminate();
+    }
+    REXLOG_INFO("KK: easter egg over{}: back to Home", egg_quitting_ ? " (Quit to main menu)" : "");
+    egg_running_ = egg_paused_ = egg_quitting_ = false;
+    egg_code_.Reset();
+    input_.ConsumeAll();
+    if (cb_.native_window) egg::ForceToFront(cb_.native_window());
+  }
+
+  // The frame while the game runs. False when it has just ended (Home is drawn this frame).
+  bool DrawEgg(ImDrawList* dl, ImGuiIO& io) {
+    if (music_) music_->Update(0.0f, io.DeltaTime);  // silent while it runs, back after
+    FadeSceneSound(0.0f, io.DeltaTime);
+    TickState();  // the launcher's jobs go on (and TickEgg)
+    if (!egg_running_) return false;
+    DrawBackdrop(dl);
+    if (egg_paused_) {
+      DrawEggPause(dl);
+    } else if (!egg_quitting_ && (input_.pad_presses() & ui::Input::kPadStart) && egg_ && egg_->WindowShown()) {
+      // (only once its window is up: a Start before that does nothing)
+      egg_paused_ = true;
+      egg_focus_ = 0;
+      egg_pause_time_ = ImGui::GetTime();
+      const bool front = cb_.native_window && egg::ForceToFront(cb_.native_window());
+      REXLOG_INFO("KK: easter egg paused (Start): launcher {}",
+                  front ? "in front" : "asked to the front, Windows kept another window in front");
+    }
+    input_.ConsumeAll();
+    return true;
+  }
+
+  // The pause panel over the game, as the game's own pause menu looks: the shade, PAUSED, Resume and Quit to
+  // main menu; B (Esc) or Start resumes.
+  void DrawEggPause(ImDrawList* dl) {
+    const float s = S();
+    const ui::Fonts f = ui::GetFonts();
+    const float t = std::clamp(float(ImGui::GetTime() - egg_pause_time_) / 0.18f, 0.0f, 1.0f);
+    const ImVec2 p1(o_.x + w_, o_.y + h_);
+    const float x = o_.x + 72 * s, list_w = std::min(400 * s, w_ * 0.42f);
+    const float solid = x - o_.x + std::min(500 * s, w_ * 0.5f - 72 * s) + 40 * s;
+    dl->AddRectFilled(o_, p1, ui::WithAlpha(color::kBase, t * 0.28f));
+    const ImU32 c0 = ui::WithAlpha(color::kBase, t * 0.82f), c1 = ui::WithAlpha(color::kBase, 0.0f);
+    dl->AddRectFilled(o_, ImVec2(o_.x + solid, p1.y), c0);
+    dl->AddRectFilledMultiColor(ImVec2(o_.x + solid, o_.y), ImVec2(o_.x + solid + w_ * 0.18f, p1.y), c0, c1, c1, c0);
+    const ImU32 b0 = ui::WithAlpha(color::kBase, t * 0.55f);
+    dl->AddRectFilledMultiColor(ImVec2(o_.x, p1.y - 120 * s), p1, c1, c1, b0, b0);
+    const float cy = o_.y + 72 * s;
+    ui::DrawTracked(dl, f.display, 15 * s, ImVec2(x, cy - 7.5f * s), color::kAccent, text::Upper(T("Paused")), 5 * s);
+    dl->AddRectFilled(ImVec2(x, cy + 17 * s), ImVec2(x + 44 * s, cy + 19 * s), ui::WithAlpha(color::kAccent, 0.7f));
+    static const char* const kEntries[2] = {"Resume", "Quit to main menu"};
+    const float item_h = 40 * s, fs = 23 * s, tr = 1.6f * s;
+    if (input_.Pressed(Action::kUp) || input_.Pressed(Action::kDown)) egg_focus_ = 1 - egg_focus_;
+    int chosen = -1;
+    float iy = o_.y + 118 * s;
+    for (int i = 0; i < 2; ++i) {
+      if (ImGui::IsMouseHoveringRect(ImVec2(x - 8 * s, iy), ImVec2(x + list_w, iy + item_h), false)) {
+        if (input_.mouse_moved()) egg_focus_ = i;
+        if (ImGui::IsMouseClicked(0)) egg_focus_ = chosen = i;
+      }
+      const bool on = i == egg_focus_;
+      egg_offsets_[size_t(i)] = ui::Approach(egg_offsets_[size_t(i)], on ? 1.0f : 0.0f, 14.0f);
+      const float k = egg_offsets_[size_t(i)];
+      if (k > 0.02f)
+        dl->AddRectFilled(ImVec2(x, iy + item_h * 0.5f - fs * 0.55f), ImVec2(x + 4 * s, iy + item_h * 0.5f + fs * 0.55f),
+                          ui::WithAlpha(color::kAccent, k));
+      ui::DrawTracked(dl, f.display, fs, ImVec2(x + 20 * s + 6 * s * k, iy + (item_h - fs) * 0.5f),
+                      on ? color::kText : color::kTextDim, text::Upper(T(kEntries[i])), tr);
+      iy += item_h;
+    }
+    if (input_.Pressed(Action::kAccept)) chosen = egg_focus_;
+    if (input_.Pressed(Action::kBack) || input_.Pressed(Action::kPlay)) chosen = 0;
+    const Action clicked = ui::DrawPrompts(dl, glyphs_, PromptSet(), {{Action::kAccept, "Select"}, {Action::kBack, "Resume"}},
+                                           o_.x + w_ - 72 * s, o_.y + h_ - 48 * s, m_, true);
+    if (clicked != Action::kCount) pending_click_ = clicked;
+    if (chosen == 0) {
+      egg_paused_ = false;
+      REXLOG_INFO("KK: easter egg resumed");
+      if (egg_) egg_->ToFront();
+    } else if (chosen == 1) {
+      egg_paused_ = false;
+      egg_quitting_ = true;
+      egg_close_at_ = SteadySeconds();
+      REXLOG_INFO("KK: easter egg: Quit to main menu");
+      if (egg_) egg_->RequestClose();
+    }
+  }
+
   // ---------------------------------------------------------- heartbeat ---
   // Task 173: the launcher's logic runs in OnDraw, which the SDK calls only while it presents. With the
   // window minimised, or after a "swapchain outdated" frame whose reconnect found no surface to draw to,
@@ -7851,6 +8004,7 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
     DevNotifyTest();
 #endif
     FlushProfileOptions(false);
+    TickEgg();
     FinishInstallIfDone();
     FinishArtIfDone();
     RefreshPack();
@@ -8211,6 +8365,12 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
         if (text::Upper(t.substr(5)) == text::Upper(kPageNames[p])) GoTo(Page(p));
       return;
     }
+    if (t == "home-play") {  // task 357: Home's focus on Play, as when Home opens
+      home_focus_ = 0;
+      side_focus_ = -1;
+      status_focus_ = false;
+      return;
+    }
     if (t.rfind("focus:", 0) == 0) {
       const bool gfx = InSetup() && GraphicsSetupStage(SetupStage());
       const bool setup_settings = InSetup() && SettingsSetupStage(SetupStage());  // task 332
@@ -8391,6 +8551,14 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
   ImVec2 o_{0, 0};
   float w_ = 1280, h_ = 720;
   Page page_ = kHome;
+  // Task 357: the Easter egg game (EggCodeInput, DrawEgg).
+  egg::Code egg_code_;
+  std::unique_ptr<egg::Process> egg_;
+  bool egg_running_ = false, egg_paused_ = false, egg_quitting_ = false;
+  int egg_focus_ = 0;          // the pause panel: 0 Resume, 1 Quit to main menu
+  double egg_pause_time_ = 0;  // ImGui time the pause panel opened (its shade fades in)
+  double egg_close_at_ = 0;    // SteadySeconds when Quit to main menu asked it to close
+  std::array<float, 2> egg_offsets_{};
   bool recovery_shown_ = false;
   bool crash_notice_shown_ = false;  // task 228
   int shown_frames_ = 0;
