@@ -6,6 +6,7 @@ import math
 from pathlib import Path
 import re
 import sys
+import time
 
 spec = importlib.util.spec_from_file_location("world_diff", Path(__file__).with_name("world-diff.py"))
 w = importlib.util.module_from_spec(spec)
@@ -23,9 +24,21 @@ def sha(path):
 def score(evidence_dir, run):
     evidence = w.read(evidence_dir / "evidence.json")
     result = w.series(evidence_dir / "host", evidence_dir / "guest")
+    # Capture and analysis can be revised independently. Retain exact analyzer
+    # sources/hashes per scoring pass, in addition to the launch manifest.
+    analysis_dir = evidence_dir / ("analysis-tools-" + str(time.time_ns()))
+    analysis_dir.mkdir()
+    result["analysis_harness"] = {}
+    for tool_name in ("world-diff.py", "world-sweep-score.py"):
+        source = Path(__file__).with_name(tool_name)
+        target = analysis_dir / tool_name
+        target.write_bytes(source.read_bytes())
+        result["analysis_harness"][tool_name] = {"sha256": sha(target), "source": str(target)}
     result.update(entry=evidence["entry"], requested_start=evidence["start"], load_proof=evidence["load_proof"],
                   campaign_progression="UNPROVEN: forced entry/checkpoint smoke only", objects="UNSUPPORTED: C71 not integrated",
                   artifacts=[], actions={})
+    result["policy"] = evidence["policy"]
+    result["native_capture_status"] = result["status"]
     ids = {}
     logs_ok = True
     for role, log_role in (("host", "host"), ("guest", "join")):
@@ -67,7 +80,15 @@ def score(evidence_dir, run):
     if result["actual_exe_sha256"] != evidence["exe_sha256"] or not logs_ok:
         result["errors"].append("private executable/log/load/WAN evidence incomplete or mismatched")
         result["status"] = "INVALID"
+    elif evidence["policy"] != "Together":
+        result["status"] = "UNSUPPORTED_POLICY"
+        result["policy_comparison"] = "Independent worlds allowed; shared equality not applicable. Native capture limits remain recorded."
     result["scenario_acceptance"] = "UNPROVEN: missing hit/trigger/object postconditions"
+    previous = evidence_dir / "result.json"
+    if previous.exists():
+        retained = evidence_dir / "previous-results"
+        retained.mkdir(exist_ok=True)
+        previous.rename(retained / ("result-" + str(time.time_ns()) + ".json"))
     (evidence_dir / "result.json").write_text(json.dumps(result, indent=2, sort_keys=True) + "\n", encoding="utf-8")
     print(result["status"], "entry=" + str(evidence["entry"]), "start=" + str(evidence["start"]),
           "diffs=" + str(len(result["differences"])), "checkpoints=" + str(result["native_checkpoint_ids"]))

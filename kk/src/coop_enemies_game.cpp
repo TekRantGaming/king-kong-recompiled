@@ -2086,22 +2086,27 @@ world::Json world::EnemySnapshot(const uint8_t* b,world::Capture& capture) {
     if (!id.source) { ++unbound; capture.Error("enemy-native-identity-unresolved"); continue; }
     const auto authority=s.authority.find(id);
     const auto* a=authority==s.authority.end() ? nullptr:&authority->second;
-    Binding observed; EnemyState e;
-    if (!initializing && !Read(b,actor,observed,e)) {
-      capture.Error("enemy-native-health-unreadable:"+key); continue;
-    }
+    // Read just the field's own proven native chain. The replication pose
+    // reader also validates facing/animation, which dormant bats need not have.
+    Binding observed; observed.actor=actor; observed.ai=ai; observed.matrix=matrix; observed.id.family=family;
+    observed.vars=Ptr(b,ai,64,LifeBytes(family));
+    if (!initializing && !observed.vars) { capture.Error("enemy-native-vars-unreadable:"+key); continue; }
     // Missing authority is observable state, not a failed native read. Keep
     // 'unassigned' so a guest-only activation can produce a named mismatch.
     const auto cell=initializing ? 0:LifeCell(b,observed);
-    const float native_life=initializing ? 0:StateLife(family) ? e.life:cell ? LoadF(b,cell):NAN;
+    const float native_life=initializing ? 0:StateLife(family) ? ReplicatedLife(family,state,0):cell ? LoadF(b,cell):NAN;
     if (!std::isfinite(native_life)) capture.Error("enemy-native-health-unreadable:"+key);
+    const auto secondary_offset=SecondaryLifeOffset(family);
+    const float secondary=initializing || !secondary_offset ? 0:LoadF(b,observed.vars+secondary_offset);
+    if (!std::isfinite(secondary)) capture.Error("enemy-native-secondary-health-unreadable:"+key);
+    const bool alive=ReplicatedLife(family,state,native_life)>0 && (!secondary_offset || secondary>0);
     const float x=LoadF(b,matrix+48),y=LoadF(b,matrix+52),z=LoadF(b,matrix+56);
     if (!std::isfinite(x) || !std::isfinite(y) || !std::isfinite(z)) capture.Error("enemy-native-position-unreadable:"+key);
     initializing_count+=initializing;
     const auto row=Json::Object({{"family",unsigned(family)},{"phase",initializing ? "initializing":"initialized"},
         {"health_kind",StateLife(family) ? "native-track-lifecycle":"native-scalar"},
-        {"health",initializing ? Json():Json(native_life)},{"secondary_health",initializing ? Json():Json(e.secondary_life)},
-        {"alive",initializing ? Json():Json(e.life>0)},{"owner",a ? a->owner==EnemyOwner::Host ? "host":"guest":"unassigned"},
+        {"health",initializing ? Json():Json(native_life)},{"secondary_health",initializing ? Json():Json(secondary)},
+        {"alive",initializing ? Json():Json(alive)},{"owner",a ? a->owner==EnemyOwner::Host ? "host":"guest":"unassigned"},
         {"authority_present",a!=nullptr},{"owner_generation",a ? a->generation:0},{"native_state",state},
         {"scheduled",scheduled},{"position",Json::Array({x,y,z})}});
     if (!rows.emplace(key,row).second) capture.Error("enemy-id-collision:"+key);

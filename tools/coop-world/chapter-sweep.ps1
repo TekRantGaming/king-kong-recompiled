@@ -12,11 +12,12 @@ param(
     [switch]$Checkpoints,
     [ValidateRange(0,32)][int]$CheckpointLimit = 3,
     [ValidateRange(1,256)][int]$MaxRuns = 64,
-    [string]$DeadlineUtc = ''
+    [string]$DeadlineUtc = '',
+    [ValidateRange(0,60)][int]$RetryBlockedSeconds = 0
 )
 $ErrorActionPreference = 'Stop'
 $coopRoot = 'F:\kk-native-coop'
-$runner = Join-Path $PSScriptRoot 'coop-run.ps1'
+$runner = Join-Path $coopRoot 'tools\coop-run.ps1'
 $pythonExe = 'C:\Users\TekRa\AppData\Local\Programs\Python\Python312\python.exe'
 if ($Checkpoints -and -not $WorldDiff) { throw '-Checkpoints requires -WorldDiff' }
 if ($WorldDiff -and ($Seconds -gt 180 -or $Seconds -lt 70)) { throw 'World diff runs need 70..180 seconds.' }
@@ -45,7 +46,7 @@ $harnessDir=Join-Path $sweepDir 'harness'
 New-Item -ItemType Directory -Path $harnessDir | Out-Null
 $toolHashes=[ordered]@{}
 foreach ($toolName in 'chapter-sweep.ps1','world-diff.py','world-sweep-score.py','coop-run.ps1') {
-    $toolPath=Join-Path $PSScriptRoot $toolName
+    $toolPath=if ($toolName -eq 'coop-run.ps1') { $runner } else { Join-Path $PSScriptRoot $toolName }
     Copy-Item -LiteralPath $toolPath -Destination $harnessDir
     $toolHashes[$toolName]=(Get-FileHash -LiteralPath $toolPath -Algorithm SHA256).Hash.ToLowerInvariant()
 }
@@ -128,6 +129,10 @@ try {
             # Do not add an -Entry start: SessionStart from the lobby must drive both loads.
             # Do not pass a final --name= with no value: the native flag parser rejects
             # the guest command line. The private setupdone config has no policy override.
+            $attempt=0
+            do {
+            $attempt++; $runOutput.Clear()
+            "runner attempt $attempt" | Add-Content -LiteralPath $record.runner_output -Encoding UTF8
             & $shellExe -NoProfile -ExecutionPolicy Bypass -File $runner -Name $record.name `
                 -Seconds $Seconds -Worktree $Worktree -Two -Launcher -Snap '120' -Env $envText -JoinEnv $joinText `
                 -HostExtra $hostArgs -Extra '--kk_launcher=true|--kk_toggle_aim=false' 2>&1 |
@@ -137,6 +142,15 @@ try {
                     Write-Host $line
                 }
             $record.exit_code = $LASTEXITCODE
+            $blocked=($runOutput -match '^USER:|^QUIET:|^CRAIG:|^BUSY:') -and -not ($runOutput -match '^(host|join|solo) PID ')
+            $retry=$blocked -and $RetryBlockedSeconds -gt 0 -and [DateTime]::UtcNow.AddSeconds($Seconds+30+$RetryBlockedSeconds) -lt $deadline
+            if ($retry) {
+                $record.status='waiting-runner'; Save-Manifest
+                Write-Host "Waiting $RetryBlockedSeconds seconds for the approved runner."
+                Start-Sleep -Seconds $RetryBlockedSeconds
+                $record.status='running'; Save-Manifest
+            }
+            } while ($retry)
             $record.status = 'completed'
             if ($record.exit_code -ne 0 -or -not ($runOutput -match '^RUN ') -or
                 -not ($runOutput -contains 'slots released') -or
@@ -153,7 +167,7 @@ try {
             $record.finished_utc = [DateTime]::UtcNow.ToString('o'); Save-Manifest
         }
         if ($WorldDiff -and $record.run) {
-            & $pythonExe -I (Join-Path $PSScriptRoot 'world-sweep-score.py') $record.world_evidence $record.run
+            & $pythonExe -I (Join-Path $harnessDir 'world-sweep-score.py') $record.world_evidence $record.run
             if ($LASTEXITCODE -eq 0) {
                 $scored=Get-Content -LiteralPath "$($record.world_evidence)\result.json" -Raw | ConvertFrom-Json
                 $record.world_status=$scored.status

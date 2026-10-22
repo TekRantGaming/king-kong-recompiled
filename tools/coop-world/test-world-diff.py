@@ -147,6 +147,15 @@ class Contract(unittest.TestCase):
             rows.append((str(i), d))
         self.assertEqual(w.stable_candidates(rows, 3, .01), [])
 
+    def test_checksum_traffic_does_not_prevent_native_quiet(self):
+        rows = []
+        for i in range(3):
+            d = copy.deepcopy(self.h)
+            d.update(sample=i+1, captured_utc=1000.+i*2, playing_seconds=25.+i*2)
+            d["shared"]["story"]["watermark"] += i*10
+            rows.append((str(i), d))
+        self.assertEqual(len(w.stable_candidates(rows, 3, .01)), 1)
+
     def retained_series(self, mutate=None):
         root = Path("F:/kk-native-coop/scratch") / ("c76-fixture-" + uuid.uuid4().hex)
         for role in ("host", "guest"):

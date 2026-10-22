@@ -124,6 +124,10 @@ def shared(d):
     Personal inventory/health/camera and body rig choices are intentionally local.
     """
     out = copy.deepcopy(d["shared"])
+    # Reliable delivery/checksum traffic advances this counter even when no
+    # native state changes. Pair boundaries must agree, but quiet native
+    # windows need not hold an unchanged transport watermark.
+    out["story"].pop("watermark", None)
     for row in out["enemies"]["rows"].values():
         for key in IGNORED_ENEMY:
             row.pop(key, None)
