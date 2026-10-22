@@ -72,7 +72,7 @@ def validate(d, role=None):
         if "source_dirty" not in evidence or not evidence["scenario"] or not evidence["fault_profile"]:
             errors.append("missing dirty/scenario/fault evidence")
         enemies, story = d["shared"]["enemies"], d["shared"]["story"]
-        if enemies["unbound"] or enemies["initializing"]:
+        if enemies["unbound"]:
             errors.append("incomplete native enemy census")
         if not isinstance(story["watermark"], int) or story["watermark"] < 0 or story["ready"] is not True:
             errors.append("story not load-ready/settled")
@@ -84,11 +84,16 @@ def validate(d, role=None):
             source, sequence, family = key.split(":")
             if not int(source, 16) or int(sequence) < 0 or not 1 <= int(family) <= 14 or row["family"] != int(family):
                 errors.append("invalid enemy id " + key)
+            initializing = row.get("phase") == "initializing"
             for field in ("health", "secondary_health"):
+                if initializing and row[field] is None:
+                    continue
                 if not isinstance(row[field], (int, float)) or isinstance(row[field], bool):
                     errors.append("unreadable native " + field)
-            if type(row["alive"]) is not bool or row["owner"] not in ("host", "guest") or row["owner_generation"] < 0:
+            if (type(row["alive"]) is not bool and not (initializing and row["alive"] is None)) or row["owner"] not in ("host", "guest", "unassigned") or row["owner_generation"] < 0:
                 errors.append("invalid enemy lifecycle/owner")
+        if sum(row.get("phase") == "initializing" for row in enemies["rows"].values()) != enemies["initializing"]:
+            errors.append("incomplete initializer census")
         for key, row in story["rows"].items():
             source, script = key.split(":")
             if not int(source, 16) or not int(script, 16):

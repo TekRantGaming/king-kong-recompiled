@@ -4,6 +4,7 @@ import importlib.util
 import json
 from pathlib import Path
 import unittest
+import uuid
 
 spec = importlib.util.spec_from_file_location("world_diff", Path(__file__).with_name("world-diff.py"))
 w = importlib.util.module_from_spec(spec)
@@ -111,6 +112,16 @@ class Contract(unittest.TestCase):
         self.g["shared"]["enemies"]["rows"][E]["health"] = None
         self.assertEqual(self.result()["status"], "INVALID")
 
+    def test_authored_initializer_has_explicit_not_applicable_health(self):
+        for d in (self.h, self.g):
+            d["shared"]["enemies"]["initializing"] = 1
+            d["shared"]["enemies"]["rows"][E].update(phase="initializing", health=None, secondary_health=None, alive=None, owner="unassigned")
+        self.assertEqual(self.result()["status"], "PARTIAL_EQUAL")
+
+    def test_missing_initializer_rows_invalid(self):
+        self.g["shared"]["enemies"]["initializing"] = 1
+        self.assertEqual(self.result()["status"], "INVALID")
+
     def test_nonfinite_invalid(self):
         self.g["shared"]["enemies"]["rows"][E]["health"] = float("nan")
         self.assertEqual(self.result()["status"], "INVALID")
@@ -130,6 +141,42 @@ class Contract(unittest.TestCase):
             d["shared"]["enemies"]["rows"][E]["health"] -= i
             rows.append((str(i), d))
         self.assertEqual(w.stable_candidates(rows, 3, .01), [])
+
+    def retained_series(self, mutate=None):
+        root = Path("F:/kk-native-coop/scratch") / ("c76-fixture-" + uuid.uuid4().hex)
+        for role in ("host", "guest"):
+            directory = root / role
+            directory.mkdir(parents=True)
+            for i in range(3):
+                d = fixture(role)
+                d.update(sample=i+1, captured_utc=1000.+i*2, playing_seconds=25.+i*2)
+                if role == "guest" and mutate:
+                    mutate(d)
+                (directory / f"world-g1-{i+1}.json").write_text(json.dumps(d), encoding="utf-8")
+        return root
+
+    def test_real_file_series_unchanged(self):
+        root = self.retained_series()
+        result = w.series(root / "host", root / "guest")
+        self.assertEqual(result["status"], "PARTIAL_EQUAL")
+        self.assertEqual(len(result["host_window"]), 3)
+
+    def test_real_file_series_planted_life(self):
+        root = self.retained_series(lambda d: d["shared"]["enemies"]["rows"][E].update(health=40.))
+        result = w.series(root / "host", root / "guest")
+        self.assertEqual(result["status"], "DIFF")
+        self.assertEqual([d["key"] for d in result["differences"]], [f"shared.enemies.rows.{E}.health"])
+
+    def test_real_file_missing_peer_invalid(self):
+        root = self.retained_series()
+        self.assertEqual(w.series(root / "host", root / "missing")["status"], "INVALID")
+
+    def test_duplicate_json_key_invalid(self):
+        root = self.retained_series()
+        path = root / "duplicate.json"
+        path.write_text('{"valid":true,"valid":false}', encoding="utf-8")
+        with self.assertRaisesRegex(ValueError, "duplicate JSON key valid"):
+            w.read(path)
 
 
 if __name__ == "__main__":
