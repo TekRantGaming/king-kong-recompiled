@@ -910,6 +910,9 @@ const bool g_steps_thread = [] {
 }  // namespace kk::play
 
 namespace kk {
+#if defined(KK_DEV_TOOLS)
+void DevBugCheckpoint(uint8_t* base, uint32_t self, int32_t before, int32_t after);  // dev_bug_trace.cpp
+#endif
 void CreatePauseStandIn(rex::ui::ImGuiDrawer* drawer) {
   if (play::StandInOn()) new play::PauseStandIn(drawer);
 }
@@ -921,8 +924,10 @@ REX_EXTERN(__imp__sub_826437D0);
 REX_HOOK_RAW(sub_826437D0) {
   const uint32_t g = kk::play::Load32(base, kk::play::kGamePtr);
   const int32_t before = g ? int32_t(kk::play::Load32(base, g + 0xC)) : -1;
+  const uint32_t self = kk::play::Load32(base, 0x82CCBF6C);  // the checkpoint object (for dev_bug_trace.cpp)
   __imp__sub_826437D0(ctx, base);
   const int32_t after = g ? int32_t(kk::play::Load32(base, g + 0xC)) : -1;
+  kk::DevBugCheckpoint(base, self, before, after);  // KK_DEV_BUG_TRACE=checkpoint
   static int calls = 0;
   if (before != after || ++calls <= 2)
     REXLOG_INFO("KK dev: checkpoint taken (ES_CheckPoint): start point {} -> {}", before, after);
