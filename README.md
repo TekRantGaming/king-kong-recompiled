@@ -2,6 +2,26 @@
 
 <img src="docs/images/banner.jpg" alt="Peter Jackson's King Kong PC Port" width="100%">
 
+## King Kong Remastered arrives Friday 30 October 2026, 18:00 UK time
+
+[<img src="https://img.shields.io/badge/Live%20countdown-kong.tekrantgaming.com-e8a33c?style=for-the-badge&labelColor=0d0b09" alt="Watch the live countdown" height="40">](https://kong.tekrantgaming.com/)
+&nbsp;
+[<img src="https://img.shields.io/badge/Try%20the%20latest%20beta-v2.0.0-5b7a8c?style=for-the-badge&labelColor=0d0b09" alt="Try the latest beta" height="40">](https://github.com/TekRantGaming/king-kong-recompiled-beta/releases/latest)
+
+</div>
+
+> I have been working extremely hard on this project, and the biggest update it has ever had is almost here.
+> I don't want to spoil too much, so jump into the [Discord](https://discord.gg/8eakYSvBZS) or try the
+> [latest beta](https://github.com/TekRantGaming/king-kong-recompiled-beta/releases/latest) to see where things are heading.
+>
+> One thing you should know: not every feature of King Kong Remastered is in the betas. There may be a surprise or two
+> waiting for King Kong fans on launch day. I can't wait to share more as we get closer.
+>
+> **TekRantGaming**
+
+<div align="center">
+
+
 ### Peter Jackson's King Kong on PC, running natively, with the launcher and options of a modern PC release.
 
 [<img src="https://img.shields.io/badge/Download-Windows%20x64-e8a33c?style=for-the-badge&logo=windows&logoColor=white&labelColor=0d0b09" alt="Download for Windows" height="44">](https://github.com/TekRantGaming/king-kong-recompiled/releases/latest)
