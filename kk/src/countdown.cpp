@@ -137,7 +137,7 @@ std::string CountdownText(int64_t left) {
   if (left < 0) left = 0;
   const int64_t days = left / 86400;
   const int h = int(left / 3600 % 24), m = int(left / 60 % 60), s = int(left % 60);
-  return "T- " + std::to_string(days) + "d " + TwoDigits(h) + ":" + TwoDigits(m) + ":" + TwoDigits(s);
+  return std::to_string(days) + "d " + TwoDigits(h) + ":" + TwoDigits(m) + ":" + TwoDigits(s);
 }
 
 std::string DateLine(int64_t utc) {

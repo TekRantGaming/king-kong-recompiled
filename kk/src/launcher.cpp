@@ -1417,7 +1417,7 @@ class Launcher final : public rex::ui::ImGuiDialog {
     const std::string date = countdown::DateLine(launch_utc_);
     const float date_fs = 15 * s;
     const std::string invite =
-        T("Join our Discord to follow development, get behind-the-scenes previews and have your say on new features.");
+        T("Join our Discord to follow development, get behind the scenes previews and have your say on new features.");
     const float inv_fs = 14.5f * s;
     const float bh = 38 * s, b_fs = 15.5f * s, b_pad = 18 * s, icon = 18 * s, b_gap = 10 * s;
 
