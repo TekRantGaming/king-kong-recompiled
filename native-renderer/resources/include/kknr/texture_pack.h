@@ -51,8 +51,6 @@ class TexturePackStream {
   // decoded bytes are dropped, and it can be requested again later.
   void Cancel(uint64_t hash, const HostTexturePlan& original);
   std::string Status() const;
-  // Task 354: reads queued or in flight and a folder change not yet read (0: idle).
-  size_t Pending() const;
   // Task 284: counts finished read batches (found or not) and folder changes. While it and the
   // caller's own state are unchanged, polling Request/Take for every waiting original finds nothing new.
   uint64_t Events() const;

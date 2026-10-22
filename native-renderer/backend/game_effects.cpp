@@ -152,7 +152,7 @@ void GameRenderer::UpdateUpscaler(UpscaleConfig want) {
   if (options_.table_capacities != kNativeTableCapacities) want.kind = UpscalerKind::kOff;
   // What only the start sets (the point, debugging, timers, rules) stays as it was.
   want.point = upscale_initial_.point;
-  want.debug = upscale_initial_.debug | (want.debug & 8u);  // task 354: native_upscaler_still (no jitter) is live
+  want.debug = upscale_initial_.debug;
   want.gpu_time = upscale_initial_.gpu_time;
   want.rules_file = upscale_initial_.rules_file;
   if (Ready(upscale_build_)) {
@@ -214,7 +214,6 @@ void GameRenderer::UpdateUpscaler(UpscaleConfig want) {
   u.config.reactive = want.reactive;
   u.config.mip_bias = want.mip_bias;
   u.config.mip_bias_auto = want.mip_bias_auto;
-  u.config.debug = (u.config.debug & ~8u) | (want.debug & 8u);  // task 354: jitter off/on (native_upscaler_still)
   const float bias = UpscaleMipBiasFor(u);
   if (bias != u.mip_bias) {
     u.mip_bias = bias;
@@ -425,11 +424,6 @@ void GameRenderer::PublishEffectTimes() {
   s.preparing = (gi_build_.valid() ? 1u : 0u) | (lighting_build_.valid() ? 2u : 0u) | (upscale_build_.valid() ? 4u : 0u) |
                 (shaders_->lighting_variants_pending() ? 8u : 0u) | (cel_build_.valid() ? 16u : 0u);
   if (ao_timer_ && AoSettingsFor(ao_settings_frame_).mode) s.ao_ms = ao_timer_->milliseconds();
-  // Task 354: the comparison capture waits for the texture pack to finish streaming in.
-  if (options_.texture_pack_folder != texture_pack_folder_) s.pack_pending = 1;
-  else if (texture_pack_stream_ && !texture_pack_folder_.empty())
-    s.pack_pending = uint32_t(texture_pack_stream_->Pending()) + (pack_upload_.replacement ? 1u : 0u);
-  s.pack_ready = stats_.pack_textures_ready;
   if (gi_timer_ && scene_gi_) s.gi_ms = gi_timer_->milliseconds();
   if (scene_lighting_) {
     auto ms = [&](int i) {

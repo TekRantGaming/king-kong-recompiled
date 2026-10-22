@@ -1,7 +1,6 @@
 #pragma once
 
 #include <cstddef>
-#include <cstdint>
 #include <functional>
 
 #include <rex/ui/overlay/debug_overlay.h>
@@ -12,8 +11,6 @@ namespace kk {
 rex::ui::FrameStats GetGuestFrameStats();
 // The longest guest frame of the last one-second window (ms; the graphics panel's readout).
 double GuestWorstFrameMs();
-// Guest frames presented since the start (each call of the title's swap routine). Any thread.
-uint64_t GuestFrameCount();
 // The last guest frame times in ms, oldest first (up to 256; the Performance metrics graph). Returns how many.
 size_t GuestFrameTimes(float* out, size_t max);
 

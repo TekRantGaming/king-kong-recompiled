@@ -335,7 +335,6 @@ struct TexturePackStream::Impl {
   std::condition_variable work;
   bool stop = false, configure = false;
   uint64_t generation = 0, ready_bytes = 0;
-  size_t in_flight = 0;  // task 354: the batch being read (Pending)
   std::atomic<uint64_t> events{0};  // task 284: TexturePackStream::Events
   std::string folder, status;
   std::deque<Request> requests;
@@ -362,7 +361,6 @@ struct TexturePackStream::Impl {
         if (stop) return;
         changed=configure; configure=false; root=folder; epoch=generation;
         while (!requests.empty() && batch.size() < 4) { batch.push_back(std::move(requests.front())); requests.pop_front(); }
-        in_flight = batch.size();
       }
       if (changed) {
         // The folder setting may name several packs separated by '|' (the player's own pack, then Kong
@@ -405,7 +403,6 @@ struct TexturePackStream::Impl {
       });
       {
         std::lock_guard lock(mutex);
-        in_flight = 0;
         if (epoch != generation) continue;
         for (size_t i=0;i<batch.size();++i) {
           auto& r=results[i];
@@ -463,12 +460,6 @@ void TexturePackStream::Cancel(uint64_t hash, const HostTexturePlan& original) {
     impl_->ready_bytes-=it->second->bytes.size(); impl_->ready.erase(it);
   }
   impl_->seen.erase(key);
-}
-size_t TexturePackStream::Pending() const {
-  std::lock_guard lock(impl_->mutex);
-  // Read images not taken yet are left out: one whose original went meanwhile is never taken (the renderer's
-  // next scan, at most 60 frames later, takes the others and its upload counts then).
-  return impl_->requests.size() + impl_->in_flight + (impl_->configure ? 1u : 0u);
 }
 std::string TexturePackStream::Status() const { std::lock_guard lock(impl_->mutex); return impl_->status; }
 uint64_t TexturePackStream::Events() const { return impl_->events.load(std::memory_order_acquire); }

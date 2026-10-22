@@ -426,7 +426,6 @@ GameSettings ReadGameSettings(bool vulkan) {
     if (!upscale.mip_bias_auto) upscale.mip_bias = float(std::clamp(bias_value, -4.0, 4.0));
     upscale.reactive = float(std::clamp(number("native_upscaler_reactive", 1.0), 0.0, 1.0));
     s.upscale = upscale;
-    if (get("native_upscaler_still") == "true") s.upscale.debug |= 8u;  // task 354: no jitter (live)
     const std::string aa = get("swap_post_effect");
     s.fxaa = aa == "smaa" ? 3u : (aa == "fxaa" ? 1u : (aa == "fxaa_extreme" ? 2u : 0u));
     s.effect_buffers = get("native_effect_buffers") != "false";

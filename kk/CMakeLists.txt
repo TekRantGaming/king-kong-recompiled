@@ -105,7 +105,6 @@ set(KINGKONG_SOURCES
     src/pause_hooks.cpp
     src/pause_menu.cpp
     src/photo_mode.cpp
-    src/compare_capture.cpp
 )
 # The game side of the launcher's Play menu and the pause menu (play_session.h) is play_session.cpp;
 # until it is there, a stand-in with made-up saves lets the UI side build (play_session_stub.cpp).
@@ -265,11 +264,6 @@ if(KK_DEV_TOOLS)
     enable_testing()
     add_test(NAME free-camera COMMAND kk-freecam-tests)
     # Task 208: photo mode's settings, camera limits, controller, hidden draws and grade colours; its text.
-    # Task 354: the comparison capture's shot list, looks, 720p mode and settle measure.
-    add_executable(kk-compare-capture-tests tests/compare_capture_tests.cpp)
-    target_include_directories(kk-compare-capture-tests PRIVATE src)
-    target_compile_features(kk-compare-capture-tests PRIVATE cxx_std_20)
-    add_test(NAME compare-capture COMMAND kk-compare-capture-tests)
     add_executable(kk-photo-mode-tests tests/photo_mode_tests.cpp ../native-renderer/backend/photo_config.cpp)
     target_include_directories(kk-photo-mode-tests PRIVATE src ../native-renderer)
     target_compile_features(kk-photo-mode-tests PRIVATE cxx_std_20)

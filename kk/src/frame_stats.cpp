@@ -196,8 +196,6 @@ size_t GuestFrameTimes(float* out, size_t max) {
   return n;
 }
 
-uint64_t GuestFrameCount() { return g_frames.load(); }
-
 double GuestWorstFrameMs() {
   std::lock_guard lock(g_mutex);
   return g_worst_ms;

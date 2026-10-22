@@ -25,9 +25,6 @@ bool Available();
 void Enter();
 // Back to the pause menu, or (resume_game) straight back to the game.
 void Exit(bool resume_game);
-// Task 354 (compare_capture.cpp): while quiet, photo mode keeps the game frozen and the camera where it started
-// but draws no panel and reads no input. Any thread.
-void SetQuiet(bool quiet);
 // freecam.cpp, on each pad poll of the first player while photo mode is on: the controller's buttons for
 // the panel (the sticks and triggers fly the camera).
 void OnPad(uint16_t buttons, int16_t lx, int16_t ly, int16_t rx, int16_t ry, uint8_t lt, uint8_t rt);
