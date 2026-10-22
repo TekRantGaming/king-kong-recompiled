@@ -23,7 +23,7 @@ namespace kk {
 
 #if defined(_WIN32)
 bool HttpGet(const std::string& url, std::vector<uint8_t>& out, std::atomic<uint64_t>* bytes,
-             std::atomic<uint64_t>* total) {
+             std::atomic<uint64_t>* total, int timeout_ms) {
   URL_COMPONENTSW parts{};
   parts.dwStructSize = sizeof(parts);
   wchar_t host[256], path[2048];
@@ -37,6 +37,7 @@ bool HttpGet(const std::string& url, std::vector<uint8_t>& out, std::atomic<uint
   HINTERNET session = WinHttpOpen(L"KingKongRecomp/" KK_VERSION_W, WINHTTP_ACCESS_TYPE_AUTOMATIC_PROXY,
                                   WINHTTP_NO_PROXY_NAME, WINHTTP_NO_PROXY_BYPASS, 0);
   if (!session) return false;
+  if (timeout_ms > 0) WinHttpSetTimeouts(session, timeout_ms, timeout_ms, timeout_ms, timeout_ms);
   bool ok = false;
   if (HINTERNET conn = WinHttpConnect(session, host, parts.nPort, 0)) {
     if (HINTERNET req = WinHttpOpenRequest(conn, L"GET", path, nullptr, WINHTTP_NO_REFERER,
@@ -121,7 +122,7 @@ bool HttpPost(const std::string& url, const std::string& json, std::vector<uint8
 #else
 // Linux: through curl (on SteamOS, Bazzite and the usual desktop distributions).
 bool HttpGet(const std::string& url, std::vector<uint8_t>& out, std::atomic<uint64_t>* bytes,
-             std::atomic<uint64_t>* total) {
+             std::atomic<uint64_t>* total, int timeout_ms) {
   const std::string agent = "KingKongRecomp/" KK_VERSION;
   if (total) {
     // The size, from the last response's headers (GitHub downloads redirect).
@@ -137,6 +138,8 @@ bool HttpGet(const std::string& url, std::vector<uint8_t>& out, std::atomic<uint
       *total += size;
     }
   }
+  if (timeout_ms > 0)
+    return RunCapture({"curl", "-sSfL", "-m", std::to_string((timeout_ms + 999) / 1000), "-A", agent, url}, out, bytes);
   return RunCapture({"curl", "-sSfL", "-A", agent, url}, out, bytes);
 }
 

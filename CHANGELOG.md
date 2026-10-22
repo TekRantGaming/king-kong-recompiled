@@ -3,6 +3,19 @@
 Every release of the King Kong PC port, newest first. The launcher shows this on its About page, and a
 version's notes the first time you start it.
 
+## v1.9.12 (22 October 2026)
+
+### What's new
+- **A countdown to the King Kong Remastered update.** The Home screen counts down to the King Kong Remastered update (v2.0.0), out on Friday 30 October at 18:00 UK time, with the time on your own clock too if it differs. When it reaches zero it says the update is out, with a **Check for updates** button to install it.
+- **Join our Discord.** The same card has a **Join the Discord** button: follow development, get behind-the-scenes previews and have your say on new features. Press right from the menu to reach it with a controller or the keyboard.
+- **Achievement pop-ups scale with the screen.** They were tiny in large windows and at high resolutions; they now grow with the screen (the same size as before at 1080p).
+- **Ready for the jump to v2.0.0.** The updater now also installs the new folders v2.0.0 brings (the launcher's videos and the built-in mods), so updating from the launcher gives you the complete new version.
+
+### Full changelog
+- `countdown.cpp`: the launch time and title come from the website's `launch.json` (fetched in the background with a short timeout, kept in the settings as `kk_launch_utc` and `kk_launch_title` for offline starts); without it, the built-in 30 October 2026 18:00 UTC. In all five launcher languages.
+- `update.cpp`: an update also writes the `launcher` and `mods-builtin` folders.
+- `toast.cpp`: achievement pop-ups scale with the screen height (1x at 1080p).
+
 ## v1.9.11 (11 October 2026)
 
 ### What's new

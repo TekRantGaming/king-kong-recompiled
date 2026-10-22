@@ -50,6 +50,7 @@ set(KINGKONG_SOURCES
     src/shader_pack.cpp
     src/http.cpp
     src/update.cpp
+    src/countdown.cpp
 )
 
 # Developer-only test aids (never in release builds): -DKK_DEV_TOOLS=ON.
@@ -106,7 +107,7 @@ endif()
 # The port's version: shown in the launcher and compared with GitHub releases by the updater.
 # (-DKK_VERSION=x.y.z overrides it, to test the updater with an "older" build.)
 if(NOT DEFINED KK_VERSION)
-    set(KK_VERSION "1.9.11")
+    set(KK_VERSION "1.9.12")
 endif()
 target_compile_definitions(king_kong PRIVATE KK_VERSION="${KK_VERSION}" KK_VERSION_W=L"${KK_VERSION}")
 

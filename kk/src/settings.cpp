@@ -33,6 +33,10 @@ REXCVAR_DEFINE_INT32(kk_settings_version, 0, "KK",
                      "Internal: which defaults the settings file was written with (see MigrateSettings)");
 REXCVAR_DEFINE_STRING(kk_last_version, "", "KK",
                       "Last port version the launcher has shown (it shows What's new once after an update)");
+REXCVAR_DEFINE_STRING(kk_launch_utc, "", "KK",
+                      "Internal: the Remastered update's launch time from the website (the Home countdown)");
+REXCVAR_DEFINE_STRING(kk_launch_title, "", "KK",
+                      "Internal: the Home countdown's title from the website (empty: the built-in one)");
 REXCVAR_DEFINE_INT32(kk_frame_rate, 30, "KK/Video",
                      "Frame-rate cap: 30, 60, 90, 120, 144, 165, 240, or 0 for unlimited");
 REXCVAR_DEFINE_STRING(kk_render_quality, "quality", "KK/Video",

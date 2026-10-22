@@ -30,7 +30,18 @@ namespace {
 namespace fs = std::filesystem;
 
 // The folders an update may write to, relative to the program (never game/).
-const char* const kUpdatedDirs[] = {"", "glyphs", "launcher_art"};
+// launcher and mods-builtin: what v2.0.0 adds (launcherideo, the built-in mods).
+const char* const kUpdatedDirs[] = {"", "glyphs", "launcher_art", "launcher", "mods-builtin"};
+
+#if defined(KK_DEV_TOOLS)
+// Developer aid: KK_DEV_UPDATE_ZIP=<a release zip on this PC> is offered as the
+// newest version (KK_DEV_UPDATE_VERSION, default 2.0.0) and installed from that
+// file instead of a download, to test updating to a build that isn't released.
+const char* DevUpdateZip() {
+  const char* v = std::getenv("KK_DEV_UPDATE_ZIP");
+  return v && *v ? v : nullptr;
+}
+#endif
 
 // The string value of the first "key": "value" in a JSON text (no escapes needed for ours).
 std::string JsonString(const std::string& json, const std::string& key, size_t from = 0, size_t* at = nullptr) {
@@ -106,13 +117,24 @@ bool IsNewerVersion(const std::string& a, const std::string& b) {
 void CheckForUpdate(UpdateStatus& status, const std::string& channel, bool switching) {
   status.busy = true;
   UpdateInfo info;
+#if defined(KK_DEV_TOOLS)
+  if (const char* zip = DevUpdateZip()) {
+    const char* v = std::getenv("KK_DEV_UPDATE_VERSION");
+    info.version = v && *v ? v : "2.0.0";
+    info.zip_url = zip;
+  } else
+#endif
   if (!LatestRelease(kReleasesApi, info)) {
     status.message = "Could not check for updates.";
     status.failed = true;
     status.busy = false;
     return;
   }
-  if (channel == "beta") {
+  if (channel == "beta"
+#if defined(KK_DEV_TOOLS)
+      && !DevUpdateZip()
+#endif
+  ) {
     // No beta repo or release yet: beta players get the stable build.
     UpdateInfo beta;
     if (LatestRelease(kBetaReleasesApi, beta) && IsNewerVersion(beta.version, info.version)) info = beta;
@@ -150,11 +172,19 @@ void InstallUpdate(const UpdateInfo& info, UpdateStatus& status) {
   fs::remove_all(work, ec);
   fs::create_directories(work / "files", ec);
 
-  std::vector<uint8_t> zip;
-  if (!HttpGet(info.zip_url, zip, &status.bytes, &status.total))
-    return fail("The download failed. Check your internet connection and try again.");
   const fs::path zip_path = work / "update.zip";
-  std::ofstream(zip_path, std::ios::binary).write(reinterpret_cast<const char*>(zip.data()), std::streamsize(zip.size()));
+#if defined(KK_DEV_TOOLS)
+  if (DevUpdateZip()) {
+    if (!fs::copy_file(fs::path(info.zip_url), zip_path, fs::copy_options::overwrite_existing, ec))
+      return fail("KK_DEV_UPDATE_ZIP: could not read " + info.zip_url);
+  } else
+#endif
+  {
+    std::vector<uint8_t> zip;
+    if (!HttpGet(info.zip_url, zip, &status.bytes, &status.total))
+      return fail("The download failed. Check your internet connection and try again.");
+    std::ofstream(zip_path, std::ios::binary).write(reinterpret_cast<const char*>(zip.data()), std::streamsize(zip.size()));
+  }
 
   // Windows 10 and 11 include tar, which unpacks zip files.
   wchar_t system_dir[MAX_PATH];
@@ -253,7 +283,7 @@ void CleanUpAfterUpdate() {
   };
   for (auto& e : fs::directory_iterator(exe_dir, ec))  // the program's own folder, not game/
     if (e.is_regular_file()) clean(e.path());
-  for (const char* d : {"glyphs", "launcher_art"})
+  for (const char* d : {"glyphs", "launcher_art", "launcher", "mods-builtin"})
     for (auto& e : fs::recursive_directory_iterator(exe_dir / d, ec))
       if (e.is_regular_file()) clean(e.path());
 }
