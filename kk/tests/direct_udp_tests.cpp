@@ -193,6 +193,13 @@ class LossyLoopback {
     const std::array<uint8_t,3> bad{1,2,3};
     for (int i=0;i<128;++i) Send(bad,host_);
   }
+  void ReplayStaleNonce(bool source) {
+    Check(!captured_host_.empty(),"capture authenticated host frame before nonce replay");
+    auto stale=captured_host_;
+    stale[source ? 12 : 20]^=0x80; // Same pinned socket/address, wrong source or target session nonce.
+    Send(stale,guest_);
+  }
+  void ReplayCurrentNonce() { Send(captured_host_,guest_); }
   void Poll() {
     if (!held_.empty()) { Send(held_,held_target_); held_.clear(); }
     for (int i=0;i<128;++i) {
@@ -214,6 +221,7 @@ class LossyLoopback {
       }
       if (kind==2 && !dropped_ack_) { dropped_ack_=true; continue; }
       const std::span<const uint8_t> wire(bytes.data(),size_t(n));
+      if (from_host && kind==1) captured_host_.assign(wire.begin(),wire.end());
       if (kind==1 && ++reliable_%4==0) { held_.assign(wire.begin(),wire.end()); held_target_=target; }
       else Send(wire,target);
       if (kind==1 && reliable_%7==0) Send(wire,target);
@@ -232,6 +240,7 @@ class LossyLoopback {
   bool dropped_host_=false,dropped_guest_=false,dropped_ack_=false;
   int reliable_=0;
   std::vector<uint8_t> held_;
+  std::vector<uint8_t> captured_host_;
 };
 void ReliabilityAndFlood() {
   auto a=Host(); LossyLoopback proxy(a->LocalPort());
@@ -260,6 +269,18 @@ void ReliabilityAndFlood() {
     }
   }
   Check(count==40,"all reliable samples delivered");
+  // Drain both directions first so only our injected datagrams can affect this
+  // counter. Reliable duplicates normally increment received; a nonce rejection
+  // must happen before that counter and before any application delivery.
+  for(int i=0;i<100;++i,now+=.01) { proxy.Poll(); a->Poll(now); b->Poll(now); }
+  const auto before=b->Stats().received;
+  proxy.ReplayStaleNonce(true); proxy.ReplayStaleNonce(false);
+  for(int i=0;i<20;++i,now+=.01) { b->Poll(now); }
+  std::vector<uint8_t> stale;
+  Check(b->Stats().received==before && !b->Receive(stale),"stale source and target nonces rejected before ACK or application");
+  proxy.ReplayCurrentNonce();
+  for(int i=0;i<20;++i,now+=.01) b->Poll(now);
+  Check(b->Stats().received==before+1 && !b->Receive(stale),"same-address positive control passes nonce guard then duplicate filter");
 }
 }
 void SimulationIntegration(double delay=150,double jitter=30,double loss=3) {

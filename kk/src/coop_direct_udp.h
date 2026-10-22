@@ -1,15 +1,12 @@
 #pragma once
 #include "coop_transport.h"
+#include "coop_udp_faults.h"
 #include "steam_lobby.h"
 #include <string>
 #include <string_view>
 
 namespace kk::coop {
 // Explicit test options. Shipping UI never populates these; no wire changes.
-struct UdpSimulation {
-  double delay_ms = 0, jitter_ms = 0, loss_percent = 0;
-  uint32_t seed = 68;
-};
 struct DirectUdpOptions {
   bool host = false;
   // Numeric IPv4/IPv6. Host: "::" is dual stack, "127.0.0.1"/"::1" are private tests.
@@ -38,6 +35,11 @@ class DirectUdpTransport : public ICoopTransport {
   virtual bool PeerReady() const = 0;
   virtual bool CodeRejected() const = 0;
   virtual uint16_t LocalPort() const = 0;
+#if defined(KK_DEV_TOOLS)
+  virtual UdpFaultStats SimulationStats() const = 0;
+  // Test-thread-only, just like Poll. Schedules restart at the next Poll.
+  virtual void SetSimulation(UdpSimulation simulation) = 0;
+#endif
 };
 std::unique_ptr<DirectUdpTransport> CreateDirectUdp(DirectUdpOptions options);
 #if defined(KK_DEV_TOOLS)

@@ -1,5 +1,6 @@
 #pragma once
 #include "coop_enemies.h"
+#include "coop_mut.h"
 #include <deque>
 #include <map>
 
@@ -129,7 +130,7 @@ class Checksums {
     if (e.phase!=StoryPhase::Checksum || e.generation!=expected.generation || e.level!=expected.level ||
         e.source!=expected.source || e.script!=expected.script) return Result::Ignored;
     pending_.erase(it);
-    return e.run==expected.run && e.record==expected.record ? Result::Match : Result::Mismatch;
+    return COOP_MUT_IF("digest_compare") || (e.run==expected.run && e.record==expected.record) ? Result::Match : Result::Mismatch;
   }
   void Expire(double now) {
     for (auto it=pending_.begin();it!=pending_.end();)
@@ -233,7 +234,11 @@ class Ordered {
   }
   bool Push(const StoryEvent& e, double now) {
     if (!ValidStoryEvent(e) || !std::isfinite(now) || now<0) return false;
-    if (e.generation!=generation_ || e.level!=level_ || e.number<next_) return false;
+    if (!COOP_MUT_IF("story_world") && (e.generation!=generation_ || e.level!=level_)) return false;
+    if (e.number<next_) {
+      if (!COOP_MUT_IF("story_duplicate")) return false;
+      next_=e.number; // twin reopens a previously applied event
+    }
     if (behind_) return false;
     if (const auto it=pending_.find(e.number); it!=pending_.end()) {
       if (it->second.event!=e) Fail(Failure::Conflict,e);

@@ -130,7 +130,7 @@ void CoopSession::Receive(const Message& m, double now) {
     if (m.epoch != epoch_ || !epoch_) return;
     rejection_ = m.reason; Transition(SessionState::Ended); return;
   } else {
-    if (!epoch_ || m.epoch != epoch_ || m.protocol != config_.compatibility.protocol) {
+    if (!epoch_ || (!COOP_MUT_IF("session_epoch") && m.epoch != epoch_) || m.protocol != config_.compatibility.protocol) {
       if (camera) reject_camera("wrong epoch/protocol");
       return;
     }
