@@ -17,7 +17,7 @@ namespace kk::countdown {
 constexpr const char* kLaunchJsonUrl = "https://kong.tekrantgaming.com/launch.json";
 constexpr const char* kBuiltInUtc = "2026-10-30T18:00:00Z";
 constexpr const char* kBuiltInTitle = "King Kong Remastered update";
-constexpr const char* kInviteUrl = "https://discord.gg/ZUeuCRncb";
+constexpr const char* kInviteUrl = "https://discord.gg/8eakYSvBZS";
 
 // "2026-10-30T18:00:00Z" (seconds optional; "Z" or "+00:00") to seconds since
 // 1970 UTC, or nothing if it isn't one (or is far outside the launch's years).

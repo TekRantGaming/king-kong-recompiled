@@ -72,7 +72,7 @@ namespace color = ui::color;
 
 constexpr uint32_t kTitleId = 0x555307D3;
 constexpr const char* kProjectUrl = "https://github.com/TekRantGaming/king-kong-recompiled";
-constexpr const char* kDiscordUrl = "https://discord.gg/PET2xU5FJq";  // permanent (expires_at null)
+constexpr const char* kDiscordUrl = "https://discord.gg/8eakYSvBZS";  // owner, 22 Oct 2026
 #include "discord_icon.inc"
 #include "steam_icon.inc"
 constexpr const char* kOnlineAbout =
