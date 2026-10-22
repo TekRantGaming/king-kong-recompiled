@@ -9,6 +9,7 @@
 #include "play_internal.h"
 #include "photo_mode.h"
 #include "coop_partner_body.h"
+#include "coop_world_snapshot.h"
 #if defined(KK_DEV_TOOLS)
 #include "coop_stimulus_debug.h"
 #endif
@@ -2054,6 +2055,41 @@ void EnemyAfterLoad(const uint8_t* b, uint32_t game) {
   s.capture = ValidEnemyWorld(s.identity);
 }
 EnemyWorld EnemyCurrentWorld() { return Get().identity; }
+#if defined(KK_DEV_TOOLS)
+world::Json world::EnemySnapshot(const uint8_t* b,world::Capture& capture) {
+  auto& s=Get(); std::map<std::string,Json> rows;
+  if (!Environment(b,s.world)) capture.Error("enemy-native-world-unavailable");
+  std::set<uint32_t> bound;
+  for (const auto& [actor,binding]:s.bindings) {
+    Binding observed; EnemyState e;
+    if (!ValidBinding(b,binding) || !Read(b,actor,observed,e)) {
+      // A retired native binding has no readable life. Do not substitute the
+      // authority's death flag or last outgoing/incoming health.
+      continue;
+    }
+    bound.insert(actor);
+    const auto id=Canonical(binding.id); const auto* a=AuthorityFor(binding.id);
+    const auto key=Hex(id.source)+":"+std::to_string(id.sequence)+":"+std::to_string(unsigned(id.family));
+    if (!id.source || !a) { capture.Error("enemy-identity-or-owner-unresolved:"+key); continue; }
+    const auto cell=LifeCell(b,observed);
+    const float native_life=StateLife(id.family) ? e.life : cell ? LoadF(b,cell) : NAN;
+    if (!std::isfinite(native_life)) capture.Error("enemy-native-health-unreadable:"+key);
+    const auto row=Json::Object({{"family",unsigned(id.family)},{"health",native_life},
+        {"secondary_health",e.secondary_life},{"alive",e.life>0},{"owner",a->owner==EnemyOwner::Host ? "host":"guest"},
+        {"owner_generation",a->generation},{"native_state",e.state},
+        {"scheduled",Member(b,s.world,actor)},{"position",Json::Array({e.x,e.y,e.z})}});
+    if (!rows.emplace(key,row).second) capture.Error("enemy-id-collision:"+key);
+  }
+  unsigned unbound=0,initializing=0;
+  for (const auto& e:DevEnemies(b,s.world,{})) {
+    if (e.initializing) ++initializing;
+    else if (!bound.contains(e.actor)) ++unbound;
+  }
+  if (unbound) capture.Error("unbound-native-enemies:"+std::to_string(unbound));
+  if (initializing) capture.Error("initializing-native-enemies:"+std::to_string(initializing));
+  return Json::Object({{"rows",Json::Object(rows)},{"unbound",unbound},{"initializing",initializing}});
+}
+#endif
 void EnemyGuardRecoveryWorld(EnemyWorld world) {
   guard_world.reset();
   const auto v=SessionFlowSnapshot(); const auto link=EnemyLinkSnapshot();

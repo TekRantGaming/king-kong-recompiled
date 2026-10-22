@@ -68,6 +68,7 @@
 #endif
 
 #include "art.h"
+#include "coop_world_snapshot.h"
 #include "dev_launcher_chain.h"
 #include "dev_movie_input.h"
 #include "freecam.h"
@@ -220,6 +221,7 @@ void StoreBE(uint8_t* p, T v) {
 bool WanderPad(uint8_t* state, int64_t now) {
   std::memset(state, 0, 16);
   StoreBE<uint32_t>(state, uint32_t(now / 50));
+  if (kk::coop::world::RouteStopped()) return true;
   // Act like a player: jump, then cycle through the other buttons (pick up,
   // throw, reload and so on), aim with the left trigger and fire with the
   // right one, so combat effects get drawn too.

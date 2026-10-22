@@ -9,6 +9,7 @@
 // KK_DEV_PUPPET_SPAWN_OFFSET=x,y,z uses source+offset, permits solo diagnosis,
 // and gives drive mode a stationary target at that creation point.
 #include "coop_partner_body.h"
+#include "coop_world_snapshot.h"
 #if defined(KK_DEV_TOOLS)
 #include "art.h"
 #include "dev_puppet_mesh.h"
@@ -1489,6 +1490,18 @@ void CensusAndSelect(PPCContext& ctx, uint8_t* b, uint32_t w) {
 }
 }  // namespace
 
+#if defined(KK_DEV_TOOLS)
+coop::world::Json coop::world::BodySnapshot(const uint8_t* b,coop::world::Capture& capture) {
+  const auto& s=Get(); Rig rig;
+  const bool readable=s.driving && s.Environment(b,s.world) && ReadRig(b,s.selected.actor,rig) && Same(rig,s.selected);
+  if (!readable) return Json::Object({{"available",false},{"reason","no-readable-driven-native-body"}});
+  const auto matrix=Load32(b,rig.actor+12);
+  if (!Range(matrix,64)) { capture.Error("partner-body-matrix-unreadable"); return {}; }
+  return Json::Object({{"available",true},{"copy",s.selected_copy},
+      {"represents",EnemyLinkSnapshot().role==coop::Role::Host ? "guest":"host"},
+      {"position",Json::Array({LoadF(b,matrix+48),LoadF(b,matrix+52),LoadF(b,matrix+56)})}});
+}
+#endif
 void PartnerBodyGameFrame(uint8_t* b) {
   if (!Opt().on || !Opt().partner) return;
   auto& s = Get();

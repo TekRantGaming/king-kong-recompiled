@@ -27,6 +27,7 @@ set(KINGKONG_SOURCES
     src/coop_flow_game.cpp
     src/coop_story_game.cpp
     src/coop_desync_game.cpp
+    src/coop_world_snapshot.cpp
     src/coop_runtime.cpp
     src/coop_partner_body.cpp
     src/coop_nametag.cpp
@@ -264,6 +265,10 @@ if(WIN32)
 endif()
 if(KK_DEV_TOOLS)
     target_compile_definitions(king_kong PRIVATE KK_DEV_TOOLS=1)
+    execute_process(COMMAND git rev-parse HEAD WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}"
+                    OUTPUT_VARIABLE KK_WORLD_SOURCE_COMMIT OUTPUT_STRIP_TRAILING_WHITESPACE)
+    configure_file(src/coop_world_build.h.in "${CMAKE_CURRENT_BINARY_DIR}/coop_world_build.h" @ONLY)
+    target_include_directories(king_kong PRIVATE "${CMAKE_CURRENT_BINARY_DIR}")
 endif()
 # Only settings.cpp needs the default; other sources use the resolved cvar.
 set_property(SOURCE src/settings.cpp APPEND PROPERTY COMPILE_DEFINITIONS
