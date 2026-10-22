@@ -99,6 +99,8 @@ try {
     foreach ($key in $previousDevEnv.Keys) { [Environment]::SetEnvironmentVariable($key, $null, 'Process') }
     for ($recordIndex=0; $recordIndex -lt $records.Count -and $recordIndex -lt $MaxRuns; $recordIndex++) {
         $record=$records[$recordIndex]
+        if (Test-Path -LiteralPath (Join-Path $sweepDir 'stop-after-current')) { $record.status='blocked-task-stop'; Save-Manifest; break }
+        if ($WorldDiff -and (Get-PSDrive -Name F).Free -lt 8GB) { $record.status='blocked-disk-space'; Save-Manifest; break }
         if ([DateTime]::UtcNow.AddSeconds($Seconds + 30) -gt $deadline) { $record.status='blocked-deadline'; Save-Manifest; break }
         $record.status = 'running'; $record.started_utc = [DateTime]::UtcNow.ToString('o'); Save-Manifest
         $runOutput = New-Object 'System.Collections.Generic.List[string]'
