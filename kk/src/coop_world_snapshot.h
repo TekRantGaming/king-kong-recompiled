@@ -59,5 +59,6 @@ Json StorySnapshot(const uint8_t* base,Capture& capture);
 Json BodySnapshot(const uint8_t* base,Capture& capture);
 void Frame(uint8_t* base);
 bool RouteStopped();
+uint32_t ConfirmedShots();
 }
 #endif

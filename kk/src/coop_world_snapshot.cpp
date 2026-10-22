@@ -121,7 +121,7 @@ Json Snapshot(uint8_t* b,double now,const FlowView& v,const EnemyLink& link) {
       {"shared",Json::Object({{"enemies",enemies},{"story",story}})},
       {"native_checkpoint_ids",checkpoints},
       {"local",Json::Object({{"player",pose.pose ? Json::Object({{"id",v.host ? "host":"guest"},
-          {"position",Position(*pose.pose)},{"weapon",pose.pose->weapon},{"fire",pose.pose->fire},
+          {"position",Position(*pose.pose)},{"weapon",pose.pose->weapon},{"fire",ConfirmedShots()},
           {"condition",unsigned(LocalPlayerCondition(b).value_or(PlayerCondition::Dead))}}):Json()},
           {"partner_body",body},{"pickups_policy","personal"}})}});
 }

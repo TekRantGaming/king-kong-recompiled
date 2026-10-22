@@ -847,6 +847,9 @@ void PartnerAnimationShot(uint8_t weapon) {
   if (weapon < 1 || weapon > 4) return;
   ++animation_fire; animation_weapon = weapon;
 }
+#if defined(KK_DEV_TOOLS)
+uint32_t world::ConfirmedShots() { return animation_fire; }
+#endif
 void SetPartnerBodyDriven(bool driven) {
   partner_body_driven.store(driven);
   if (!driven) { std::lock_guard lock(head_mutex); head_anchor = {}; }
