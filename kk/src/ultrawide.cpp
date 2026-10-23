@@ -1,12 +1,14 @@
-// Experimental ultrawide (task 223, the built-in Ultrawide mod; DECISIONS 18 Oct): hor+ for the game's 3D views.
+// Ultrawide (task 223; built into the game and always on since task 360, Beta 17, DECISIONS 23 Oct): hor+ for
+// the game's 3D views. KK_ULTRAWIDE=0 (developers only) switches it off (settings.cpp UltrawideSwitchedOff).
 //
-// With kk_aspect wider than 16:9 the renderer draws a wider picture (settings.cpp ApplyRenderPreset) while the
+// On a screen or window wider than 16:9 the renderer draws a wider picture (settings.cpp ApplyRenderPreset) while the
 // game keeps drawing for 1280x720, so each 3D view is made UltrawideFactor() times wider here: the same height,
 // more on the sides, nothing stretched. The projection callback (GDI +32, sub_8278AB00; used by the scene views
 // from sub_82872DB8, the first-person weapon and photo mode) builds a perspective matrix at 0x83090510 and pushes
 // it on the projection stack (sub_820E0D08, which copies the 16 floats). That push is widened (column 0 divided,
 // ultrawide_logic.h WidenProjection) and the scratch matrix put back afterwards, so the game never sees a change.
-// Orthographic projections (HUD, menus, full-screen passes) and the menus' 3D pieces stay as they are.
+// Orthographic projections (HUD, menus, full-screen passes) stay as they are. Task 360: the menus' 3D pieces get
+// hor+ too and the menus' 2D (the HUD pass) goes in the 16:9 box, so the two still line up, nothing stretched.
 //
 // Edge culling (task 311): the game skips objects outside a frustum it builds from the view's angle, which
 // stayed 16:9, so things at the new edges were left out. fov.cpp now widens the scene views' angle by the same
@@ -139,7 +141,7 @@ void SetViewWidened(float factor) { g_view_widened = factor; }
 REX_EXTERN(__imp__sub_82796C10);
 REX_HOOK_RAW(sub_82796C10) {
   const uint32_t pass = ctx.r4.u32;
-  const bool box = kk::UltrawideFactor() != 1.0f && !kk::fov::InMenus() && (pass == kHudPass || PassDiag());
+  const bool box = kk::UltrawideFactor() != 1.0f && (pass == kHudPass || PassDiag());
   const bool hide = pass == kHudPass && HideHudPass(base);
   // Task 330: the live menu scene behind the launcher: the game's menus (the HUD pass: its logo, texts, pages,
   // loading text) are left out whole.
@@ -171,7 +173,7 @@ REX_HOOK_RAW(sub_8278AB00) {
 REX_EXTERN(__imp__sub_820E0D08);
 REX_HOOK_RAW(sub_820E0D08) {
   const float factor = kk::UltrawideFactor();
-  if (factor == 1.0f || g_in_projection == 0 || ctx.r4.u32 != kProjectionScratch || kk::fov::InMenus()) {
+  if (factor == 1.0f || g_in_projection == 0 || ctx.r4.u32 != kProjectionScratch) {
     __imp__sub_820E0D08(ctx, base);
     return;
   }

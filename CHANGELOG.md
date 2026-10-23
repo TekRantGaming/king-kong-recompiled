@@ -3,6 +3,11 @@
 Every release of the King Kong PC port, newest first. The launcher shows this on its About page, and a
 version's notes the first time you start it.
 
+## v2.0.0-beta.17 (unreleased)
+
+### What's new
+- **Ultrawide is built in**: on a 21:9 or 32:9 screen or window the game fills the whole width and shows more on the left and right, with nothing stretched. The HUD, subtitles, menus, pause and photo mode stay in their places in the middle. Nothing changes on a 16:9 screen. The Ultrawide mod is gone: there is nothing to switch on.
+
 ## v2.0.0-beta.16 (22 October 2026)
 
 ### What's new

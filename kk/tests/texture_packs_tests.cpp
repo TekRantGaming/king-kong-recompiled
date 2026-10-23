@@ -154,8 +154,7 @@ static void DownloadTable() {
 // with ranged reads (ReadZipPicture), and the card pictures made from a still (workshop_art.h).
 static void ContentFacts() {
   using kk::workshop_content::FactsFor;
-  for (const char* key : {"original", "hd", "uhd", "comic", "tropical", "cartoon", "folder", "builtin:cel-shading",
-                          "builtin:ultrawide"}) {
+  for (const char* key : {"original", "hd", "uhd", "comic", "tropical", "cartoon", "folder", "builtin:cel-shading"}) {
     const auto* f = FactsFor(key);
     CHECK(f && f->changes && f->needs);
   }
@@ -163,9 +162,8 @@ static void ContentFacts() {
   // Kong Comic Book: the owner's wording only (DECISIONS 18 Oct), so no "how it looks" of ours.
   CHECK(!FactsFor("comic")->looks && std::string(FactsFor("comic")->pairs).find("Cel shading") != std::string::npos);
   CHECK(std::string(FactsFor("builtin:cel-shading")->pairs).find("Kong Comic Book") != std::string::npos);
-  // Task 232: the Ultrawide mod needs an ultrawide screen and keeps saying it is experimental.
-  CHECK(std::string(FactsFor("builtin:ultrawide")->needs).find("ultrawide screen") != std::string::npos);
-  CHECK(std::string(FactsFor("builtin:ultrawide")->looks).find("Experimental") != std::string::npos);
+  // Task 360 (Beta 17): ultrawide is built in, the Ultrawide mod and its Workshop entry are gone.
+  CHECK(!FactsFor("builtin:ultrawide"));
   // The UHD and HD descriptions no longer repeat the size (it is the facts table's Size row).
   for (const auto& page : kDownloadPages) CHECK(std::string(page.description).find("GB") == std::string::npos);
   const char* langs[] = {"1", "3", "5", "4", "6"};

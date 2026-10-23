@@ -175,10 +175,6 @@ REXCVAR_DEFINE_STRING(kk_graphics_preset, "", "KK/Graphics",
                       "Internal: the chosen preset label when presets have identical values");
 REXCVAR_DEFINE_INT32(kk_fov, 69, "KK/Gameplay",
                      "Field of view in degrees for Jack's camera (69 = original); other cameras widen to match");
-REXCVAR_DEFINE_STRING(kk_aspect, "16:9", "KK/Video",
-                      "Experimental (the built-in Ultrawide mod): the picture's shape, 16:9 (the game's own: nothing "
-                      "changes), 21:9, 32:9 or auto (the chosen resolution's shape, 16:9 to 32:9); wider shows more "
-                      "on the sides");
 REXCVAR_DEFINE_BOOL(kk_skip_intros, true, "KK/Gameplay",
                     "Skip the Ubisoft, Universal and WingNut logo movies when the game starts");
 REXCVAR_DEFINE_BOOL(kk_toggle_aim, false, "KK/Controls",
@@ -331,7 +327,7 @@ std::pair<int, int> UpscalerOutputSize(int screen_w, int screen_h, int cap_w, in
     w = std::min(w, cap_w);
     h = std::min(h, cap_h);
   }
-  if (ultrawide::WidthFactor(aspect) != 1.0) {  // the Ultrawide mod: the largest picture of its shape
+  if (ultrawide::WidthFactor(aspect) != 1.0) {  // ultrawide: the largest picture of its shape
     const auto [uw, uh] = ultrawide::LargestInside(w, h, aspect);
     return {std::clamp(uw, 320, 10240), std::clamp(uh, 180, 5760)};
   }
@@ -355,7 +351,7 @@ std::pair<int, int> UpscalerOutputFor(int screen_w, int screen_h, double aspect)
 
 std::pair<int, int> NoUpscalerFrameSize(int screen_w, int screen_h, int draw_w, int draw_h, double aspect) {
   const auto [pw, ph] = UpscalerOutputSize(screen_w, screen_h, 0, 0, aspect);
-  // The Ultrawide mod: the draw resolution scale's height, as wide as the picture's shape.
+  // Ultrawide: the draw resolution scale's height, as wide as the picture's shape.
   if (const double a = ultrawide::WidthFactor(aspect); a != 1.0) draw_w = int(std::lround(draw_w * a));
   return {std::clamp(std::min(draw_w, pw), 320, 10240), std::clamp(std::min(draw_h, ph), 180, 5760)};
 }
@@ -364,6 +360,19 @@ namespace {
 std::atomic<float> ultrawide_factor{1.0f};
 }
 float UltrawideFactor() { return ultrawide_factor.load(std::memory_order_relaxed); }
+
+bool UltrawideSwitchedOff() {
+  static const bool off = [] {
+    const char* e = std::getenv("KK_ULTRAWIDE");
+    return e && *e == '0';
+  }();
+  return off;
+}
+
+double PictureAspectFor(int output_width, int output_height) {
+  return UltrawideSwitchedOff() ? ultrawide::kGameAspect
+                                : ultrawide::AspectFor("auto", output_width, output_height);
+}
 
 namespace {
 // Without a temporal upscaler: the frame the native renderer draws (native_frame_size, read by its
@@ -383,18 +392,20 @@ void ApplyRenderPreset(int output_width, int output_height) {
   // itself; the renderer takes that size from native_upscaler_output (set as a default: not saved).
   std::string quality = REXCVAR_GET(kk_render_quality);
   const bool temporal = TemporalUpscalerOn();
-  // The Ultrawide mod (kk_aspect, ultrawide_logic.h): a wider picture, the presenter shown its shape
-  // (native_display_aspect, not saved) and the game's 3D views widened (ultrawide.cpp). 16:9: nothing changes.
-  const double aspect = ultrawide::AspectFor(REXCVAR_GET(kk_aspect), output_width, output_height);
+  // Ultrawide (task 360, Beta 17: built in, always on; ultrawide_logic.h): a screen or window wider than 16:9
+  // gets a picture of its own shape (up to 32:9), the presenter is shown that shape (native_display_aspect, not
+  // saved) and the game's 3D views are widened (ultrawide.cpp). 16:9 or narrower: nothing changes.
+  const double aspect = PictureAspectFor(output_width, output_height);
   const double factor = ultrawide::WidthFactor(aspect);
   ultrawide_factor.store(float(factor), std::memory_order_relaxed);
   if (factor != 1.0) {
     const auto [pw, ph] = UpscalerOutputSize(output_width, output_height, 0, 0, aspect);
     SetCvarDefault("native_display_aspect", std::to_string(pw) + "x" + std::to_string(ph));
-    REXLOG_INFO("KK: ultrawide (experimental): {} at {}x{} -> a {}x{} picture, views {:.3f} times wider",
-                REXCVAR_GET(kk_aspect), output_width, output_height, pw, ph, factor);
+    REXLOG_INFO("KK: ultrawide: {}x{} -> a {}x{} picture, views {:.3f} times wider", output_width, output_height, pw,
+                ph, factor);
   } else {
     SetCvarDefault("native_display_aspect", "");
+    if (UltrawideSwitchedOff()) REXLOG_INFO("KK: ultrawide: off (KK_ULTRAWIDE=0)");
   }
   if (temporal) {
     const auto [ow, oh] = UpscalerOutputFor(output_width, output_height, aspect);
