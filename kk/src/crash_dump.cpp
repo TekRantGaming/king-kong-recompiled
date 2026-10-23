@@ -468,6 +468,25 @@ void WatchForHangs() {
       filter_tick = now;
     }
     if (g_quitting.load(std::memory_order_relaxed)) continue;  // task 368: no hang report while quitting
+#if defined(KK_DEV_TOOLS)
+    // Task 372 test aid: KK_DEV_HANG_NOW=<file>: a hang report (where every thread is) each time a test
+    // creates or rewrites that file, e.g. while the window is Not responding but guest frames still come.
+    static const char* hang_now = std::getenv("KK_DEV_HANG_NOW");
+    static ULONGLONG hang_now_stamp = 0;
+    if (hang_now && *hang_now && now - hang_now_stamp >= 500) {
+      WIN32_FILE_ATTRIBUTE_DATA a{};
+      static ULONGLONG written = 0;
+      if (GetFileAttributesExA(hang_now, GetFileExInfoStandard, &a)) {
+        const ULONGLONG t = (ULONGLONG(a.ftLastWriteTime.dwHighDateTime) << 32) | a.ftLastWriteTime.dwLowDateTime;
+        if (t != written) {
+          written = t;
+          REXLOG_WARN("KK dev: hang report asked for by the test ({})", hang_now);
+          WriteHangReport(0);
+        }
+      }
+      hang_now_stamp = now;
+    }
+#endif
     const ULONGLONG last = g_last_frame.load(std::memory_order_relaxed);
     if (now - previous_tick > 5000) {
       // This thread did not run for a while: the PC slept or the process was
