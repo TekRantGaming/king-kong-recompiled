@@ -14,7 +14,6 @@ version's notes the first time you start it.
 - **A countdown to the King Kong Remastered update on the Home screen**: the time left until Friday 30 October, 18:00 UK time (also shown in your own time), with a Join the Discord button. When the time comes it says the update is out and offers Check for updates.
 - **The updater installs every file of an update**: it checks the download first, installs every file the new version ships, removes old files the game no longer uses (never your saves, settings or mods), and puts everything back as it was if something goes wrong. On the first start of a new version the game also checks its own files and fetches any that are missing.
 
-
 ### Changed
 - **Field of view is 80 by default**, marked recommended. 69, the original, is still there and marked as the original. If you already play, your field of view stays as it is.
 - **The shader screen stays until the shaders are ready**: Continue in the background and Skip all are gone from it, so the game never starts while its shaders are still being prepared.
