@@ -1083,6 +1083,44 @@ if 'input_.set_pads_active(active || egg_running_);' not in launcher:
 if 'if (!pads_active_)' not in ui_src or 'dir_stale_' not in ui_src:
     fail('the input does not ignore controllers while the window is not active')
 
+# Task 370: the new updater's screen and messages: in five languages, no dash of any kind and no hyphenated word
+# (owner), and the messages update.cpp gives are exactly these (the launcher translates them as it draws).
+_upd_cpp = (src / 'update.cpp').read_text(encoding='utf-8')
+_upd_launcher = (src / 'launcher.cpp').read_text(encoding='utf-8')
+_updater_strings = [
+    'Finishing the update',
+    'Some files of version {0} are missing, so the launcher is downloading them again. Your installed game, saves and settings stay as they are.',
+    'Installing the files.',
+    'Every file of version {0} is now installed.',
+    'The download did not pass its check, so nothing was changed. Try again later.',
+    '{0} is in use by another program, so the update was undone and nothing was changed. Close that program and try again.',
+    "The update's file list is damaged, so nothing was changed.",
+    'The download failed. Check your internet connection and try again.',
+    'Could not unpack the update.',
+    "The update did not contain the game's program.",
+    'Could not write the update into the game folder. Is it read only?',
+    'Checking the download.', 'Connecting', 'Continue in the background', 'Update failed',
+]
+strings |= set(_updater_strings)
+_dash = re.compile(r'[\u2010-\u2015\u2212]|\w-\w| - ')
+for _s in _updater_strings:
+    if len(entries.get(_s, [])) != 4 or not all(entries[_s]):
+        fail(f'370: not translated: {_s!r}')
+    for _tr in [_s] + entries.get(_s, []):
+        if _dash.search(_tr):
+            fail(f'370: dash or hyphen in {_tr!r}')
+for _s in _updater_strings[4:11]:
+    _c = _s.replace('"', '\\"')
+    if f'"{_c}"' not in _upd_cpp and not all(f'"{p}' in _upd_cpp for p in [_c[:40]]):
+        fail(f'370: update.cpp does not give {_s!r}')
+for _needle, _why in (
+    ('heading("Finishing the update");', 'the first start check has its screen'),
+    ('entries.push_back({"Continue in the background", true, [this] { finish_hidden_ = true; }});', 'it can be left'),
+    ('F(update_->message.c_str(), {update_->detail})', 'the failure names the file in use'),
+    ('StartFinishCheck();', 'the first start check runs'),
+):
+    if _needle not in _upd_launcher:
+        fail(f'370: {_why} ({_needle})')
 if failures:
     print('\n'.join('FAIL: ' + f for f in failures))
     sys.exit(1)

@@ -2790,6 +2790,10 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
     StartContent();
     StartNotifications();
     CleanUpAfterUpdate();
+    // Task 370: nothing an update installs or removes may be in the user or game data folders; then the first start
+    // check (FinishUpdate): files an older updater left out are downloaded again (the update screen shows it).
+    SetProtectedFolders({paths_.user_dir, paths_.game_dir});
+    StartFinishCheck();
     online::Start();
     discord::Start();
     const bool testing = std::getenv("KK_AUTOPLAY") != nullptr;
@@ -4714,7 +4718,7 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
     if (dev_setup_ >= 0) return true;
 #endif
     return !files_ok_ || installing_ || setup_art_ || setup_shaders_ || setup_textures_ || setup_cutscenes_ ||
-           setup_graphics_ || setup_prompts_ || setup_all_set_ || update_new_ || installing_update_ || update_shaders_ ||
+           setup_graphics_ || setup_prompts_ || setup_all_set_ || update_new_ || UpdateScreen() || update_shaders_ ||
            setup_settings_ || setup_workshop_;
   }
 
@@ -4731,7 +4735,7 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
   // The native renderer's shaders being prepared, as a screen of its own: the setup's step (after the
   // artwork, before the texture pack page) and after every update.
   bool ShaderScreen() const {
-    if (installing_update_ || installing_ || setup_art_) return false;
+    if (UpdateScreen() || installing_ || setup_art_) return false;
 #if defined(KK_DEV_TOOLS)
     if (dev_setup_ >= 0) return dev_setup_ == 4;
 #endif
@@ -4853,7 +4857,7 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
 #endif
     // Task 332: the first-time setup's pages in the owner's order (each page clears its own flag; Back sets the
     // one before again): shaders, the Settings pages, button prompts, texture pack, PS2 cutscenes, Workshop, all set.
-    return installing_update_ ? 3 : installing_ ? 1 : setup_art_ ? 2 : setup_shaders_ ? 4
+    return UpdateScreen() ? 3 : installing_ ? 1 : setup_art_ ? 2 : setup_shaders_ ? 4
            : setup_settings_ ? kSettingsFirstStage + std::clamp(setup_settings_page_, 0, kSettingsSetupPages - 1)
            : setup_prompts_ ? kPromptsStage : setup_textures_ ? 6 : setup_cutscenes_ ? 7
            : setup_workshop_ ? kWorkshopStage : setup_all_set_ ? kAllSetStage
@@ -5140,27 +5144,48 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
     } else {
       float got = 0, size = 0;
       std::string version;
-      if (update_) {
+      int phase = 0;
+      const bool files = FinishScreen();  // task 370: the first start check's download
+      if (files) {
+        got = float(finish_->bytes.load());
+        size = float(finish_->total.load());
+        phase = finish_->phase.load();
+        version = KK_VERSION;
+      } else if (update_) {
         got = float(update_->bytes.load());
         size = float(update_->total.load());
+        phase = update_->phase.load();
         if (update_->found) version = update_->found->version;
       }
-      bool finishing = update_ && !update_->busy && update_->done;
+      bool finishing = !files && update_ && !update_->busy && update_->done;
 #if defined(KK_DEV_TOOLS)
       if (dev_setup_ >= 0) version = "9.9.9", size = 61.4e6f, got = size * 0.42f, finishing = false;
 #endif
-      heading(finishing ? "Restarting" : "Updating");
-      body(F("Downloading version {0} of the port. The launcher restarts by itself when it's done; your installed "
-             "game, saves and settings stay as they are.",
-             {version}));
+      if (files) {
+        heading("Finishing the update");
+        body(F("Some files of version {0} are missing, so the launcher is downloading them again. Your installed "
+               "game, saves and settings stay as they are.",
+               {version}));
+      } else {
+        heading(finishing ? "Restarting" : "Updating");
+        body(F("Downloading version {0} of the port. The launcher restarts by itself when it's done; your installed "
+               "game, saves and settings stay as they are.",
+               {version}));
+      }
       bar(finishing ? 1.0f : size > 0 ? got / size : -1.0f);
       auto mb = [](float bytes) {
         char buf[32];
         std::snprintf(buf, sizeof(buf), "%.1f", bytes / 1e6f);
         return std::string(buf);
       };
-      caption_pair(size > 0 ? F("{0} of {1} MB", {mb(got), mb(size)}) : T(std::string("Connecting")),
-                   size > 0 ? std::to_string(int(got / size * 100)) + "%" : "");
+      // Task 370: below the bar, what the updater is doing once the download is over.
+      const bool downloading = phase == int(UpdatePhase::kDownloading) && !finishing;
+      const char* step = phase == int(UpdatePhase::kInstalling) || finishing ? "Installing the files." : "Checking the download.";
+      caption_pair(!downloading ? T(std::string(step))
+                   : size > 0   ? F("{0} of {1} MB", {mb(got), mb(size)})
+                                : T(std::string("Connecting")),
+                   downloading && size > 0 ? std::to_string(int(got / size * 100)) + "%" : "");
+      if (files) entries.push_back({"Continue in the background", true, [this] { finish_hidden_ = true; }});
     }
     if (stage == 0) DrawSidePanels(dl, 1.0f, false, entries, setup_focus_, o_.y + h_ - 120 * s);
     else side_focus_ = -1;
@@ -6263,6 +6288,20 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
   // No reminder about the online player count ever opens by itself (owner, 16 Oct): it is explained and
   // switched in the first-time setup, and on the About page, and nowhere else.
 
+  // Task 370: the first start check runs on its own thread; the update screen (SetupStage 3) shows it only while it
+  // downloads files an older updater left out, until Continue in the background. A failure is only logged.
+  void StartFinishCheck() {
+    finish_ = std::make_shared<FinishStatus>();
+    std::thread([s = finish_, file = paths_.user_dir / "update-check.txt"] { FinishUpdate(*s, file); }).detach();
+  }
+  bool FinishScreen() const { return finish_ && finish_->downloading && !finish_hidden_ && !installing_update_; }
+  bool UpdateScreen() const { return installing_update_ || FinishScreen(); }
+  void TickFinish() {
+    if (!finish_ || finish_reported_ || finish_->busy || !(finish_->done || finish_->failed)) return;
+    finish_reported_ = true;
+    if (finish_->done && finish_->installed > 0) Status(F("Every file of version {0} is now installed.", {KK_VERSION}));
+  }
+
   // The update screen shows the download (SetupStage 3).
   void BeginUpdateInstall(const UpdateInfo& info) {
     installing_update_ = true;
@@ -6307,10 +6346,24 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
     if (!installing_update_ || update_->busy) return;
     if (update_->failed) {
       installing_update_ = false;
-      OpenModal("Update failed", update_->message, {"Close"}, 0, nullptr);
+      OpenModal("Update failed", F(update_->message.c_str(), {update_->detail}), {"Close"}, 0, nullptr);
     } else if (update_->done && !relaunched_) {  // start the new version, then close this one
       relaunched_ = true;
-      RelaunchSelf(L"");
+      std::wstring extra;
+#if defined(KK_DEV_TOOLS) && defined(_WIN32)
+      // Task 370: a KK_DEV_UPDATE_ZIP test. The new process must not offer it again (nor its steps install it again),
+      // and it must not log over this run's log (with the second --log_file it writes logs\king_kong_NNN.log in the
+      // program folder, as a run without one does).
+      if (const char* zip = std::getenv("KK_DEV_UPDATE_ZIP"); zip && *zip) {
+        _putenv_s("KK_DEV_UPDATE_RELAUNCHED", "1");
+        _putenv_s("KK_DEV_LAUNCHER_INPUT", "");
+        const std::filesystem::path log = rex::cvar::GetFlagByName("log_file");
+        if (!log.empty())
+          extra = L"--log_file=\"" +
+                  (log.parent_path() / (log.stem().wstring() + L"-relaunch" + log.extension().wstring())).wstring() + L"\"";
+      }
+#endif
+      RelaunchSelf(extra);
       if (cb_.quit) cb_.quit();
     }
   }
@@ -8183,6 +8236,7 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
     RefreshPack();
     TickContent();
     TickUpdate();
+    TickFinish();
     TickSteam();
     // Saved crash reports never open a pop-up (owner, 19 Oct: it showed on every start and covered the
     // benchmark results); they are still saved and uploaded as before, and the Settings Diagnostics row
@@ -8441,6 +8495,8 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
       else if (w == "wait-home") met = !InSetup() && !ShaderScreen() && !loop_ && !MoviesPending();  // task 331/332: the loop and movies gone
       else if (w == "wait-movies") met = movies_ != nullptr;  // task 332: the startup movies are up
       else if (w == "wait-modal") met = modal_.open;  // a pop-up is up (logged with its title)
+      else if (w == "wait-files") met = FinishScreen();  // task 370: the first start check downloads
+      else if (w == "wait-files-done") met = finish_ && !finish_->busy && (finish_->done || finish_->failed);
       else if (w == "wait-artbook") {  // Beta 7: the artbook installed, or its download failed
         const auto st = content::Service::Get().Get(content::Kind::kArtbook);
         met = st.installed || st.stage == content::Stage::kFailed;
@@ -8848,6 +8904,8 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
   std::shared_ptr<UpdateStatus> update_;
   std::shared_ptr<SteamState> steam_;
   bool update_manual_ = false, update_prompted_ = false, installing_update_ = false, relaunched_ = false;
+  std::shared_ptr<FinishStatus> finish_;  // task 370: the first start check
+  bool finish_hidden_ = false, finish_reported_ = false;
   std::string switch_to_;  // the channel Change version is switching to, while it checks
   bool open_whats_new_ = false;
   bool whats_new_shown_ = false;  // opened once in this launcher session (FinishSetup asks for it only if not)

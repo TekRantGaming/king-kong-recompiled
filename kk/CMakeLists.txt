@@ -99,6 +99,7 @@ set(KINGKONG_SOURCES
     src/workshop_net.cpp
     src/system_notify.cpp
     src/update.cpp
+    src/update_files.cpp
     src/play_session.cpp
     src/ps2_movies.cpp
     src/profile_options.cpp
@@ -329,6 +330,12 @@ if(KK_DEV_TOOLS)
     target_include_directories(kk-content-tests PRIVATE src)
     rexglue_apply_target_settings(kk-content-tests)
     add_test(NAME content-downloads COMMAND kk-content-tests "${CMAKE_CURRENT_BINARY_DIR}/content-test")
+    # Task 370: the updater's file work (kk-files.txt, staged install with undo, retired files, the first start
+    # check) on real files in a temp folder; also the packaging simulation's helper (codex\simulate-update.ps1).
+    add_executable(kk-update-tests tests/update_files_tests.cpp src/update_files.cpp)
+    target_include_directories(kk-update-tests PRIVATE src)
+    rexglue_apply_target_settings(kk-update-tests)
+    add_test(NAME update-files COMMAND kk-update-tests "${CMAKE_CURRENT_BINARY_DIR}/update-test")
     add_executable(kk-menu-sound-tests tests/launcher_sounds_tests.cpp src/launcher_sounds.cpp)
     target_include_directories(kk-menu-sound-tests PRIVATE src)
     target_link_libraries(kk-menu-sound-tests PRIVATE rex::runtime)
