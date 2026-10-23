@@ -22,7 +22,7 @@ version's notes the first time you start it.
 - **Plainer wording** in the launcher and the game menus, in all five languages.
 - **Switching back to stable keeps the renderer settings** once stable 2.0.0 is out. Only a stable version before 2.0.0, which has no native renderer, still puts them back to their defaults.
 - **Intel integrated graphics (UHD, Iris, HD) use Vulkan by default**, and the setup no longer prepares the DirectX 12 shaders for them, which saves a long wait. Intel Arc is not affected. You can still pick DirectX 12 in Settings.
-- **More graphics pipelines are prepared before you play**: the list that comes with the game is updated.
+- **More graphics pipelines are prepared before you play**: the list that comes with the game is updated (16,548).
 
 ### Fixed
 - **Some Intel graphics crashed at every launcher start** while the shaders were being prepared. If the graphics driver ends the game there, the next start now leaves that step out instead of crashing again.
