@@ -3,7 +3,7 @@
 Every release of the King Kong PC port, newest first. The launcher shows this on its About page, and a
 version's notes the first time you start it.
 
-## v2.0.0-beta.17 (unreleased)
+## v2.0.0-beta.17 (23 October 2026)
 
 ### What's new
 - **The Home screen surprise now also works from the keyboard**, and the cheat codes from the original PS2 and Xbox games open it too, on any controller. While it runs, Esc opens the pause menu as Enter and Start do.
@@ -12,6 +12,8 @@ version's notes the first time you start it.
 - **First time setup: a progress bar, Next page, Skip all and Auto detect** at the top right of every page until the last one. Auto detect picks the recommended settings for your PC on every page, then takes you to the texture pack and PS2 cutscene questions. Skip all asks first, because a game that is not set up well may play worse.
 - **The setup's Workshop page explains the Workshop**: the HD, UHD, Comic Book, Cartoon and Tropical Holiday texture packs and the mods, how to download them and switch them on, and how big the packs are, with their pictures.
 - **A countdown to the King Kong Remastered update on the Home screen**: the time left until Friday 30 October, 18:00 UK time (also shown in your own time), with a Join the Discord button. When the time comes it says the update is out and offers Check for updates.
+- **The updater installs every file of an update**: it checks the download first, installs every file the new version ships, removes old files the game no longer uses (never your saves, settings or mods), and puts everything back as it was if something goes wrong. On the first start of a new version the game also checks its own files and fetches any that are missing.
+
 
 ### Changed
 - **Field of view is 80 by default**, marked recommended. 69, the original, is still there and marked as the original. If you already play, your field of view stays as it is.
