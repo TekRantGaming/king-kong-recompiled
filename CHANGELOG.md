@@ -8,6 +8,7 @@ version's notes the first time you start it.
 ### What's new
 - **The Home screen surprise now also works from the keyboard.**
 - **Ultrawide is built in**: on a 21:9 or 32:9 screen or window the game fills the whole width and shows more on the left and right, with nothing stretched. The HUD, subtitles, menus, pause and photo mode stay in their places in the middle. Nothing changes on a 16:9 screen. The Ultrawide mod is gone: there is nothing to switch on.
+- **Ultrawide sizes on any screen**: Window size, Resolution (now also in Borderless) and the first time setup list 21:9 and 32:9 sizes (2560 x 1080 up to 7680 x 2160, as tall as your screen at most). The game draws the wide picture at that size and fits it into your window or screen with black bars above and below, so you can play or try ultrawide on a 16:9 screen. A size wider than your screen gets a window of the same shape that fits.
 
 ### Changed
 - **PS2 cutscenes now play first and the next level loads after them**, so nothing loads under the clip.

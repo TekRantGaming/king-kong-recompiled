@@ -271,7 +271,7 @@ void RefreshDiagnostics() {
   else out << "unavailable\n";
 #endif
   out << "Settings (requested; actual selection/failures appear in the log):\n";
-  for (const char* key : {"kk_update_channel", "fullscreen", "kk_fullscreen_mode", "window_width", "window_height",
+  for (const char* key : {"kk_update_channel", "fullscreen", "kk_fullscreen_mode", "kk_picture_size", "window_width", "window_height",
        "monitor", "kk_render_quality", "native_render_scale", "ao_mode", "ao_strength",
        "kk_renderer", "gpu_plugin", "native_backend", "resolution_scale", "draw_resolution_scale_x", "draw_resolution_scale_y",
        "native_upscaler", "native_upscaler_quality", "native_upscaler_output", "native_frame_size", "native_ao_method", "native_ao_apply",

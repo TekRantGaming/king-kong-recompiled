@@ -9,6 +9,7 @@
 #include <array>
 #include <filesystem>
 #include <cstdint>
+#include <optional>
 #include <string>
 #include <vector>
 #include <utility>
@@ -67,6 +68,7 @@ REXCVAR_DECLARE(bool, kk_original_look);
 REXCVAR_DECLARE(std::string, kk_modern_settings);
 REXCVAR_DECLARE(std::string, kk_renderer);
 REXCVAR_DECLARE(std::string, kk_fullscreen_mode);
+REXCVAR_DECLARE(std::string, kk_picture_size);
 REXCVAR_DECLARE(bool, kk_cheats);
 REXCVAR_DECLARE(int32_t, kk_hitch_report_ms);
 
@@ -141,6 +143,10 @@ float UltrawideFactor();
 bool UltrawideSwitchedOff();
 // The picture's shape for the chosen resolution: its own shape clamped to 16:9..32:9 (16:9 when switched off).
 double PictureAspectFor(int output_width, int output_height);
+// Task 363: the ultrawide picture size chosen in a resolution list (kk_picture_size, ultrawide_logic.h
+// ParsePictureSize), drawn whatever the window or screen and fitted into it (presenter: native_display_aspect).
+// nullopt: none chosen (the window's or screen's own size, as before) or ultrawide switched off.
+std::optional<std::pair<int, int>> ChosenPictureSize();
 
 // Writes the current settings (skipping command-line/env overrides) to `path`.
 bool SaveSettings(const std::filesystem::path& path, bool include_temporary = false);

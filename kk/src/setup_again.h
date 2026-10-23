@@ -27,7 +27,7 @@ inline bool Due(bool existing_install, int round_done, bool testing) {
 inline bool Resets(std::string_view name, std::string_view category) {
   static constexpr std::string_view kNames[] = {
       // Display
-      "fullscreen", "kk_fullscreen_mode", "window_width", "window_height", "monitor", "present_letterbox",
+      "fullscreen", "kk_fullscreen_mode", "kk_picture_size", "window_width", "window_height", "monitor", "present_letterbox",
       "kk_brightness", "kk_gamma", "d3d12_allow_variable_refresh_rate_and_tearing", "kk_frame_rate", "kk_hdr",
       "kk_hdr_levels", "kk_fov", "kk_motion_blur", "kk_camera_shake", "kk_camera_shake_strength",
       // (present_hdr and its levels follow kk_hdr and kk_hdr_levels at every start: hdr_display.cpp. A Manual peak

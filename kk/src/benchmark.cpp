@@ -209,7 +209,7 @@ std::string Settings() {
   std::string out = "Version: " KK_VERSION "\nRoute: recorded-controller-v1\n";
   out += DiagnosticsHardware();
   out += "\nSettings (requested; renderer fallbacks are recorded in diagnostics):\n";
-  for (const char* key : {"native_backend", "kk_frame_rate", "fullscreen", "kk_fullscreen_mode",
+  for (const char* key : {"native_backend", "kk_frame_rate", "fullscreen", "kk_fullscreen_mode", "kk_picture_size",
       "window_width", "window_height", "video_mode_width", "video_mode_height", "monitor",
       "d3d12_allow_variable_refresh_rate_and_tearing", "vulkan_allow_present_mode_immediate",
       "vulkan_allow_present_mode_mailbox", "vulkan_allow_present_mode_fifo_relaxed", "ui_paint_on_demand",

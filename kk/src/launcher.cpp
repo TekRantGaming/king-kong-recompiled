@@ -318,7 +318,7 @@ constexpr std::pair<int, const char*> kLanguages[] = {
 // native_upscaler: on Vulkan, DLSS and XeSS need the device made with their extensions (the native
 // renderer asks for them when it makes the device, before the launcher opens).
 // VSync: Vulkan chooses its present mode when the swapchain is created.
-constexpr const char* kRestartCvars[] = {"present_effect", "window_width", "window_height", "monitor", "gpu_plugin",
+constexpr const char* kRestartCvars[] = {"present_effect", "window_width", "window_height", "kk_picture_size", "monitor", "gpu_plugin",
                                          "native_upscaler", "native_backend",
                                          "d3d12_allow_variable_refresh_rate_and_tearing"};
 
@@ -558,7 +558,7 @@ void ResetBetaOnlySettings() {
     if (e.type == rex::cvar::FlagType::Command) continue;
     if (e.source == rex::cvar::Source::kCommandLine || e.source == rex::cvar::Source::kEnvironment) continue;
     const bool beta = e.name.rfind("native_", 0) == 0 || e.category == "Native renderer" || e.name == "kk_renderer" ||
-                      e.name == "kk_fullscreen_mode" || e.name == "gpu_plugin";
+                      e.name == "kk_fullscreen_mode" || e.name == "kk_picture_size" || e.name == "gpu_plugin";
     if (beta && e.getter() != e.default_value) REXLOG_INFO("KK: switching to stable: {} back to its default", e.name);
     if (beta) rex::cvar::ResetToDefault(e.name);
   }
@@ -1101,7 +1101,9 @@ class SettingsPages {
     const auto [out_w, out_h] = cb_.output_size ? cb_.output_size() : std::pair<int, int>{1280, 720};
     const double aspect = PictureAspect(out_w, out_h);  // 16:9 unless the Ultrawide mod is on
     const bool original = GetBool("kk_original_look");
-    const char* draws = GetBool("fullscreen") ? "Draws {0} for your {1} screen." : "Draws {0} for your {1} window.";
+    const char* draws = ChosenPictureSize()    ? "Draws {0} for a {1} picture."  // task 363: a chosen ultrawide size
+                        : GetBool("fullscreen") ? "Draws {0} for your {1} screen."
+                                                : "Draws {0} for your {1} window.";
     items.push_back(Section("Upscaling"));
     const std::string temporal = CurrentTemporalUpscaler();
     {
@@ -1323,6 +1325,8 @@ class SettingsPages {
     if (ExclusiveFullscreen()) {
       items.push_back(ResolutionItem());
       items.push_back(RefreshRateItem());
+    } else if (GetBool("fullscreen")) {
+      items.push_back(BorderlessResolutionItem());  // task 363
     }
     {
       // A screen or window wider than 16:9 (task 311, built in since task 360): the picture is already wider (its
@@ -1452,30 +1456,81 @@ class SettingsPages {
                                                  {1920, 1080}, {2560, 1440}, {3200, 1800}};
     const auto [screen_w, screen_h] = cb_.screen_size ? cb_.screen_size() : std::pair<int, int>{1 << 16, 1 << 16};
     auto close_to = [](int a, int b) { return std::abs(a - b) <= 2; };
+    const auto picture = ChosenPictureSize();
     Item it;
     it.type = ItemType::kChoice;
     it.label = "Window size";
     it.description = "The size of the game's window.";
     it.index = -1;
-    it.value_text = Size(w, h);
+    it.value_text = picture ? Size(picture->first, picture->second) : Size(w, h);
     it.default_text = "Default";
     std::vector<std::pair<int, int>> sizes;
+    std::vector<bool> wide;  // an ultrawide picture size (task 363), not a window size
     for (auto [sw, sh] : kSizes) {
       if (sw >= screen_w || sh >= screen_h) continue;  // must fit with its frame
-      if (close_to(sw, w) && close_to(sh, h)) it.index = int(sizes.size());
+      if (!picture && close_to(sw, w) && close_to(sh, h)) it.index = int(sizes.size());
       it.options.push_back(sw == 0 ? std::string("Default") : Size(sw, sh));
       sizes.emplace_back(sw, sh);
+      wide.push_back(false);
     }
-    it.on_choice = [sizes, scale](int i) {
-      const auto [sw, sh] = sizes[size_t(i)];
+    // Task 363: the ultrawide sizes too, even wider than the screen: the window then takes the largest size of that
+    // shape that fits (FitWindow) and the game still draws the chosen size.
+    WideOptions(screen_h, picture, it, sizes, wide);
+    it.on_choice = [sizes, wide, scale, fit_w = screen_w, fit_h = screen_h](int i) {
+      auto [sw, sh] = sizes[size_t(i)];
+      if (wide[size_t(i)]) {
+        Set("kk_picture_size", std::to_string(sw) + "x" + std::to_string(sh));
+        const auto window = ultrawide::FitWindow(sw, sh, fit_w, fit_h);
+        sw = window.first;
+        sh = window.second;
+      } else {
+        Reset("kk_picture_size");
+      }
+      if (sw == 0) {
+        Reset("window_width");
+        Reset("window_height");
+        return;
+      }
       SetInt("window_width", int(sw / scale + 0.5));
       SetInt("window_height", int(sh / scale + 0.5));
     };
     it.on_default = [] {
+      Reset("kk_picture_size");
       Reset("window_width");
       Reset("window_height");
     };
+    if (picture)
+      it.facts.push_back(F("The game draws a {0} picture and fits it into your {1} window.",
+                           {Size(picture->first, picture->second), Size(w, h)}));
     return it;
+  }
+
+  // Task 363 (Beta 17): the ultrawide sizes (ultrawide_logic.h kWideSizes) a resolution list offers for a screen
+  // screen_h tall, as "2560 x 1080  .  21:9", after the list's own; the chosen one (kk_picture_size) is always there
+  // and selected. Skips sizes the list already has as its own (a real ultrawide monitor's modes).
+  static void WideOptions(int screen_h, const std::optional<std::pair<int, int>>& picture, Item& it,
+                          std::vector<std::pair<int, int>>& sizes, std::vector<bool>& wide) {
+    const size_t own = sizes.size();
+    auto listed = [&](int w, int h) {
+      for (size_t i = 0; i < own; ++i)
+        if (sizes[i] == std::pair<int, int>{w, h}) return true;
+      return false;
+    };
+    auto add = [&](int w, int h, const char* shape) {
+      if (picture && *picture == std::pair<int, int>{w, h}) it.index = int(sizes.size());
+      it.options.push_back(Size(w, h) + "  " KK_DOT "  " + shape);
+      sizes.emplace_back(w, h);
+      wide.push_back(true);
+    };
+    bool chosen_added = false;
+    for (const auto& s : ultrawide::kWideSizes) {
+      const bool chosen = picture && *picture == std::pair<int, int>{s.w, s.h};
+      if (!chosen && (!ultrawide::WideSizeOffered(s.h, screen_h) || listed(s.w, s.h))) continue;
+      add(s.w, s.h, s.shape);
+      chosen_added = chosen_added || chosen;
+    }
+    if (picture && !chosen_added)  // from the settings file, not one of the list's
+      add(picture->first, picture->second, double(picture->first) / picture->second > 3.0 ? "32:9" : "21:9");
   }
 
   // Fullscreen resolution (display_modes.h): Desktop, or one of the monitor's sizes, with its refresh
@@ -1536,9 +1591,19 @@ class SettingsPages {
     it.on_choice = [this](int i) {
       if (i == 1) Set("kk_fullscreen_mode", "desktop");
       if (i == 2 && !ParseDisplayMode(Get("kk_fullscreen_mode"))) Set("kk_fullscreen_mode", DesktopModeValue());
+      // Task 363: an ultrawide picture size stays chosen; Windowed gets a window of its shape that fits.
+      if (const auto picture = ChosenPictureSize(); i == 0 && picture) {
+        const double scale = cb_.dpi_scale ? cb_.dpi_scale() : 1.0;
+        const auto [screen_w, screen_h] =
+            cb_.screen_size ? cb_.screen_size() : std::pair<int, int>{picture->first * 2, picture->second * 2};
+        const auto [ww, wh] = ultrawide::FitWindow(picture->first, picture->second, screen_w, screen_h);
+        SetInt("window_width", int(ww / scale + 0.5));
+        SetInt("window_height", int(wh / scale + 0.5));
+      }
       SetFullscreen(i != 0);
     };
     it.on_default = [this] {
+      Reset("kk_picture_size");
       Reset("kk_fullscreen_mode");
       Reset("fullscreen");
       if (cb_.set_fullscreen) cb_.set_fullscreen(GetBool("fullscreen"));
@@ -1548,10 +1613,43 @@ class SettingsPages {
     return it;
   }
 
+  // Borderless only (task 363): the desktop's own size, or an ultrawide picture size, drawn at that size and fitted
+  // into the screen (black bars above and below on a 16:9 screen; the Aspect ratio row can stretch it instead).
+  Item BorderlessResolutionItem() {
+    const auto picture = ChosenPictureSize();
+    const auto desktop = ParseDisplayMode(DesktopModeValue());
+    const auto [screen_w, screen_h] = desktop ? std::pair<int, int>{desktop->width, desktop->height}
+                                      : cb_.screen_size ? cb_.screen_size()
+                                                        : std::pair<int, int>{1920, 1080};
+    Item it;
+    it.type = ItemType::kChoice;
+    it.label = "Resolution";
+    it.description = "The size of the game's picture: your desktop's, or a wider one shown with black bars above and "
+                     "below.";
+    it.options.push_back("Desktop");
+    it.index = 0;
+    it.default_text = "Desktop";
+    std::vector<std::pair<int, int>> sizes = {{0, 0}};
+    std::vector<bool> wide = {false};
+    WideOptions(screen_h, picture, it, sizes, wide);
+    it.value_text = picture ? Size(picture->first, picture->second) : Size(screen_w, screen_h);
+    it.on_choice = [sizes](int i) {
+      const auto [w, h] = sizes[size_t(i)];
+      if (w == 0) Reset("kk_picture_size");
+      else Set("kk_picture_size", std::to_string(w) + "x" + std::to_string(h));
+    };
+    it.on_default = [] { Reset("kk_picture_size"); };
+    it.facts.push_back(picture ? F("The game draws a {0} picture and fits it into your {1} screen.",
+                                   {Size(picture->first, picture->second), Size(screen_w, screen_h)})
+                               : F("The game will be shown at {0}.", {Size(screen_w, screen_h)}));
+    return it;
+  }
+
   // Fullscreen only: the screen's size while the game runs.
   Item ResolutionItem() {
     LoadDisplayModes();
     const auto cur = ParseDisplayMode(Get("kk_fullscreen_mode"));
+    const auto picture = ChosenPictureSize();
     Item it;
     it.type = ItemType::kChoice;
     it.label = "Resolution";
@@ -1563,17 +1661,31 @@ class SettingsPages {
       it.options.push_back(Size(m.width, m.height));
     }
     it.index = -1;
-    for (size_t i = 0; i < sizes.size(); ++i)
-      if (sizes[i] == std::pair<int, int>{cur->width, cur->height}) it.index = int(i);
-    if (it.index < 0) {  // a size this display doesn't have (another monitor's, or the settings file's)
+    if (!picture)
+      for (size_t i = 0; i < sizes.size(); ++i)
+        if (sizes[i] == std::pair<int, int>{cur->width, cur->height}) it.index = int(i);
+    if (it.index < 0 && !picture) {  // a size this display doesn't have (another monitor's, or the settings file's)
       it.index = int(sizes.size());
       sizes.emplace_back(cur->width, cur->height);
       it.options.push_back(F("{0} (not on this display)", {Size(cur->width, cur->height)}));
     }
-    it.facts.push_back(F("The game will be shown at {0}.", {Size(cur->width, cur->height)}));
+    // Task 363: the ultrawide sizes this display has no mode for: the screen stays at the desktop's mode and the game
+    // draws the chosen size, fitted into it.
+    std::vector<bool> wide(sizes.size(), false);
     const auto desktop = ParseDisplayMode(DesktopModeValue());
+    WideOptions(desktop ? desktop->height : cur->height, picture, it, sizes, wide);
+    it.facts.push_back(picture ? F("The game draws a {0} picture and fits it into your {1} screen.",
+                                   {Size(picture->first, picture->second), Size(cur->width, cur->height)})
+                               : F("The game will be shown at {0}.", {Size(cur->width, cur->height)}));
     if (desktop) it.default_text = Size(desktop->width, desktop->height);
-    it.on_choice = [this, sizes, cur](int i) {
+    it.on_choice = [this, sizes, wide, cur](int i) {
+      if (wide[size_t(i)]) {
+        const auto [w, h] = sizes[size_t(i)];
+        Set("kk_picture_size", std::to_string(w) + "x" + std::to_string(h));
+        Set("kk_fullscreen_mode", DesktopModeValue());
+        return;
+      }
+      Reset("kk_picture_size");
       const auto [w, h] = sizes[size_t(i)];
       const std::vector<float> rates = RatesAt(w, h);
       // The rate chosen before when this size has it, else this size's highest.
@@ -1582,7 +1694,10 @@ class SettingsPages {
         if (cur && std::fabs(r - cur->refresh) < 0.01f) rate = r;
       Set("kk_fullscreen_mode", DisplayMode{w, h, rate}.Value());
     };
-    it.on_default = [this] { Set("kk_fullscreen_mode", DesktopModeValue()); };
+    it.on_default = [this] {
+      Reset("kk_picture_size");
+      Set("kk_fullscreen_mode", DesktopModeValue());
+    };
     return it;
   }
 
@@ -5860,7 +5975,7 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
   static std::vector<std::string> PageSettings(Page page) {
     switch (page) {
       case kDisplay:
-        return {"fullscreen", "kk_fullscreen_mode", "window_width", "window_height", "monitor", "kk_frame_rate",
+        return {"fullscreen", "kk_fullscreen_mode", "kk_picture_size", "window_width", "window_height", "monitor", "kk_frame_rate",
                 "d3d12_allow_variable_refresh_rate_and_tearing", "present_letterbox", "kk_brightness", "kk_gamma",
                 "kk_performance_metrics"};
       case kGraphics:

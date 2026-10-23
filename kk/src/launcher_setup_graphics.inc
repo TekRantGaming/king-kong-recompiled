@@ -137,14 +137,13 @@
           rows.back().facts.insert(rows.back().facts.begin(), "The game is drawn at up to this size.");
         TakeRow(display, "Refresh rate", "How many times a second your screen refreshes while the game runs.", rows);
       } else if (GetBool("fullscreen")) {  // Borderless: the desktop's own mode
+        // Task 363: the desktop's size or an ultrawide picture size (BorderlessResolutionItem).
         const auto desktop = ParseDisplayMode(DesktopModeValue());
-        Item res;
-        res.type = ItemType::kInfo;
-        res.label = "Resolution";
-        res.description = "Borderless uses your desktop's resolution. Choose Fullscreen to pick another one.";
-        res.value_text = desktop ? Size(desktop->width, desktop->height) : T(std::string("Desktop"));
-        res.facts.push_back("The game is drawn at up to this size.");
-        rows.push_back(std::move(res));
+        if (TakeRow(display, "Resolution",
+                    "The size of the game's picture: your desktop's, or a wider one shown with black bars above and "
+                    "below.",
+                    rows))
+          rows.back().facts.insert(rows.back().facts.begin(), "The game is drawn at up to this size.");
         Item hz;
         hz.type = ItemType::kInfo;
         hz.label = "Refresh rate";
@@ -166,7 +165,7 @@
                   rows) && !temporal.empty()) {
         // The sizes it draws at and rebuilds to, for each mode ("1280 x 720 to 1920 x 1080").
         const auto [out_w, out_h] = cb_.output_size ? cb_.output_size() : std::pair<int, int>{1280, 720};
-        const auto [ow, oh] = UpscalerOutputFor(out_w, out_h);
+        const auto [ow, oh] = UpscalerOutputFor(out_w, out_h, PictureAspect(out_w, out_h));  // ultrawide's shape too
         Item& it = rows.back();
         it.facts.clear();
         for (size_t m = 0; m < std::size(kTemporalModes) && m < it.options.size(); ++m) {

@@ -167,6 +167,9 @@ REXCVAR_DEFINE_STRING(kk_renderer, "native", "KK/Graphics", "Legacy renderer sel
 REXCVAR_DEFINE_STRING(kk_fullscreen_mode, "desktop", "KK/Video",
                       "Fullscreen resolution: desktop (a borderless window at the desktop's resolution) or a display "
                       "mode WIDTHxHEIGHT@HZ, e.g. 2560x1440@144 (exclusive fullscreen at that mode)");
+REXCVAR_DEFINE_STRING(kk_picture_size, "", "KK/Video",
+                      "An ultrawide picture size WIDTHxHEIGHT (e.g. 2560x1080) the game draws whatever the window or "
+                      "screen, fitted into it with black bars; empty: the window's or screen's own size");
 REXCVAR_DEFINE_STRING(kk_upscalers_offered, "", "KK/Graphics",
                       "Internal: the temporal upscalers this PC runs, as the launcher last found ('none' or "
                       "'dlss,fsr3,xess'); empty until it has asked (the default upscaler follows it)");
@@ -370,6 +373,11 @@ bool UltrawideSwitchedOff() {
   return off;
 }
 
+std::optional<std::pair<int, int>> ChosenPictureSize() {
+  if (UltrawideSwitchedOff()) return std::nullopt;
+  return ultrawide::ParsePictureSize(REXCVAR_GET(kk_picture_size));
+}
+
 double PictureAspectFor(int output_width, int output_height) {
   return UltrawideSwitchedOff() ? ultrawide::kGameAspect
                                 : ultrawide::AspectFor("auto", output_width, output_height);
@@ -402,8 +410,9 @@ void ApplyRenderPreset(int output_width, int output_height) {
   if (factor != 1.0) {
     const auto [pw, ph] = UpscalerOutputSize(output_width, output_height, 0, 0, aspect);
     SetCvarDefault("native_display_aspect", std::to_string(pw) + "x" + std::to_string(ph));
-    REXLOG_INFO("KK: ultrawide: {}x{} -> a {}x{} picture, views {:.3f} times wider", output_width, output_height, pw,
-                ph, factor);
+    REXLOG_INFO("KK: ultrawide: {}x{} -> a {}x{} picture, views {:.3f} times wider{}", output_width, output_height, pw,
+                ph, factor,
+                ChosenPictureSize() ? " (chosen picture size, fitted into the window or screen)" : "");
   } else {
     SetCvarDefault("native_display_aspect", "");
     if (UltrawideSwitchedOff()) REXLOG_INFO("KK: ultrawide: off (KK_ULTRAWIDE=0)");

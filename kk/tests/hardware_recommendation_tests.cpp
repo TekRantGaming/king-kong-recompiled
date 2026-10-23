@@ -699,6 +699,36 @@ int main() {
   ApplyRenderPreset(2560, 1080);
   Equals("native_display_aspect", "2560x1080");
   Check(std::abs(UltrawideFactor() - float(2560.0 / 1080.0 / (16.0 / 9.0))) < 1e-5f, "auto at 2560x1080: factor 1.333");
+  // Task 363: ultrawide sizes in the resolution lists (kk_picture_size).
+  {
+    namespace uw = kk::ultrawide;
+    for (const auto& s : uw::kWideSizes) {
+      Check(uw::ParsePictureSize(std::to_string(s.w) + "x" + std::to_string(s.h)).has_value(), "every listed size parses");
+      Check(s.w <= uw::kMaxPictureWidth && s.h <= uw::kMaxPictureHeight, "no listed size past 7680x2160");
+      const double a = double(s.w) / s.h;
+      Check(a > uw::kGameAspect && a <= uw::kMaxAspect + 1e-9, "every listed size is wider than 16:9, at most 32:9");
+    }
+    Check(!uw::ParsePictureSize(""), "empty: none chosen");
+    Check(!uw::ParsePictureSize("1920x1080"), "16:9 is not a picture size (the window or screen decides)");
+    Check(!uw::ParsePictureSize("1920x1200"), "16:10 neither");
+    Check(!uw::ParsePictureSize("10240x2160"), "past 7680 wide: ignored");
+    Check(!uw::ParsePictureSize("2560x1080x"), "junk after the size: ignored");
+    Check(uw::ParsePictureSize("7680x2160") == std::pair<int, int>{7680, 2160}, "7680x2160 parses");
+    Check(uw::WideSizeOffered(2160, 2160) && !uw::WideSizeOffered(2160, 1440), "a size taller than the screen is not offered");
+    Check(uw::FitWindow(2560, 1080, 3840, 2160) == std::pair<int, int>{2560, 1080}, "fits: the window is the size");
+    const auto [fw, fh] = uw::FitWindow(5120, 1440, 2560, 1440);  // room 2304x1296
+    Check(fw == 2304 && fh <= 1296 && std::abs(double(fw) / fh - 32.0 / 9.0) < 0.01, "too wide: same shape, inside 90%");
+    const auto [gw, gh] = uw::FitWindow(3440, 1440, 1920, 1080);
+    Check(gw <= 1728 && gh <= 972 && gw % 2 == 0 && gh % 2 == 0 && std::abs(double(gw) / gh - 3440.0 / 1440) < 0.01,
+          "3440x1440 on 1080p: even, same shape");
+    rex::cvar::ResetAllToDefaults();
+    Check(!ChosenPictureSize(), "no picture size by default");
+    rex::cvar::SetFlagByName("kk_picture_size", "2560x1080");
+    Check(ChosenPictureSize() == std::pair<int, int>{2560, 1080}, "a chosen picture size is used");
+    rex::cvar::SetFlagByName("kk_picture_size", "2560x1440");
+    Check(!ChosenPictureSize(), "a 16:9 size in the setting is ignored");
+    rex::cvar::ResetAllToDefaults();
+  }
   // Task 350a: DirectX 12 is the default graphics API on Windows; a settings file from before Beta 14 (version 3 or
   // older) moves to it once, before the renderer starts; the player's later choice stays. Linux keeps Vulkan.
   {

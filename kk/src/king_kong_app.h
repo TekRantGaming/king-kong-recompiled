@@ -550,9 +550,11 @@ class KingKongApp : public rex::ReXApp {
     w->RequestPaint();
   }
 
-  // Size the game is shown at: in fullscreen the Resolution picked on the Display page, or the
+  // Size the game is shown at: an ultrawide size picked in a resolution list (task 363: drawn at that size and
+  // fitted into the window or screen); in fullscreen the Resolution picked on the Display page, or the
   // monitor's; else the window.
   std::pair<int, int> OutputSize() const {
+    if (const auto picture = kk::ChosenPictureSize()) return *picture;
     if (REXCVAR_QUERY(bool, fullscreen)) {
       if (const auto mode = kk::FullscreenModeSize(); mode && mode->first > 0 && mode->second > 0) return *mode;
       if (!kk::ParseDisplayMode(REXCVAR_GET(kk_fullscreen_mode))) {
