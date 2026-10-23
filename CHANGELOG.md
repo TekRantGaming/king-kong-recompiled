@@ -3,6 +3,14 @@
 Every release of the King Kong PC port, newest first. The launcher shows this on its About page, and a
 version's notes the first time you start it.
 
+## v1.9.13 (23 October 2026)
+
+### What's new
+- **The updater now installs everything in an update.** Every file of the new version is installed, new folders too, so updating to the King Kong Remastered update (v2.0.0) from the launcher gives you the complete game. The download is checked before anything changes, and if a file is in use the update is undone and your game stays as it was.
+
+### Full changelog
+- `update.cpp`, `update_files.cpp`: the download is checked against the release's `SHA256SUMS.txt` and its size; every file in the release's file list is installed, except the game folder, logs, settings and user data; if a file cannot be replaced, every file is put back. Files a release no longer ships are removed only when unchanged. On the first start of a version, files an older updater left out are downloaded again.
+
 ## v1.9.12 (22 October 2026)
 
 ### What's new

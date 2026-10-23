@@ -50,6 +50,7 @@ set(KINGKONG_SOURCES
     src/shader_pack.cpp
     src/http.cpp
     src/update.cpp
+    src/update_files.cpp
     src/countdown.cpp
 )
 
@@ -107,9 +108,26 @@ endif()
 # The port's version: shown in the launcher and compared with GitHub releases by the updater.
 # (-DKK_VERSION=x.y.z overrides it, to test the updater with an "older" build.)
 if(NOT DEFINED KK_VERSION)
-    set(KK_VERSION "1.9.12")
+    set(KK_VERSION "1.9.13")
 endif()
 target_compile_definitions(king_kong PRIVATE KK_VERSION="${KK_VERSION}" KK_VERSION_W=L"${KK_VERSION}")
+
+# Developer builds only: unit tests (ctest). 1.9.13: the updater's file work (kk-files.txt, staged install with undo,
+# retired files, the first start check) on real files in a temp folder, also the helper of codex\simulate-update.ps1;
+# and the updater's texts (translated, no dashes) and launcher wiring.
+if(KK_DEV_TOOLS)
+    enable_testing()
+    add_executable(kk-update-tests tests/update_files_tests.cpp src/update_files.cpp)
+    target_include_directories(kk-update-tests PRIVATE src)
+    target_compile_features(kk-update-tests PRIVATE cxx_std_20)
+    rexglue_apply_target_settings(kk-update-tests)
+    add_test(NAME update-files COMMAND kk-update-tests "${CMAKE_CURRENT_BINARY_DIR}/update-test")
+    find_package(Python3 COMPONENTS Interpreter)
+    if(Python3_FOUND)
+        add_test(NAME updater-text COMMAND "${Python3_EXECUTABLE}" -I
+            "${CMAKE_CURRENT_SOURCE_DIR}/tests/updater_text_tests.py" "${CMAKE_CURRENT_SOURCE_DIR}")
+    endif()
+endif()
 
 # Button prompt pictures (kk_button_prompts) live beside the program.
 add_custom_command(TARGET king_kong POST_BUILD
