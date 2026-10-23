@@ -138,7 +138,6 @@ Useful settings:
 | `kk_vibration` | true / false | Controller vibration |
 | `kk_ps2_cutscenes` | true / false | The restored PS2 cutscenes (when they are installed) |
 | `native_cel_shading` | true / false | Cel shading (ink outlines and flat light bands) |
-| `kk_aspect` | "16:9", "21:9", "32:9", "auto" | Experimental: the picture's shape. Wider than 16:9 shows more on the sides ("auto": the screen's or window's own shape, up to 32:9). The HUD and menus are not adapted yet |
 | `native_cel_outline` | 0.5 to 4 | Cel shading: outline thickness |
 | `native_cel_darkness` | 0 to 1 | Cel shading: outline darkness (1 is black) |
 | `native_cel_bands` | 2 to 4 | Cel shading: number of light bands |
@@ -155,7 +154,7 @@ the online and update switches, the setup's own records or the mod list: `kk_mod
 `kk_achievement_sound_file`, `gpu_plugin`, `kk_launcher`, `kk_skip_launcher`, `kk_start`, `kk_renderer`,
 `kk_launcher_open` and the benchmark settings.
 
-The built in mods are settings mods: **Cel shading** (`native_cel_shading`; the fine controls are in the F8 panel) and **Ultrawide (experimental)** (`kk_aspect = "auto"`; it may not work as intended).
+The built in mod is a settings mod: **Cel shading** (`native_cel_shading`; the fine controls are in the F8 panel). Ultrawide is no longer a mod: since Beta 17 it is part of the game and always on.
 
 ## Cutscene mods
 

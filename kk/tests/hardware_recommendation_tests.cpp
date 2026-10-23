@@ -686,12 +686,16 @@ int main() {
   const std::string recaptured_text((std::istreambuf_iterator<char>(recaptured_file)), {});
   Check(recaptured_text.find("native_ao_samples = 2") != std::string::npos, "new saved baseline replaces an older trial baseline");
   ClearTemporarySettingBaselines();
-  // Ultrawide mod: ApplyRenderPreset: 16:9 leaves the presenter's shape alone; auto at 2560x1080 sets it and the factor.
+  // Ultrawide, built in and always on (task 360): ApplyRenderPreset: a 16:9 (or narrower) size leaves the
+  // presenter's shape alone; 2560x1080 sets it and the factor, with no setting.
   rex::cvar::ResetAllToDefaults();
-  ApplyRenderPreset(2560, 1080);
+  ApplyRenderPreset(1920, 1080);
   Equals("native_display_aspect", "");
   Check(UltrawideFactor() == 1.0f, "16:9: factor 1");
-  rex::cvar::SetFlagByName("kk_aspect", "auto");
+  ApplyRenderPreset(1920, 1200);
+  Equals("native_display_aspect", "");
+  Check(UltrawideFactor() == 1.0f, "16:10: factor 1");
+  Check(!UltrawideSwitchedOff() && PictureAspectFor(2560, 1080) == 2560.0 / 1080.0, "on without a setting");
   ApplyRenderPreset(2560, 1080);
   Equals("native_display_aspect", "2560x1080");
   Check(std::abs(UltrawideFactor() - float(2560.0 / 1080.0 / (16.0 / 9.0))) < 1e-5f, "auto at 2560x1080: factor 1.333");

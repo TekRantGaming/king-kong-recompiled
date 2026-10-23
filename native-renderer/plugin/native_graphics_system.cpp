@@ -584,7 +584,7 @@ void NativeGraphicsSystem::OnSwap(uint32_t /*frontbuffer_ptr*/, uint32_t width, 
   }
   rex::system::X_VIDEO_MODE mode;
   rex::kernel::xboxkrnl::VdQueryVideoMode(&mode);
-  // The experimental Ultrawide mod (kk_aspect): the picture is wider than the game's 16:9 and the presenter
+  // Ultrawide (built into the game, task 360): the picture is wider than the game's 16:9 and the presenter
   // fits that shape instead (native_display_aspect, WxH, set by the game before the GPU starts).
   static const std::pair<uint32_t, uint32_t> shape = [] {
     unsigned w = 0, h = 0;

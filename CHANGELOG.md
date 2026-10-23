@@ -7,8 +7,10 @@ version's notes the first time you start it.
 
 ### What's new
 - **The Home screen surprise now also works from the keyboard.**
+- **Ultrawide is built in**: on a 21:9 or 32:9 screen or window the game fills the whole width and shows more on the left and right, with nothing stretched. The HUD, subtitles, menus, pause and photo mode stay in their places in the middle. Nothing changes on a 16:9 screen. The Ultrawide mod is gone: there is nothing to switch on.
 
 ### Changed
+- **PS2 cutscenes now play first and the next level loads after them**, so nothing loads under the clip.
 - **A new Discord invite link** in the launcher and the game.
 - **Plainer wording** in the launcher and the game menus, in all five languages.
 - **Switching back to stable keeps the renderer settings** once stable 2.0.0 is out. Only a stable version before 2.0.0, which has no native renderer, still puts them back to their defaults.

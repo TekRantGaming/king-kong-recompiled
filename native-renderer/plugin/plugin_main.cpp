@@ -465,8 +465,8 @@ REXCVAR_DEFINE_STRING(native_upscaler_output, "", "Native renderer",
     .lifecycle(rex::cvar::Lifecycle::kInitOnly);
 
 REXCVAR_DEFINE_STRING(native_display_aspect, "", "Native renderer",
-                      "The shown picture's shape, WxH (the game sets it, not saved, for the experimental Ultrawide "
-                      "mod); empty: the game's own 16:9")
+                      "The shown picture's shape, WxH (the game sets it, not saved, on a screen wider "
+                      "than 16:9: ultrawide); empty: the game's own 16:9")
     .lifecycle(rex::cvar::Lifecycle::kInitOnly);
 
 REXCVAR_DEFINE_STRING(native_frame_size, "", "Native renderer",
