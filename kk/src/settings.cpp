@@ -474,11 +474,6 @@ void ClearModSettings() {
   std::lock_guard lock(temporary_mutex);
   mod_overlay.clear();
 }
-namespace {
-std::atomic<bool> g_audio_mute_held{false};  // task 293 (SetAudioMuteHeld)
-}  // namespace
-void SetAudioMuteHeld(bool held) { g_audio_mute_held = held; }
-
 bool SaveSettings(const std::filesystem::path& path, bool include_temporary) {
   std::lock_guard lock(temporary_mutex);
   // Like rex::cvar::SaveConfig, but values that came from the command line or
@@ -494,8 +489,6 @@ bool SaveSettings(const std::filesystem::path& path, bool include_temporary) {
     if (source == rex::cvar::Source::kCommandLine || source == rex::cvar::Source::kEnvironment) continue;
     // Set by the port at every start (ApplyRuntimeOverrides).
     if (e.name == "video_mode_width" || e.name == "video_mode_height") continue;
-    // Task 293: held on by a PS2 cutscene the level loads under, never the player's choice.
-    if (e.name == "audio_mute" && g_audio_mute_held.load()) continue;
     // Set from kk_hdr and kk_hdr_levels at every start (hdr_display.cpp, HDR follows Windows).
     if (e.name == "present_hdr" || ((e.name == "present_hdr_peak" || e.name == "present_hdr_paper_white") &&
                                     REXCVAR_GET(kk_hdr_levels) != "manual"))
