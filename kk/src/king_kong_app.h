@@ -89,6 +89,8 @@ class KingKongApp : public rex::ReXApp {
   bool OnWindowCloseRequested() override {
     // The SDK's accepted window close hard-exits without running our destructor.
     // Task 349c: the window closed (X, Alt+F4) while the menu scene started is not a failed start.
+    // Task 368: from here at most 10 s, and no crash report (crash_dump.h NoteQuitStarted).
+    kk::NoteQuitStarted("the window closes");
     kk::menu_scene::NoteClosing();
     kk::benchmark::Shutdown();
     kk::play::FlushRendererFiles();
@@ -100,6 +102,7 @@ class KingKongApp : public rex::ReXApp {
   }
 
   void OnShutdown() override {
+    kk::NoteQuitStarted("shutdown");  // task 368
     kk::benchmark::Shutdown();
     kk::play::FlushRendererFiles();
     kk::startup::CleanExit();
@@ -356,6 +359,7 @@ class KingKongApp : public rex::ReXApp {
   // The launcher's process ends (Quit, or Play restarting the program for restart-only settings).
   void CloseLauncherProcess() {
     REXLOG_INFO("KK: the launcher closes");
+    kk::NoteQuitStarted("the launcher closes");  // task 368 (after the game's window has shown, on Play)
     kk::exit_evidence::NoteCleanExit("launcher closed");
     kk::menu_scene::NoteClosing();
     // Task 330: a launcher with the live menu scene has the game running: closed as the game's window is

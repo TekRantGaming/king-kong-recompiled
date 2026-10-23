@@ -590,8 +590,28 @@ constexpr int32_t kHdrOffVersion = 5;
 constexpr int32_t kFovDefaultVersion = 6;
 }  // namespace
 
+bool IntelIntegratedGraphics() {
+#if defined(_WIN32)
+  static const bool intel = IntelIntegratedNotArc(Gpu());  // (first called before the log exists: no log here)
+  return intel;
+#else
+  return false;
+#endif
+}
+
+bool Fsr4AllowedOnThisGpu() {
+  const GpuInfo& gpu = Gpu();
+  // An unknown card (no DXGI answer) is left to the renderer, which checks the device's own vendor.
+  if (!gpu.vendor_id && gpu.vendor == GpuVendor::kUnknown) return true;
+  return gpu.vendor_id ? gpu.vendor_id == 0x1002 : gpu.vendor == GpuVendor::kAmd;
+}
+
 bool MigrateGraphicsApi() {
 #if defined(_WIN32)
+  if (IntelIntegratedGraphics())
+    REXLOG_INFO("KK: Intel integrated graphics ({}, {} MiB): Vulkan is the default graphics API, and the setup "
+                "skips the DirectX 12 shader pack unless DirectX 12 is chosen (native_backend now {})", Gpu().name,
+                Gpu().dedicated_memory >> 20, rex::cvar::GetFlagByName("native_backend"));
   // Read before MigrateSettings brings the version up to date (that runs once the paths are final, after the
   // renderer has started). A new install (no file: version 0) is already on the default, DirectX 12.
   if (REXCVAR_GET(kk_settings_version) >= kD3d12DefaultVersion) return false;
@@ -604,6 +624,8 @@ bool MigrateGraphicsApi() {
     return false;
   const std::string before = flag->getter();
   if (before == "d3d12") return false;
+  // Task 368: Intel integrated graphics stay on Vulkan (its default there; "auto" runs Vulkan too).
+  if (IntelIntegratedGraphics()) return false;
   rex::cvar::SetFlagByName("native_backend", "d3d12");
   REXLOG_INFO("KK: settings from before Beta 14: graphics API {} -> d3d12 (DirectX 12 is the default on Windows; "
               "Vulkan stays the fallback when DirectX 12 cannot start)", before);
@@ -913,6 +935,13 @@ void ApplyFixedSettings() {
                 BestTemporalUpscaler(), SpatialDefault(),
                 REXCVAR_GET(kk_upscalers_offered).empty() ? "not asked yet" : REXCVAR_GET(kk_upscalers_offered));
   }
+  // Task 368 (owner, 23 Oct): FSR 4 only on AMD cards. A saved FSR 4 on another card goes back to the default
+  // upscaler for this card and tier (ApplyUpscalerDefaults), and is saved that way.
+  if (Flag("native_upscaler") && rex::cvar::GetFlagByName("native_upscaler") == "fsr4" && !Fsr4AllowedOnThisGpu()) {
+    rex::cvar::ResetToDefault("native_upscaler");
+    REXLOG_INFO("KK: FSR 4 was chosen but runs on AMD graphics cards only: upscaler back to the default ({})",
+                rex::cvar::GetFlagByName("native_upscaler"));
+  }
   // FXAA Extreme is no longer offered: a settings file that chose it gets FXAA.
   if (rex::cvar::GetFlagByName("swap_post_effect") == "fxaa_extreme")
     rex::cvar::SetFlagByName("swap_post_effect", "fxaa");
@@ -977,7 +1006,11 @@ void ApplyPortDefaults() {
   // Task 350a (owner, 21 Oct): DirectX 12 is the graphics API on Windows; startup recovery switches to Vulkan when
   // DirectX 12 cannot start (startup_recovery.cpp). Linux keeps the renderer's own "auto" (Vulkan). A settings file
   // from before Beta 14 is moved over once (MigrateGraphicsApi).
-  SetCvarDefault("native_backend", "d3d12");
+  // Task 368 (owner, 23 Oct): Intel integrated graphics (not Arc) default to Vulkan and the setup skips the DirectX
+  // 12 shader pack (IntelIntegratedNotArc). A saved choice of DirectX 12 stays (config wins over a default).
+  const bool intel = IntelIntegratedGraphics();
+  SetCvarDefault("native_backend", intel ? "vulkan" : "d3d12");
+  if (intel) SetCvarDefault("native_setup_skip_d3d12", "true");
 #endif
   SetCvarDefault("mnk_sensitivity", "0.010000");  // as the setting writes it, so it is not saved
   // Keyboard & mouse: laid out like other first-person games. The mouse turns

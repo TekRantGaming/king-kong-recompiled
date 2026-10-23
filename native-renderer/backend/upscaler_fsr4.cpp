@@ -16,6 +16,7 @@
 #if NR_HAS_FFX && NR_HAS_D3D12
 
 #include <chrono>
+#include <cstdio>
 #include <cstdlib>
 #include <cstring>
 #include <string>
@@ -245,6 +246,17 @@ std::unique_ptr<Upscaler> CreateFsr4Upscaler(nvrhi::IDevice* device, const Upsca
     if (why) *why = "amd_fidelityfx_loader_dx12.dll has no FidelityFX API";
     return nullptr;
   }
+  // Task 368 (owner, 23 Oct; crash report G7): FSR 4 only on AMD cards, as the changelog says. The AMD library
+  // also lists an FSR 4 on NVIDIA cards, where its context took seconds and the game then hung. The developer
+  // path test below (NR_DEV_FSR4_ANY_PROVIDER) still runs anywhere.
+  const char* any_provider = std::getenv("NR_DEV_FSR4_ANY_PROVIDER");
+  const bool dev_any = any_provider && std::strcmp(any_provider, "1") == 0;
+  if (const uint32_t vendor = UpscalerDeviceVendor(device); vendor != 0x1002 && !dev_any) {
+    char id[16];
+    std::snprintf(id, sizeof(id), "0x%04X", vendor);
+    if (why) *why = std::string("FSR 4 runs on AMD graphics cards only (this card's vendor is ") + id + ")";
+    return nullptr;
+  }
   // The upscaler versions the library offers on this device (newest first), and the newest FSR 4.
   f::ffxQueryDescGetVersions q{};
   q.header.type = FFX_API_QUERY_DESC_TYPE_GET_VERSIONS;
@@ -276,7 +288,7 @@ std::unique_ptr<Upscaler> CreateFsr4Upscaler(nvrhi::IDevice* device, const Upsca
   // Developer check only (never set by the game or launcher): NR_DEV_FSR4_ANY_PROVIDER=1 takes the newest
   // version the library offers when it has no FSR 4, so this SDK 2.3 path (context, dispatch, jitter and
   // the game's FSR 4 plumbing) can run on a GPU without FSR 4. It is not FSR 4's model.
-  if (const char* any = std::getenv("NR_DEV_FSR4_ANY_PROVIDER"); any && std::strcmp(any, "1") == 0 && count) {
+  if (dev_any && count) {
     const std::string name = names[0] ? names[0] : "?";
     Logf(LogLevel::kWarning, "rexgpu-native: FSR 4 path test: no FSR 4 here (%s); using FSR %s through the same path",
          offered.c_str(), name.c_str());

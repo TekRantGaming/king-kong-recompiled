@@ -309,10 +309,13 @@
 #if !defined(__linux__)
       // Task 350a (owner, 21 Oct): DirectX 12 is the recommended API on Windows, Vulkan the other choice and the
       // fallback when DirectX 12 cannot start.
+      // Task 368: on Intel integrated graphics Vulkan is the recommended one (and the default).
+      const bool intel = IntelIntegratedGraphics();
       GfxCard dx;
       dx.label = "DirectX 12";
-      dx.caption = "Recommended";
-      dx.text = "The recommended graphics API on Windows. If it cannot start, the game uses Vulkan.";
+      dx.caption = intel ? "Also available" : "Recommended";
+      dx.text = intel ? "Also available. On this graphics card Vulkan is recommended."
+                      : "The recommended graphics API on Windows. If it cannot start, the game uses Vulkan.";
       dx.selected = backend == "d3d12";
       dx.pick = [] {
         if (Get("native_backend") == "d3d12") return;
@@ -328,8 +331,9 @@
       vk.caption = "Recommended";
       vk.text = "The recommended graphics API. It works on every graphics card the game supports.";
 #else
-      vk.caption = "If DirectX 12 has problems";
-      vk.text = "Works on every graphics card the game supports. Try it if DirectX 12 gives you problems.";
+      vk.caption = intel ? "Recommended" : "If DirectX 12 has problems";
+      vk.text = intel ? "The recommended graphics API. It works on every graphics card the game supports."
+                      : "Works on every graphics card the game supports. Try it if DirectX 12 gives you problems.";
 #endif
       vk.selected = backend == "auto" || backend == "vulkan";
       vk.pick = [] {

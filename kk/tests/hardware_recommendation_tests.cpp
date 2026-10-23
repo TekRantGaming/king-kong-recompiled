@@ -166,6 +166,25 @@ int main() {
     fake.gpu.vendor_id = 0x10DE;
     Check(FirstSetupHardwareTierIndex(fake) == 1, "PCI ID must match its vendor");
   }
+  // Task 368: older Intel integrated graphics (Vulkan by default, no DirectX 12 pack at setup); never Arc.
+  {
+    constexpr uint64_t MiB = uint64_t(1) << 20;
+    struct IntelCase { GpuInfo gpu; bool expected; const char* what; };
+    const IntelCase cases[] = {
+        {{GpuVendor::kIntel, "Intel(R) UHD Graphics 600", 128 * MiB, "", 0x8086, 0x3185}, true, "UHD 600 (N4020)"},
+        {{GpuVendor::kIntel, "Intel(R) UHD Graphics", 128 * MiB, "", 0x8086, 0x46D0}, true, "UHD (N200)"},
+        {{GpuVendor::kIntel, "Intel(R) Iris(R) Xe Graphics", 128 * MiB, "", 0x8086, 0x9A49}, true, "Iris Xe"},
+        {{GpuVendor::kIntel, "Intel(R) HD Graphics 620", 0, "", 0, 0}, true, "HD 620, vendor only"},
+        {{GpuVendor::kIntel, "Intel(R) Arc(TM) A770 Graphics", 16 * GiB, "", 0x8086, 0x56A0}, false, "Arc A770"},
+        {{GpuVendor::kIntel, "Intel(R) Arc(TM) 140V GPU (16GB)", 128 * MiB, "", 0x8086, 0x64A0}, false, "Arc 140V"},
+        {{GpuVendor::kIntel, "Intel(R) Graphics", 128 * MiB, "", 0x8086, 0x7D55}, false, "Meteor Lake ID"},
+        {{GpuVendor::kIntel, "Intel(R) Future Graphics", 2 * GiB, "", 0x8086, 0x1234}, false, "2 GiB of its own"},
+        {{GpuVendor::kNvidia, "NVIDIA GeForce RTX 4050 Laptop GPU", 6 * GiB, "", 0x10DE, 0x28A1}, false, "NVIDIA"},
+        {{GpuVendor::kNvidia, "Intel(R) UHD Graphics 620", 128 * MiB, "", 0x10DE, 0x3EA0}, false, "ID wins"},
+        {{GpuVendor::kUnknown, "", 0, "", 0, 0}, false, "unknown card"},
+    };
+    for (const auto& c : cases) Check(IntelIntegratedNotArc(c.gpu) == c.expected, c.what);
+  }
   fake = {{GpuVendor::kIntel, "Intel Arc A770", 16 * GiB, "", 0x8086, 0x56A0}, 8, 32 * GiB};
   Check(FirstSetupHardwareTierIndex(fake) == 2, "dedicated Intel ID retains high");
   fake = {{GpuVendor::kIntel, "Intel Arc B580", 12 * GiB, "", 0x8086, 0xE20B}, 8, 32 * GiB};

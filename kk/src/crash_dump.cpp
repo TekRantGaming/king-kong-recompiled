@@ -10,6 +10,7 @@
 #include "crash_dump.h"
 #include "diagnostics.h"
 #include "exit_evidence.h"
+#include "overlay_modules.h"
 #include "startup_clock.h"
 #include "hooks/kk_native_ui.h"
 #include "backend/startup_steps.h"
@@ -26,9 +27,12 @@
 #include <dbghelp.h>
 #include <tlhelp32.h>
 #include <shellapi.h>
+#include <psapi.h>
 #pragma comment(lib, "dbghelp.lib")
 
+#include <algorithm>
 #include <atomic>
+#include <cctype>
 #include <cstdio>
 #include <cstdlib>
 #include <cwchar>
@@ -52,6 +56,16 @@ LPTOP_LEVEL_EXCEPTION_FILTER g_previous = nullptr;
 LPTOP_LEVEL_EXCEPTION_FILTER g_original_previous = nullptr;
 volatile LONG g_crashing = 0;
 std::atomic<int> g_api{0};  // task 270: SetCrashReportApi
+// Task 368 (owner, 23 Oct; crash reports G5, G8): quitting has started (NoteQuitStarted). A crash or abort from
+// then on ends the process quietly, with no report (accepted: real crashes during quit go unreported).
+std::atomic<bool> g_quitting{false};
+constexpr DWORD kQuitLimitMs = 10000;
+
+[[noreturn]] void EndQuietly(const char* what) {
+  nr::steps::Note("%s while quitting: the program ends without a crash report", what);
+  TerminateProcess(GetCurrentProcess(), 0);
+  for (;;) Sleep(INFINITE);  // (TerminateProcess on this process does not return)
+}
 
 const char* ApiName() {
   const int api = g_api.load(std::memory_order_relaxed);
@@ -119,6 +133,32 @@ void WriteCrashStack(FILE* f, EXCEPTION_POINTERS* info) {
 #endif
 }
 
+// Task 368: "Overlays loaded: RivaTuner Statistics Server (rtsshooks64.dll), ..." (file names only, no folders).
+void WriteOverlayModules(FILE* f) {
+  HMODULE modules[1024];
+  DWORD needed = 0;
+  if (!K32EnumProcessModules(GetCurrentProcess(), modules, sizeof(modules), &needed)) return;
+  wchar_t exe[MAX_PATH] = L"";
+  GetModuleFileNameW(nullptr, exe, MAX_PATH);
+  const wchar_t* exe_slash = wcsrchr(exe, L'\\');
+  const size_t exe_dir = exe_slash ? size_t(exe_slash - exe) : 0;
+  std::string found;
+  const DWORD count = std::min<DWORD>(needed / sizeof(HMODULE), DWORD(std::size(modules)));
+  for (DWORD i = 0; i < count; ++i) {
+    wchar_t path[MAX_PATH];
+    if (!GetModuleFileNameW(modules[i], path, MAX_PATH)) continue;
+    const wchar_t* slash = wcsrchr(path, L'\\');
+    const wchar_t* file = slash ? slash + 1 : path;
+    const size_t dir = slash ? size_t(slash - path) : 0;
+    const bool beside = exe_dir && dir == exe_dir && _wcsnicmp(path, exe, dir) == 0;
+    std::string name;
+    for (const wchar_t* c = file; *c; ++c) name += *c < 128 ? char(std::tolower(int(*c))) : '?';
+    const std::string what = OverlayModule(name, beside);
+    if (!what.empty()) found += (found.empty() ? "" : ", ") + what + " (" + name + ")";
+  }
+  std::fprintf(f, "Overlays loaded: %s\n", found.empty() ? "none found" : found.c_str());
+}
+
 // crash-<time>.dmp and .txt. `thread`: the thread that crashed (this one, or the one the writer thread
 // works for). `reason`: why the program ends when no exception was raised (abort(), std::terminate).
 void WriteCrashFiles(EXCEPTION_POINTERS* info, DWORD thread, const char* reason) {
@@ -138,6 +178,7 @@ void WriteCrashFiles(EXCEPTION_POINTERS* info, DWORD thread, const char* reason)
     // tables: the server groups identical crashes by the code and the first three of these.
     WriteCrashStack(f, info);
     std::fputs("\n", f);
+    WriteOverlayModules(f);  // task 368
     WriteCrashDiagnostics(f);
     // What the game was doing: the last 200 log lines (fixed memory, redacted when they were logged).
     std::fputs("\n", f);
@@ -189,6 +230,7 @@ bool WriteCrashReportOnce(EXCEPTION_POINTERS* info, const char* reason) {
 LONG WINAPI OnCrash(EXCEPTION_POINTERS* info) {
   // Called again from a filter that replaced ours and keeps ours as its previous: on to the one before us.
   if (t_in_filter) return g_original_previous ? g_original_previous(info) : EXCEPTION_CONTINUE_SEARCH;
+  if (g_quitting.load(std::memory_order_relaxed)) EndQuietly("a crash");  // task 368
   ++t_in_filter;
   if (!g_crashing) NoteException(info, "crash (unhandled)");
   WriteCrashReportOnce(info, nullptr);
@@ -231,6 +273,7 @@ LONG CALLBACK OnVectored(EXCEPTION_POINTERS* info) {
   if (t_in_vectored || !Serious(code)) return EXCEPTION_CONTINUE_SEARCH;
   ++t_in_vectored;
   if (AlwaysFatal(code)) {
+    if (g_quitting.load(std::memory_order_relaxed)) EndQuietly("a fatal exception");  // task 368
     NoteException(info, "crash (fatal)");
     WriteCrashReportOnce(info, "a fatal exception (written from the vectored handler)");
   } else if (!g_last_frame_seen.load(std::memory_order_relaxed) && InterlockedIncrement(&g_noted_exceptions) <= 16) {
@@ -424,6 +467,7 @@ void WatchForHangs() {
       KeepFilterInFront();
       filter_tick = now;
     }
+    if (g_quitting.load(std::memory_order_relaxed)) continue;  // task 368: no hang report while quitting
     const ULONGLONG last = g_last_frame.load(std::memory_order_relaxed);
     if (now - previous_tick > 5000) {
       // This thread did not run for a while: the PC slept or the process was
@@ -498,7 +542,23 @@ void NoteGuestFrame() {
   exit_evidence::NoteFrame();
 }
 
+void NoteQuitStarted(const char* why) {
+  if (g_quitting.exchange(true)) return;
+  nr::steps::Note("quitting (%s): no crash reports from now on; the program is ended if it still runs in 10 s", why);
+  REXLOG_INFO("KK: quitting ({}): the program is ended if it still runs {} s from now", why, kQuitLimitMs / 1000);
+  std::thread([] {
+    Sleep(kQuitLimitMs);
+    REXLOG_WARN("KK: the program still ran {} s after quitting started: ended now", kQuitLimitMs / 1000);
+    nr::steps::Note("still running 10 s after quitting started: the program is ended");
+    rex::FlushLogging();
+    TerminateProcess(GetCurrentProcess(), 0);
+  }).detach();
+}
+
+bool QuitStarted() { return g_quitting.load(std::memory_order_relaxed); }
+
 void WriteCrashReportNow(const char* reason) {
+  if (g_quitting.load(std::memory_order_relaxed)) EndQuietly(reason ? reason : "an abort");  // task 368
   if (InterlockedExchange(&g_crashing, 1) != 0 || !g_crash_dir[0]) return;
   // No exception was raised (abort(), std::terminate, an invalid C runtime argument): a made-up record
   // (STATUS_FATAL_APP_EXIT, as abort() reports) and this thread's registers, so the stack shows the caller.
@@ -630,6 +690,8 @@ void NoteGuestFrame() {}
 void NoteGameStarting() {}
 void SetCrashReportApi(int) {}
 void WriteCrashReportNow(const char*) {}
+void NoteQuitStarted(const char*) {}
+bool QuitStarted() { return false; }
 void InstallCrashDumps(const std::filesystem::path&, const std::filesystem::path&) {}
 void InstallEarlyCrashHandlers(const std::filesystem::path&, const std::filesystem::path&) {}
 }  // namespace kk

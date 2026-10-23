@@ -32,6 +32,33 @@ inline constexpr std::array<HardwareTier, 3> kHardwareTiers = {{
     {"mid", "quality", "half", 2, true, "medium"},
     {"high", "quality", "auto", 3, true, "high"},
 }};
+// Intel's MTL/ARL/LNL/PTL integrated IDs (Arc class integrated graphics), including adapters with generic names.
+// https://github.com/torvalds/linux/blob/master/include/drm/intel/pciids.h
+inline constexpr uint32_t kIntelArcIntegratedIds[] = {
+    0x7D51, 0x7DD1, 0x7D41, 0x7D67, 0xB640, 0x7D40, 0x7D45,
+    0x7D55, 0x7D60, 0x7DD5, 0x6420, 0x64A0, 0x64B0,
+    0xB080, 0xB081, 0xB082, 0xB083, 0xB084, 0xB085,
+    0xB086, 0xB087, 0xB08F, 0xB090, 0xB0A0, 0xB0B0};
+
+// Task 368 (crash reports G1, owner 23 Oct): the game's graphics card (DetectGpu: Windows' high performance
+// adapter, so a hybrid laptop's NVIDIA or AMD card wins over its Intel one) is older Intel integrated graphics
+// (UHD, Iris, HD), where Intel's Direct3D 12 driver crashed making the setup's device. Then the default API is
+// Vulkan and the setup skips the DirectX 12 shader pack. Told by: Intel's PCI vendor (0x8086, or the vendor
+// when no ID is known), no "Arc" in the name, not one of the Arc class integrated IDs above (those run both
+// APIs), and under 1 GiB of its own video memory (integrated graphics report 128 MB or less; Arc cards have
+// 4 GiB or more). An unknown card is never matched.
+inline bool IntelIntegratedNotArc(const GpuInfo& gpu) {
+  const bool intel = gpu.vendor_id ? gpu.vendor_id == 0x8086 : gpu.vendor == GpuVendor::kIntel;
+  if (!intel || gpu.name.empty()) return false;
+  std::string model = gpu.name;
+  std::transform(model.begin(), model.end(), model.begin(), [](unsigned char c) { return char(std::tolower(c)); });
+  if (model.find("arc") != std::string::npos) return false;
+  if (std::find(std::begin(kIntelArcIntegratedIds), std::end(kIntelArcIntegratedIds), gpu.device_id) !=
+      std::end(kIntelArcIntegratedIds))
+    return false;
+  return gpu.dedicated_memory < (uint64_t(1) << 30);
+}
+
 inline size_t HardwareTierIndex(const HardwareProfile& h) {
   constexpr uint64_t GiB = uint64_t(1) << 30;
   std::string model = h.gpu.name;
@@ -81,13 +108,7 @@ inline size_t FirstSetupHardwareTierIndex(const HardwareProfile& h) {
       (has("radeon graphics") || has("radeon 780m") || has("radeon 890m") ||
        has("radeon 760m") || has("radeon 860m") || has("radeon 880m") ||
        has("ryzen z1") || has("ryzen z2"));
-  // Intel's MTL/ARL/LNL/PTL integrated IDs, including adapters with generic names.
-  // https://github.com/torvalds/linux/blob/master/include/drm/intel/pciids.h
-  constexpr uint32_t intel_integrated[] = {
-      0x7D51, 0x7DD1, 0x7D41, 0x7D67, 0xB640, 0x7D40, 0x7D45,
-      0x7D55, 0x7D60, 0x7DD5, 0x6420, 0x64A0, 0x64B0,
-      0xB080, 0xB081, 0xB082, 0xB083, 0xB084, 0xB085,
-      0xB086, 0xB087, 0xB08F, 0xB090, 0xB0A0, 0xB0B0};
+  const auto& intel_integrated = kIntelArcIntegratedIds;
   const bool intel_apu = vendor(0x8086, GpuVendor::kIntel) &&
       (std::find(std::begin(intel_integrated), std::end(intel_integrated), h.gpu.device_id) !=
            std::end(intel_integrated) || has("arc graphics") || has("arc integrated") ||

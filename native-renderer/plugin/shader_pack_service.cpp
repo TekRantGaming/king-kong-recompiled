@@ -58,6 +58,7 @@ REXCVAR_DECLARE(bool, native_pipeline_list);
 REXCVAR_DECLARE(bool, native_pipeline_cache);
 REXCVAR_DECLARE(bool, native_vk_pipeline_cache);
 REXCVAR_DECLARE(std::string, native_failed_backends);
+REXCVAR_DECLARE(bool, native_setup_skip_d3d12);
 
 namespace nr {
 
@@ -244,6 +245,7 @@ struct NrShaderPackJob {
   std::string player_records;
   bool need_driver_cache = false;
   std::string failed_backends;  // --native_failed_backends when the job started
+  bool skip_d3d12 = false;      // --native_setup_skip_d3d12 when the job started (task 368)
   // The steps (NrShaderPackProgress): per API its shaders, then its pipelines in two passes.
   std::atomic<int> step{0}, steps{0}, step_kind{0}, pass{0};
   std::atomic<bool> preparing{false};  // the pipelines are being prepared (not only checked)
@@ -267,6 +269,7 @@ NrShaderPackJob* StartJob(const char* cache_dir, const char* game_dir, uint32_t 
   job->player_records = place.records();
   job->need_driver_cache = REXCVAR_GET(native_vk_pipeline_cache);
   job->failed_backends = REXCVAR_GET(native_failed_backends);
+  job->skip_d3d12 = REXCVAR_GET(native_setup_skip_d3d12);
   rex::system::X_VIDEO_MODE mode{};
   rex::kernel::xboxkrnl::VdQueryVideoMode(&mode);
   for (unsigned i = 0; i < 2; ++i) {
@@ -312,6 +315,12 @@ NrShaderPackJob* StartJob(const char* cache_dir, const char* game_dir, uint32_t 
           std::string::npos) {
         REXLOG_INFO("rexgpu-native: {} shader pack skipped (that API failed to start here)",
                     kkshaders::packBackendName(backend));
+        continue;
+      }
+      // Task 368: on Intel integrated graphics (the game sets --native_setup_skip_d3d12) the DirectX 12 pack and
+      // its pipeline device are left out unless DirectX 12 is the selected API (crash reports G1).
+      if (backend == kkshaders::PackBackend::Dxil && job->skip_d3d12 && selected_backend != backend) {
+        REXLOG_INFO("rexgpu-native: Direct3D 12 shader pack skipped (Intel integrated graphics, Vulkan selected)");
         continue;
       }
       backends.push_back(backend);
@@ -414,25 +423,35 @@ NrShaderPackJob* StartJob(const char* cache_dir, const char* game_dir, uint32_t 
 #endif
       if (!r.upToDate || previous != expected || !driver_ready || driver_changed || availability.Retry()) {
         const auto start = std::chrono::steady_clock::now();
+        // Task 368: a device that ended the program at an earlier setup (the crash mark) is not made again.
+        const bool crashed_before = availability.CrashedBefore();
+        if (crashed_before)
+          REXLOG_WARN("rexgpu-native: setup {} pipeline device ended the program at an earlier setup; not made "
+                      "again until the driver or the shaders change", kkshaders::packBackendName(backend));
 #if NR_HAS_VULKAN
-        if (backend == kkshaders::PackBackend::Spirv && !host) {
+        if (backend == kkshaders::PackBackend::Spirv && !host && !crashed_before) {
           nr::PreferHighPerformanceGpu(nr::GpuApi::kVulkan);  // the game's GPU, not adapter 0 (task 203)
           nr::PrepareVulkanDeviceRequests();  // the graphics pipeline library (task 183)
           nr::steps::Note("shader setup: making a Vulkan device for the pipelines");
+          availability.BeforeDevice();
           provider = rex::ui::vulkan::VulkanProvider::Create(true, false);
           nr::steps::Note("shader setup: Vulkan device %s", provider ? "made" : "not made");
           if (provider) host = nr::CreateVulkanHostDevice(*provider);
+          if (host) availability.DeviceMade();
         }
 #endif
 #if NR_HAS_D3D12
-        if (backend == kkshaders::PackBackend::Dxil) {
+        if (backend == kkshaders::PackBackend::Dxil && !crashed_before) {
           // The SDK's default is the first adapter: the integrated GPU on hybrid laptops, where
           // Intel's driver crashed preparing these pipelines (Beta 7/8 reports, task 203).
           nr::PreferHighPerformanceGpu(nr::GpuApi::kD3D12);
           nr::steps::Note("shader setup: making a Direct3D 12 device for the pipelines");
+          // Task 368: Intel's driver ends the program inside the device's creation (crash reports G1).
+          availability.BeforeDevice();
           provider = rex::ui::d3d12::D3D12Provider::Create();
           nr::steps::Note("shader setup: Direct3D 12 device %s", provider ? "made" : "not made");
           if (provider) host = nr::CreateD3D12HostDevice(*provider);
+          if (host) availability.DeviceMade();
         }
 #endif
         if (host) {

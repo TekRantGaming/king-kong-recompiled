@@ -34,6 +34,13 @@ void NoteGuestFrame();
 // runtime argument), with `reason` in the .txt. Once per process (shares the crash handler's guard).
 void WriteCrashReportNow(const char* reason);
 
+// Task 368 (owner, 23 Oct): quitting has started (the window closes, Quit, the launcher's process ends). From now
+// on a crash, fatal exception or abort ends the process quietly with no crash report or upload, no hang report
+// is written, and if the process still runs 10 seconds later it is ended (exit code 0). Any thread; once.
+// Windows only (nothing elsewhere).
+void NoteQuitStarted(const char* why);
+bool QuitStarted();
+
 // Task 270: the graphics API this session renders with (1 Vulkan, 2 Direct3D 12, 0 not known yet), written
 // into crash and hang reports as "Graphics API: ..." so their upload names this session's API, not the API
 // of the later session that sends them. Any thread.

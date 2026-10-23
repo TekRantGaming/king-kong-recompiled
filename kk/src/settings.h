@@ -177,6 +177,12 @@ void ApplyFirstSetupHardwareRecommendation(int width, int height);
 // later choices stay. Call after the settings file is read and before the renderer starts (it reads native_backend
 // only then), before startup recovery applies a fallback. Nothing on Linux (Vulkan). True if it changed the API.
 bool MigrateGraphicsApi();
+// Task 368: the game's graphics card is Intel integrated graphics, not Arc (hardware_recommendation.h
+// IntelIntegratedNotArc): Vulkan is the default and recommended API there. Always false off Windows.
+bool IntelIntegratedGraphics();
+// Task 368: FSR 4 is offered and kept only on AMD graphics cards (true when the card is not known: the
+// renderer then checks the device's vendor itself).
+bool Fsr4AllowedOnThisGpu();
 
 // The default upscaler (Beta 3, docs/upscalers.md "The default"): with the native renderer, the best
 // temporal upscaler this PC runs (native_upscaler): DLSS on an NVIDIA card that supports it, FSR 4 on

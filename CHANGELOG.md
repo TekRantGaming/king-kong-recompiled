@@ -19,6 +19,14 @@ version's notes the first time you start it.
 - **A new Discord invite link** in the launcher and the game.
 - **Plainer wording** in the launcher and the game menus, in all five languages.
 - **Switching back to stable keeps the renderer settings** once stable 2.0.0 is out. Only a stable version before 2.0.0, which has no native renderer, still puts them back to their defaults.
+- **Intel integrated graphics (UHD, Iris, HD) use Vulkan by default**, and the setup no longer prepares the DirectX 12 shaders for them, which saves a long wait. Intel Arc is not affected. You can still pick DirectX 12 in Settings.
+- **More graphics pipelines are prepared before you play**: the list that comes with the game is updated.
+
+### Fixed
+- **Some Intel graphics crashed at every launcher start** while the shaders were being prepared. If the graphics driver ends the game there, the next start now leaves that step out instead of crashing again.
+- **AMD FSR 4 is offered on AMD graphics cards only**, as intended. On other cards it could make the game hang. A saved FSR 4 on another card goes back to the recommended upscaler for that card.
+- **Quitting could hang**: if the game has not closed 10 seconds after you quit, it now closes itself.
+- **Crash reports note overlays** such as ReShade, RivaTuner, RenoDX and Overwolf, to help find crashes they cause. Nothing changes on screen.
 
 ## v2.0.0-beta.16 (22 October 2026)
 

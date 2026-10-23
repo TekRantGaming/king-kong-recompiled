@@ -141,6 +141,13 @@ REXCVAR_DEFINE_STRING(native_failed_backends, "", "Native renderer",
                       "failed to start on this PC. Setup does not prepare shaders or pipelines for them")
     .debug_only();
 
+// Task 368: the game turns this on (as a default, never saved) on Intel integrated graphics, where Intel's
+// Direct3D 12 driver crashed while the setup made a device for that API's pipelines.
+REXCVAR_DEFINE_BOOL(native_setup_skip_d3d12, false, "Native renderer",
+                    "Setup does not build the Direct3D 12 shader pack or prepare its pipelines unless Direct3D 12 "
+                    "is the selected API (set by the game on Intel integrated graphics)")
+    .debug_only();
+
 REXCVAR_DEFINE_BOOL(native_vk_pipeline_cache, true, "Native renderer",
                     "Vulkan: keep the driver's compiled pipelines (a VkPipelineCache) in a file under the cache "
                     "root (<cache root>/native-pipelines/<title>.vkcache, or native_pipeline_cache_dir) and load it "

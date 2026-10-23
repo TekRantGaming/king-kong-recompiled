@@ -414,7 +414,7 @@ OfferedUpscalers OfferedTemporalUpscalers() {
   o.known = o.known || c.state == 0 || c.state == 3;
 #endif
   o.fsr3 = c.fsr3;
-  o.fsr4 = c.fsr4;
+  o.fsr4 = c.fsr4 && Fsr4AllowedOnThisGpu();  // task 368: AMD cards only
   o.dlss = c.dlss;
   o.xess = c.xess;
   return o;
@@ -2139,9 +2139,12 @@ class SettingsPages {
       // other choice and the fallback when DirectX 12 cannot start. "auto" (the renderer's own, Vulkan) is not
       // offered any more: a value of it from the command line shows as Vulkan, which it runs.
       api.description = "How the renderer talks to your graphics card.";
-      api.options = {"DirectX 12 (recommended)", "Vulkan"};
+      // Task 368: on Intel integrated graphics Vulkan is the default and the recommended one.
+      const bool intel = IntelIntegratedGraphics();
+      api.options = intel ? std::vector<std::string>{"DirectX 12", "Vulkan (recommended)"}
+                          : std::vector<std::string>{"DirectX 12 (recommended)", "Vulkan"};
       api.index = backend == "d3d12" ? 0 : backend == "vulkan" || backend == "auto" ? 1 : -1;
-      api.default_text = "DirectX 12 (recommended)";
+      api.default_text = intel ? "Vulkan (recommended)" : "DirectX 12 (recommended)";
 #endif
       api.value_text = backend;
       api.on_choice = [](int i) {
@@ -8225,7 +8228,8 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
     upscaler_answer_taken_ = true;
     upscaler_answer_backend_ = backend;
     std::string offered;
-    for (const auto& [on, name] : {std::pair{c.dlss, "dlss"}, std::pair{c.fsr4, "fsr4"}, std::pair{c.fsr3, "fsr3"},
+    for (const auto& [on, name] : {std::pair{c.dlss, "dlss"}, std::pair{c.fsr4 && Fsr4AllowedOnThisGpu(), "fsr4"},
+                                   std::pair{c.fsr3, "fsr3"},
                                    std::pair{c.xess, "xess"}})
       if (on) offered += (offered.empty() ? "" : ",") + std::string(name);
     if (offered.empty()) offered = "none";
