@@ -11,6 +11,7 @@ version's notes the first time you start it.
 - **Ultrawide sizes on any screen**: Window size, Resolution (now also in Borderless) and the first time setup list 21:9 and 32:9 sizes (2560 x 1080 up to 7680 x 2160, as tall as your screen at most). The game draws the wide picture at that size and fits it into your window or screen with black bars above and below, so you can play or try ultrawide on a 16:9 screen. A size wider than your screen gets a window of the same shape that fits.
 - **First time setup: a progress bar, Next page, Skip all and Auto detect** at the top right of every page until the last one. Auto detect picks the recommended settings for your PC on every page, then takes you to the texture pack and PS2 cutscene questions. Skip all asks first, because a game that is not set up well may play worse.
 - **The setup's Workshop page explains the Workshop**: the HD, UHD, Comic Book, Cartoon and Tropical Holiday texture packs and the mods, how to download them and switch them on, and how big the packs are, with their pictures.
+- **A countdown to the King Kong Remastered update on the Home screen**: the time left until Friday 30 October, 18:00 UK time (also shown in your own time), with a Join the Discord button. When the time comes it says the update is out and offers Check for updates.
 
 ### Changed
 - **Field of view is 80 by default**, marked recommended. 69, the original, is still there and marked as the original. If you already play, your field of view stays as it is.

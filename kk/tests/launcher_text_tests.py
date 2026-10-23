@@ -67,6 +67,17 @@ strings |= {
 LOCKED_HELP = 'An original bonus video mode. Unlock it in Extras before changing it.'
 UNLOCKED_HELP = 'An original bonus video mode, unlocked in Extras.'
 strings |= {UNLOCKED_HELP}
+# Task 373: the Remastered update countdown on Home (countdown.cpp, the card in launcher.cpp), from stable 1.9.12.
+strings |= {
+    'King Kong Remastered update', 'The King Kong Remastered update is out', '{0} is out', '{0} {1} {2}, {3} UK time',
+    '({0} your time)', 'Join the Discord', 'Check for updates', 'Checking for updates',
+    'Join our Discord to follow development, get behind the scenes previews and have your say on new features.',
+    'Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'January', 'February', 'March',
+    'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December',
+}
+_countdown = (src / 'countdown.cpp').read_text(encoding='utf-8')
+if 'T-' in _countdown or '"d "' not in _countdown:
+    fail('task 373: the countdown reads like 8d 15:24:51 (no T, no dashes)')
 # Content downloads (task J1): the Settings rows, their values, help, errors and status lines.
 strings |= {
     'HD texture pack',

@@ -359,6 +359,13 @@ bool RunCapture(const std::vector<std::string>& argv, std::vector<uint8_t>& out,
 
 void OpenUrl(const std::string& url) {
   if (url.rfind("https://", 0) != 0) return;  // web pages only
+#if defined(KK_DEV_TOOLS)
+  // Developer aid (scripted test runs): KK_DEV_NO_BROWSER=1 only logs the page.
+  if (const char* v = std::getenv("KK_DEV_NO_BROWSER"); v && *v) {
+    REXLOG_INFO("KK dev: open url {}", url);
+    return;
+  }
+#endif
 #if defined(_WIN32)
   const std::wstring w(url.begin(), url.end());
   ShellExecuteW(nullptr, L"open", w.c_str(), nullptr, nullptr, SW_SHOWNORMAL);

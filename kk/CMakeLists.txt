@@ -99,6 +99,7 @@ set(KINGKONG_SOURCES
     src/workshop_net.cpp
     src/system_notify.cpp
     src/update.cpp
+    src/countdown.cpp
     src/update_files.cpp
     src/play_session.cpp
     src/ps2_movies.cpp
