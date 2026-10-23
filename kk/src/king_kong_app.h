@@ -445,6 +445,9 @@ class KingKongApp : public rex::ReXApp {
     }
     kk::ApplyRuntimeOverrides();
     kk::benchmark::InstallPresentObserver();
+#if defined(KK_DEV_TOOLS)
+    StartDevFocusCycle();  // task 372
+#endif
     UseOneControllerSlot();
     if (!kk::menu_scene::Active()) kk::mouse_look::Install(window());  // task 330: the launcher keeps the mouse
     // HDR follows Windows for the screen the game's window is on (hdr_display.h).
@@ -535,6 +538,41 @@ class KingKongApp : public rex::ReXApp {
   // Reconnects the presenter to the window's surface (what a resize does), when the window can be drawn
   // (not minimised or hidden, some pixels). UI thread. `why`: logged (null: the launcher's heartbeat, which
   // counts its own).
+#if defined(KK_DEV_TOOLS)
+  // Task 372 test aid: KK_DEV_FOCUS_CYCLE="<start s>,<away s>,<back s>,<count>" makes the window lose and regain
+  // the focus <count> times, through the SDK's own focus path (every listener sees what an Alt+Tab gives it),
+  // without taking the owner's foreground. Seconds from this point (the game runtime set up).
+  struct DevFocusPoke : rex::ui::Window {
+    static void Set(rex::ui::Window* w, bool focus) {
+      WindowDestructionReceiver receiver(w);
+      (w->*(&DevFocusPoke::OnFocusUpdate))(focus, receiver);
+    }
+  };
+  void StartDevFocusCycle() {
+    const char* spec = std::getenv("KK_DEV_FOCUS_CYCLE");
+    if (!spec || !*spec) return;
+    double start = 30, away = 1.5, back = 2.5;
+    int count = 20;
+    std::sscanf(spec, "%lf,%lf,%lf,%d", &start, &away, &back, &count);
+    REXLOG_INFO("KK dev: focus cycle in {:.1f} s: {} times, {:.1f} s away, {:.1f} s back", start, count, away, back);
+    std::thread([this, start, away, back, count] {
+      auto sleep = [](double s) { std::this_thread::sleep_for(std::chrono::milliseconds(int64_t(s * 1000))); };
+      sleep(start);
+      for (int i = 1; i <= count; ++i) {
+        for (const bool focus : {false, true}) {
+          app_context().CallInUIThreadDeferred([this, focus, i] {
+            if (!window()) return;
+            REXLOG_INFO("KK dev: focus cycle {}: {}", i, focus ? "focus back" : "focus lost");
+            DevFocusPoke::Set(window(), focus);
+          });
+          sleep(focus ? back : away);
+        }
+      }
+      REXLOG_INFO("KK dev: focus cycle done");
+    }).detach();
+  }
+#endif
+
   void RecoverPresentation(const char* why) {
 #if defined(KK_DEV_TOOLS)
     static const bool off = std::getenv("KK_DEV_NO_HEARTBEAT") != nullptr;  // the behaviour before task 173
