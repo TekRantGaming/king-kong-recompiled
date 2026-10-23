@@ -1,7 +1,7 @@
 # Ultrawide: state after task 360 (23 Oct, Beta 17): built into the game, always on
 
 Owner decision 23 Oct (DECISIONS top row): native ultrawide, ON by default, no setting, no mod, no experimental label.
-Branch b17-uw (from beta4-next ca87286). Not merged, not pushed.
+Branch b17-uw (from beta4-next ca87286), merged into beta4-next 082070c (task 361, 23 Oct); smoke tested Vulkan and D3D12 at 16:9 and 21:9. Not pushed.
 
 ## What is true now
 - No cvar: kk_aspect is gone. settings.cpp PictureAspectFor(w, h) = the chosen resolution's own shape clamped
