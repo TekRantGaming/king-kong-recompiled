@@ -141,6 +141,7 @@ bool Process::InFront() {
 }
 
 bool EnterKeyDown() { return (GetAsyncKeyState(VK_RETURN) & 0x8000) != 0; }
+bool EscapeKeyDown() { return (GetAsyncKeyState(VK_ESCAPE) & 0x8000) != 0; }
 
 void Process::ToFront() {
   if (!Running()) return;
@@ -212,6 +213,7 @@ bool Process::Running() { return false; }
 bool Process::WindowShown() { return false; }
 bool Process::InFront() { return false; }
 bool EnterKeyDown() { return false; }
+bool EscapeKeyDown() { return false; }
 void Process::ToFront() {}
 void Process::RequestClose() {}
 void Process::Terminate() {}

@@ -230,8 +230,10 @@ void Input::UpdateGamepads(double now) {
         b(SDL_GAMEPAD_BUTTON_DPAD_DOWN) || past(ly, dir_[1].held),
         b(SDL_GAMEPAD_BUTTON_DPAD_LEFT) || past(-lx, dir_[2].held),
         b(SDL_GAMEPAD_BUTTON_DPAD_RIGHT) || past(lx, dir_[3].held),
-        lt > 0.5f,
-        rt > 0.5f,
+        // Task 364: past halfway, and held until nearly let go (a trigger held for a code does not flicker).
+        // A digital trigger (Switch ZL and ZR) is a full axis in SDL, so it counts the same.
+        past(lt, dir_[4].held),
+        past(rt, dir_[5].held),
     };
     const bool pad_down[8] = {b(SDL_GAMEPAD_BUTTON_SOUTH),         b(SDL_GAMEPAD_BUTTON_EAST),
                               b(SDL_GAMEPAD_BUTTON_WEST),          b(SDL_GAMEPAD_BUTTON_NORTH),
@@ -271,6 +273,14 @@ void Input::UpdateGamepads(double now) {
       if (dir[i] && !dir_[i].held && pads_active_) pad_presses_ |= kDirBits[i];
     for (size_t i = 0; i < 8; ++i)
       if (down[i] && !buttons_down_[i]) pad_presses_ |= kButtonBits[i];
+    // Task 364: what is held down now (the Home codes entered while shoulder buttons are held).
+    pad_held_ = 0;
+    if (pads_active_) {
+      for (size_t i = 0; i < 6; ++i)
+        if (dir[i]) pad_held_ |= kDirBits[i];
+      for (size_t i = 0; i < 8; ++i)
+        if (down[i]) pad_held_ |= kButtonBits[i];
+    }
   }
   // In game: the pad the game read (FeedPad), XInput's layout.
   if (now - fed_.at < 0.25) {

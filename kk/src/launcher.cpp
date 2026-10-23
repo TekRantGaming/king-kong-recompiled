@@ -3156,7 +3156,7 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
       }
       // Task 357: the controller code, on Home only.
       if (!modal_.open && play_ == PlayView::kNone && page_ == kHome) EggCodeInput();
-      else egg_code_.Reset();
+      else egg_code_.Reset(), egg_held_codes_.Reset(), egg_holding_ = false;
       if (!modal_.open) HandleGlobalInput();
       if (play_ != PlayView::kNone) {
         DrawPlayHeader(dl);
@@ -7493,8 +7493,52 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
   // Task 358: the keyboard too, mixed with the controller in one code: the arrow keys for the directions, B and A
   // for B and A, Enter for Start (kept from the launcher while it is the code's next press, as Start is). Any
   // other key is a wrong press.
+  // Task 364: the original game's cheat menu codes start it too, from a controller only (egg::kHeldCodes): PS2
+  // (hold LB and RB), Xbox and GameCube (hold a left and a right bumper or trigger), Xbox 360 (hold all four).
+  // While a code's hold is down, Home does nothing else with the controller or the keyboard (no moving, no Steam
+  // or Discord or Quit from X, Y or B); with the hold up, Home works as always. LB, RB, LT and RT alone already do
+  // nothing on Home. The game starts on the code's last press (no need to let go first).
   void EggCodeInput() {
     const uint32_t presses = input_.pad_presses(), keys = input_.key_presses();
+    {
+      const uint32_t held = input_.pad_held();
+      unsigned hold = 0;
+      if (held & ui::Input::kPadLB) hold |= egg::kHoldLB;
+      if (held & ui::Input::kPadRB) hold |= egg::kHoldRB;
+      if (held & ui::Input::kPadLT) hold |= egg::kHoldLT;
+      if (held & ui::Input::kPadRT) hold |= egg::kHoldRT;
+      egg_held_codes_.SetHeld(hold);
+    }
+    const bool holding = egg_held_codes_.Holding();
+#if defined(KK_DEV_TOOLS)
+    if (holding != egg_holding_) REXLOG_INFO("KK dev: easter egg: code hold {}", holding ? "down" : "up");
+#endif
+    egg_holding_ = holding;
+    if (holding) {
+      static constexpr std::pair<uint32_t, egg::Pad> kHeldBits[] = {
+          {ui::Input::kPadUp, egg::Pad::kUp}, {ui::Input::kPadDown, egg::Pad::kDown},
+          {ui::Input::kPadLeft, egg::Pad::kLeft}, {ui::Input::kPadRight, egg::Pad::kRight},
+          {ui::Input::kPadA, egg::Pad::kA}, {ui::Input::kPadB, egg::Pad::kB},
+          {ui::Input::kPadX, egg::Pad::kX}, {ui::Input::kPadY, egg::Pad::kY},
+          {ui::Input::kPadStart, egg::Pad::kStart}, {ui::Input::kPadBack, egg::Pad::kOther},
+      };  // LB, RB, LT and RT are the holds, not presses
+      bool start = false;
+      for (const auto& [bit, pad] : kHeldBits) {
+        if (!(presses & bit)) continue;
+        const egg::Step step = egg_held_codes_.Press(pad);
+#if defined(KK_DEV_TOOLS)
+        REXLOG_INFO("KK dev: easter egg: held code press {} step {}", int(pad), int(step));
+#endif
+        if (step == egg::Step::kComplete) {
+          REXLOG_INFO("KK: easter egg: the original {} code", egg::kHeldCodes[egg_held_codes_.completed()].name);
+          start = true;
+        }
+      }
+      input_.ConsumeAll();
+      egg_code_.Reset();
+      if (start) StartEgg();
+      return;
+    }
     if (!presses && !keys) return;
     using P = egg::Pad;
     struct Bit {
@@ -7506,8 +7550,8 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
         {ui::Input::kPadUp, P::kUp, Action::kCount},      {ui::Input::kPadDown, P::kDown, Action::kCount},
         {ui::Input::kPadLeft, P::kLeft, Action::kCount},  {ui::Input::kPadRight, P::kRight, Action::kCount},
         {ui::Input::kPadB, P::kB, Action::kBack},         {ui::Input::kPadA, P::kA, Action::kAccept},
-        {ui::Input::kPadStart, P::kStart, Action::kPlay}, {ui::Input::kPadX, P::kOther, Action::kCount},
-        {ui::Input::kPadY, P::kOther, Action::kCount},    {ui::Input::kPadLB, P::kOther, Action::kCount},
+        {ui::Input::kPadStart, P::kStart, Action::kPlay}, {ui::Input::kPadX, P::kX, Action::kCount},
+        {ui::Input::kPadY, P::kY, Action::kCount},        {ui::Input::kPadLB, P::kOther, Action::kCount},
         {ui::Input::kPadRB, P::kOther, Action::kCount},   {ui::Input::kPadBack, P::kOther, Action::kCount},
         {ui::Input::kPadLT, P::kOther, Action::kCount},   {ui::Input::kPadRT, P::kOther, Action::kCount},
     };
@@ -7544,6 +7588,7 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
     egg_running_ = true;
     egg_paused_ = egg_quitting_ = false;
     egg_enter_down_ = true;  // the Enter that ended the code counts only once let go
+    egg_esc_down_ = true;    // task 364: likewise an Esc held as it starts
   }
 
   static double SteadySeconds() {
@@ -7562,6 +7607,7 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
     REXLOG_INFO("KK: easter egg over{}: back to Home", egg_quitting_ ? " (Quit to main menu)" : "");
     egg_running_ = egg_paused_ = egg_quitting_ = false;
     egg_code_.Reset();
+    egg_held_codes_.Reset();
     input_.ConsumeAll();
     if (cb_.native_window) egg::ForceToFront(cb_.native_window());
   }
@@ -7580,16 +7626,22 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
     const bool enter = (enter_down && !egg_enter_down_ && egg_ && egg_->InFront()) ||
                        (input_.key_presses() & ui::Input::kPadStart);
     egg_enter_down_ = enter_down;
+    // Task 364 (owner): Esc pauses it too, read the same way as Enter. In the pause panel Esc is Back (Resume) as
+    // before; the Esc that resumed counts once let go, so it does not pause again.
+    const bool esc_down = egg::EscapeKeyDown();
+    const bool esc = (esc_down && !egg_esc_down_ && egg_ && egg_->InFront()) ||
+                     (!egg_paused_ && ImGui::IsKeyPressed(ImGuiKey_Escape, false));
+    egg_esc_down_ = esc_down;
     if (egg_paused_) {
       DrawEggPause(dl);
-    } else if (!egg_quitting_ && ((input_.pad_presses() & ui::Input::kPadStart) || enter) && egg_ &&
+    } else if (!egg_quitting_ && ((input_.pad_presses() & ui::Input::kPadStart) || enter || esc) && egg_ &&
                egg_->WindowShown()) {
       // (only once its window is up: a Start before that does nothing)
       egg_paused_ = true;
       egg_focus_ = 0;
       egg_pause_time_ = ImGui::GetTime();
       const bool front = cb_.native_window && egg::ForceToFront(cb_.native_window());
-      REXLOG_INFO("KK: easter egg paused ({}): launcher {}", enter ? "Enter" : "Start",
+      REXLOG_INFO("KK: easter egg paused ({}): launcher {}", enter ? "Enter" : esc ? "Esc" : "Start",
                   front ? "in front" : "asked to the front, Windows kept another window in front");
     }
     input_.ConsumeAll();
@@ -8690,6 +8742,22 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
       }
       return;
     }
+    // Task 364: "hold:lb+rb+lt+rt" holds those controller buttons down until the next hold step ("hold:none" lets
+    // go), for the Home codes entered while shoulder buttons are held. Presses meanwhile: pad:down, pad:x, ...
+    if (t.rfind("hold:", 0) == 0) {
+      static const std::map<std::string, uint32_t> kHoldNames = {{"lb", ui::Input::kPadLB}, {"rb", ui::Input::kPadRB},
+                                                                 {"lt", ui::Input::kPadLT}, {"rt", ui::Input::kPadRT}};
+      uint32_t bits = 0;
+      std::string rest = t.substr(5);
+      for (size_t at = 0; at <= rest.size();) {
+        const size_t plus = std::min(rest.find('+', at), rest.size());
+        if (auto it = kHoldNames.find(rest.substr(at, plus - at)); it != kHoldNames.end()) bits |= it->second;
+        at = plus + 1;
+      }
+      input_.InjectHeld(bits);
+      REXLOG_INFO("KK dev: held {}", rest);
+      return;
+    }
     if (t.rfind("wheel:", 0) == 0) return io.AddMouseWheelEvent(0, std::stof(t.substr(6)));
     ui::Device d = ui::Device::kKeyboard;
     if (t.rfind("pad:", 0) == 0) d = ui::Device::kXbox, t = t.substr(4);
@@ -8713,12 +8781,15 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
   Page page_ = kHome;
   // Task 357: the Easter egg game (EggCodeInput, DrawEgg).
   egg::Code egg_code_;
+  egg::HeldCodes egg_held_codes_;  // task 364: the original game's codes
+  bool egg_holding_ = false;       // task 364: a code's hold was down last frame (logged once)
   std::unique_ptr<egg::Process> egg_;
   bool egg_running_ = false, egg_paused_ = false, egg_quitting_ = false;
   int egg_focus_ = 0;          // the pause panel: 0 Resume, 1 Quit to main menu
   double egg_pause_time_ = 0;  // ImGui time the pause panel opened (its shade fades in)
   double egg_close_at_ = 0;    // SteadySeconds when Quit to main menu asked it to close
   bool egg_enter_down_ = false;  // task 358: Enter was held last frame (read from the system)
+  bool egg_esc_down_ = false;    // task 364: Esc likewise
   std::array<float, 2> egg_offsets_{};
   bool recovery_shown_ = false;
   bool crash_notice_shown_ = false;  // task 228

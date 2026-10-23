@@ -48,5 +48,7 @@ bool ForceToFront(void* hwnd);
 // keys, so Enter as Start (the pause panel) is read this way, and only while the game is in front (Process::InFront).
 // Windows only (false elsewhere).
 bool EnterKeyDown();
+// Task 364: Esc held down now, read the same way (Esc pauses the game too).
+bool EscapeKeyDown();
 
 }  // namespace kk::egg

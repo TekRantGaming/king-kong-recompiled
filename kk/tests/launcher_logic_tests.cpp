@@ -1030,6 +1030,80 @@ void EasterEggKeyboardChecks() {
         "only Enter of the code is kept from the launcher (B and A keys have no launcher action)");
 }
 
+// Task 364: the original game's cheat menu codes, entered while shoulder buttons are held (easter_egg_logic.h).
+void EasterEggHeldCodeChecks() {
+  using kk::egg::HeldCodes;
+  using kk::egg::Pad;
+  using kk::egg::Step;
+  using namespace kk::egg;
+  auto enter = [](HeldCodes& c, unsigned held, std::initializer_list<Pad> presses) {
+    Step last = Step::kNone;
+    for (Pad p : presses) {
+      c.SetHeld(held);
+      last = c.Press(p);
+    }
+    return last;
+  };
+  const std::initializer_list<Pad> ps2 = {Pad::kDown, Pad::kB, Pad::kUp, Pad::kX,
+                                          Pad::kDown, Pad::kDown, Pad::kUp, Pad::kUp};
+  const std::initializer_list<Pad> xbox = {Pad::kDown, Pad::kX, Pad::kUp, Pad::kY,
+                                           Pad::kDown, Pad::kDown, Pad::kUp, Pad::kUp};
+  const std::initializer_list<Pad> x360 = {Pad::kDown, Pad::kUp, Pad::kY, Pad::kX,
+                                           Pad::kDown, Pad::kDown, Pad::kY, Pad::kY};
+  const unsigned bumpers = kHoldLB | kHoldRB, triggers = kHoldLT | kHoldRT, all = bumpers | triggers;
+  HeldCodes c;
+  Check(enter(c, bumpers, ps2) == Step::kComplete && c.completed() == 0, "PS2 code with LB and RB held");
+  Check(enter(c, bumpers, xbox) == Step::kComplete && c.completed() == 1, "Xbox code with LB and RB held");
+  Check(enter(c, triggers, xbox) == Step::kComplete && c.completed() == 1, "Xbox code with the triggers held");
+  Check(enter(c, kHoldLB | kHoldRT, xbox) == Step::kComplete && c.completed() == 1,
+        "Xbox code with a bumper and a trigger held");
+  Check(enter(c, all, x360) == Step::kComplete && c.completed() == 2, "Xbox 360 code with all four held");
+  Check(enter(c, all, ps2) == Step::kComplete && c.completed() == 0, "PS2 code with all four held (extra holds are fine)");
+  Check(enter(c, all, xbox) == Step::kComplete && c.completed() == 1, "Xbox code with all four held");
+  Check(enter(c, bumpers, x360) == Step::kNone && c.progress(2) == 0, "Xbox 360 code needs the triggers too");
+  c.Reset();
+  Check(enter(c, triggers, ps2) == Step::kNone && c.progress(0) == 0, "PS2 code needs LB and RB, not the triggers");
+  c.Reset();
+  Check(enter(c, kHoldLB, ps2) == Step::kNone && c.progress(0) == 0 && c.progress(1) == 0, "one bumper is not a hold");
+  Check(enter(c, 0, ps2) == Step::kNone && c.progress(0) == 0, "nothing held: no code");
+  // Letting go early starts the code again.
+  Check(enter(c, bumpers, {Pad::kDown, Pad::kB, Pad::kUp, Pad::kX, Pad::kDown}) == Step::kMatched && c.progress(0) == 5,
+        "PS2 code half way");
+  c.SetHeld(kHoldLB);  // RB let go
+  Check(c.progress(0) == 0 && !c.Holding(), "letting go of RB resets");
+  Check(enter(c, bumpers, {Pad::kDown, Pad::kUp, Pad::kUp}) == Step::kNone && c.progress(0) == 0,
+        "the rest of the code after letting go does not finish it");
+  c.Reset();
+  Check(enter(c, all, {Pad::kDown, Pad::kUp, Pad::kY, Pad::kX}) == Step::kMatched && c.progress(2) == 4, "360 half way");
+  c.SetHeld(bumpers);  // the triggers let go
+  Check(c.progress(2) == 0 && c.Holding(), "letting go of the triggers resets the 360 code (LB and RB still a hold)");
+  // Wrong presses.
+  c.Reset();
+  Check(enter(c, bumpers, {Pad::kDown, Pad::kB, Pad::kUp, Pad::kA}) == Step::kNone && c.progress(0) == 0,
+        "A instead of Square resets the PS2 code");
+  // (The Down is also the Xbox code's first press, same hold: kMatched overall.)
+  Check(enter(c, bumpers, {Pad::kDown, Pad::kB, Pad::kUp, Pad::kX, Pad::kDown, Pad::kDown, Pad::kUp, Pad::kDown}) ==
+                Step::kMatched && c.progress(0) == 1 && c.progress(1) == 1,
+        "a wrong last press keeps only what starts the code again (Down)");
+  c.Reset();
+  Check(enter(c, all, {Pad::kDown, Pad::kUp, Pad::kY, Pad::kX, Pad::kDown, Pad::kDown, Pad::kY, Pad::kOther}) ==
+                Step::kNone && c.progress(2) == 0,
+        "Back or another button resets the 360 code");
+  Check(enter(c, all, {Pad::kStart, Pad::kLeft, Pad::kRight}) == Step::kNone, "Start, Left and Right are in no code");
+  c.Reset();
+  Check(enter(c, bumpers, {Pad::kDown, Pad::kDown, Pad::kB, Pad::kUp, Pad::kX, Pad::kDown, Pad::kDown, Pad::kUp, Pad::kUp}) ==
+            Step::kComplete,
+        "an extra Down first still finishes the PS2 code");
+  c.SetHeld(0);
+  Check(!c.Holding(), "nothing held: Home works as usual");
+  c.SetHeld(bumpers);
+  Check(c.Holding(), "LB and RB held: Home keeps the controller to the codes");
+  c.SetHeld(kHoldLT | kHoldRB);
+  Check(c.Holding(), "a trigger and a bumper held: the Xbox code's hold");
+  Check(enter(c, bumpers, ps2) == Step::kComplete && enter(c, bumpers, ps2) == Step::kComplete,
+        "the code works a second time");
+}
+
 // Task 358: the update channel comes from the build (update_channel.h).
 void UpdateChannelChecks() {
   using kk::ChannelAtStart;
@@ -1054,6 +1128,7 @@ void UpdateChannelChecks() {
 int main() {
   EasterEggCodeChecks();
   EasterEggKeyboardChecks();
+  EasterEggHeldCodeChecks();
   UpdateChannelChecks();
   // Extras playback does not set either story-movie flag. SKIP must still
   // send Start, and must stop sending it once playback ends.
