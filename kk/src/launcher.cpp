@@ -16,6 +16,7 @@
 #include "launcher_ui.h"
 #include "easter_egg.h"
 #include "easter_egg_logic.h"
+#include "countdown.h"
 #include "menu_scene.h"
 #include "loading_loop.h"
 #include "startup_movies.h"
@@ -2799,6 +2800,7 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
     const bool testing = std::getenv("KK_AUTOPLAY") != nullptr;
     if (GetBool("kk_check_updates") && !testing) StartUpdateCheck(false);
     StartSteamCheck();
+    StartLaunchTime(!testing);  // task 373: the Home countdown's time from the website
     // Menu sounds (the device opens in OnDraw while they're on).
     ui::SetSoundHandler([this](ui::Sound sound, float value) {
       if (!GetBool("kk_launcher_sounds")) return;
@@ -3157,6 +3159,7 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
       return;
     }
     DrawBackdrop(dl);
+    if (ShaderScreen() || InSetup()) card_focus_ = -1;  // the Home countdown's buttons are Home's only
     if (ShaderScreen()) {
       DrawShaderScreen(dl);
     } else if (InSetup()) {
@@ -3171,6 +3174,7 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
       else egg_code_.Reset(), egg_held_codes_.Reset(), egg_holding_ = false;
       if (!modal_.open) HandleGlobalInput();
       if (play_ != PlayView::kNone) {
+        card_focus_ = -1;
         DrawPlayHeader(dl);
         if (play_ == PlayView::kMenu) DrawPlayMenu(dl);
         else DrawPlayPage(dl);
@@ -3576,6 +3580,7 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
     if (IsSettingsPage(page) || about_tab) settings_page_ = page;
     extras_return_focus_ = -1;  // only the Graphics visit an Extras row opened returns there
     side_focus_ = -1;
+    card_focus_ = -1;
     play_ = PlayView::kNone;
     const bool opening_workshop = page == kWorkshop && page_ != kWorkshop;
     page_ = page;
@@ -3643,6 +3648,9 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
       return p;
     }
     if (page_ == kHome) {
+      if (card_focus_ >= 0)  // as CardButtons: Check for updates (once it's out), then Join the Discord
+        return {{Action::kAccept, LaunchIsOut() && card_focus_ == 0 ? "Select" : "Open in browser"},
+                {Action::kBack, "Back"}};
       if (status_focus_) return {{Action::kAccept, "Rebuild shaders"}, {Action::kBack, "Back"}};
       if (side_focus_ < 0 && menu_value_) p.push_back({Action::kLeft, "Change"});
       p.push_back({Action::kAccept, side_focus_ >= 0 ? SidePanelVerb(true) : "Select"});
@@ -3705,7 +3713,8 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
       } else if (page_ == kWorkshop && workshop_) {  // task 209: an inner page back to its card, then Home
         if (!workshop_->Back()) GoTo(kHome);
       } else if (page_ != kHome) GoTo(kHome);
-      else if (status_focus_ || side_focus_ >= 0) status_focus_ = false, side_focus_ = -1;  // back to the menu
+      else if (status_focus_ || side_focus_ >= 0 || card_focus_ >= 0)  // back to the menu
+        status_focus_ = false, side_focus_ = -1, card_focus_ = -1;
       else OpenQuit();
     }
   }
@@ -3746,7 +3755,7 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
     focus = std::clamp(focus, 0, n - 1);
     const int focus_before = focus;
     menu_value_ = bool(entries[size_t(focus)].change);
-    const bool active = focusable && !modal_.open && side_focus_ < 0 && !status_focus_;
+    const bool active = focusable && !modal_.open && side_focus_ < 0 && !status_focus_ && card_focus_ < 0;
     // Home: down from the last entry (or up from the first) moves to the shaders' status below.
     if (active && menu_to_status_ && n > 1 &&
         ((focus == n - 1 && input_.Pressed(Action::kDown)) || (focus == 0 && input_.Pressed(Action::kUp)))) {
@@ -3785,7 +3794,7 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
           chosen = i;
         }
       }
-      const bool on = focusable && i == focus && side_focus_ < 0 && !status_focus_;
+      const bool on = focusable && i == focus && side_focus_ < 0 && !status_focus_ && card_focus_ < 0;
       home_offset_[size_t(i)] = ui::Approach(home_offset_[size_t(i)], on ? 22 * s : 0.0f, 18.0f);
       const float off = home_offset_[size_t(i)];
       const float k = off / (22 * s);
@@ -3933,6 +3942,7 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
           const int next = a == Action::kLeft ? side_focus_ - 1 : a == Action::kRight ? side_focus_ + 1 : -1;
           if (next >= n) continue;  // already the last
           side_focus_ = next;
+          if (a == Action::kUp && home) card_focus_ = 0;  // task 373: Up to the countdown's buttons above them
           ui::Cue(a == Action::kBack ? ui::Sound::kBack : ui::Sound::kMove);
         }
         if (side_focus_ >= 0 && input_.Pressed(Action::kAccept)) {
@@ -4647,6 +4657,249 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
     return y;
   }
 
+  // ----------------------------------------------- Remastered countdown ---
+  // Task 373 (Beta 17, ported from stable 1.9.12): a card at the top right of Home counting down to the King Kong Remastered
+  // update (countdown.h), with the Discord invite; at zero it says the update
+  // is out and offers Check for updates. Right from the menu (or the mouse)
+  // moves to its buttons; Left and Right between them; Down to the side
+  // panels; Left from the first or B back to the menu.
+  struct CardButton {
+    std::string label;
+    bool enabled;
+    bool discord;  // shows the Discord mark
+    std::function<void()> action;
+  };
+
+  bool LaunchIsOut() const { return countdown::NowUtc() >= launch_utc_; }
+
+  std::vector<CardButton> CardButtons() {
+    std::vector<CardButton> b;
+    if (LaunchIsOut()) {
+      if (update_ && update_->busy && !installing_update_)
+        b.push_back({T("Checking for updates"), false, false, nullptr});
+      else
+        b.push_back({T("Check for updates"), true, false, [this] {
+                       if (update_ && update_->found) OpenUpdatePrompt();
+                       else StartUpdateCheck(true);  // the normal check; it offers the update when found
+                     }});
+    }
+    b.push_back({T("Join the Discord"), true, true, [] { OpenUrl(kDiscordUrl); }});
+    return b;
+  }
+
+  // The launch time: the last one the website gave (kept in the settings), else
+  // the built-in one; the website's launch.json is fetched in the background.
+  void StartLaunchTime(bool fetch) {
+    launch_utc_ = *countdown::ParseUtc(countdown::kBuiltInUtc);
+    if (const auto cached = countdown::ParseUtc(Get("kk_launch_utc"))) {
+      launch_utc_ = *cached;
+      launch_title_ = Get("kk_launch_title");
+    }
+#if defined(KK_DEV_TOOLS)
+    // Developer aids: KK_DEV_LAUNCH_JSON='{"utc": "...", "title": "..."}' stands in
+    // for the website's file (applied and cached like it); KK_DEV_COUNTDOWN=<seconds>
+    // puts the launch that far from now (0 or less: already out), not cached.
+    if (const char* j = std::getenv("KK_DEV_LAUNCH_JSON"); j && *j) {
+      launch_fetch_ = std::make_shared<countdown::Fetch>();
+      launch_fetch_->info = countdown::ParseLaunchJson(j);
+      launch_fetch_->done = true;
+      fetch = false;
+    }
+    if (const char* v = std::getenv("KK_DEV_COUNTDOWN"); v && *v) {
+      dev_countdown_ = true;
+      launch_utc_ = countdown::NowUtc() + std::atoll(v);
+      fetch = false;
+    }
+#endif
+    if (fetch) launch_fetch_ = countdown::StartFetch();
+  }
+
+  void TickLaunchTime() {
+    if (!launch_fetch_ || !launch_fetch_->done) return;
+    const std::optional<countdown::LaunchInfo> info = launch_fetch_->info;
+    launch_fetch_.reset();
+    if (!info) {
+      REXLOG_INFO("KK: launch.json not available; countdown to {}", launch_utc_);
+      return;
+    }
+    if (!dev_countdown_) {
+      launch_utc_ = info->utc;
+      launch_title_ = info->title;
+    }
+    REXLOG_INFO("KK: launch.json: {} \"{}\"", info->utc_text, info->title);
+    Set("kk_launch_utc", info->utc_text);  // saved with the other settings a moment later
+    Set("kk_launch_title", info->title);
+  }
+
+  // Text with every digit in a cell of the same width, so a ticking clock
+  // doesn't shift sideways. Returns the width (draw = false only measures).
+  float DrawSteadyDigits(ImDrawList* dl, ImFont* font, float size, ImVec2 pos, ImU32 col, const std::string& text,
+                         bool draw = true) {
+    float cell = 0;
+    for (char c = '0'; c <= '9'; ++c) cell = std::max(cell, ui::TextSize(font, size, std::string(1, c)).x);
+    float x = pos.x;
+    for (const char c : text) {
+      const std::string one(1, c);
+      const float w = ui::TextSize(font, size, one).x;
+      const bool digit = c >= '0' && c <= '9';
+      if (draw) dl->AddText(font, size, ImVec2(std::round(x + (digit ? (cell - w) * 0.5f : 0.0f)), pos.y), col, one.c_str());
+      x += digit ? cell : w;
+    }
+    return x - pos.x;
+  }
+
+  void DrawCountdown(ImDrawList* dl, float alpha, const std::vector<HomeEntry>& entries, int focus) {
+    const float s = S();
+    const ui::Fonts f = ui::GetFonts();
+    const bool out = LaunchIsOut();
+    const std::vector<CardButton> buttons = CardButtons();
+    const int n = int(buttons.size());
+    if (card_focus_ >= n) card_focus_ = n - 1;
+
+    // Controller and keyboard.
+    auto use = [&](int i) {
+      const CardButton& b = buttons[size_t(i)];
+      ui::Cue(b.enabled ? ui::Sound::kSelect : ui::Sound::kDeny);
+      if (b.enabled && b.action) b.action();
+    };
+    if (!modal_.open) {
+      const bool right_free =
+          entries.empty() || !entries[size_t(std::clamp(focus, 0, int(entries.size()) - 1))].change;
+      if (card_focus_ < 0 && side_focus_ < 0 && right_free && input_.Pressed(Action::kRight)) {
+        input_.Consume(Action::kRight);
+        card_focus_ = 0;
+        ui::Cue(ui::Sound::kMove);
+      } else if (card_focus_ >= 0) {
+        if (input_.Pressed(Action::kLeft)) {
+          input_.Consume(Action::kLeft);
+          card_focus_ -= 1;  // from the first: back to the menu
+          ui::Cue(ui::Sound::kMove);
+        } else if (input_.Pressed(Action::kRight)) {
+          input_.Consume(Action::kRight);
+          if (card_focus_ < n - 1) {
+            ++card_focus_;
+            ui::Cue(ui::Sound::kMove);
+          }
+        } else if (input_.Pressed(Action::kDown)) {
+          input_.Consume(Action::kDown);
+          card_focus_ = -1;
+          side_focus_ = 0;  // the side panels below
+          ui::Cue(ui::Sound::kMove);
+        } else if (input_.Pressed(Action::kUp)) {
+          input_.Consume(Action::kUp);
+        } else if (input_.Pressed(Action::kAccept)) {
+          input_.Consume(Action::kAccept);
+          use(card_focus_);
+        }
+      }
+    }
+
+    // Layout: right-aligned under the tabs, clear of the logo and menu on the left.
+    const float cw = 404 * s, pad = 24 * s, inner = cw - 2 * pad;
+    const float x1 = o_.x + w_ - Margin(), x0 = x1 - cw, y0 = o_.y + 104 * s;
+    const std::string title = launch_title_.empty() ? countdown::kBuiltInTitle : launch_title_;
+    const std::string caption = Upper(T(title));
+    const float cap_fs = 13 * s, cap_tr = 2.4f * s;
+    const float big_fs = 50 * s;
+    const std::string out_text = title == countdown::kBuiltInTitle ? T("The King Kong Remastered update is out")
+                                                                   : F("{0} is out", {T(title)});
+    const float out_fs = 24 * s;
+    const std::string date = countdown::DateLine(launch_utc_);
+    const float date_fs = 15 * s;
+    const std::string invite =
+        T("Join our Discord to follow development, get behind the scenes previews and have your say on new features.");
+    const float inv_fs = 14.5f * s;
+    const float bh = 38 * s, b_fs = 15.5f * s, b_pad = 18 * s, icon = 18 * s, b_gap = 10 * s;
+
+    float h = pad + cap_fs * 1.2f + 10 * s;
+    const float headline_h = out ? ui::TextSize(f.semibold, out_fs, out_text, inner).y : big_fs * 1.05f;
+    h += headline_h + 8 * s;
+    const float date_h = out ? 0.0f : ui::TextSize(f.text, date_fs, date, inner).y;
+    if (!out) h += date_h + 16 * s;
+    else h += 10 * s;
+    const float inv_h = ui::TextSize(f.text, inv_fs, invite, inner).y;
+    h += inv_h + 18 * s + bh + pad;
+
+    // The buttons' places (needed for the mouse before drawing).
+    std::vector<std::pair<ImVec2, ImVec2>> rects;
+    {
+      float bx = x0 + pad;
+      const float by = y0 + h - pad - bh;
+      for (const CardButton& b : buttons) {
+        const float bw = b_pad * 2 + ui::TextSize(f.semibold, b_fs, b.label).x + (b.discord ? icon + 10 * s : 0.0f);
+        rects.push_back({ImVec2(bx, by), ImVec2(bx + bw, by + bh)});
+        bx += bw + b_gap;
+      }
+    }
+    int hovered = -1;
+    for (int i = 0; i < n && !modal_.open; ++i)
+      if (ImGui::IsMouseHoveringRect(rects[size_t(i)].first, rects[size_t(i)].second, false)) hovered = i;
+    if (input_.mouse_moved()) {
+      card_focus_ = hovered;
+      if (hovered >= 0) side_focus_ = -1;
+    }
+    if (hovered >= 0 && ImGui::IsMouseClicked(0)) use(hovered);
+#if defined(KK_DEV_TOOLS)
+    static int logged_focus = -1;
+    if (card_focus_ != logged_focus) REXLOG_INFO("KK dev: countdown focus {}", card_focus_);
+    logged_focus = card_focus_;
+#endif
+
+    // The card, in the side panels' style, with a brass edge.
+    const ImVec2 p0(x0, y0), p1(x1, y0 + h);
+    const float r = 10 * s;
+    dl->AddRectFilled(ImVec2(p0.x, p0.y + 6 * s), ImVec2(p1.x, p1.y + 6 * s),
+                      ui::WithAlpha(IM_COL32(0, 0, 0, 255), 0.2f * alpha), r);
+    dl->AddRectFilled(p0, p1, ui::WithAlpha(IM_COL32(16, 18, 22, 255), 0.72f * alpha), r);
+    dl->AddRect(p0, p1, ui::WithAlpha(color::kText, 0.10f * alpha), r, 0, 1.0f * s);
+    dl->AddRectFilled(ImVec2(p0.x, p0.y + r), ImVec2(p0.x + 3 * s, p1.y - r), ui::WithAlpha(color::kAccent, alpha));
+
+    float y = y0 + pad;
+    const float x = x0 + pad;
+    float tr = cap_tr;
+    std::string cap = caption;
+    if (ui::TrackedWidth(f.display, cap_fs, cap, tr) > inner) {  // a long title from the website
+      tr = 0;
+      cap = ui::Ellipsize(f.display, cap_fs, cap, inner);
+    }
+    ui::DrawTracked(dl, f.display, cap_fs, ImVec2(x, y), ui::WithAlpha(color::kAccent, alpha), cap, tr);
+    y += cap_fs * 1.2f + 10 * s;
+    if (out) {
+      dl->AddText(f.semibold, out_fs, ImVec2(x, y), ui::WithAlpha(color::kText, alpha), out_text.c_str(), nullptr,
+                  inner);
+      y += headline_h + 18 * s;
+    } else {
+      const std::string clock = countdown::CountdownText(launch_utc_ - countdown::NowUtc());
+      DrawSteadyDigits(dl, f.display, big_fs, ImVec2(x - 2 * s, y), ui::WithAlpha(color::kText, alpha), clock);
+      y += headline_h + 8 * s;
+      dl->AddText(f.text, date_fs, ImVec2(x, y), ui::WithAlpha(color::kTextDim, alpha), date.c_str(), nullptr, inner);
+      y += date_h + 16 * s;
+    }
+    dl->AddText(f.text, inv_fs, ImVec2(x, y), ui::WithAlpha(color::kTextDim, alpha), invite.c_str(), nullptr, inner);
+
+    // The buttons, as in the pop-ups: the focused one filled.
+    for (int i = 0; i < n; ++i) {
+      const CardButton& b = buttons[size_t(i)];
+      const ImVec2 a = rects[size_t(i)].first, c = rects[size_t(i)].second;
+      const bool on = card_focus_ == i, hot = hovered == i;
+      if (on) dl->AddRectFilled(a, c, ui::WithAlpha(color::kFocus, alpha));
+      else dl->AddRect(a, c, ui::WithAlpha(color::kText, (hot ? 0.45f : 0.22f) * alpha));
+      const ImU32 tc = !b.enabled ? (on ? color::kOnFocusDim : color::kTextFaint) : on ? color::kOnFocus : color::kText;
+      float lx = a.x + b_pad;
+      if (b.discord) {
+        if (auto* t = BrandIcon(discord_icon_, kDiscordIcon, kDiscordIconSize)) {
+          const float iy = a.y + (bh - icon) * 0.5f;
+          dl->AddImage(ui::Tex(t), ImVec2(lx, iy), ImVec2(lx + icon, iy + icon), ImVec2(0, 0), ImVec2(1, 1),
+                       ui::WithAlpha(on ? color::kOnFocus : IM_COL32(255, 255, 255, 255), alpha));
+        }
+        lx += icon + 10 * s;
+      }
+      const ImVec2 ls = ui::TextSize(f.semibold, b_fs, b.label);
+      dl->AddText(f.semibold, b_fs, ImVec2(std::round(lx), std::round(a.y + (bh - ls.y) * 0.5f)),
+                  ui::WithAlpha(tc, alpha), b.label.c_str());
+    }
+  }
+
   void DrawHome(ImDrawList* dl) {
     const float s = S();
     const float x = o_.x + Margin();
@@ -4657,8 +4910,9 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
     // up rather than run into the status row.
     const float room = o_.y + h_ - 150 * s - y;
     const float item_h = std::clamp(room / float(std::max<size_t>(entries.size(), 1)), 28 * s, 42 * s);
+    DrawCountdown(dl, a, entries, home_focus_);  // task 373: before the side panels (Right goes to it first)
     DrawSidePanels(dl, a, true, entries, home_focus_, o_.y + h_ - 120 * s);
-    if (side_focus_ >= 0) status_focus_ = false;
+    if (side_focus_ >= 0 || card_focus_ >= 0) status_focus_ = false;
     HomeStatusInput(int(entries.size()));
     menu_to_status_ = ShaderStatusSelectable();
     if (const int i = DrawMenu(dl, entries, home_focus_, x, y, a, item_h); i >= 0) entries[size_t(i)].action();
@@ -4678,7 +4932,7 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
       status_focus_ = false;
       return;
     }
-    if (modal_.open || side_focus_ >= 0) return;
+    if (modal_.open || side_focus_ >= 0 || card_focus_ >= 0) return;
     const bool hovered = status_rect_[1].x > status_rect_[0].x &&
                          ImGui::IsMouseHoveringRect(status_rect_[0], status_rect_[1], false);
     if (input_.mouse_moved()) status_focus_ = hovered;
@@ -8236,6 +8490,7 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
     RefreshPack();
     TickContent();
     TickUpdate();
+    TickLaunchTime();
     TickFinish();
     TickSteam();
     // Saved crash reports never open a pop-up (owner, 19 Oct: it showed on every start and covered the
@@ -8855,6 +9110,11 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
   bool menu_to_status_ = false; // Home's menu moves down to it (DrawMenu)
   ImVec2 status_rect_[2] = {};  // where it was drawn last frame
   double side_since_ = -1;   // when the side panels were first drawn (their fade-in)
+  int card_focus_ = -1;      // task 373: the countdown card's button with the focus (Home), or -1
+  int64_t launch_utc_ = 0;   // the Remastered update's launch (seconds since 1970 UTC)
+  std::string launch_title_;  // the countdown's title from the website (empty: built in)
+  std::shared_ptr<countdown::Fetch> launch_fetch_;
+  bool dev_countdown_ = false;  // KK_DEV_COUNTDOWN set the time
   std::unique_ptr<rex::ui::ImmediateTexture> discord_icon_, steam_icon_;
   std::vector<float> home_offset_;
   float home_mix_ = 1.0f;

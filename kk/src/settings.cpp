@@ -61,6 +61,10 @@ REXCVAR_DEFINE_STRING(kk_shaders_prepared, "", "KK",
                       "only after an update or when the player asks (owner rule, Beta 8)");
 REXCVAR_DEFINE_STRING(kk_last_version, "", "KK",
                       "Last port version the launcher has shown (it shows What's new once after an update)");
+REXCVAR_DEFINE_STRING(kk_launch_utc, "", "KK",
+                      "Internal: the Remastered update's launch time from the website (the Home countdown)");
+REXCVAR_DEFINE_STRING(kk_launch_title, "", "KK",
+                      "Internal: the Home countdown's title from the website (empty: the built in one)");
 REXCVAR_DEFINE_STRING(kk_setup_version, "", "KK",
                       "Internal: the port version whose setup steps this player has had (the first time setup, or "
                       "the one time New in this update screen); 'waiting' while that screen is still to be shown");
