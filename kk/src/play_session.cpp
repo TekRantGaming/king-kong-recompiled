@@ -1287,9 +1287,9 @@ REX_HOOK_RAW(sub_8253DB80) {
   const bool request = g && Load32(base, g + 4) != 0;
   if (request && g_level_loaded) kk::benchmark::Interrupted();
   if (request && g_jump_requested) REXLOG_INFO("KK play: uni_go loads level {}", int32_t(Load32(base, g + 8)));
+  // Task 359: a PS2 cutscene plays to its end inside BeforeLoad; only then does the original loader run.
   const bool ps2_movie = request && kk::movies::BeforeLoad(base, g, g_starting, g_leaving);
   __imp__sub_8253DB80(ctx, base);
-  if (ps2_movie) kk::movies::AfterLoad();  // task 293: the clip's end, when the level loaded under it
   // The chapter being played, for the per-chapter performance summary (a level change's frames left out).
   if (g) kk::telemetry::NoteChapter(ChapterOfLevel(int32_t(Load32(base, g + 0x18))), request);
   if (g_extra_movie) {

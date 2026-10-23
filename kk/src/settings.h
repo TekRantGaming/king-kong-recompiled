@@ -141,9 +141,6 @@ float UltrawideFactor();
 
 // Writes the current settings (skipping command-line/env overrides) to `path`.
 bool SaveSettings(const std::filesystem::path& path, bool include_temporary = false);
-// Task 293: audio_mute is held on by a PS2 cutscene the next level loads under (ps2_movies.cpp): SaveSettings
-// leaves it out meanwhile (it is never the player's choice then). Any thread.
-void SetAudioMuteHeld(bool held);
 // Temporary overlay trials are excluded from every ordinary settings save.
 void SetTemporarySettingBaseline(const std::string& name, const std::string& value);
 void SetTemporarySettingTrialValue(const std::string& name, const std::string& value);
