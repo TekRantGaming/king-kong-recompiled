@@ -719,7 +719,6 @@ for needle, why in (
         ('startup_movies::AtLauncherStart(open_on, files_ok_, InSetup(), GetBool("kk_skip_intros"))',
          'the movies at a start from the desktop unless kk_skip_intros'),
         ('startup_movies::AskFirst(true, skip)', 'the popup before the movies after the setup with skip on'),
-        ('DrawSkipAll(dl);  // task 332: the first time setup\'s shader screen', 'Skip all on the shader screen'),
 ):
     if needle.replace('\\n', '\n') not in _l331:
         fail(f'332: {why} ({needle})')
@@ -728,9 +727,8 @@ for needle, why in (
         ('SettingsPageItems(kSetupSettingsPages[page])', 'built by the same code as Settings'),
         ('AttachHelp(items);', 'the same descriptions as Settings'),
         ('ui::DrawDescription(dl, focused, ImVec2(dx, top + 18 * s)', 'the same right-hand description panel'),
-        ('{{Action::kResetPage, "Skip all"}}', 'Skip all at the top'),
+        ('prompts.push_back({Action::kResetPage, "Skip all"});', 'Skip all at the top'),
         ('"You can change all of these settings later from Settings on the main menu."', 'the Skip all popup'),
-        ('{"OK"}, -1, [this](int) { SkipAllSetup(); }', 'OK then straight on'),
 ):
     if needle not in _pages332:
         fail(f'332: {why} ({needle})')
@@ -740,10 +738,60 @@ for banned in ('Use recommended', 'DrawCompare', 'CompareFor'):
 _end332 = (src / 'launcher_setup_end.inc').read_text(encoding='utf-8')
 if 'StartMoviesAfterSetup();' not in _end332:
     fail('332: Finish setup does not start the movies')
-if _end332.count('DrawSkipAll(dl);') != 2:
-    fail('332: Skip all missing on the button prompts or all set page')
+if _end332.count('DrawSetupTop(dl);') != 1:
+    fail('365: the top right row missing on the button prompts page, or shown on the Finish page')
 if '\u2014' in _pages332 or '\u2013' in _pages332:
     fail('dash in launcher_setup_pages.inc')
+# Task 365 (owner, 23 Oct): the shader screen has no Continue in the background and no Skip all; the setup's top right
+# row (progress bar by page until the Finish page, Auto detect, Skip all with a warning pop-up, Next page); Field of
+# view 80 recommended, 69 original; the Workshop page's description and pictures. Every string in five languages.
+_new365 = {
+    'Auto detect', 'Next page', 'Cancel',
+    'If you do not configure your game correctly, you may have a worse experience.',
+    'Auto detect chose the recommended settings for this PC.', 'How it works', 'Texture packs', 'Mods', 'Texture pack', 'Mod',
+    'Before you download', 'Cel shading',
+    'Texture packs change how the whole game looks. HD and UHD keep the original style with much sharper detail. '
+    'Comic Book, Cartoon and Tropical Holiday give it a fun new look.',
+    'Mods change how the game looks or plays, such as Cel shading, which draws it like a comic book. You can also add '
+    'your own mods; the modding guide in the Workshop shows how.',
+    'Choose a pack or mod in the Workshop to see it, download it, then switch it on there. Only one texture pack is on '
+    'at a time, and you can go back to the original textures at any time.',
+    'Texture packs are big: each one is a download of {0} to {1} GB and takes about {2} GB once installed.',
+    '{0}\u00b0 (recommended)', '{0}\u00b0 (original)',
+    'How wide the camera sees. 80\u00b0 is recommended and 69\u00b0 is the original for Jack; Kong, cutscene and other '
+    'cameras widen by the same amount. Jack\'s gun keeps its usual size.',
+}
+strings |= _new365
+_l365 = (src / 'launcher.cpp').read_text(encoding='utf-8')
+_shader365 = _l365[_l365.index('  void DrawShaderScreen(ImDrawList* dl) {'):_l365.index('  int SetupStage() const {')]
+for banned in ('Continue in the background', 'DrawSkipAll', 'DrawSetupTop', 'ContinueShadersInBackground'):
+    if banned in _shader365:
+        fail(f'365: the shader screen still has {banned}')
+if 'if (ShaderScreen()) return {};' not in _l365:
+    fail('365: the shader screen still shows a button prompt')
+for needle, why in (
+        ('prompts.push_back({Action::kNextTab, "Next page"});', 'Next page at the top right'),
+        ('if (setup_progress::AutoDetectOffered(stage)) prompts.push_back({Action::kPlay, "Auto detect"});',
+         'Auto detect on the Settings pages and the button prompts'),
+        ('{"Cancel", "Skip all"}, 0,', 'the Skip all pop-up: Cancel (focused) or Skip all'),
+        ('"If you do not configure your game correctly, you may have a worse experience."', 'the Skip all warning'),
+        ('ResetForSetupAgain();\n    ApplyRemastered(true);\n    ApplyRecommendedPreset();', 'Auto detect = the setup\'s recommendation'),
+        ('setup_textures_ = true;\n    setup_cutscenes_ = movies::PlaybackAvailable();', 'Auto detect goes on to the texture pack page'),
+        ('workshop_->TexturePackPicture(tile.key, aspect)', 'the Workshop page shows the packs\' own pictures'),
+):
+    if needle.replace('\\n', '\n') not in _pages332:
+        fail(f'365: {why} ({needle})')
+if _pages332.count('DrawSetupTop(dl);') < 2:
+    fail('365: the top right row missing on the Settings or Workshop pages')
+if 'DrawSkipAll' in _pages332 + _end332 + _l365:
+    fail('365: the old Skip all is still drawn')
+_set365 = (src / 'settings.cpp').read_text(encoding='utf-8')
+if 'REXCVAR_DEFINE_INT32(kk_fov, 80,' not in _set365 or 'rex::cvar::SetFlagByName("kk_fov", "69");' not in _set365:
+    fail('365: Field of view 80 by default, 69 kept for an existing settings file')
+for _s in sorted(_new365):
+    for _tr in entries.get(_s, []):
+        if '\u2014' in _tr or '\u2013' in _tr or re.search(r'\w-\w', _tr) or ' - ' in _tr:
+            fail(f'365: dash in a translation of {_s!r}: {_tr!r}')
 _vid332 = root / 'launcher-video' / 'trg-startup.mp4'
 if not _vid332.is_file():
     fail('332: launcher-video/trg-startup.mp4 is missing')

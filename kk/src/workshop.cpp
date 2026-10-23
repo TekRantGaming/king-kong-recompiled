@@ -1560,6 +1560,9 @@ KongMods& Workshop::Mods() { return *impl_->kong; }
 std::vector<std::pair<std::string, std::string>> Workshop::TexturePackChoices() { return impl_->shelf->Choices(); }
 std::string Workshop::ActiveTexturePack() { return impl_->shelf->Active(); }
 void Workshop::EnableTexturePack(const std::string& key) { impl_->shelf->Enable(key); }
+rex::ui::ImmediateTexture* Workshop::TexturePackPicture(const std::string& key, float* aspect) {
+  return impl_->shelf->Picture(key, aspect);
+}
 void Workshop::OnTexturePackModInstalled(const std::string& id) { impl_->shelf->OnModInstalled(id); }
 void Workshop::OnModsChanged(const std::string& removed_id) {
   if (!removed_id.empty()) impl_->shelf->OnModRemoved(removed_id);

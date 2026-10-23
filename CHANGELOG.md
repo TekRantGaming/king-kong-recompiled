@@ -9,8 +9,12 @@ version's notes the first time you start it.
 - **The Home screen surprise now also works from the keyboard**, and the cheat codes from the original PS2 and Xbox games open it too, on any controller. While it runs, Esc opens the pause menu as Enter and Start do.
 - **Ultrawide is built in**: on a 21:9 or 32:9 screen or window the game fills the whole width and shows more on the left and right, with nothing stretched. The HUD, subtitles, menus, pause and photo mode stay in their places in the middle. Nothing changes on a 16:9 screen. The Ultrawide mod is gone: there is nothing to switch on.
 - **Ultrawide sizes on any screen**: Window size, Resolution (now also in Borderless) and the first time setup list 21:9 and 32:9 sizes (2560 x 1080 up to 7680 x 2160, as tall as your screen at most). The game draws the wide picture at that size and fits it into your window or screen with black bars above and below, so you can play or try ultrawide on a 16:9 screen. A size wider than your screen gets a window of the same shape that fits.
+- **First time setup: a progress bar, Next page, Skip all and Auto detect** at the top right of every page until the last one. Auto detect picks the recommended settings for your PC on every page, then takes you to the texture pack and PS2 cutscene questions. Skip all asks first, because a game that is not set up well may play worse.
+- **The setup's Workshop page explains the Workshop**: the HD, UHD, Comic Book, Cartoon and Tropical Holiday texture packs and the mods, how to download them and switch them on, and how big the packs are, with their pictures.
 
 ### Changed
+- **Field of view is 80 by default**, marked recommended. 69, the original, is still there and marked as the original. If you already play, your field of view stays as it is.
+- **The shader screen stays until the shaders are ready**: Continue in the background and Skip all are gone from it, so the game never starts while its shaders are still being prepared.
 - **PS2 cutscenes now play first and the next level loads after them**, so nothing loads under the clip.
 - **A new Discord invite link** in the launcher and the game.
 - **Plainer wording** in the launcher and the game menus, in all five languages.

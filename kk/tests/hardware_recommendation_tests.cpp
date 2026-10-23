@@ -593,7 +593,7 @@ int main() {
     rex::cvar::LoadConfig(config);
     MigrateSettings(config);
     Equals("native_gi", p.gi);
-    Equals("kk_settings_version", "5");
+    Equals("kk_settings_version", "6");
     Equals("kk_render_quality", p.quality);
     Equals("native_shadow_quality", "high");
     Check(!std::filesystem::exists(config.string() + ".bak"), "valid version 2 is not mistaken for unread settings");
@@ -649,7 +649,7 @@ int main() {
   Equals("present_effect", "bilinear");
   Equals("kk_render_quality", "native");
   Equals("kk_frame_rate", "144");
-  Equals("kk_settings_version", "5");
+  Equals("kk_settings_version", "6");
   // A failed config load still must not overwrite the player's settings.
   rex::cvar::ResetAllToDefaults();
   const std::string unread = "kk_settings_version = 2\ninvalid settings\n";
@@ -661,7 +661,7 @@ int main() {
   rex::cvar::ResetAllToDefaults();
   ApplyPortDefaults();
   MigrateSettings(dir / "new-install.toml");
-  Equals("kk_settings_version", "5");
+  Equals("kk_settings_version", "6");
   InitializeHardwareRecommendation(dir / "new-install.toml", 1920, 1080);
   Equals("native_gi", "high");
   Check(!std::filesystem::exists(dir / "new-install.toml"), "migration does not create a new-install config early");
@@ -750,10 +750,10 @@ int main() {
         Check(MigrateGraphicsApi(), "a file from before Beta 14 moves to DirectX 12");
         Equals("native_backend", "d3d12");
         MigrateSettings(config);
-        Equals("kk_settings_version", "5");
+        Equals("kk_settings_version", "6");
         Equals("native_backend", "d3d12");
         Check(file_text().find("native_backend") == std::string::npos, "DirectX 12 is the default: not written");
-        Check(file_text().find("kk_settings_version = 5") != std::string::npos, "the migration is recorded");
+        Check(file_text().find("kk_settings_version = 6") != std::string::npos, "the migration is recorded");
       }
       // The next start: the player picks Vulkan by hand, and it stays.
       rex::cvar::SetFlagByName("native_backend", "vulkan");
@@ -804,7 +804,7 @@ int main() {
         Equals("kk_hdr", mode);
         MigrateSettings(config);
         Equals("kk_hdr", "off");
-        Equals("kk_settings_version", "5");
+        Equals("kk_settings_version", "6");
         Check(file_text().find("kk_hdr") == std::string::npos, "HDR off is the default: not written");
       }
       load(std::string("kk_settings_version = ") + version + "\n");  // Follow Windows was the old default
@@ -818,6 +818,43 @@ int main() {
     Check(rex::cvar::SetFlagFromCommandLine("kk_hdr", "on"), "command-line HDR");
     MigrateSettings(config);
     Equals("kk_hdr", "on");
+    rex::cvar::ResetAllToDefaults();
+  }
+  // Settings version 6 (task 365, owner 23 Oct): Field of view 80 is the default for new installs; a file from before
+  // that did not save kk_fov had the old default, 69, and keeps it; a saved value stays; a version 6 file is left alone.
+  {
+    auto load = [&](const std::string& text) {
+      std::ofstream(config) << text;
+      rex::cvar::ResetAllToDefaults();
+      ApplyPortDefaults();
+      rex::cvar::LoadConfig(config);
+    };
+    auto file_text = [&] {
+      std::ifstream in(config);
+      return std::string((std::istreambuf_iterator<char>(in)), {});
+    };
+    rex::cvar::ResetAllToDefaults();
+    Equals("kk_fov", "80");
+    for (const char* version : {"2", "4", "5"}) {
+      load(std::string("kk_settings_version = ") + version + "\n");
+      MigrateSettings(config);
+      Equals("kk_fov", "69");
+      Equals("kk_settings_version", "6");
+      Check(file_text().find("kk_fov = 69") != std::string::npos, "the old default is written down");
+      load(std::string("kk_settings_version = ") + version + "\nkk_fov = 95\n");
+      MigrateSettings(config);
+      Equals("kk_fov", "95");
+      load(std::string("kk_settings_version = ") + version + "\nkk_fov = 80\n");
+      MigrateSettings(config);
+      Equals("kk_fov", "80");
+    }
+    load("kk_settings_version = 6\n");
+    MigrateSettings(config);
+    Equals("kk_fov", "80");
+    rex::cvar::ResetAllToDefaults();  // a new install: no settings file, the new default
+    ApplyPortDefaults();
+    MigrateSettings(config.parent_path() / "no-settings-file.toml");
+    Equals("kk_fov", "80");
     rex::cvar::ResetAllToDefaults();
   }
   // Task 350a: the setup again gives an existing install a new install's recommendation (the first-setup policy),

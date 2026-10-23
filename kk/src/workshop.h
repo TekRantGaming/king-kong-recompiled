@@ -91,6 +91,8 @@ class Workshop {
   std::vector<std::pair<std::string, std::string>> TexturePackChoices();
   std::string ActiveTexturePack();
   void EnableTexturePack(const std::string& key);
+  // Task 365: a texture pack card's picture (TexturePackShelf::Picture), for the first time setup's Workshop page.
+  rex::ui::ImmediateTexture* TexturePackPicture(const std::string& key, float* aspect);
   // The launcher heard from the content service (TickContent): a texture pack mod was installed (it becomes the
   // one on), a mod was installed or removed, or the HD texture pack was turned on.
   void OnTexturePackModInstalled(const std::string& id);

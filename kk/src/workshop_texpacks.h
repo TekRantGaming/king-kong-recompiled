@@ -66,6 +66,9 @@ class TexturePackShelf {
   std::vector<std::pair<std::string, std::string>> Choices();
   std::string Active();
   void Enable(const std::string& key);
+  // Task 365: the picture a pack's card shows ("hd", "uhd", "comic", "cartoon", "tropical"; null if none yet), for the
+  // first time setup's Workshop page.
+  rex::ui::ImmediateTexture* Picture(const std::string& key, float* aspect);
 
   void OnModInstalled(const std::string& id);
   void OnModRemoved(const std::string& id);

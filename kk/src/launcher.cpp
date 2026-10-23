@@ -21,6 +21,7 @@
 #include "startup_movies.h"
 #include "startup_movies_logic.h"
 #include "setup_again.h"
+#include "setup_progress.h"
 #include "hardware_recommendation.h"
 #include "notify_logic.h"
 #include "system_notify.h"
@@ -45,6 +46,7 @@
 #include "ultrawide_logic.h"  // the Ultrawide mod's picture shape (task 311)
 
 #include <algorithm>
+#include <array>
 #include <atomic>
 #include <cctype>
 #include <chrono>
@@ -1361,12 +1363,15 @@ class SettingsPages {
     items.push_back(Section("Camera"));
     {
       Item it = CvarSlider("Field of view",
-                           "How wide the camera sees. 69" KK_DEG " is the original for Jack; Kong, cutscene and other "
-                           "cameras widen by the same amount. Jack's gun keeps its usual size.",
+                           "How wide the camera sees. 80" KK_DEG " is recommended and 69" KK_DEG " is the original for "
+                           "Jack; Kong, cutscene and other cameras widen by the same amount. Jack's gun keeps its usual "
+                           "size.",
                            "kk_fov", 69, 110, 1, [](float v) {
+                             // Task 365 (owner, 23 Oct): 80 is the default and marked recommended, 69 the original.
                              const int d = int(std::lround(v));
-                             return d <= 69 ? F("{0}" KK_DEG " (original)", {std::to_string(d)})
-                                            : std::to_string(d) + KK_DEG;
+                             return d <= 69   ? F("{0}" KK_DEG " (original)", {std::to_string(d)})
+                                    : d == 80 ? F("{0}" KK_DEG " (recommended)", {std::to_string(d)})
+                                              : std::to_string(d) + KK_DEG;
                            });
       items.push_back(std::move(Disable(it, original, kSetByOriginal)));
     }
@@ -2761,7 +2766,7 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
       // Task 350a (owner, 21 Oct): updating to Beta 14 takes every existing player through the first-time setup once
       // more, from the new defaults (setup_again.h); the game files page is skipped (they are here). The shaders this
       // update prepares (both packs: the DirectX 12 one too) show as the setup's shader step, not the after-update
-      // screen, and Skip all lets them carry on in the background as in a first setup.
+      // screen (task 365: it stays until they are ready, as in a first setup).
       const bool again = !first_start && setup_again::Due(existing_install_, GetInt("kk_setup_again"),
                                                          std::getenv("KK_AUTOPLAY") != nullptr);
       if (again) {
@@ -3600,7 +3605,7 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
       if (modal_.cancel >= 0) p.push_back({Action::kBack, "Back"});
       return p;
     }
-    if (ShaderScreen()) return {{Action::kAccept, "Continue in the background"}};
+    if (ShaderScreen()) return {};  // task 365: nothing to press while the shaders are prepared
     if (InSetup()) {
       switch (SetupStage()) {
         case 0:
@@ -4741,8 +4746,9 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
   }
 
   // Home's look (the stills, blurred; the game's logo; the music), with a centred panel: what is
-  // happening and why, the PC being slower meanwhile, the progress, and Continue in the background
-  // (A, Enter or a click). The build goes on behind Home after that, and Play waits for it.
+  // happening and why, the PC being slower meanwhile, and the progress. Task 365 (owner, 23 Oct): no Continue in
+  // the background and no Skip all any more (first setup, after an update, Rebuild shaders): the screen stays until
+  // the shaders are ready, then the setup (or Home, or the Graphics page) comes up by itself (TickNativeShaders).
   void DrawShaderScreen(ImDrawList* dl) {
     const float s = S();
     const ui::Fonts f = ui::GetFonts();
@@ -4778,12 +4784,10 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
         "The game's shaders are translated for your graphics card from your copy of the game, once, so effects "
         "never stutter the first time they appear.");
     const std::string slow = T(KK_SLOW_PC);
-    const std::string button = T("Continue in the background");
     const float pw = std::min(760 * s, w_ - Margin() * 2), pad = 34 * s, r = 12 * s, wrap = pw - pad * 2;
     const float why_h = ui::TextSize(f.text, 16 * s, why, wrap).y, slow_h = ui::TextSize(f.text, 14.5f * s, slow, wrap).y;
-    const float bh = 48 * s;
     const float ph = pad + 16 * s + 14 * s + 36 * s + 18 * s + why_h + 10 * s + slow_h + 30 * s + 3 * s + 14 * s +
-                     20 * s + 30 * s + bh + pad;
+                     20 * s + pad;
     float lw = 0, lh = 0;
     if (logo_) {
       lh = std::clamp(h_ - ph - 150 * s, 0.0f, 150 * s);
@@ -4828,34 +4832,7 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
     dl->AddText(f.text, 15 * s, ImVec2(tx, ty), color::kTextDim, left.c_str());
     dl->AddText(f.text, 15 * s, ImVec2(tx + wrap - ui::TextSize(f.text, 15 * s, right).x, ty), color::kTextDim,
                 right.c_str());
-    ty += 20 * s + 30 * s;
-    // Continue in the background: the panel's one button, with the focus.
-    const float bw = std::max(300 * s, ui::TextSize(f.semibold, 16 * s, button).x + 60 * s);
-    const ImVec2 b0(x1 - pad - bw, ty), b1(x1 - pad, ty + bh);
-    const bool hovered = !modal_.open && ImGui::IsMouseHoveringRect(b0, b1, false);
-    dl->AddRectFilled(b0, b1, hovered ? IM_COL32_WHITE : color::kFocus, 4 * s);
-    const ImVec2 ts = ui::TextSize(f.semibold, 16 * s, button);
-    dl->AddText(f.semibold, 16 * s, ImVec2(b0.x + (bw - ts.x) * 0.5f, b0.y + (bh - ts.y) * 0.5f), color::kOnFocus,
-                button.c_str());
-    if (!modal_.open && (input_.Pressed(Action::kAccept) || (hovered && ImGui::IsMouseClicked(0)))) {
-      input_.Consume(Action::kAccept);
-      ContinueShadersInBackground();
-    }
-    DrawSkipAll(dl);  // task 332: the first time setup's shader screen
-  }
-
-  void ContinueShadersInBackground() {
-    ui::Cue(ui::Sound::kSelect);
-    const bool rebuild = rebuild_shaders_screen_ && !setup_shaders_ && !update_shaders_;
-    setup_shaders_ = false;  // the setup goes on to the texture pack page
-    update_shaders_ = false;
-    rebuild_shaders_screen_ = false;
-#if defined(KK_DEV_TOOLS)
-    if (dev_setup_ == 4) dev_setup_ = 6;
-#endif
-    if (rebuild) return;  // back to the Graphics page it was asked for on
-    page_ = kHome;
-    home_focus_ = 0;
+    // Task 365: no button on the panel and nothing at the top right (the screen moves on by itself).
   }
 
   // Task 332: 15 the Workshop page, 16 to 18 the Settings pages Display, Graphics, Controls (launcher_setup_pages.inc);
@@ -5107,7 +5084,7 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
       y += 30 * s;
     } else if (stage == 6 || stage == 7) {
       // Setup steps 7 and 8 (setup-flow.md, task 332): the HD texture pack, and the restored PS2 cutscenes.
-      DrawSkipAll(dl);
+      DrawSetupTop(dl);
       const auto kind = stage == 6 ? content::Kind::kTexturePack : content::Kind::kCutscenes;
       const content::Info& info = content::InfoFor(kind);
       auto para = [&](const std::string& text, float size, ImU32 col) {

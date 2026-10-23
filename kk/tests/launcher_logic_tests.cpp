@@ -20,6 +20,7 @@
 #include "setup_again.h"
 #include "easter_egg_logic.h"
 #include "update_channel.h"
+#include "setup_progress.h"
 
 #include <bit>
 #include <cstdio>
@@ -1105,6 +1106,28 @@ void EasterEggHeldCodeChecks() {
 }
 
 // Task 358: the update channel comes from the build (update_channel.h).
+// Task 365: the first time setup's top right row (setup_progress.h): the page order, the progress bar by page until
+// the Finish page, Next page and where Auto detect is offered.
+void SetupProgressChecks() {
+  namespace sp = kk::setup_progress;
+  const std::vector<int> with = sp::Pages(true), without = sp::Pages(false);
+  Check(with == std::vector<int>({16, 17, 18, 12, 6, 7, 15, 13}), "365: the setup's pages in order (with PS2 cutscenes)");
+  Check(without == std::vector<int>({16, 17, 18, 12, 6, 15, 13}), "365: no PS2 cutscene page where they do not play");
+  const sp::Bar first = sp::For(16, true), prompts = sp::For(12, true), workshop = sp::For(15, false);
+  Check(first.shown && first.index == 1 && first.count == 8, "365: Display is page 1 of 8");
+  Check(prompts.shown && prompts.index == 4 && prompts.count == 8, "365: the button prompts are page 4 of 8");
+  Check(workshop.shown && workshop.index == 6 && workshop.count == 7, "365: the Workshop is page 6 of 7 without cutscenes");
+  Check(!sp::For(13, true).shown && !sp::For(13, false).shown, "365: nothing at the top right of the Finish page");
+  for (const int other : {0, 1, 2, 3, 4, 8, 9, 10, 11, 14})
+    Check(!sp::For(other, true).shown, "365: no progress bar on the game files, shaders, graphics or New screens");
+  Check(sp::Next(16, true) == 17 && sp::Next(18, true) == 12 && sp::Next(12, true) == 6, "365: Next page in order");
+  Check(sp::Next(6, true) == 7 && sp::Next(6, false) == 15 && sp::Next(7, true) == 15 && sp::Next(15, true) == 13,
+        "365: Next page past the content pages");
+  Check(sp::Next(13, true) == -1 && sp::Next(4, true) == -1, "365: no Next page from the Finish page or shaders");
+  for (const int stage : {16, 17, 18, 12}) Check(sp::AutoDetectOffered(stage), "365: Auto detect on the settings pages");
+  for (const int stage : {6, 7, 15, 13, 4}) Check(!sp::AutoDetectOffered(stage), "365: no Auto detect after the prompts");
+}
+
 void UpdateChannelChecks() {
   using kk::ChannelAtStart;
   Check(ChannelAtStart("stable", "") == "stable", "stable build, no channel saved: stable");
@@ -1126,6 +1149,7 @@ void UpdateChannelChecks() {
 }
 
 int main() {
+  SetupProgressChecks();
   EasterEggCodeChecks();
   EasterEggKeyboardChecks();
   EasterEggHeldCodeChecks();

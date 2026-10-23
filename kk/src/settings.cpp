@@ -177,8 +177,11 @@ REXCVAR_DEFINE_STRING(kk_modern_settings, "", "KK/Graphics",
                       "Internal: the Modern settings to put back when leaving the Original look");
 REXCVAR_DEFINE_STRING(kk_graphics_preset, "", "KK/Graphics",
                       "Internal: the chosen preset label when presets have identical values");
-REXCVAR_DEFINE_INT32(kk_fov, 69, "KK/Gameplay",
-                     "Field of view in degrees for Jack's camera (69 = original); other cameras widen to match");
+// Task 365 (owner, 23 Oct): 80 is the default (recommended); a settings file from before keeps its value
+// (MigrateSettings, version 6: a file without kk_fov had the old default, 69).
+REXCVAR_DEFINE_INT32(kk_fov, 80, "KK/Gameplay",
+                     "Field of view in degrees for Jack's camera (80 = recommended, 69 = original); other cameras "
+                     "widen to match");
 REXCVAR_DEFINE_BOOL(kk_skip_intros, true, "KK/Gameplay",
                     "Skip the Ubisoft, Universal and WingNut logo movies when the game starts");
 REXCVAR_DEFINE_BOOL(kk_toggle_aim, false, "KK/Controls",
@@ -578,11 +581,13 @@ void MigrateHdrSettings() {
 
 namespace {
 // The settings file's version (kk_settings_version; MigrateSettings lists what each one changed).
-constexpr int32_t kSettingsVersion = 5;
+constexpr int32_t kSettingsVersion = 6;
 // 4: DirectX 12 is the default graphics API on Windows (task 350a, MigrateGraphicsApi).
 constexpr int32_t kD3d12DefaultVersion = 4;
 // 5: HDR is off for everyone (owner, 21 Oct; experimental, F8 panel only).
 constexpr int32_t kHdrOffVersion = 5;
+// 6: the field of view's default is 80 (task 365, owner 23 Oct); a file from before without kk_fov had 69 and keeps it.
+constexpr int32_t kFovDefaultVersion = 6;
 }  // namespace
 
 bool MigrateGraphicsApi() {
@@ -618,6 +623,8 @@ void MigrateSettings(const std::filesystem::path& config_path) {
   // 4: DirectX 12 on Windows (MigrateGraphicsApi, before the renderer started; nothing more to do here).
   // 5: HDR off once for every existing player, also one who had it On or on Follow Windows (owner, 21 Oct): it is
   //    experimental now, in the F8 panel only. A command-line or environment value is that run's own and stays.
+  // 6: Field of view 80 is the default (task 365); an older file that did not save kk_fov had the old default, 69,
+  //    and keeps it (owner: an existing player's value does not change).
   constexpr int32_t kVersion = kSettingsVersion;
   if (REXCVAR_GET(kk_settings_version) >= kVersion) return;
   std::error_code ec;
@@ -691,6 +698,12 @@ void MigrateSettings(const std::filesystem::path& config_path) {
         REXLOG_INFO("KK: settings from before version 5: HDR {} -> off (experimental now, in the F8 panel only)",
                     before);
       }
+    }
+    if (REXCVAR_GET(kk_settings_version) < kFovDefaultVersion &&
+        rex::cvar::GetFlagSource("kk_fov") == rex::cvar::Source::kDefault) {
+      rex::cvar::SetFlagByName("kk_fov", "69");
+      REXLOG_INFO("KK: settings from before version 6: field of view kept at 69 (the old default; new installs start "
+                  "at 80)");
     }
     REXLOG_INFO("KK: settings file brought up to version {} (was {}); graphics API {}", kVersion,
                 REXCVAR_GET(kk_settings_version), rex::cvar::GetFlagByName("native_backend"));

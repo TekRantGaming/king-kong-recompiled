@@ -294,6 +294,10 @@ void DrawDescription(ImDrawList* dl, const Item* item, ImVec2 p0, ImVec2 p1, con
 // paragraph, 4 too tall even then (the developer build's description check).
 int DescriptionFit(const Item* item, ImVec2 p0, ImVec2 p1, const Metrics& m);
 
+// How wide DrawPrompts draws `prompts` (task 365: the setup's top right row is laid out around it).
+float PromptsWidth(ImDrawList* dl, Glyphs& glyphs, const std::string& set, const std::vector<Prompt>& prompts,
+                   const Metrics& m);
+
 // The prompt bar, right-aligned to `right` and centred on `center_y`. A
 // clicked prompt returns its action (Action::kCount if none).
 Action DrawPrompts(ImDrawList* dl, Glyphs& glyphs, const std::string& set, const std::vector<Prompt>& prompts,

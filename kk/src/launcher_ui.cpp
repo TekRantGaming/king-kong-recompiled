@@ -531,6 +531,16 @@ float DrawPromptGlyphs(ImDrawList* dl, Glyphs& glyphs, Action a, const std::stri
 
 }  // namespace
 
+float PromptsWidth(ImDrawList* dl, Glyphs& glyphs, const std::string& set, const std::vector<Prompt>& prompts,
+                   const Metrics& m) {
+  const Fonts f = GetFonts();
+  const float s = m.s, gh = 28 * s, fs = 15 * s, gap = 8 * s, between = 26 * s;
+  float total = 0;
+  for (const Prompt& p : prompts)
+    total += DrawPromptGlyphs(dl, glyphs, p.action, set, 0, 0, gh, m, false) + gap + TextSize(f.text, fs, T(p.label)).x;
+  return total + between * float(prompts.empty() ? 0 : prompts.size() - 1);
+}
+
 Action DrawPrompts(ImDrawList* dl, Glyphs& glyphs, const std::string& set, const std::vector<Prompt>& prompts, float right,
                    float center_y, const Metrics& m, bool clickable) {
   const Fonts f = GetFonts();
