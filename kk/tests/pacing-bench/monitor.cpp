@@ -23,11 +23,11 @@ int main() {
   Metrics bound;
   Check(std::string(Bound(bound)) == "Timing unavailable", "missing times cannot invent a verdict");
   bound[kGpuMs].Add(8, 1); bound[kGameMs].Add(3, 1); bound[kRenderMs].Add(4, 1);
-  Check(std::string(Bound(bound)) == "GPU-bound", "GPU indication");
+  Check(std::string(Bound(bound)) == "GPU bound", "GPU indication");
   bound[kGameMs] = {}; bound[kGameMs].Add(12, 1);
-  Check(std::string(Bound(bound)) == "CPU-bound", "CPU indication uses slower thread");
+  Check(std::string(Bound(bound)) == "CPU bound", "CPU indication uses slower thread");
   bound[kGameMs] = {}; bound[kGameMs].Add(8, 1);
-  Check(std::string(Bound(bound)) == "Mixed or cap-limited", "close timings are inconclusive");
+  Check(std::string(Bound(bound)) == "Mixed or capped", "close timings are inconclusive");
   auto old = ReadLegacySummary("Average FPS: 80\n1% low FPS: 40\nSuccessful host present return intervals:\nAverage FPS: 999\nChapter 1 entry 2\nAverage FPS: 60\nHost present returns:\nAverage FPS: 999\nChapter 2 entry 8\nAverage FPS: 55\nRecording settings:\nAverage FPS: 999\n");
   Check(old.Valid() && old.frames[0].average_fps == 80 && old.frames[1].average_fps == 60 && old.frames[2].average_fps == 55, "legacy excludes host and recording data");
   Check(!ReadNumber("nan") && !ReadNumber("inf") && !ReadNumber("10x"), "invalid history numeric fields rejected");

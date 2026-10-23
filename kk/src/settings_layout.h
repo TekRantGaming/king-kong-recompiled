@@ -53,7 +53,7 @@ inline constexpr Row kGraphicsRows[] = {
     {"Upscaling", "Upscaler mode"},
     {"Upscaling", "Render quality"},
     {"Upscaling", "Internal resolution"},
-    {"Image", "Anti-aliasing"},
+    {"Image", "Antialiasing"},
     {"Image", "Sharpness"},
     {"Image", "Texture filtering"},
     {"Lighting", "Ambient occlusion"},
@@ -117,7 +117,7 @@ inline constexpr Row kGameplayRows[] = {
     {"HUD", "Aiming visor"},
     {"HUD", "Inventory"},
     {"HUD", "Notifications"},
-    {"HUD", "Pop-up style"},
+    {"HUD", "Popup style"},
     {"Overlay", "Performance metrics"},
     {"Game", "Startup logos"},
 };

@@ -17,7 +17,7 @@ ignored apart from the files described here.
 
 ```
 <user folder>/mods/<ModName>/mod.toml      your mods (one folder each)
-<game folder>/mods-builtin/<ModName>/      the mods that ship with the game ("Built-in")
+<game folder>/mods-builtin/<ModName>/      the mods that ship with the game ("Built in")
 ```
 
 The user folder is `Documents\king_kong` on Windows and the game's user data folder on Linux
@@ -155,7 +155,7 @@ the online and update switches, the setup's own records or the mod list: `kk_mod
 `kk_achievement_sound_file`, `gpu_plugin`, `kk_launcher`, `kk_skip_launcher`, `kk_start`, `kk_renderer`,
 `kk_launcher_open` and the benchmark settings.
 
-The built-in mods are settings mods: **Cel shading** (`native_cel_shading`; the fine controls are in the F8 panel) and **Ultrawide (experimental)** (`kk_aspect = "auto"`; it may not work as intended).
+The built in mods are settings mods: **Cel shading** (`native_cel_shading`; the fine controls are in the F8 panel) and **Ultrawide (experimental)** (`kk_aspect = "auto"`; it may not work as intended).
 
 ## Cutscene mods
 

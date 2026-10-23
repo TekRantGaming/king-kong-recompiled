@@ -67,7 +67,7 @@ int main() {
       "<Data Name='ModulePath'>C:\\Program Files (x86)\\Overwolf\\owclient.dll</Data></EventData></Event>";
   std::string d = DescribeEndEvent(crash, 0x5778, "king_kong.exe");
   Check(Has(d, "exception 0xc0000409 in owclient.dll at offset 0x00000000001a2b3c"), "1000: code, module, offset");
-  Check(Has(d, "fail-fast"), "1000: fail-fast explained");
+  Check(Has(d, "fail fast"), "1000: fail fast explained");
   Check(!Has(d, "Users") && !Has(d, "Program Files"), "1000: no paths");
   Check(DescribeEndEvent(crash, 0x5779, "king_kong.exe").empty(), "1000: other process ignored");
   Check(DescribeEndEvent(crash, 0x5778, "other.exe").empty(), "1000: other program ignored");

@@ -30,6 +30,7 @@
 #include "display_modes.h"
 #include "steam_shortcut.h"
 #include "update.h"
+#include "update_channel.h"
 #include "glyphs.h"
 #include "key_glyphs.h"
 #include "discord_presence.h"
@@ -145,7 +146,7 @@ struct TexturePackZipChoice {
   kk::content::ImportTarget target = kk::content::ImportTarget::kTexturePack;  // task 209: which import button
 } texture_pack_zip_choice;
 constexpr const char* kProjectUrl = "https://github.com/TekRantGaming/king-kong-recompiled";
-constexpr const char* kDiscordUrl = "https://discord.gg/PET2xU5FJq";  // permanent (expires_at null)
+constexpr const char* kDiscordUrl = "https://discord.gg/8eakYSvBZS";  // the owner's invite (23 Oct)
 #include "discord_icon.inc"
 #include "steam_icon.inc"
 constexpr const char* kOnlineAbout =
@@ -154,7 +155,7 @@ constexpr const char* kOnlineAbout =
     "versions can prepare them in advance. It also sends an anonymous performance summary when you quit (frame "
     "rate per chapter, graphics card, driver and main graphics settings) and, after a crash, the crash report "
     "with your user name and personal folders removed. To count you, the launcher sends a tiny anonymous "
-    "check-in every 5 minutes: a random number that isn't linked to you, the port's version (stable or beta), "
+    "check in every 5 minutes: a random number that isn't linked to you, the port's version (stable or beta), "
     "Windows or Linux, and whether you're in the game. No name, account, IP address or personal files are "
     "kept, and switching it off stops all of this and deletes the random number.";
 #define KK_TIMES "\xC3\x97"
@@ -982,7 +983,7 @@ class SettingsPages {
       }
     }
     items.push_back(Section("Achievements"));
-    items.push_back(CvarToggle("Sound", "The sound that plays with each pop-up.", "kk_achievement_sound"));
+    items.push_back(CvarToggle("Sound", "The sound that plays with each popup.", "kk_achievement_sound"));
     const bool sound = GetBool("kk_achievement_sound");
     const char* sound_note = "Switch Sound on to choose it.";
     {
@@ -995,7 +996,7 @@ class SettingsPages {
       it.type = ItemType::kChoice;
       it.label = "Sound to play";
       it.description =
-          "The built-in chime or a sound you added. Put .wav files in the sounds folder to see them here.";
+          "The built in chime or a sound you added. Put .wav files in the sounds folder to see them here.";
       const std::string cur = Get("kk_achievement_sound_file");
       it.index = 0;
       std::vector<std::string> values;
@@ -1665,7 +1666,7 @@ class SettingsPages {
       Item it;
       it.label = "Recommended";
       it.description = "Detect your hardware and recommend render resolution, upscaling, ambient occlusion and global illumination. "
-                       "Settings you changed are kept. The frame-rate cap, graphics API and other lighting effects are kept.";
+                       "Settings you changed are kept. The frame rate cap, graphics API and other lighting effects are kept.";
       const std::string tier = Get("kk_hardware_tier");
       it.value_text = tier == "low" ? "Low" : tier == "mid" ? "Medium" : tier == "high" ? "High" : tier;
       it.on_activate = [this] {
@@ -1680,7 +1681,7 @@ class SettingsPages {
     UpscalingItems(items);
     items.push_back(Section("Image"));
     {
-      Item it = CvarChoice("Anti-aliasing", "Smooths jagged edges after the frame is drawn.", "swap_post_effect",
+      Item it = CvarChoice("Antialiasing", "Smooths jagged edges after the frame is drawn.", "swap_post_effect",
                            {{"Off", "none"}, {"FXAA", "fxaa"}, {"SMAA", "smaa"}});
       items.push_back(std::move(Disable(it, original, kSetByOriginal)));
     }
@@ -1756,7 +1757,7 @@ class SettingsPages {
     }
     {
       Item it = CvarToggle("Distance fog",
-                           "The haze over far-away scenery.",
+                           "The haze over far away scenery.",
                            "kk_fog");
       items.push_back(std::move(Disable(it, original, kSetByOriginal)));
     }
@@ -2108,11 +2109,11 @@ class SettingsPages {
       items.push_back(ProfileToggle("Inventory", "Show the game's inventory indicators.", play::ProfileOption::kInventory,
                                     profile.inventory));
     }
-    items.push_back(CvarToggle("Notifications", "A pop-up when you unlock an achievement in game.",
+    items.push_back(CvarToggle("Notifications", "A popup when you unlock an achievement in game.",
                                "kk_achievement_toasts"));
-    items.push_back(CvarChoice("Pop-up style",
+    items.push_back(CvarChoice("Popup style",
                                "Xbox 360 unfolds from a green ring at the bottom of the screen. Steam slides up in "
-                               "the bottom-right corner. Try them with Test notification.",
+                               "the bottom right corner. Try them with Test notification.",
                                "kk_achievement_style", {{"Xbox 360", "xbox360"}, {"Steam", "steam"}}));
     // Performance metrics moved here from Display (owner, 18 Oct); the camera rows went to Display > Camera.
     items.push_back(Section("Overlay"));
@@ -2223,7 +2224,7 @@ class SettingsPages {
     {
       Item it = CvarSlider("Mouse sensitivity",
                            "How far the camera turns as you move the mouse. It turns the same however fast you move "
-                           "it, as in other first-person games.",
+                           "it, as in other first person games.",
                            "kk_mouse_sensitivity", 0.1f, 5.0f, 0.05f, [](float v) {
                              char buf[32];
                              std::snprintf(buf, sizeof(buf), "%.2f" KK_TIMES, v);
@@ -4729,7 +4730,7 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
       input_.Consume(Action::kAccept);
       ContinueShadersInBackground();
     }
-    DrawSkipAll(dl);  // task 332: the first-time setup's shader screen
+    DrawSkipAll(dl);  // task 332: the first time setup's shader screen
   }
 
   void ContinueShadersInBackground() {
@@ -5155,7 +5156,7 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
     const bool on = GetBool("kk_online_count");
     const std::string text = T(
         "Shows how many players are online, at the top right of the launcher. Help reduce stutter: share "
-        "graphics pipeline data. It sends a tiny anonymous check-in every 5 minutes (a random number, the "
+        "graphics pipeline data. It sends a tiny anonymous check in every 5 minutes (a random number, the "
         "port's version, Windows or Linux, and whether you're playing) and, when you quit, the game's graphics "
         "pipeline data and an anonymous performance summary. After a crash, it sends the crash report with "
         "your user name and personal folders removed. Nothing that identifies you or your PC is kept. Switch "
@@ -5783,7 +5784,8 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
       };
       items.push_back(std::move(it));
     }
-    {
+    // Task 358: a stable build follows stable only and never offers the beta channel (update_channel.h).
+    if (OffersChannelChoice(kBuildChannel)) {
       Item it = ActionItem("Change version",
                            "Stable is the tested version of the port. Beta gets test builds of upcoming features "
                            "early, which can have problems. Your saves and settings are kept either way.",
@@ -6094,7 +6096,8 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
     if (Get("kk_update_channel") == "beta") {
       OpenModal("Switch back to stable?",
                 "This installs the newest stable version of the port and restarts the launcher. If your beta is "
-                "newer than it, this goes back a version.\n\nStable has no native renderer, so the beta's own "
+                "newer than it, this goes back a version.\n\nStable versions before 2.0.0 have no native renderer, so when going "
+                "back to one of those, the beta's own "
                 "settings (the renderer, its ambient occlusion method and the fullscreen resolution) go back to "
                 "their defaults. Your installed game, saves and other settings stay as they are.",
                 {"Switch to stable", "Cancel"}, 1, [this](int i) {
@@ -6138,8 +6141,10 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
       return;
     }
     Set("kk_update_channel", channel);
-    // Stable has no native renderer: it must find only settings it knows (ResetBetaOnlySettings).
-    if (channel == "stable" && update_->found) ResetBetaOnlySettings();
+    // A stable version before 2.0.0 has no native renderer: it must find only settings it knows
+    // (ResetBetaOnlySettings). Stable 2.0.0 and later have them, so they stay (task 358).
+    if (channel == "stable" && update_->found && StableLacksNativeRenderer(update_->found->version))
+      ResetBetaOnlySettings();
     SaveSettings(paths_.config_path);
     if (update_->found) {
       BeginUpdateInstall(*update_->found);
@@ -6240,10 +6245,10 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
     if (!steam_ || steam_->busy) return;
     const bool running = steam::SteamRunning();
     OpenModal("Add to Steam",
-              running ? "Adds King Kong to your Steam library as a non-Steam game, with artwork from SteamGridDB, so "
+              running ? "Adds King Kong to your Steam library as a non Steam game, with artwork from SteamGridDB, so "
                         "you can start it from Steam, Big Picture or a Steam Deck.\n\nSteam reads its list of games "
                         "only when it starts, so it closes for a moment and opens again afterwards."
-                      : "Adds King Kong to your Steam library as a non-Steam game, with artwork from SteamGridDB, so "
+                      : "Adds King Kong to your Steam library as a non Steam game, with artwork from SteamGridDB, so "
                         "you can start it from Steam, Big Picture or a Steam Deck.",
               {running ? "Close Steam and add" : "Add to Steam", "Cancel"}, 1, [this](int i) {
                 if (i == 0) StartAddToSteam();
@@ -7084,8 +7089,8 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
                                         : "Downloading the PS2 cutscenes";
     OpenModal(title,
               importing ? T("Your ZIP file is checked and unpacked. It carries on in the background if you leave "
-                            "this pop-up, and Cancel stops it without changing anything you have installed.")
-                        : T("It carries on in the background if you leave this pop-up. If the connection drops or "
+                            "this popup, and Cancel stops it without changing anything you have installed.")
+                        : T("It carries on in the background if you leave this popup. If the connection drops or "
                             "you close the launcher, it continues from where it stopped."),
               buttons, background,
               [this, kind, mode, background](int i) {
@@ -7374,9 +7379,12 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
   // starts the owner's little game (launcher\easter-egg\). While it runs the launcher keeps reading the
   // controller: Start brings the launcher in front with a pause panel (Resume, Quit to main menu). Its music
   // and sounds are silent meanwhile. Nothing on screen tells of the code.
+  // Task 358: the keyboard too, mixed with the controller in one code: the arrow keys for the directions, B and A
+  // for B and A, Enter for Start (kept from the launcher while it is the code's next press, as Start is). Any
+  // other key is a wrong press.
   void EggCodeInput() {
-    const uint32_t presses = input_.pad_presses();
-    if (!presses) return;
+    const uint32_t presses = input_.pad_presses(), keys = input_.key_presses();
+    if (!presses && !keys) return;
     using P = egg::Pad;
     struct Bit {
       uint32_t bit;
@@ -7398,6 +7406,19 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
       if (egg::Swallowed(b.pad, step)) input_.Consume(b.action);
       if (step == egg::Step::kComplete) StartEgg();
     }
+    // The keyboard (Input::key_presses): Enter is the launcher's Accept, kept from it while it is the code's next press.
+    using K = egg::Key;
+    static constexpr std::pair<uint32_t, K> kKeys[] = {
+        {ui::Input::kPadUp, K::kUp}, {ui::Input::kPadDown, K::kDown}, {ui::Input::kPadLeft, K::kLeft},
+        {ui::Input::kPadRight, K::kRight}, {ui::Input::kPadB, K::kB}, {ui::Input::kPadA, K::kA},
+        {ui::Input::kPadStart, K::kEnter}, {ui::Input::kKeyOther, K::kOther},
+    };
+    for (const auto& [bit, key] : kKeys) {
+      if (!(keys & bit)) continue;
+      const egg::Step step = egg_code_.Press(egg::FromKey(key));
+      if (egg::KeySwallowed(key, step)) input_.Consume(Action::kAccept);
+      if (step == egg::Step::kComplete) StartEgg();
+    }
   }
 
   void StartEgg() {
@@ -7411,6 +7432,7 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
     if (!egg_->Start(exe)) return;
     egg_running_ = true;
     egg_paused_ = egg_quitting_ = false;
+    egg_enter_down_ = true;  // the Enter that ended the code counts only once let go
   }
 
   static double SteadySeconds() {
@@ -7440,15 +7462,23 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
     TickState();  // the launcher's jobs go on (and TickEgg)
     if (!egg_running_) return false;
     DrawBackdrop(dl);
+    // Task 358: Enter acts as Start. With the game in front the launcher's window gets no keys, so it is read from
+    // the system then (only while the game's window is the foreground one); a press the launcher sees itself counts
+    // too. A held Enter counts once.
+    const bool enter_down = egg::EnterKeyDown();
+    const bool enter = (enter_down && !egg_enter_down_ && egg_ && egg_->InFront()) ||
+                       (input_.key_presses() & ui::Input::kPadStart);
+    egg_enter_down_ = enter_down;
     if (egg_paused_) {
       DrawEggPause(dl);
-    } else if (!egg_quitting_ && (input_.pad_presses() & ui::Input::kPadStart) && egg_ && egg_->WindowShown()) {
+    } else if (!egg_quitting_ && ((input_.pad_presses() & ui::Input::kPadStart) || enter) && egg_ &&
+               egg_->WindowShown()) {
       // (only once its window is up: a Start before that does nothing)
       egg_paused_ = true;
       egg_focus_ = 0;
       egg_pause_time_ = ImGui::GetTime();
       const bool front = cb_.native_window && egg::ForceToFront(cb_.native_window());
-      REXLOG_INFO("KK: easter egg paused (Start): launcher {}",
+      REXLOG_INFO("KK: easter egg paused ({}): launcher {}", enter ? "Enter" : "Start",
                   front ? "in front" : "asked to the front, Windows kept another window in front");
     }
     input_.ConsumeAll();
@@ -8220,6 +8250,7 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
   }
   std::chrono::steady_clock::time_point dev_notify_at_{}, dev_history_at_{};
   bool dev_notify_ok_ = true;
+  ImGuiKey dev_key_up_ = ImGuiKey_None;  // task 358: the key a "key:" step pressed (let go next frame)
 
   void DevInput() {
     ImGuiIO& io = ImGui::GetIO();
@@ -8230,6 +8261,10 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
     if (release) {
       io.AddMouseButtonEvent(0, false);
       release = false;
+    }
+    if (dev_key_up_ != ImGuiKey_None) {  // task 358: the key a "key:" step pressed is let go the next frame
+      io.AddKeyEvent(dev_key_up_, false);
+      dev_key_up_ = ImGuiKey_None;
     }
     static std::vector<std::string> steps = [] {
       std::vector<std::string> out;
@@ -8530,6 +8565,20 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
       return;
     }
     if (t == "up") return io.AddMouseButtonEvent(0, false);
+    // Task 358: "key:<name>" presses a real keyboard key (ImGui key events, let go at the next step), so the
+    // keyboard path (Input::key_presses, the Home code) runs as when typed: up, down, left, right, a, b, enter,
+    // space, escape, x.
+    if (t.rfind("key:", 0) == 0) {
+      static const std::map<std::string, ImGuiKey> kKeyNames = {
+          {"up", ImGuiKey_UpArrow}, {"down", ImGuiKey_DownArrow}, {"left", ImGuiKey_LeftArrow},
+          {"right", ImGuiKey_RightArrow}, {"a", ImGuiKey_A}, {"b", ImGuiKey_B}, {"enter", ImGuiKey_Enter},
+          {"space", ImGuiKey_Space}, {"escape", ImGuiKey_Escape}, {"x", ImGuiKey_X}};
+      if (auto it = kKeyNames.find(t.substr(4)); it != kKeyNames.end()) {
+        io.AddKeyEvent(it->second, true);
+        dev_key_up_ = it->second;
+      }
+      return;
+    }
     if (t.rfind("wheel:", 0) == 0) return io.AddMouseWheelEvent(0, std::stof(t.substr(6)));
     ui::Device d = ui::Device::kKeyboard;
     if (t.rfind("pad:", 0) == 0) d = ui::Device::kXbox, t = t.substr(4);
@@ -8558,6 +8607,7 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
   int egg_focus_ = 0;          // the pause panel: 0 Resume, 1 Quit to main menu
   double egg_pause_time_ = 0;  // ImGui time the pause panel opened (its shade fades in)
   double egg_close_at_ = 0;    // SteadySeconds when Quit to main menu asked it to close
+  bool egg_enter_down_ = false;  // task 358: Enter was held last frame (read from the system)
   std::array<float, 2> egg_offsets_{};
   bool recovery_shown_ = false;
   bool crash_notice_shown_ = false;  // task 228

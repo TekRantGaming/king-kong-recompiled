@@ -408,7 +408,7 @@ struct KongMods::Impl {
       Picture(dl, f, i, a, pb, s, on_tile);
       const bool on = IsOn(md);
       // Badges: Built-in on the left, On / Off and a problem or conflict on the right.
-      if (md.builtin) Badge(dl, f, a.x + 8 * s, a.y + 8 * s, s, T("Built-in"), ui::WithAlpha(color::kAccent, 0.92f), color::kOnFocus);
+      if (md.builtin) Badge(dl, f, a.x + 8 * s, a.y + 8 * s, s, T("Built in"), ui::WithAlpha(color::kAccent, 0.92f), color::kOnFocus);
       const std::string state = on ? std::to_string(Position(md) + 1) + "  " + T("On") : std::string(T("Off"));
       const float sw = ui::TrackedWidth(f.display, 11.5f * s, text::Upper(state), 1.5f * s) + 12 * s;
       Badge(dl, f, b.x - 8 * s - sw, a.y + 8 * s, s, state, on ? ui::WithAlpha(color::kGood, 0.92f) : ui::WithAlpha(color::kBase, 0.8f),
@@ -494,7 +494,7 @@ struct KongMods::Impl {
     dl->AddText(f.display, 30 * s, ImVec2(p0.x, y), color::kText, md.name.c_str(), nullptr, wrap);
     y += f.display->CalcTextSizeA(30 * s, FLT_MAX, wrap, md.name.c_str()).y + 8 * s;
     float bx = p0.x;
-    if (md.builtin) bx += Badge(dl, f, bx, y, s, T("Built-in"), ui::WithAlpha(color::kAccent, 0.92f), color::kOnFocus) + 10 * s;
+    if (md.builtin) bx += Badge(dl, f, bx, y, s, T("Built in"), ui::WithAlpha(color::kAccent, 0.92f), color::kOnFocus) + 10 * s;
     std::vector<std::string> facts;
     if (const char* t = TypeName(md.type); *t) facts.push_back(t);
     if (!md.author.empty()) facts.push_back(F("By {0}", {md.author}));

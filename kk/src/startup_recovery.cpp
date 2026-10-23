@@ -238,7 +238,7 @@ void MonitorStartup() {
     const char* what = code == 0            ? "ended normally"
                        : code == kRetryExit ? "ended to start again with the other graphics API"
                        : code == 0xC0000005 ? "crashed (access violation)"
-                       : code == 0xC0000409 ? "was ended by a fail-fast (or a stack buffer overrun)"
+                       : code == 0xC0000409 ? "was ended by a fail fast (or a stack buffer overrun)"
                        : code == 0xC00000FD ? "crashed (stack overflow)"
                        : code == 0xC0000374 ? "crashed (heap corruption)"
                        : code == 0xC000001D ? "crashed (illegal instruction)"

@@ -176,8 +176,8 @@ const std::vector<Setting>& Settings() {
       {"Image", "Effect resolution", "native_effect_buffers", Kind::kChoice,
        {{"Original", "false"}, {"Output", "true"}}, 0, 1, "", true, Show::kAlways,
        "Resolution of bloom, blur and glow buffers."},
-      {"Image", "Anti-aliasing", "swap_post_effect", Kind::kChoice, {{"Off", "none"}, {"FXAA", "fxaa"}, {"SMAA", "smaa"}}, 0, 2,
-       "", true, Show::kAlways, "Off while a temporal upscaler runs (it anti-aliases itself)."},
+      {"Image", "Antialiasing", "swap_post_effect", Kind::kChoice, {{"Off", "none"}, {"FXAA", "fxaa"}, {"SMAA", "smaa"}}, 0, 2,
+       "", true, Show::kAlways, "Off while a temporal upscaler runs (it antialiases itself)."},
       {"Image", "Texture filtering", "anisotropic_override", Kind::kChoice,
        {{"Game", "-1"}, {"Off", "0"}, {"2x", "2"}, {"4x", "3"}, {"8x", "4"}, {"16x", "5"}}},
       // Ambient occlusion.
@@ -193,7 +193,7 @@ const std::vector<Setting>& Settings() {
        0, 1, "", true, Show::kAo, "Blends the shading over frames (grain on hands and weapons)."},
       {"Ambient occlusion", "Normal smoothing", "native_ao_normal_smoothing", Kind::kChoice,
        {{"Off", "0"}, {"Low", "1"}, {"High", "2"}}, 0, 1, "", true, Show::kAo,
-       "Smooths the shading across low-poly models (faceted characters, Kong, rocks). Edges stay sharp."},
+       "Smooths the shading across low poly models (faceted characters, Kong, rocks). Edges stay sharp."},
       // Global illumination.
       {"Global illumination", "Global illumination", "native_gi", Kind::kChoice,
        {{"Off", "off"}, {"Low", "low"}, {"Medium", "medium"}, {"High", "high"}}},
@@ -462,7 +462,7 @@ std::string AppliedText(const NrEffectStats& s, std::vector<std::string>* notes)
       notes->push_back(T(s.water_draws_waiting ? "Water reflections: their shader is being prepared."
                                              : "Water reflections: no water in view."));
     if (Get("swap_post_effect") != "none" && (s.applied & 64))
-      notes->push_back(T("FXAA / SMAA: off while a temporal upscaler runs (it anti-aliases itself)."));
+      notes->push_back(T("FXAA / SMAA: off while a temporal upscaler runs (it antialiases itself)."));
     if (Get("native_volumetrics") != "off" && !(s.applied & 16)) notes->push_back(T("Light shafts: being prepared."));
     if (Get("native_gi") != "off" && !(s.applied & 2)) notes->push_back(T("GI: being prepared."));
     if (Get("native_cel_shading") == "true" && !(s.applied & 128)) notes->push_back(T("Cel shading: being prepared."));
@@ -900,7 +900,7 @@ class GraphicsPanel final : public rex::ui::ImGuiDialog, public rex::ui::WindowI
       }
       ImGui::TextWrapped("%s", T("Hold F7 / LB to compare. F6 / RB captures."));
     }
-    ImGui::TextWrapped("%s", T("L3+R3: panel. D-pad / left stick: move. Left/right: change. A: select. B: close."));
+    ImGui::TextWrapped("%s", T("L3+R3: panel. D pad / left stick: move. Left/right: change. A: select. B: close."));
     ImGui::Separator();
   }
 
@@ -1121,7 +1121,7 @@ class GraphicsPanel final : public rex::ui::ImGuiDialog, public rex::ui::WindowI
         break;
       case 4: drive({0x0002}); break;
       case 5:
-        check(consumed && focus_row_ > 0, "D-pad moves focus while the game's pad remains neutral");
+        check(consumed && focus_row_ > 0, "D pad moves focus while the game's pad remains neutral");
         drive({});
         if (focus_cvar_ != "swap_post_effect" && ++controller_test_moves_ < 30) controller_test_stage_ = 4;
         break;

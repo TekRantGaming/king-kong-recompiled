@@ -44,7 +44,7 @@ inline constexpr Facts kFacts[] = {
     {"uhd",
      "Rock, moss, forest ground, dirt, gravel, wood, bark and rust become photographed materials, recoloured to the "
      "game's look. Everything else is the original texture upscaled with AI.",
-     "More real-world surface detail than the HD texture pack. Where real materials are used, the look moves away "
+     "More real world surface detail than the HD texture pack. Where real materials are used, the look moves away "
      "from the original (see the note).",
      "Texture filtering at 16x (Settings > Graphics) keeps the detailed ground clear into the distance.",
      "About 1 GB of graphics memory per chapter. Replacement textures may use up to a quarter of your graphics "

@@ -178,8 +178,8 @@ strings |= {
     'Installing your texture pack',
     'Downloading the HD texture pack',
     'Downloading the PS2 cutscenes',
-    'Your ZIP file is checked and unpacked. It carries on in the background if you leave this pop-up.',
-    'It carries on in the background if you leave this pop-up. If the connection drops or you close the launcher, it continues from where it stopped.',
+    'Your ZIP file is checked and unpacked. It carries on in the background if you leave this popup.',
+    'It carries on in the background if you leave this popup. If the connection drops or you close the launcher, it continues from where it stopped.',
     'Waiting for the other download to finish',
     'Starting',
     'Connecting',
@@ -268,7 +268,7 @@ strings |= {
     'Brighter highlights and deeper colour on your HDR screen.',
     'Sunlight bounces off surfaces and softly lights the shade beside them.',
     'Soft shading where surfaces meet, in corners and under rocks and grass.',
-    "Sharper, softer-edged shadows than the game's own.",
+    "Sharper, softer edged shadows than the game's own.",
     'The water reflects the rocks, trees and the ship around it.',
     'Sunlight shines through the mist and fog in visible shafts.',
     'Original look',
@@ -380,7 +380,7 @@ strings |= {'Mods', 'Texture packs', 'Other TRG projects and games', 'Not instal
             'A texture pack in a folder of your own (with its pack.txt). Choosing one switches it on.',
             "No texture pack is on. Choose one in the Workshop from the main menu.",
             'Nothing is installed and everything you had stays as it was. Your ZIP file is kept.',
-            'Your ZIP file is checked and unpacked. It carries on in the background if you leave this pop-up, and Cancel '
+            'Your ZIP file is checked and unpacked. It carries on in the background if you leave this popup, and Cancel '
             'stops it without changing anything you have installed.',
             'Comic Book Texture Pack', 'Downloading Comic Book Texture Pack', 'Comic Book Texture Pack installed', 'Switch on {0}', '{0} is on',
             "Kong's Tropical Holiday Texture Pack", "Downloading Kong's Tropical Holiday Texture Pack",
@@ -403,7 +403,7 @@ strings |= {'Mods', 'Texture packs', 'Other TRG projects and games', 'Not instal
             'Already installed. Turn it on or off at any time in the Workshop or Settings > Graphics.',
             'Already installed. Turn them on or off at any time in Settings > Advanced.',
             'Already downloading. It carries on in the background.',
-            'Enabled {0}', 'Disabled', 'Problem', 'Built-in', 'Conflict', 'Version {0}', 'Import mod', 'From a ZIP file'}
+            'Enabled {0}', 'Disabled', 'Problem', 'Built in', 'Conflict', 'Version {0}', 'Import mod', 'From a ZIP file'}
 if len(workshop_strings) < 14:
     fail(f'J8: only {len(workshop_strings)} Workshop strings found')
 strings |= workshop_strings
@@ -419,9 +419,9 @@ if 'Coming soon' in workshop_cpp or 'KongMods' not in workshop_cpp:
     fail('task 200: the Workshop still shows Coming soon instead of the Kong mods row')
 for builtin in ('cel-shading',):  # Hardcore held back until no healing works (owner, Beta 7)
     if not (root / 'mods-builtin' / builtin / 'mod.toml').exists():
-        fail(f'task 200: built-in mod {builtin} missing')
+        fail(f'task 200: built in mod {builtin} missing')
 if (root / 'mods-builtin' / 'hardcore').exists():
-    fail('task 200: the Hardcore mod is held back and must not ship as a built-in mod yet')
+    fail('task 200: the Hardcore mod is held back and must not ship as a built in mod yet')
 if not (root.parent / 'MODDING.md').exists():
     fail('task 200: MODDING.md missing')
 else:
@@ -463,7 +463,7 @@ for needle, why in (
 ):
     if needle not in workshop_cpp:
         fail(why)
-UHD_NOTE = ('This pack replaces many surfaces with high-detail materials that were not made for this game, so the game '
+UHD_NOTE = ('This pack replaces many surfaces with high detail materials that were not made for this game, so the game '
             'will no longer look exactly as its developers intended. Every effort was made to keep the original style: '
             'where no good match was found, the original texture is used, upscaled with AI.')
 _flat = re.sub(r'"\s*\n\s*"', '', texpacks_cpp)
@@ -718,8 +718,8 @@ for needle, why in (
          'the owner\'s order: prompts, texture pack, cutscenes, Workshop, all set'),
         ('startup_movies::AtLauncherStart(open_on, files_ok_, InSetup(), GetBool("kk_skip_intros"))',
          'the movies at a start from the desktop unless kk_skip_intros'),
-        ('startup_movies::AskFirst(true, skip)', 'the pop-up before the movies after the setup with skip on'),
-        ('DrawSkipAll(dl);  // task 332: the first-time setup\'s shader screen', 'Skip all on the shader screen'),
+        ('startup_movies::AskFirst(true, skip)', 'the popup before the movies after the setup with skip on'),
+        ('DrawSkipAll(dl);  // task 332: the first time setup\'s shader screen', 'Skip all on the shader screen'),
 ):
     if needle.replace('\\n', '\n') not in _l331:
         fail(f'332: {why} ({needle})')
@@ -729,7 +729,7 @@ for needle, why in (
         ('AttachHelp(items);', 'the same descriptions as Settings'),
         ('ui::DrawDescription(dl, focused, ImVec2(dx, top + 18 * s)', 'the same right-hand description panel'),
         ('{{Action::kResetPage, "Skip all"}}', 'Skip all at the top'),
-        ('"You can change all of these settings later from Settings on the main menu."', 'the Skip all pop-up'),
+        ('"You can change all of these settings later from Settings on the main menu."', 'the Skip all popup'),
         ('{"OK"}, -1, [this](int) { SkipAllSetup(); }', 'OK then straight on'),
 ):
     if needle not in _pages332:
@@ -872,8 +872,8 @@ for needle, why in (
         ('{"Yes, restore them", true,', 'the cutscene page lost Yes'),
         ('{"No thanks", true,', 'the cutscene page lost No thanks'),
         ('    content::Service::Get().Download(kind);\n    REXLOG_INFO("KK content: {} download started ({}); watching the progress"',
-         'a download does not go straight to its progress pop-up (owner 19 Oct)'),
-        ('{"Pause", "Run in background", "Cancel"}', 'the progress pop-up buttons differ'),
+         'a download does not go straight to its progress popup (owner 19 Oct)'),
+        ('{"Pause", "Run in background", "Cancel"}', 'the progress popup buttons differ'),
         ('if (st.stage != content::Stage::kUnpacking)', 'the UI thread logs while unpacking'),
         ('void NotifyContentDone(', 'no notification hook for job J3'),
         # Job J3: the decision (notify_logic.h), the switch, the ding and the system notification.

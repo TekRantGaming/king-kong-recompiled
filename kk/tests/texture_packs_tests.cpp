@@ -97,7 +97,7 @@ static void DownloadTable() {
   // and its page offers the Cel shading mod.
   CHECK(uhd && uhd->note == kk::texpacks::kUhdNote && uhd->credits && !uhd->recommended_mod);
   CHECK(std::string(uhd->note) ==
-        "This pack replaces many surfaces with high-detail materials that were not made for this game, so the game "
+        "This pack replaces many surfaces with high detail materials that were not made for this game, so the game "
         "will no longer look exactly as its developers intended. Every effort was made to keep the original style: "
         "where no good match was found, the original texture is used, upscaled with AI.");
   CHECK(comic && !comic->note && !comic->credits && std::string(comic->recommended_mod) == "builtin:cel-shading");
@@ -117,7 +117,7 @@ static void DownloadTable() {
   const char* langs[] = {"1", "3", "5", "4", "6"};  // English, German, Spanish, French, Italian
   const char* comic_text[] = {
       "A comic book style texture pack for King Kong. We recommend also enabling the Cel shading mod.",
-      "Ein Texturpaket im Comic-Stil f\xC3\xBCr King Kong. Wir empfehlen, zus\xC3\xA4tzlich die Mod Cel-Shading zu aktivieren.",
+      "Ein Texturpaket im Comicstil f\xC3\xBCr King Kong. Wir empfehlen, zus\xC3\xA4tzlich die Mod Cel Shading zu aktivieren.",
       "Un paquete de texturas de estilo c\xC3\xB3mic para King Kong. Recomendamos activar tambi\xC3\xA9n el mod Cel shading.",
       "Un pack de textures style bande dessin\xC3\xA9" "e pour King Kong. Nous recommandons d'activer aussi le mod Cel shading.",
       "Un pacchetto texture in stile fumetto per King Kong. Consigliamo di attivare anche la mod Cel shading."};

@@ -633,7 +633,7 @@ bool ShowNotifySend(const Job& job) {
                              const_cast<char*>(job.body.c_str()), nullptr};
   pid_t pid = 0;
   if (posix_spawnp(&pid, "notify-send", nullptr, nullptr, argv.data(), environ) != 0) {
-    Log(false, "no notification service (no D-Bus notifications, no notify-send): the launcher's pop-up only");
+    Log(false, "no notification service (no D-Bus notifications, no notify-send): the launcher's popup only");
     return false;
   }
   int status = 0;

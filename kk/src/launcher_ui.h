@@ -136,6 +136,11 @@ class Input {
     kPadStart = 1u << 10, kPadBack = 1u << 11, kPadLT = 1u << 12, kPadRT = 1u << 13,
   };
   uint32_t pad_presses() const { return pad_presses_; }
+  // Task 358: what the keyboard newly pressed this frame (no repeats), as PadBit values for the Home code: the
+  // arrow keys as the directions, B and A as B and A, Enter as Start; any other key is kKeyOther. A key that
+  // Steam's desktop layout types for a held controller button is that press, not a second one.
+  static constexpr uint32_t kKeyOther = 1u << 31;
+  uint32_t key_presses() const { return key_presses_; }
 
  private:
   using Repeat = DirectionRepeat;
@@ -166,6 +171,7 @@ class Input {
   } fed_;
   std::array<bool, 8> buttons_down_{};
   uint32_t pad_presses_ = 0;
+  uint32_t key_presses_ = 0;
   // When each action was last held on a controller / pressed on the keyboard:
   // Steam's desktop controller layout also types keys for the controller's
   // buttons (arrows, Enter, Escape), and one press must count once.

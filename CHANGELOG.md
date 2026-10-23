@@ -3,6 +3,16 @@
 Every release of the King Kong PC port, newest first. The launcher shows this on its About page, and a
 version's notes the first time you start it.
 
+## v2.0.0-beta.17 (unreleased)
+
+### What's new
+- **The Home screen surprise now also works from the keyboard.**
+
+### Changed
+- **A new Discord invite link** in the launcher and the game.
+- **Plainer wording** in the launcher and the game menus, in all five languages.
+- **Switching back to stable keeps the renderer settings** once stable 2.0.0 is out. Only a stable version before 2.0.0, which has no native renderer, still puts them back to their defaults.
+
 ## v2.0.0-beta.16 (22 October 2026)
 
 ### What's new
@@ -15,7 +25,7 @@ version's notes the first time you start it.
 ### Fixed
 - **Windows Defender wrongly flagged a game file** (`rexgpu-native.dll`) in Beta 13 and Beta 14 as a threat and removed it, so the game showed "Failed to load GPU plugin" and would not start. It was a false alarm. Beta 15 ships a freshly built file that antivirus programs do not flag. If the game will not start, download Beta 15 from the releases page and unpack it over your game folder; your saves are kept.
 - **A rare crash when changing several graphics settings quickly** (for example in the F8 panel): the game now waits for the graphics card to finish before it switches effects on or off.
-- **Updating from inside the launcher skipped some files**: the startup movies, menu videos and built-in mods are now updated too.
+- **Updating from inside the launcher skipped some files**: the startup movies, menu videos and built in mods are now updated too.
 
 ## v2.0.0-beta.14 (21 October 2026)
 
@@ -23,12 +33,12 @@ version's notes the first time you start it.
 
 ### What's new
 - **DirectX 12 is now the default on Windows**, for new players and for everyone updating. Vulkan is used automatically if DirectX 12 cannot start on your PC, and you can still choose it in Settings > Graphics.
-- **A fresh first-time setup**: updating to Beta 14 takes everyone through the setup once more, starting from the new defaults and the preset recommended for your PC. Your saves, game files and downloads are kept, and the game files page is skipped. The graphics are prepared again for DirectX 12 the first time, which can take a few minutes.
+- **A fresh first time setup**: updating to Beta 14 takes everyone through the setup once more, starting from the new defaults and the preset recommended for your PC. Your saves, game files and downloads are kept, and the game files page is skipped. The graphics are prepared again for DirectX 12 the first time, which can take a few minutes.
 - **Graphics presets now set every graphics setting**, including shadows, water reflections and light shafts: High gives High shadows, water reflections and low light shafts; Ultra gives Ultra shadows, water reflections and high light shafts. Changing any one setting shows Custom.
 
 ### Fixed
 - **A crash a few seconds into the benchmark** on some runs.
-- **Updating from inside the launcher skipped some files**: the startup movies, menu videos and built-in mods were not updated. They are now, and updating from Beta 13 brings the missing ones in on the first start.
+- **Updating from inside the launcher skipped some files**: the startup movies, menu videos and built in mods were not updated. They are now, and updating from Beta 13 brings the missing ones in on the first start.
 - **The game closing by itself at the start on some PCs** (seen on Intel UHD Graphics): the check of which upscalers your PC offers now runs on its own, so a graphics library that fails during the check only turns that upscaler off.
 - **Stutter in busy scenes with DLSS, FSR and XeSS, such as Ann's chapter**: the work that prepares motion information for the upscaler grew much faster than the number of objects on screen. It now takes a fraction of the time, with exactly the same result: in our test of Ann's chapter, frames over 20 ms dropped from about 210 to 3.
 - **The live main menu now always loads behind the loading screen**, including on the Steam Deck and after setup or an update. A slow or failed start tries again instead of falling back to the slideshow of pictures.
@@ -42,7 +52,7 @@ version's notes the first time you start it.
 - **Faster shadows with DLSS, FSR and XeSS**: soft shadows and the game's own shadows are now worked out at the upscaler's resolution instead of the full output size, and the soft shadows at High and Ultra use slightly lighter internal settings with no visible difference. About 25% more frames at 4K in our tests.
 - **Smoother chapter starts after the PS2 cutscenes**: while a story cutscene plays, the game now prepares most of the next chapter's textures, so far fewer have to load in the first minute of play.
 - **Lighter defaults on weak hardware**: the first setup picks a lighter preset for handhelds, integrated graphics, entry gaming laptops and PCs with little video memory. Existing players keep their settings.
-- **Medium preset**: uses the original shadows, which saves a lot of graphics time on mid-range PCs.
+- **Medium preset**: uses the original shadows, which saves a lot of graphics time on midrange PCs.
 - **Less work for your CPU**: parts of the renderer that run for every draw are faster, with exactly the same picture.
 - **More graphics prepared ahead of time**: the shipped list now has 16,295 graphics pipelines (1,598 more), from players who share them with Online players on, so fewer things hitch the first time you see them.
 
@@ -54,9 +64,9 @@ version's notes the first time you start it.
 **Beta 13**: a live main menu, from the beta channel (**About** > **Change version**). Your saves and settings are kept. Windows only for this beta.
 
 ### What's new
-- **The main menu is the game's own start menu scene, live**: the Venture rolls on the stormy sea under Skull Island behind the launcher, moving, with the menu's own music and the sound of the sea (Settings > Audio > Menu music and its volume apply to it). It replaces the slideshow of pictures. The pictures still show during setup, on the first start after an update, while shaders are prepared, on low-end PCs such as the Steam Deck, and if the scene could not start last time.
+- **The main menu is the game's own start menu scene, live**: the Venture rolls on the stormy sea under Skull Island behind the launcher, moving, with the menu's own music and the sound of the sea (Settings > Audio > Menu music and its volume apply to it). It replaces the slideshow of pictures. The pictures still show during setup, on the first start after an update, while shaders are prepared, on low end PCs such as the Steam Deck, and if the scene could not start last time.
 - **Loading screens for the main menu**: when you open the game, a screen explains when the game saves (when you choose Save game or quit from the pause menu) while the main menu gets ready. When you come back from the game, **Returning to the main menu** shows until the main menu is ready, with **Game saved at your last checkpoint.** after a story game you quit from the pause menu, and a tip about the game, a different one each time.
-- **A new first-time setup**: after the game files and the shaders, the full **Display**, **Graphics** and **Controls** settings pages, then button prompts, the HD texture pack, the PS2 cutscenes, what the **Workshop** is, and Join our Discord / Add to Steam. **Skip all** at the top of every page after the game files goes straight on, with every setting as it is; all of them can be changed later in Settings on the main menu. Players who update keep the one-time New in this update screen.
+- **A new first time setup**: after the game files and the shaders, the full **Display**, **Graphics** and **Controls** settings pages, then button prompts, the HD texture pack, the PS2 cutscenes, what the **Workshop** is, and Join our Discord / Add to Steam. **Skip all** at the top of every page after the game files goes straight on, with every setting as it is; all of them can be changed later in Settings on the main menu. Players who update keep the one time New in this update screen.
 - **Startup movies**: the Ubisoft, Universal and WingNut logo movies from your copy of the game, then a TRG Studios movie, play once after the setup, and then each time you open the game unless Settings > Gameplay > Startup logos is set to Skip (it skips the TRG Studios movie too). The loading screen follows them until the main menu is ready.
 - **Extras > Original main menu**: the game's own Xbox 360 main menu, as it was, with its pages, options and saves. Start a game from it, then pause and quit to come back to the launcher. The next time you open the game, the launcher's menu is back.
 - **Extras > User manual**: the game's Xbox 360 manual, page by page, with zoom. It downloads in the background (about 2 MB) the first time the launcher runs.
@@ -66,7 +76,7 @@ version's notes the first time you start it.
 - **More graphics prepared ahead of time**: the shipped list now has 14,697 graphics pipelines (59 more), from players who share them with Online players on.
 
 ### Fixed
-- **After the first-time setup, the old pictures showed before the live main menu.** The startup movies and the loading screen now cover the main menu while it gets ready.
+- **After the first time setup, the old pictures showed before the live main menu.** The startup movies and the loading screen now cover the main menu while it gets ready.
 
 ## v2.0.0-beta.12 (19 October 2026)
 
@@ -94,9 +104,9 @@ version's notes the first time you start it.
 - **Open Windows HDR Calibration** button in Settings > Display (the Microsoft Store page when the app is not installed). The values are read again when you come back.
 - **New HDR highlights**: HDR now brightens highlights smoothly, up to a 1000-nit cap by default. This fixes overexposed light shafts with a grey core. The strength, the starting point and the cap are sliders in the F8 menu.
 - **Setup graphics pictures from your own game**: the first setup's graphics pages no longer use screenshots shipped with the download. Their pictures are made from your copy of the game while the launcher runs, and options that only show in the game itself show a still from your game with a description.
-- **Workshop pictures and details**: every texture pack and built-in mod has a details table (what it changes, how it looks, what it goes well with, its size, what it needs) in five languages, and the texture packs and Cel shading have a picture of what they do. Kong UHD Textures and Kong Comic Book show their own pictures before you download them (about 1 MB each); the HD texture pack and Cel shading pictures are made from your copy of the game. The **Other TRG projects and games** row comes up in a new random order each time you open the Workshop.
+- **Workshop pictures and details**: every texture pack and built in mod has a details table (what it changes, how it looks, what it goes well with, its size, what it needs) in five languages, and the texture packs and Cel shading have a picture of what they do. Kong UHD Textures and Kong Comic Book show their own pictures before you download them (about 1 MB each); the HD texture pack and Cel shading pictures are made from your copy of the game. The **Other TRG projects and games** row comes up in a new random order each time you open the Workshop.
 - **Two more texture packs in the Workshop**: **Kong's Tropical Holiday Texture Pack** and **Kong Cartoon Texture Pack**, downloads in Workshop > Texture packs like the UHD and Comic Book packs. Just for fun, very different from the original look. One texture pack is on at a time.
-- **Ultrawide (experimental)**, a built-in mod in the Workshop, off unless you switch it on: on a 21:9 or 32:9 screen or window the game fills the width and shows more on the sides instead of black bars, without stretching. The ammo counter and the subtitles stay in a 16:9 box in the middle of the screen. It may not work as intended: menus and some effects are not adapted yet. Photo mode is wide too, and Settings > Display > Aspect ratio says when the mod is on and the size of the picture. Without the mod nothing changes.
+- **Ultrawide (experimental)**, a built in mod in the Workshop, off unless you switch it on: on a 21:9 or 32:9 screen or window the game fills the width and shows more on the sides instead of black bars, without stretching. The ammo counter and the subtitles stay in a 16:9 box in the middle of the screen. It may not work as intended: menus and some effects are not adapted yet. Photo mode is wide too, and Settings > Display > Aspect ratio says when the mod is on and the size of the picture. Without the mod nothing changes.
 
 ### Fixed
 - **Long stutters in Ann's chapter with DLSS, FSR or XeSS on.** When a lot of objects were on screen, the renderer's motion tracking for the upscaler took far too long each frame and the picture froze in bursts. It is now many times faster, with the same picture.
@@ -117,11 +127,11 @@ version's notes the first time you start it.
 ### Changed
 - **Smoother chapter starts.** Each chapter's own shaders are prepared first when it loads, the textures it needs are prepared ahead on the loading screen, and on DirectX 12 textures and buffers are made far faster. Fewer hitches in the first seconds of a chapter.
 - **Simpler downloads.** A texture pack or the PS2 cutscenes start downloading straight away and show their progress with Pause, Run in background and Cancel; there is no longer a question first. With **Notify me when downloads finish** on, a notification still tells you when a download running in the background has finished.
-- **No more crash report pop-up when the launcher starts.** Crash reports are still saved (and sent with the online switch on, as before); Settings > Advanced > **Saved crash reports** opens their folder.
+- **No more crash report popup when the launcher starts.** Crash reports are still saved (and sent with the online switch on, as before); Settings > Advanced > **Saved crash reports** opens their folder.
 - **No loading screen after the PS2 cutscenes.** When the restored PS2 cutscenes play between chapters, the next chapter now loads while the cutscene plays.
 - **The game stays smooth when other programs are busy.** The game's own threads now get priority over background work on your PC.
 - **Every setting explains itself.** The panel beside the settings, in the launcher and in the pause menu, now says what each setting does, what you will notice in the game, what each option changes, and shows its performance and video memory impact and when a change takes effect. In five languages.
-- **New pause menu.** A short list on the left over the paused game: Resume, Photo mode, Controls, Gameplay and Settings, then Load last checkpoint (and Score or Save game where the game offers them), Quit to main menu and Quit game. **Settings** opens a second list with Display, Graphics and Audio; Back takes you to the list you came from. **Load last checkpoint** takes you back to the last checkpoint you reached, as the game does after a death (but it does not count as one), after you confirm; it is there in every chapter, also outside chapter-select runs. Display, Graphics, Audio, Controls and Gameplay each open their own page, with the settings you can't change while playing greyed at the bottom under **Change from the main menu**. A strip at the bottom says what the selected item does. Works with a controller, keyboard and mouse.
+- **New pause menu.** A short list on the left over the paused game: Resume, Photo mode, Controls, Gameplay and Settings, then Load last checkpoint (and Score or Save game where the game offers them), Quit to main menu and Quit game. **Settings** opens a second list with Display, Graphics and Audio; Back takes you to the list you came from. **Load last checkpoint** takes you back to the last checkpoint you reached, as the game does after a death (but it does not count as one), after you confirm; it is there in every chapter, also outside chapter select runs. Display, Graphics, Audio, Controls and Gameplay each open their own page, with the settings you can't change while playing greyed at the bottom under **Change from the main menu**. A strip at the bottom says what the selected item does. Works with a controller, keyboard and mouse.
 - **Weapon cheats are not available in the Hayes chapter.** The Revolver, Machine gun, Shotgun and Sniper rifle cheats could leave the raptor fight with Hayes stuck, so in that chapter you play with the weapons the chapter gives you. In the pause menu their cheats are greyed with "Not available in this chapter." Your cheat settings are not changed: in every other chapter they work as before.
 - **Some settings moved to another tab**, in the launcher and the pause menu alike: Field of view, Motion blur and Camera shake are now in Settings > Display > Camera, and Performance metrics in Settings > Gameplay > Overlay. The frame rate cap stays in Display.
 
@@ -143,7 +153,7 @@ version's notes the first time you start it.
 
 ### What's new
 - **Brightness and gamma** in Settings > Display > Picture and in the pause menu. Brightness raises or lowers the darkest parts of the picture, Gamma the middle tones. Changes show at once, also while paused. Only the game's picture changes, not the launcher or the menus. At 0 and 1.00 the picture is exactly as before. With HDR, white stays at the Paper white brightness.
-- **Photo mode** in the pause menu: the game stays paused while you fly a free camera around (left stick and right stick, triggers down and up, or W A S D and the mouse), with roll and field of view. Jack's floating arms and the HUD are hidden. Looks (black and white, sepia, tints), exposure, contrast, saturation, white balance, depth of field, vignette, film grain, letterbox bars and a mirror, plus cel shading, sharpening, brightness and gamma for the picture only. **A** (Enter) saves a full-resolution picture without any menus in the screenshots folder of your user data. Nothing you change in photo mode is kept or changes your settings.
+- **Photo mode** in the pause menu: the game stays paused while you fly a free camera around (left stick and right stick, triggers down and up, or W A S D and the mouse), with roll and field of view. Jack's floating arms and the HUD are hidden. Looks (black and white, sepia, tints), exposure, contrast, saturation, white balance, depth of field, vignette, film grain, letterbox bars and a mirror, plus cel shading, sharpening, brightness and gamma for the picture only. **A** (Enter) saves a full resolution picture without any menus in the screenshots folder of your user data. Nothing you change in photo mode is kept or changes your settings.
 - **Texture packs in the Workshop**: every texture pack you have is a card with its picture, name, author and version and a clear **Enabled**, **Disabled** or **Not installed** badge: the original textures, the HD texture pack, **Kong UHD Textures** (new, a download in the Workshop), packs you imported and your own folder. Select a card for its page: Enable or Disable, Download, Remove (it asks first), its credits. **Only one texture pack is on at a time**: switching one on switches the one before off, everywhere (the Workshop, Settings > Graphics, the pause menu, after a download or import). Settings from an older version with several packs on keep one.
 - **Kong UHD Textures**: every texture at up to four times its resolution, with real photographed materials for rock, moss, ground, wood and more. Its page says plainly, before the download starts, that some of its materials were not made for this game, so the game will not look exactly as its developers intended.
 - **Comic Book Texture Pack**: a comic book style texture pack, a second download in the Workshop's Texture packs row. We recommend also enabling the Cel shading mod: its page has a button that switches it on.
@@ -152,7 +162,7 @@ version's notes the first time you start it.
 
 ### Fixed
 - **Vulkan crash when loading a chapter on AMD graphics cards.** The faster pipeline building added in Beta 7 is now used on NVIDIA cards only, where it was tested; other cards build pipelines the earlier way.
-- **Crash during shader setup on laptops with two graphics chips.** The shader setup, the launcher and the game now always use the more powerful graphics card instead of the built-in Intel or AMD chip. A graphics card chosen in the settings file is still respected.
+- **Crash during shader setup on laptops with two graphics chips.** The shader setup, the launcher and the game now always use the more powerful graphics card instead of the built in Intel or AMD chip. A graphics card chosen in the settings file is still respected.
 - **Pause menu in the Weta artwork galleries.** In a gallery started from Extras, **Start** or **Esc** threw you straight back to Extras. It now opens the pause menu, as in any chapter: **Resume**, **Settings**, **Return to main menu**. A gallery never writes to your save.
 - **The launcher flickered.** When it was busy for a moment (for example while unpacking a large ZIP), it rebuilt its picture each time it came back, which showed as a flash. It now does that only when the window really stopped drawing.
 - **Importing a big texture pack ZIP replaced the HD texture pack** and named it "textures". An imported pack is now a pack of its own beside the HD texture pack.
@@ -166,7 +176,7 @@ version's notes the first time you start it.
 - **The Workshop is one page with three rows:** Texture packs, Mods (many on at once, in load order; the modding guide and your mods folder are at the end of the row) and Other TRG projects and games. Up and Down move between the rows, Left and Right along them; Back from a card's page returns to the same card.
 - **Settings > Graphics > Texture pack** is now a choice of the packs you have installed (or the original textures). Downloading, importing and removing packs are in the Workshop.
 - **First setup** no longer skips the HD texture pack and PS2 cutscene pages without a word when they are already installed: the page says "Already installed" and you press Continue.
-- **No frame rate pop-up** when pressing Play with a frame rate above 60 FPS.
+- **No frame rate popup** when pressing Play with a frame rate above 60 FPS.
 - **More settings in the pause menu.** Settings that cannot change while you play (window, resolution, VSync, render quality, look, preset, graphics API, language) are now shown greyed out with a note to change them from the launcher's main menu. The upscaler (DLSS, FSR 4, FSR 3.1, XeSS or Off), its mode and the frame rate cap now change while you play. A new **Graphics** entry opens the graphics settings directly.
 
 ## v2.0.0-beta.8 (17 October 2026)
@@ -181,11 +191,11 @@ version's notes the first time you start it.
 
 ## v2.0.0-beta.7 (17 October 2026)
 
-**Beta 7**: from the beta channel (**About** > **Change version**). Expect bugs, and please tell us how it runs on the [Discord](https://discord.gg/PET2xU5FJq). Your saves and settings are kept, and you can switch back to stable at any time. Windows only for this beta.
+**Beta 7**: from the beta channel (**About** > **Change version**). Expect bugs, and please tell us how it runs on the [Discord](https://discord.gg/8eakYSvBZS). Your saves and settings are kept, and you can switch back to stable at any time. Windows only for this beta.
 
 ### What's new
 - **Kong mods in the Workshop.** Put a mod in your `mods` folder and turn it on or off in the Workshop. Mods can be texture packs, settings presets or replacement cutscenes. See MODDING.md for how to make one.
-- **Built-in Cel shading mod** (ink outlines and flat colours), on or off in the Workshop.
+- **Built in Cel shading mod** (ink outlines and flat colours), on or off in the Workshop.
 - **Artbook in Extras.** The six Weta concept paintings from the PS2 bonus disc, downloaded in the background, with zoom and Save to PC.
 - **Smoother ambient occlusion.** Soft, rounded shading instead of hard creases on characters, Kong and rocks. On by default with the Remastered look.
 - **Better water reflections.** The screen space reflections no longer break up on moving water and fade softly at their edges (Settings > Graphics, off by default).
@@ -199,7 +209,7 @@ version's notes the first time you start it.
 - Kong's fur is not outlined by the Cel shading mod.
 
 ### Full changelog
-- AO: edge-aware smoothing of the depth-rebuilt normals before GTAO (`native_ao_normal_smoothing`, High with Strong GTAO).
+- AO: edge aware smoothing of the depth rebuilt normals before GTAO (`native_ao_normal_smoothing`, High with Strong GTAO).
 - Water reflections: traced from the water's flat plane with a small ripple (`native_ssr_ripple`), soft fade where rays miss (`native_ssr_soft_edge`).
 - Cel shading screen effect (`native_cel_*`, F8 "Cel shading").
 - Uploads (only with Online player count on): pipeline record file and performance summary on quit, crash and hang reports with the last 200 log lines (names and personal folders removed) on the next start.
@@ -208,21 +218,21 @@ version's notes the first time you start it.
 
 ## v2.0.0-beta.6 (17 October 2026)
 
-**Beta 6**: a big update, from the beta channel (**About** > **Change version**). Expect bugs, and please tell us how it runs on the [Discord](https://discord.gg/PET2xU5FJq). Your saves and settings are kept, and you can switch back to stable at any time. Windows only for this beta.
+**Beta 6**: a big update, from the beta channel (**About** > **Change version**). Expect bugs, and please tell us how it runs on the [Discord](https://discord.gg/8eakYSvBZS). Your saves and settings are kept, and you can switch back to stable at any time. Windows only for this beta.
 
 ### What's new
-- **A new first-time setup.** After the shaders, setup offers an optional HD texture pack, the restored PS2 cutscenes, four pages of graphics options with side-by-side comparisons, your choice of button prompts, and links to the Discord and Add to Steam. New installs start with the Remastered look; the Original look is in Settings > Graphics.
+- **A new first time setup.** After the shaders, setup offers an optional HD texture pack, the restored PS2 cutscenes, four pages of graphics options with side by side comparisons, your choice of button prompts, and links to the Discord and Add to Steam. New installs start with the Remastered look; the Original look is in Settings > Graphics.
 - **Optional HD texture pack.** A separate 2.6 GB download with sharper textures at four times their original size. It downloads in the background and can be turned on or off at any time in Settings > Graphics. You can also install a texture pack ZIP you already have.
 - **Restored PS2 cutscenes.** The cutscenes between missions from the PlayStation 2 version, upscaled. A separate 1.9 GB download, on or off in Settings > Advanced.
 - **Downloads tell you when they finish**, with a sound and a Windows notification, and pause while you play.
 - **High frame rates fixed for the boat, the hanging boxes, the fish, the water, motion blur and the camera** at the start of chapters. They now behave the same at 60, 120 and higher as at 30.
 - **Far fewer stutters.** Missing graphics pipelines no longer freeze the game, Vulkan builds new pipelines in under a millisecond on supported drivers, the shipped pipeline list covers much more of the game, and short hitches around 30 seconds into each chapter and when saving files are gone.
 - **Upscalers (DLSS, FSR, XeSS) now draw at the resolution you choose in the launcher**, and without an upscaler the game never draws above it. This is faster on screens below 1440p.
-- **Sharper textures with DLAA and native anti-aliasing.**
+- **Sharper textures with DLAA and native antialiasing.**
 - **Settings reorganised**: Display, Graphics, Audio, Controls, Gameplay, Cheats, Advanced and About. About is also on the main menu.
 - **Workshop** on the main menu: our other projects, with their pages and download links. Kong mods are coming soon.
 - **Free camera** (F9) and hide the HUD (F10) are now part of the game. See FREECAM.txt.
-- **Built-in benchmark** on About > Run benchmark, fully usable with a controller.
+- **Built in benchmark** on About > Run benchmark, fully usable with a controller.
 - **Shadows, water reflections and light shafts** can be turned on in Settings > Graphics (off by default, still being improved).
 
 ### Known issues
@@ -234,18 +244,18 @@ version's notes the first time you start it.
 ### Full changelog
 - Launcher: Extras in Play; one shader progress bar; no shader compile at Play; no desktop between screens; Rebuild shaders in Graphics > Advanced; Display page opens instantly; keeps working while minimised; ignores controllers while it is not the active window.
 - Content downloads: resume after a lost connection or restart, SHA-256 check before installing, free space check, installed into the user folder.
-- Renderer: per-list volatile constant budget (heavy frames cannot overflow), retired resources released over several frames, cache files written on a background thread, driver pipeline cache saved before exit and safe when two devices save it, texture pack limit is a quarter of graphics memory, texture pack replacements freed at chapter changes and shared between identical textures.
+- Renderer: per list volatile constant budget (heavy frames cannot overflow), retired resources released over several frames, cache files written on a background thread, driver pipeline cache saved before exit and safe when two devices save it, texture pack limit is a quarter of graphics memory, texture pack replacements freed at chapter changes and shared between identical textures.
 - Pipelines: scene draws wait at most 4 ms per frame for a pipeline, then skip that draw until it is ready; Vulkan graphics pipeline library with linked pipelines replaced by optimised ones in the background.
-- High frame rate fixes: game time at a chapter start, boat roll, hanging-box wind, camera pitch after landing, motion blur fade.
+- High frame rate fixes: game time at a chapter start, boat roll, hanging box wind, camera pitch after landing, motion blur fade.
 - Benchmark: other programs' GPU use counts only 3D work on the game's graphics card.
 
 ## v2.0.0-beta.5 (16 October 2026)
 
-**Beta 5**: a small update to Beta 4, from the beta channel (**About** > **Change version**). Expect bugs, and please tell us how it runs on the [Discord](https://discord.gg/PET2xU5FJq). Your saves and settings are kept, and you can switch back to stable at any time.
+**Beta 5**: a small update to Beta 4, from the beta channel (**About** > **Change version**). Expect bugs, and please tell us how it runs on the [Discord](https://discord.gg/8eakYSvBZS). Your saves and settings are kept, and you can switch back to stable at any time.
 
 ### What's new
 - **Global illumination is now on by default** and follows the graphics preset: Low, Medium or High (Ultra uses High, Steam Deck uses Low). The Original look keeps it off. If you chose a level yourself, it is kept.
-- **An experimental native Linux version.** A Linux AppImage (`KingKong-v2.0.0-beta.5-linux-x86_64.AppImage`) runs the game natively with the Vulkan renderer. It was tested on a ROG Ally with Bazzite, including Steam's Game Mode (add it to Steam as a non-Steam game). DLSS, FSR 3/4 and XeSS are Windows only; FSR 1 is available. This is an early test build: please report how it runs.
+- **An experimental native Linux version.** A Linux AppImage (`KingKong-v2.0.0-beta.5-linux-x86_64.AppImage`) runs the game natively with the Vulkan renderer. It was tested on a ROG Ally with Bazzite, including Steam's Game Mode (add it to Steam as a non Steam game). DLSS, FSR 3/4 and XeSS are Windows only; FSR 1 is available. This is an early test build: please report how it runs.
 - **The renderer does much less CPU work for each thing it draws.** This helps most on handhelds and slower processors, and with high frame rates.
 - **Smoother Vulkan presentation.** The final step that puts each frame on screen no longer waits for the graphics card and rebuilds itself every frame.
 - **Fewer stutters the first time you reach new places.** The list of graphics pipelines prepared before you play now covers more of the game.
@@ -259,7 +269,7 @@ version's notes the first time you start it.
 - FSR 4 is untested on the cards that support it, and runs on DirectX 12 only.
 - In a few chapters the camera starts a pixel or two higher than on the console.
 - With motion blur on, its trail is shorter at high frame rates.
-- Coming in Beta 6: sharper shadows, reflections on water and volumetric light shafts, a low graphics memory mode, support for older graphics cards, high frame rates done properly, frame pacing and a built-in benchmark.
+- Coming in Beta 6: sharper shadows, reflections on water and volumetric light shafts, a low graphics memory mode, support for older graphics cards, high frame rates done properly, frame pacing and a built in benchmark.
 
 ### Full changelog
 - Graphics presets set and match `native_gi`: Low = Low, Medium = Medium, High/Ultra = High, Steam Deck = Low. Remastered and new installs use the hardware recommendation. Settings version 3 migrates GI that was never saved, preserves saved choices, and keeps GI with the saved Modern look while Original is off.
@@ -267,11 +277,11 @@ version's notes the first time you start it.
 - The render thread receives only the device state blocks that changed; shader constants are compared and converted in 64-byte blocks; indexed draws scan their indices only for dynamic vertex buffers; the AO rules test shader hashes first; texture untiling and copying do less work per block.
 - The pause menu's settings use the settings file path from the start (the dialogs were made before the path was known).
 - The shipped pipeline list adds the pipelines recorded on Linux.
-- Linux: the launcher process exits after starting the game, the pipeline setup is not repeated at every start, and the per-thread CPU times in the frame timing log are measured.
+- Linux: the launcher process exits after starting the game, the pipeline setup is not repeated at every start, and the per thread CPU times in the frame timing log are measured.
 
 ## v2.0.0-beta.4 (15 October 2026)
 
-**Beta 4**: the fourth test build of the next big update, from the beta channel (**About** > **Change version**). Expect bugs, and please tell us how it runs on the [Discord](https://discord.gg/PET2xU5FJq). Your saves and settings are kept, and you can switch back to stable at any time. Windows only for now.
+**Beta 4**: the fourth test build of the next big update, from the beta channel (**About** > **Change version**). Expect bugs, and please tell us how it runs on the [Discord](https://discord.gg/8eakYSvBZS). Your saves and settings are kept, and you can switch back to stable at any time. Windows only for now.
 
 ### What's new
 - **Native rendering only.** The game now always uses the native renderer, on **Vulkan** (the default) or **DirectX 12**. The Classic renderer is gone. If you had Classic selected, you start on Vulkan. **Graphics** > **Advanced** > **Graphics API** offers **Auto**, **Vulkan** and **DirectX 12**.
@@ -293,22 +303,22 @@ version's notes the first time you start it.
 
 ### Known issues
 - FSR 4 is untested on the graphics cards that run it (we have none here), and it runs on DirectX 12 only.
-- Coming in Beta 5: sharper shadows, reflections on water and volumetric light shafts (hidden in Beta 4), a low graphics memory mode, support for older graphics cards, high frame rates done properly, frame pacing and a built-in benchmark.
+- Coming in Beta 5: sharper shadows, reflections on water and volumetric light shafts (hidden in Beta 4), a low graphics memory mode, support for older graphics cards, high frame rates done properly, frame pacing and a built in benchmark.
 - In a few chapters the camera starts a pixel or two higher than on the console, because of how loading is timed.
 - With motion blur on, its trail is shorter at high frame rates.
 
 ### Full changelog
 - The Classic (Xenos emulation) renderer and `rexgpu-xenos.dll` are removed; the build always includes the native renderer. Old `kk_renderer`, `gpu_plugin` and `native_backend` values migrate to native Auto (Vulkan), and old startup recovery state is cleared. Startup recovery: the chosen API, then the other one, then a translated help message and a clean exit.
-- At most two unfinished GPU frames; the wait for older frames happens just before submitting, outside the submit lock. First-use pipelines are waited for instead of skipped; demanded pipelines take priority over background prewarm, and motion and scale variants are prepared during setup.
+- At most two unfinished GPU frames; the wait for older frames happens just before submitting, outside the submit lock. First use pipelines are waited for instead of skipped; demanded pipelines take priority over background prewarm, and motion and scale variants are prepared during setup.
 - SDK patch 0035 (Vulkan present semaphores per swapchain image), 0036 (AMD FSR luma history format) and 0037 (UI paint on demand: persistent dialogs repaint only for new game frames, input, changes and animation; `ui_paint_on_demand`).
-- `native_diagnostics` (default off) gates per-call API timing and detailed frame and ring telemetry. The frame timing summary every 600 frames, hitch logs and crash reports stay.
-- Screen-space GI (`native_gi`): a sunlit source term above the frame's ambient light, sources and receivers must face each other, a minimum sample distance, and each pixel's added light bounded by its own colour.
+- `native_diagnostics` (default off) gates per call API timing and detailed frame and ring telemetry. The frame timing summary every 600 frames, hitch logs and crash reports stay.
+- Screen space GI (`native_gi`): a sunlit source term above the frame's ambient light, sources and receivers must face each other, a minimum sample distance, and each pixel's added light bounded by its own colour.
 - Ann tessellation (`native-renderer/docs/tessellation.md`): Phong tessellation for Ann's identified draws only (shader, texture and geometry content keys), with the depth pass reading the paired lit pass's normals so depth, colour and motion vectors match. Its pipelines are prewarmed and its shaders are in the shader packs.
 - Effects hidden for Beta 4: shadows, water reflections and light shafts (code kept). Ultra shadows are capped at twice the game's map size.
 
 ## v2.0.0-beta.3 (13 October 2026)
 
-**Beta 3**: the third test build of the next big update, from the beta channel (**About** > **Change version**). Expect bugs, and please tell us how it runs on the [Discord](https://discord.gg/PET2xU5FJq). Your saves and settings are kept, and you can switch back to stable at any time. Windows only for now.
+**Beta 3**: the third test build of the next big update, from the beta channel (**About** > **Change version**). Expect bugs, and please tell us how it runs on the [Discord](https://discord.gg/8eakYSvBZS). Your saves and settings are kept, and you can switch back to stable at any time. Windows only for now.
 
 ### What's new
 - **The launcher is now the game's main menu.** **Play** opens a Play menu: **Continue** (at the top when you have a save), **New game**, **Load game** and **Chapter select**. The game then starts straight there: no logos, no title screen, no game menus. **Load game** lists your five saves to continue or delete. **Chapter select** has all 42 chapters open, with their names and pictures from your own copy of the game and your best scores. Before you play, and before a save is deleted or overwritten, your saves are copied to a backup folder (**About** > **Open save backups**). The "All chapters" cheat is gone: it isn't needed any more.
@@ -324,13 +334,13 @@ version's notes the first time you start it.
 - The chapter select's last four entries (Venatosaurus, Empire State, Kong's death, Credits) have no picture of their own.
 - FSR 4 is untested on the graphics cards that run it (we have none here); on other cards it isn't offered.
 - The Vulkan renderer (the default) can't run FSR 4, only Direct3D 12 can.
-- Coming in a later beta: screen-space global illumination, sharper shadows, reflections on water and volumetric light shafts.
+- Coming in a later beta: screen space global illumination, sharper shadows, reflections on water and volumetric light shafts.
 - In a few chapters the camera starts a pixel or two higher than on the console, because of how loading is timed.
 - With motion blur on, its trail is shorter at high frame rates.
 
 ### Full changelog
-- The Play menu and the pause menu (`native-renderer/docs/menus.md`): the launcher sets a start request (`play_session.h`: continue, new game or a chapter, with a save slot) and the port carries it out on the title screen in one frame, loading the save from its file and asking the game for the level, so the game's logos, title, save and main menus never show. Chapter-select runs go back to the launcher's Chapter select after their Score pages; Return to main menu reopens the launcher; the game's own save routine can no longer delete a save (it did when a save's continue point was empty). The port's pause menu replaces the game's (`IntMIG_Page_Main`): the game stays paused, the last frame of play is kept behind the menu, the game gets an empty pad, and each item runs the game's own page. Restart-only settings are hidden in it. `kk_cheat_chapters` is removed.
-- The chapter names and pictures are read from the player's game files into the launcher's art cache: the start menu's text in KKMaps.bf (the BIG reader now follows its chained tables) and the chapter select's film-frame textures in KKTextures.bf.
+- The Play menu and the pause menu (`native-renderer/docs/menus.md`): the launcher sets a start request (`play_session.h`: continue, new game or a chapter, with a save slot) and the port carries it out on the title screen in one frame, loading the save from its file and asking the game for the level, so the game's logos, title, save and main menus never show. Chapter select runs go back to the launcher's Chapter select after their Score pages; Return to main menu reopens the launcher; the game's own save routine can no longer delete a save (it did when a save's continue point was empty). The port's pause menu replaces the game's (`IntMIG_Page_Main`): the game stays paused, the last frame of play is kept behind the menu, the game gets an empty pad, and each item runs the game's own page. Settings that need a restart are hidden in it. `kk_cheat_chapters` is removed.
+- The chapter names and pictures are read from the player's game files into the launcher's art cache: the start menu's text in KKMaps.bf (the BIG reader now follows its chained tables) and the chapter select's film frame textures in KKTextures.bf.
 - `ao_strength` defaults to 3 with the native renderer (`ApplyRendererChoice`); presets and Remastered use it.
 - SDK patch 0017 (`rex::ui::GetDisplays`): the Monitor row in the SDK's display order.
 - `native_upscaler` (`off`, `dlss`, `fsr3`, `fsr4`, `xess`) and `native_upscaler_quality`, set by the launcher. Their defaults follow `kk_upscalers_offered`, the launcher's answer kept in the settings (until it has asked once, the card's vendor decides; the plugin's own default is `auto`, so the game's Vulkan device has the extensions for the vendor's upscaler from the first start). A settings file from an earlier version with `present_effect` in it (a choice made on the Upscaler row) gets `native_upscaler` `off`. NIS is a choice only now, no longer NVIDIA cards' default.
@@ -341,19 +351,19 @@ version's notes the first time you start it.
 
 ## v2.0.0-beta.2 (12 October 2026)
 
-**Beta 2**: the second test build of the next big update, from the beta channel (**About** > **Change version**). Expect bugs, and please tell us how it runs on the [Discord](https://discord.gg/PET2xU5FJq). Your saves and settings are kept, and you can switch back to stable at any time. Windows only for now.
+**Beta 2**: the second test build of the next big update, from the beta channel (**About** > **Change version**). Expect bugs, and please tell us how it runs on the [Discord](https://discord.gg/8eakYSvBZS). Your saves and settings are kept, and you can switch back to stable at any time. Windows only for now.
 
 ### What's new
 - **Windowed, Borderless or Fullscreen.** **Display** > **Window mode** has three choices now. **Borderless** fills the screen with a window at your desktop's resolution, so Alt+Tab is instant. **Fullscreen** switches your screen to the **Resolution** and **Refresh rate** you pick while the game runs. The render quality follows the resolution you pick.
 - **A fix for Alt+Tab not getting out of the game properly in fullscreen.** With some graphics drivers, Beta 1's fullscreen window was taken over as exclusive fullscreen. It should now stay a normal borderless window, as in the stable version. Thanks to GPUnity for the report.
-- **Frame rate and upscaling are on the Display page now**, next to the resolution settings. **Graphics** keeps the look, the preset, anti-aliasing, texture filtering, ambient occlusion and the effects.
+- **Frame rate and upscaling are on the Display page now**, next to the resolution settings. **Graphics** keeps the look, the preset, antialiasing, texture filtering, ambient occlusion and the effects.
 - **Discord status.** While Discord is running on your PC, your profile shows that you're playing King Kong, in the launcher or in the game, and for how long. **Discord status** on the **About** page switches it off.
 - **GTAO is now the ambient occlusion.** With the native renderer, ambient occlusion is always the new GTAO, so the **AO method** choice is gone (if you picked Classic in Beta 1, you now get GTAO). **AO strength** is now **Light** (recommended), **Medium** or **Strong**: how dark the shading gets and how far it spreads.
 - **Supersampling is gone.** Pick a **Resolution** instead. If you had it on, the game now draws at **Native**.
 - The shaders are prepared again the first time you start Beta 2, as after every update.
 
 ### Known issues
-- Coming in a later beta: DLSS, FSR 3 and 4, and XeSS upscaling, screen-space global illumination, sharper shadows, reflections on water and volumetric light shafts.
+- Coming in a later beta: DLSS, FSR 3 and 4, and XeSS upscaling, screen space global illumination, sharper shadows, reflections on water and volumetric light shafts.
 - In a few chapters the camera starts a pixel or two higher than on the console, because of how loading is timed.
 - With motion blur on, its trail is shorter at high frame rates.
 
@@ -366,59 +376,59 @@ version's notes the first time you start it.
 
 ## v2.0.0-beta.1 (12 October 2026)
 
-**This is a beta**: an early test build of the next big update, from the beta channel (**About** > **Change version**). Expect bugs, and please tell us how it runs on the [Discord](https://discord.gg/PET2xU5FJq). Your saves and settings are kept, and you can switch back to stable at any time. Windows only for now: on Linux, keep using the stable version through Proton.
+**This is a beta**: an early test build of the next big update, from the beta channel (**About** > **Change version**). Expect bugs, and please tell us how it runs on the [Discord](https://discord.gg/8eakYSvBZS). Your saves and settings are kept, and you can switch back to stable at any time. Windows only for now: on Linux, keep using the stable version through Proton.
 
 ### What's new
 - **A renderer of our own.** The game is now drawn by a new native renderer on Vulkan, instead of an imitation of the Xbox 360's graphics chip. It draws the game the same way the console did, runs much faster, and draws at higher resolutions for real instead of upscaling a 720p picture. **Graphics** > **Advanced** > **Renderer** switches back to the **Classic** renderer to compare.
 - **Shaders prepared from your own game files.** At the end of setup, and again after every update, the launcher prepares the game's shaders from your own disc files, which takes about a minute, so effects don't stutter the first time they appear. Your PC may run slower while it works. The **SHADERS** status on Home shows how it's going; select it to prepare them again if something looks wrong.
 - **Original or Remastered.** The last step of setup asks how you'd like the game to look: **Original**, the Xbox 360 as it was (720p, 30 FPS, the console's look), or **Remastered**, sharper and at your screen's resolution with soft ambient occlusion and 60 FPS, set up for your graphics card. **Look** on the **Graphics** page changes it at any time.
 - **New ambient occlusion.** With the native renderer, **AO method** on the **Graphics** page picks the new **GTAO**: sharper soft shadows in corners and creases that never darken water, smoke, fire, Kong's fur or the sky, and that now work in the chapters where the old one did nothing. **Classic** is the old one.
-- **Higher frame rates done properly.** Things that were tied to the console's 30 FPS now run at the right speed at any frame rate: the lifeboat crew's rowing, particles, Kong's grabs, button mashing and finishers, knock-backs, and the splashes and ripples in water. At 30 FPS nothing changes.
+- **Higher frame rates done properly.** Things that were tied to the console's 30 FPS now run at the right speed at any frame rate: the lifeboat crew's rowing, particles, Kong's grabs, button mashing and finishers, knockbacks, and the splashes and ripples in water. At 30 FPS nothing changes.
 
 ### Known issues
-- Coming in a later beta: DLSS, FSR 3 and 4, and XeSS upscaling, screen-space global illumination, sharper shadows, reflections on water and volumetric light shafts.
+- Coming in a later beta: DLSS, FSR 3 and 4, and XeSS upscaling, screen space global illumination, sharper shadows, reflections on water and volumetric light shafts.
 - In a few chapters the camera starts a pixel or two higher than on the console, because of how loading is timed.
 - With motion blur on, its trail is shorter at high frame rates.
 
 ### Full changelog
-- `rexgpu-native`: a GPU plugin that hooks the game's Direct3D calls and draws with its own Vulkan (or Direct3D 12) renderer through NVRHI, on its own render thread, with the game's shaders translated from Xbox 360 microcode (XenosRecomp-based) and its textures converted on upload. `kk_renderer` (`native` or `classic`) picks it; switching back to the stable channel resets it and every other beta-only setting first.
+- `rexgpu-native`: a GPU plugin that hooks the game's Direct3D calls and draws with its own Vulkan (or Direct3D 12) renderer through NVRHI, on its own render thread, with the game's shaders translated from Xbox 360 microcode (XenosRecomp based) and its textures converted on upload. `kk_renderer` (`native` or `classic`) picks it; switching back to the stable channel resets it and every other beta only setting first.
 - The shader pack is built by the launcher from the player's `Shaders/xeshaders.bin` into the user's cache (`native-shaders`), with a stamp so it is rebuilt exactly when needed; no translated shader ships. `dxcompiler.dll` (DirectX Shader Compiler, LLVM Release License) is included for that.
 - `kkpipelines.list` lists the game's pipelines across all chapters, made in the background before the game starts; the driver's pipeline cache is kept between runs.
 - GTAO: Intel's XeGTAO (MIT), applied before the game's fog pass so transparent effects are drawn over it.
-- High frame rate fixes (`kk_hfr_fixes`, on): the rowing crew's animation time, particle drag, a precise frame clock, scripts that clamped the frame time to 0.016 s, per-step decays, follow smoothing, footstep splashes and water ripples.
+- High frame rate fixes (`kk_hfr_fixes`, on): the rowing crew's animation time, particle drag, a precise frame clock, scripts that clamped the frame time to 0.016 s, per step decays, follow smoothing, footstep splashes and water ripples.
 - What's new orders beta versions like the updater does.
 - Beta players only get beta updates, plus the final stable release of their beta (a stable with the same or higher version numbers); a stable hotfix of an older version is not offered to them.
 
 ## v1.9.11 (11 October 2026)
 
 ### What's new
-- **See how many people are playing.** The top right of the launcher shows how many players are online. **Online player count** is on by default: the setup screen explains it, players who already have the game are told once, and you can switch it off at any time on the **About** page (or with **Online players** on the setup screen). While it's on, the launcher sends a tiny anonymous check-in every 5 minutes with just four things: a random number that isn't linked to you, the port's version (stable or beta), Windows or Linux, and whether you're in the game. No name, account, IP address or anything from your PC is kept, and switching it off deletes the random number.
+- **See how many people are playing.** The top right of the launcher shows how many players are online. **Online player count** is on by default: the setup screen explains it, players who already have the game are told once, and you can switch it off at any time on the **About** page (or with **Online players** on the setup screen). While it's on, the launcher sends a tiny anonymous check in every 5 minutes with just four things: a random number that isn't linked to you, the port's version (stable or beta), Windows or Linux, and whether you're in the game. No name, account, IP address or anything from your PC is kept, and switching it off deletes the random number.
 - **A clearer setup screen.** A **Supported disc** card says exactly which disc image works: a full image (7,834,892,288 bytes) that you made from your own Xbox 360 disc of Peter Jackson's King Kong: The Official Game of the Movie, the USA and Europe release (title ID `555307D3`, version `0.0.0.1`), with its SHA-1 to check it against. An **Online players** card beside it explains the player count.
 - **The Steam panel stays on Home.** Once the game is in your Steam library, it says **In your Steam library** and opens Steam, instead of disappearing.
 
 ### Full changelog
-- `online.cpp`: a background check-in (`POST /v1/heartbeat`) every 5 minutes, and at once when it's switched on or the game starts, to the port's own server (a Cloudflare Worker with a D1 database). Settings `kk_online_count` (on by default), `kk_online_asked` and `kk_install_id` (a random UUID, deleted when the count is switched off). Linux and Proton report as `linux`. Nothing is sent while it's off.
+- `online.cpp`: a background check in (`POST /v1/heartbeat`) every 5 minutes, and at once when it's switched on or the game starts, to the port's own server (a Cloudflare Worker with a D1 database). Settings `kk_online_count` (on by default), `kk_online_asked` and `kk_install_id` (a random UUID, deleted when the count is switched off). Linux and Proton report as `linux`. Nothing is sent while it's off.
 - `HttpPost` (WinHTTP on Windows, curl on Linux).
 
 ## v1.9.10 (11 October 2026)
 
 ### What's new
-- **Fixed: the screen shaking non-stop in the V-Rex chapter** (#39). Above 30 FPS, the camera shake from the V-Rex's footsteps could stop fading out and keep going until you died. The shake now fades the same way at any frame rate, as it does on the Xbox 360 at 30 FPS. Thanks to MustopuhGgi for the report.
+- **Fixed: the screen shaking nonstop in the V-Rex chapter** (#39). Above 30 FPS, the camera shake from the V-Rex's footsteps could stop fading out and keep going until you died. The shake now fades the same way at any frame rate, as it does on the Xbox 360 at 30 FPS. Thanks to MustopuhGgi for the report.
 - **Camera shake settings.** **Camera shake** (on or off) and **Camera shake strength** (10% to 200%) are on the **Gameplay** page, for anyone who finds the shaking too much, or not enough.
 - **The best upscaler for your graphics card, by default.** The launcher now checks which graphics card you have (your dedicated card if you have one, otherwise your integrated graphics). On an NVIDIA card the default is now **NVIDIA NIS** at Quality; on AMD, Intel or anything else it stays **AMD FSR 1** at Quality. If you've picked an upscaler yourself, it stays as you set it.
 - **Every graphics preset uses that upscaler.** Low draws at Performance, Medium at Quality, and High, Ultra and Steam Deck at Native, where the upscaler only sharpens.
 - **Supersampling is its own setting.** **Supersampling** on the **Graphics** page draws the game at more pixels than your screen has, for the cleanest edges. The Ultra preset no longer turns it on.
 - **FXAA Extreme is gone.** It cost a lot for little gain. The **Ultra** preset now uses FXAA, and anyone who had Extreme on gets FXAA.
 - **Join the official Discord.** A panel at the bottom right of the Home and setup screens (press right to reach it with a controller or the keyboard), and **Discord** on the **About** page: news, upcoming features, early builds, and a place to tell us what you think.
-- **Add to Steam is a panel too**, beside the Discord one: it adds the game to your Steam library as a non-Steam game, with its artwork, so you can start it from Steam. It's there until the game is in your library. Left and right move between the two panels, and each has its own button: **X** adds to Steam and **Y** opens the Discord (Del and R on the keyboard), shown in your button prompt style.
+- **Add to Steam is a panel too**, beside the Discord one: it adds the game to your Steam library as a non Steam game, with its artwork, so you can start it from Steam. It's there until the game is in your library. Left and right move between the two panels, and each has its own button: **X** adds to Steam and **Y** opens the Discord (Del and R on the keyboard), shown in your button prompt style.
 - **Button prompts that match your controller.** **Button prompts** on the **Controls** page has a new **Automatic** setting, now the default: an Xbox 360 controller shows Xbox 360 buttons, an Xbox One or Series controller shows Xbox Series buttons, a PlayStation 4 or 5 controller shows PlayStation buttons and a Steam Deck shows its own, in the game and in the launcher. Pick any style yourself and it stays as you set it.
 - **Stable or beta.** **Change version** on the **About** page switches between the stable version and the beta, for early test builds of upcoming features. You'll see a warning first: betas can have bugs and support for them is limited. The warning has a **Join Discord** button too, to tell us how the beta runs. Your saves and settings are kept either way, and you can switch back at any time. There's no beta build yet; until there is, the beta gets stable versions.
 - **Steam Deck button prompts.** **Button prompts** on the **Controls** page now has **Steam Deck**, in the game and in the launcher.
-- **Steam style achievement pop-ups.** **Pop-up style** on the **Achievements** page picks between the Xbox 360 pop-up and a Steam style one in the bottom-right corner.
+- **Steam style achievement popups.** **Popup style** on the **Achievements** page picks between the Xbox 360 popup and a Steam style one in the bottom right corner.
 
 ### Full changelog
 - Camera shake: the camera's effects script, CM_Sfx (`sub_8245EC90`), and SFX_ShakeCam's SCC_SFX (`sub_82553F20`) multiply their fall rate once a frame, so above 30 FPS it wore away faster with every footstep until a shake could no longer reach zero. `camera_shake.cpp` keeps the falloff per second (the multiplier to the power of frame time x 30), so 30 FPS is unchanged. `kk_camera_shake` and `kk_camera_shake_strength` scale the shake's size for the call only, so a shake still lasts as long as the game meant.
-- Upscaler default: the high-performance DXGI adapter's vendor (`DetectGpu` in `platform.cpp`) picks `present_effect`: `nis` on NVIDIA, `fsr` otherwise. The card is written to the log at start. Every graphics preset uses the same upscaler (`auto` in the preset table), and Ultra's render quality is `native`; Supersampling sets `kk_render_quality` to `supersample`.
+- Upscaler default: the high performance DXGI adapter's vendor (`DetectGpu` in `platform.cpp`) picks `present_effect`: `nis` on NVIDIA, `fsr` otherwise. The card is written to the log at start. Every graphics preset uses the same upscaler (`auto` in the preset table), and Ultra's render quality is `native`; Supersampling sets `kk_render_quality` to `supersample`.
 - `swap_post_effect` `fxaa_extreme` is moved to `fxaa`.
 - Updates: `kk_update_channel` (`stable` or `beta`). Beta builds come from the separate `king-kong-recompiled-beta` repo, so the main Releases page only ever shows stable versions; the beta channel takes whichever of the two is newer. Versions like `2.0.0-beta.1` sort before `2.0.0`. Change version installs the other channel's newest version, older or newer.
 - `kk_button_prompts` takes `auto` (the new default; `PadPromptsFor` in `glyphs.cpp` turns SDL's controller type into a style, for the game and the launcher) and `steam_deck`; the pictures are from Kenney's Input Prompts (CC0), built by `tools/make_glyphs.py --kenney`.
@@ -447,13 +457,13 @@ version's notes the first time you start it.
 ## v1.9.7 (9 October 2026)
 
 ### What's new
-- **Real mouse look.** The mouse now turns the camera directly: the same movement always turns it the same amount, however fast you move, as in other first-person games. Before, the mouse was treated like a thumbstick, so small movements did nothing and fast ones were capped at the stick's top speed. **Mouse sensitivity** (1.00x is 0.066 degrees per count) and a new **Mouse vertical** setting (to invert it) are on the **Controls** page.
+- **Real mouse look.** The mouse now turns the camera directly: the same movement always turns it the same amount, however fast you move, as in other first person games. Before, the mouse was treated like a thumbstick, so small movements did nothing and fast ones were capped at the stick's top speed. **Mouse sensitivity** (1.00x is 0.066 degrees per count) and a new **Mouse vertical** setting (to invert it) are on the **Controls** page.
 - **A modern keyboard and mouse layout.** Left mouse button shoots (and takes, uses and repels), right mouse button aims, R reloads, C or Ctrl crouches, middle mouse button or Z zooms, WASD moves, F calls your companion, Space checks your reserve bullets, G drops the spear and Esc pauses. As Kong: F hits, Space jumps, dodges and climbs, Q grabs and throws, G pushes back, bites and goes into fury mode. In the menus: Enter selects, Space or Backspace goes back and the arrow keys move around. Any key you changed yourself stays as you set it; **Reset to defaults** on the **Keyboard bindings** page gives you the whole new layout.
 - **Mouse buttons can be bound.** The **Keyboard bindings** page now takes the left, right and middle mouse buttons, and each binding says what its button does in the game, for Jack and for Kong.
 - **Choosing Keyboard & mouse sets things up.** It switches the game's button prompts to **Keyboard**, so hints show your keys and mouse buttons, and turns **Mouse camera** on. Going back to **Controller** brings your controller's prompts back.
 
 ### Full changelog
-- Mouse look: `mouse_look.cpp` adds up the window's raw mouse movement and gives Jack's camera (CM_Cam, `sub_8246F180`) the angle the mouse moved through its yaw and pitch turns (`sub_82711950`, `sub_82712300`). CM_Cam only turns an axis whose stick is past its 15% deadzone, so while the mouse moves, its stick read is nudged just past it. The runtime's own mouse-to-stick path is kept at its lowest (`mnk_sensitivity` 0.01), where it never gets past that deadzone. While Jack aims, the game turns about 75% as far.
+- Mouse look: `mouse_look.cpp` adds up the window's raw mouse movement and gives Jack's camera (CM_Cam, `sub_8246F180`) the angle the mouse moved through its yaw and pitch turns (`sub_82711950`, `sub_82712300`). CM_Cam only turns an axis whose stick is past its 15% deadzone, so while the mouse moves, its stick read is nudged just past it. The runtime's own mouse to stick path is kept at its lowest (`mnk_sensitivity` 0.01), where it never gets past that deadzone. While Jack aims, the game turns about 75% as far.
 - Settings: `kk_mouse_sensitivity`, `kk_mouse_invert_y` and `kk_pad_prompts` (the controller prompts to bring back). The new `keybind_*` defaults and `mnk_mouse` on are set with the port's other defaults.
 - Prompt pictures `LMB`, `RMB` and `MMB` in `glyphs/keyboard`.
 - Launcher: key capture takes mouse buttons (a click on Cancel still cancels).
@@ -461,7 +471,7 @@ version's notes the first time you start it.
 ## v1.9.6 (9 October 2026)
 
 ### What's new
-- **Play on Linux and Steam Deck now, through Proton (experimental).** This is not the native Linux version: it's the Windows download running through Steam's Proton, so Linux players can play while the native Linux version is finished. That will come in a future update. To play, add **king_kong.exe** to Steam as a non-Steam game and set it to use **Proton Experimental** (the README has the steps). Tested on a ROG Ally (Z1 Extreme) with Bazzite: the launcher, installing from a disc image and the game all work, and it held 120 FPS on the 10 W power profile. The first start takes about half a minute while Steam sets Proton up for the game; after that it starts straight away. Under Proton the launcher uses your system's font, and **Add to Steam** is hidden, since the game is already in Steam.
+- **Play on Linux and Steam Deck now, through Proton (experimental).** This is not the native Linux version: it's the Windows download running through Steam's Proton, so Linux players can play while the native Linux version is finished. That will come in a future update. To play, add **king_kong.exe** to Steam as a non Steam game and set it to use **Proton Experimental** (the README has the steps). Tested on a ROG Ally (Z1 Extreme) with Bazzite: the launcher, installing from a disc image and the game all work, and it held 120 FPS on the 10 W power profile. The first start takes about half a minute while Steam sets Proton up for the game; after that it starts straight away. Under Proton the launcher uses your system's font, and **Add to Steam** is hidden, since the game is already in Steam.
 - **Fixed: the game could freeze on the black LOADING screen** as the main menu loads. When a load starts, the loading screen and the game's frame presenter both need the graphics device, and if the loading screen got it first, each waited for the other forever. It happened often on Linux; on Windows the presenter nearly always got there first, but it could happen there too.
 - **Fixed: one controller press counting twice in the launcher while Steam is open.** Steam's desktop controller layout also types keys for the controller's buttons (arrow keys, Enter), so the selection moved two places and switches flipped twice and stayed as they were. A press and the key Steam types for it now count once.
 - **Fixed: the Home menu running into the status line in a small window.** Its entries now shrink to fit.
@@ -475,10 +485,10 @@ version's notes the first time you start it.
 ## v1.9.5 (9 October 2026)
 
 ### What's new
-- **A new launcher.** Rebuilt from scratch with a cleaner look, and it now works fully with a controller: move with the stick or D-pad, change pages with the bumpers, and the button pictures follow your **Button prompts** setting (Xbox 360, Xbox Series, PlayStation 5, PlayStation 2 or keyboard). Keyboard and mouse work everywhere too, and the text is sharp at any Windows display scale.
+- **A new launcher.** Rebuilt from scratch with a cleaner look, and it now works fully with a controller: move with the stick or D pad, change pages with the bumpers, and the button pictures follow your **Button prompts** setting (Xbox 360, Xbox Series, PlayStation 5, PlayStation 2 or keyboard). Keyboard and mouse work everywhere too, and the text is sharp at any Windows display scale.
 - **The game's own artwork.** The launcher takes the King Kong logo and stills from the movie trailer from your copy of the game, and the Home screen shows them as a slow slideshow. Nothing from the game is in the download. On a new install the launcher starts on a setup screen: pick your disc image, it installs, prepares the artwork, then opens.
 - **The game's menu music and sounds.** The main menu music plays in the launcher, and moving around makes the game's own menu sounds. Both come from your copy of the game, and each has a switch and a volume slider under **About > Launcher**.
-- **Add to Steam.** A new **Add to Steam** entry on the Home screen adds the port to your Steam library as a non-Steam game, with artwork from SteamGridDB, so you can start it from Steam, Big Picture or a Steam Deck. Steam closes for a moment while it's added and opens again afterwards. Steam Input is switched off for the game, so your controller keeps working.
+- **Add to Steam.** A new **Add to Steam** entry on the Home screen adds the port to your Steam library as a non Steam game, with artwork from SteamGridDB, so you can start it from Steam, Big Picture or a Steam Deck. Steam closes for a moment while it's added and opens again afterwards. Steam Input is switched off for the game, so your controller keeps working.
 - **Updates.** **Check for updates** is on the Home screen, and an update now downloads on a screen of its own with a progress bar.
 - **The launcher in your language.** It follows the game's **Language** setting (English, French, German, Spanish or Italian), and the setup screen lets you pick it before you install.
 - **New defaults.** New installs start with **AMD FSR 1** at **Quality**, and the **Medium** preset now uses it. If you're updating, your picture settings stay as they were. The **startup logos** are now skipped by default; turn them back on on the **Gameplay** page.
@@ -489,7 +499,7 @@ version's notes the first time you start it.
 - Sharp text: `rexruntime.dll` is rebuilt with `tools/rexglue-patches` 0010, which lets ImGui 1.92 bake its fonts at the size they're drawn.
 - Artwork: `launcher_art.cpp` reads the front end's texture pack in `KKTextures.bf` (LZO1X chunks; the logo is a tiled 8:8:8:8 texture, the button sheet DXT5) and takes keyframes from `Video/Trailer.wmv` with Windows Media Foundation. It's kept in `Documents\king_kong\cache\art`.
 - Music and sounds: from `Sound/Sound_Common.bf` through `SoundHeaders.db` (Xbox ADPCM, `game_sound.cpp`). The menu music is key 0x060002C9; the move, select and back sounds are 0x87003BF2, 0x87003BF4 and 0x87003D8A, the ones the game's main menu plays.
-- Add to Steam: `steam_shortcut.cpp` adds the shortcut to `userdata/<account>/config/shortcuts.vdf` (binary VDF; every other entry is kept byte for byte) and sets `UseSteamControllerConfig` to 0 in `localconfig.vdf`, while Steam is closed, keeping a `.kk-backup` of each. The artwork is the top-scored grid, wide grid, hero, logo and icon of SteamGridDB game 5249080.
+- Add to Steam: `steam_shortcut.cpp` adds the shortcut to `userdata/<account>/config/shortcuts.vdf` (binary VDF; every other entry is kept byte for byte) and sets `UseSteamControllerConfig` to 0 in `localconfig.vdf`, while Steam is closed, keeping a `.kk-backup` of each. The artwork is the top scored grid, wide grid, hero, logo and icon of SteamGridDB game 5249080.
 - Settings: `kk_launcher_music`, `kk_launcher_music_volume`, `kk_launcher_sounds`, `kk_launcher_sounds_volume`. `kk_settings_version` 2 keeps the old upscaler defaults (`present_effect` bilinear, `kk_render_quality` native) for settings files from earlier versions. `kk_skip_intros` defaults to on. Shader preparing is fixed at Balanced (`async_shader_compilation` on, the default `async_shader_wait_ms`).
 - Translations: the launcher's 370 lines of text in German, Spanish, French and Italian.
 
@@ -512,10 +522,10 @@ version's notes the first time you start it.
 ## v1.9.0 (8 October 2026)
 
 ### What's new
-- **Ambient occlusion.** A new setting on the **Graphics** page adds soft shading where surfaces meet: in corners and creases, and on the ground under rocks, grass and people. It's off by default. Choose strength 1 (recommended), 2 or 3. It stays under the game's distance fog, so far-off walls don't show through the haze. It costs about 1 ms a frame at 4K, and works with NVIDIA and AMD graphics for now (not Intel yet) (#24).
+- **Ambient occlusion.** A new setting on the **Graphics** page adds soft shading where surfaces meet: in corners and creases, and on the ground under rocks, grass and people. It's off by default. Choose strength 1 (recommended), 2 or 3. It stays under the game's distance fog, so far off walls don't show through the haze. It costs about 1 ms a frame at 4K, and works with NVIDIA and AMD graphics for now (not Intel yet) (#24).
 - **AMD FSR 1 and NVIDIA Image Scaling.** A new **Upscaler** setting: **Off** (the default), **AMD FSR 1** or **NVIDIA NIS**. Both work on any graphics card. Each has **Native**, **Quality**, **Balanced** and **Performance** modes, and the launcher shows the resolution the game draws at in each one. They scale the picture up to your screen and sharpen it, so a lower resolution still looks crisp.
-- **Original Xbox 360 or Modern.** A new **Look** setting at the top of the **Graphics** page. **Original** is the game as it was on the console: 720p at 30 FPS, the console's own anti-aliasing and texture filtering, the 69° field of view, motion blur and fog, no ambient occlusion and no upscaler. **Modern** gives you every setting, and switching back to it puts your own settings back.
-- **Graphics presets.** **Low**, **Medium** (the default settings), **High**, **Ultra** and **Steam Deck** set the upscaler, render quality, anti-aliasing, texture filtering and ambient occlusion in one click. Change any of them yourself and it shows **Custom**.
+- **Original Xbox 360 or Modern.** A new **Look** setting at the top of the **Graphics** page. **Original** is the game as it was on the console: 720p at 30 FPS, the console's own antialiasing and texture filtering, the 69° field of view, motion blur and fog, no ambient occlusion and no upscaler. **Modern** gives you every setting, and switching back to it puts your own settings back.
+- **Graphics presets.** **Low**, **Medium** (the default settings), **High**, **Ultra** and **Steam Deck** set the upscaler, render quality, antialiasing, texture filtering and ambient occlusion in one click. Change any of them yourself and it shows **Custom**.
 - **Distance fog on or off.** **Off** clears the haze over far scenery. It's on by default, as the fog is part of Skull Island's look and also hides the edges of each area, so some empty backdrops can show with it off.
 - **Performance draws one step lower.** The game draws in steps of its original 720p, so on a 4K screen **Performance** used to come out the same as **Quality** (1440p). It now goes one step lower where there is one: 720p at 4K, 2160p at 8K.
 
@@ -530,7 +540,7 @@ version's notes the first time you start it.
 - Ambient occlusion: built into the GPU plugin (`rexgpu-xenos.dll`, patches 0003 to 0007 in `tools/rexglue-patches`), set with `ao_mode` (0 off, 1 on) and `ao_strength` (1 to 3). Once a frame, at half resolution, it reads the scene depth the game copies out before lighting, works out the occlusion from 10 samples, blurs it and scales it up to full resolution. It's applied to the scene before the game's post effects, so the HUD isn't touched, and it uses the game's own fog values so only the part of the scene in front of the fog is darkened. Measured at 0.7 to 1.0 ms a frame at 3840 x 2160 on an RTX 4070 Ti. It needs the host render target path that NVIDIA and AMD graphics use; Intel graphics use a different path that isn't supported yet.
 - Distance fog: `kk_fog` (on by default). Off skips the game's fog pass.
 - Look: `kk_original_look`. While it's on, your Modern settings are kept in `kk_modern_settings`, and the Original values are set again each time the game starts in case the settings file was edited.
-- Upscalers: `present_effect` (`bilinear` for Off, `fsr`, `nis`) and `present_nis_sharpness` (0.5). `rexruntime.dll` is now built from the ReXGlue SDK source with patch 0008: AMD FSR 1 and CAS without the AMD SDK, and the NVIDIA Image Scaling SDK v1.0.3 as a compute pass, run more than once for scale factors over 2x like FSR's own passes. The patch also fixes a heap in the presenter that only had room for two in-between images, too few for FSR from 720p to 8K. Their MIT licences are in `THIRD-PARTY-NOTICES.txt`.
+- Upscalers: `present_effect` (`bilinear` for Off, `fsr`, `nis`) and `present_nis_sharpness` (0.5). `rexruntime.dll` is now built from the ReXGlue SDK source with patch 0008: AMD FSR 1 and CAS without the AMD SDK, and the NVIDIA Image Scaling SDK v1.0.3 as a compute pass, run more than once for scale factors over 2x like FSR's own passes. The patch also fixes a heap in the presenter that only had room for two in between images, too few for FSR from 720p to 8K. Their MIT licences are in `THIRD-PARTY-NOTICES.txt`.
 - Upscaler mode: sets `kk_render_quality` (`native`, `quality`, `balanced`, `performance`). While an upscaler is on, it replaces the **Render quality** setting. `performance` now goes one 720p step below `quality` where there is one, with or without an upscaler.
 - Presets: the Graphics page shows which preset your settings match. Motion blur and fog aren't part of them.
 
@@ -540,8 +550,8 @@ version's notes the first time you start it.
 - **Shader freezes cut from 2 seconds to under half a second.** A new **Balanced** choice for **Shader preparing** on the **Graphics** page, now the default for everyone. New effects are prepared on many threads at once in the background, and each frame waits a moment for them, instead of the game stopping while they're prepared one at a time. Once in a while an object can appear a moment late the first time it's seen. **Wait** and **Background** are still there if you prefer them. The numbers are below.
 - **The shader pack looks after itself.** Each time the launcher opens, it downloads the newest shader pack if you don't have it yet. There's no button to click and nothing to remember. The Play page shows how it went, and if you press **PLAY** while a download is still going, the game starts as soon as it finishes.
 - **Prepared effects are kept after a crash.** If the game closed while saving a newly prepared effect, everything prepared after that point was ignored and had to be prepared again. Now only the damaged entry is dropped, and the rest is kept.
-- **New defaults.** FXAA is on, motion blur is off, **Controller sensitivity** is 150% and the **Stick deadzone** is 5%. The achievement sound is the Xbox 360's when you have `Xbox_360.wav` in the `sounds` folder; otherwise the built-in chime plays as before. Settings you had changed from the old defaults stay as you set them.
-- The "share your shaders" pop-up and the **Share my shaders** button are gone.
+- **New defaults.** FXAA is on, motion blur is off, **Controller sensitivity** is 150% and the **Stick deadzone** is 5%. The achievement sound is the Xbox 360's when you have `Xbox_360.wav` in the `sounds` folder; otherwise the built in chime plays as before. Settings you had changed from the old defaults stay as you set them.
+- The "share your shaders" popup and the **Share my shaders** button are gone.
 
 ### Performance
 Tested on the V-Rex chapter at 30 FPS on its first visit, with the graphics driver's own shader cache bypassed so every effect really was new.
@@ -555,9 +565,9 @@ The freezes came as the chapter started, when the game meets the most new effect
 - Shader preparing: `async_shader_compilation` is now on by default with a new `async_shader_wait_ms`. A draw whose effect is still being prepared waits for it within a budget for each frame of half a frame at your frame rate cap (16 ms at 30 FPS, 8 at 60, 4 from 120 or unlimited), and is skipped only once that is used up. **Background** sets the wait to 0, and **Wait** turns preparing in the background off.
 - GPU plugin: `rexgpu-xenos.dll` is now built from the ReXGlue SDK 0.10.0 source with the port's patch for that wait. The patch and build steps are in `tools/rexglue-patches`.
 - Shader cache: at startup the port checks the cache's records and drops any that were only partly written, instead of the runtime ignoring everything after the first one.
-- Shader pack: downloaded automatically each time the launcher opens, whether or not update checks are on. The **Shader pack update** pop-up and the **Download shader pack** button are gone. Shader pack 2 is still the latest; it covers about 40% of the game's effects, and Balanced handles the rest smoothly.
-- Defaults: `swap_post_effect` fxaa, `kk_motion_blur` false, `kk_camera_sensitivity` 150, `kk_deadzone` 5, `kk_achievement_sound_file` `Xbox_360.wav` (the built-in chime if that file isn't in the `sounds` folder). VSync off (`d3d12_allow_variable_refresh_rate_and_tearing`), 4x texture filtering (`anisotropic_override` 3) and the Modern camera response were already the defaults; the port now sets the first two itself.
-- Launcher: the share-shaders poster (`kk_share_poster`) and the **Share my shaders** button are removed.
+- Shader pack: downloaded automatically each time the launcher opens, whether or not update checks are on. The **Shader pack update** popup and the **Download shader pack** button are gone. Shader pack 2 is still the latest; it covers about 40% of the game's effects, and Balanced handles the rest smoothly.
+- Defaults: `swap_post_effect` fxaa, `kk_motion_blur` false, `kk_camera_sensitivity` 150, `kk_deadzone` 5, `kk_achievement_sound_file` `Xbox_360.wav` (the built in chime if that file isn't in the `sounds` folder). VSync off (`d3d12_allow_variable_refresh_rate_and_tearing`), 4x texture filtering (`anisotropic_override` 3) and the Modern camera response were already the defaults; the port now sets the first two itself.
+- Launcher: the share shaders poster (`kk_share_poster`) and the **Share my shaders** button are removed.
 - `tools/shader_coverage.py`: measures how many of the game's own effects (listed in its `Shaders/xeshaders.bin`) a shader cache has prepared.
 
 ## v1.7.3 (8 October 2026)
@@ -599,7 +609,7 @@ The freezes came as the chapter started, when the game meets the most new effect
 - **What's new and the changelog.** After an update, the launcher shows what changed the first time it opens. The **About** page now lists the notes for every version.
 
 ### Full changelog
-- Field of view: `kk_fov`, in degrees for Jack's camera (69 is the original). Every camera is widened by the same amount, so close-ups stay closer than wide shots. The area the game draws widens with it. Jack's gun is drawn with its own fixed angle and doesn't change. Nothing is widened while the menus show.
+- Field of view: `kk_fov`, in degrees for Jack's camera (69 is the original). Every camera is widened by the same amount, so close ups stay closer than wide shots. The area the game draws widens with it. Jack's gun is drawn with its own fixed angle and doesn't change. Nothing is widened while the menus show.
 - Controller sensitivity: `kk_camera_sensitivity` now scales the right stick as the game reads it, instead of the raw stick, so both directions change together and it is no longer limited below a full push. It no longer applies to keyboard and mouse, which has its own **Mouse sensitivity**.
 - Motion blur: `kk_motion_blur`, on by default as on the console. Off runs the game's motion blur effect at zero strength, the game's own way of having no blur.
 - Startup logos: `kk_skip_intros`, off by default.
@@ -610,13 +620,13 @@ The freezes came as the chapter started, when the game meets the most new effect
 
 ### What's new
 - **No more freezes with PlayStation, Xbox Series or keyboard button prompts.** If you picked any button prompts other than the original Xbox 360 ones, the game could freeze for 1 to 5 seconds at a time, again and again, even during the intro videos. The port was searching the game's memory for the button picture in a way that held up the graphics. It now finds it instantly, and the freezes are gone (#11).
-- **Cheats page.** All ten of the game's cheats are now switches on the launcher's new **Cheats** page: all chapters, all bonus content, fast healing, one-hit kills, 999 bullets, unlimited spears, and the revolver, machine gun, shotgun and sniper rifle. Switch them on, and they're active as soon as the game reaches its main menu. No more typing codes every time you play (#29).
+- **Cheats page.** All ten of the game's cheats are now switches on the launcher's new **Cheats** page: all chapters, all bonus content, fast healing, one hit kills, 999 bullets, unlimited spears, and the revolver, machine gun, shotgun and sniper rifle. Switch them on, and they're active as soon as the game reaches its main menu. No more typing codes every time you play (#29).
 - **Shader pack 2, and shader pack updates in the launcher.** A new shader pack covers more of the game, including the V-Rex fight and the damage effects. The launcher now checks for a newer shader pack when it opens, as well as for a newer version of the port, and offers whichever is out: they're released separately, so you're always on the latest of both.
 
 ### Full changelog
 - Button prompts: the port looked for the game's button picture every second by asking Windows about each 64 KB of the game's 512 MB of memory. Each search took about 5 seconds and held the memory lock the graphics need. It now reads the emulator's own record of which memory is in use, so a search takes a few milliseconds.
 - Cheats: the launcher's **Cheats** page (`kk_cheats`, `kk_cheat_*`). The port makes the same changes the game makes when a code is typed on its Cheat screen, when the main menu appears, and again each time you return to the main menu.
-- Updates: the startup check (and **Check for updates now** on the About page) also checks the shader pack. Players with an older pack get a **Shader pack update** pop-up with **Download now** and **Later**; it waits until after a port update, since that restarts the launcher.
+- Updates: the startup check (and **Check for updates now** on the About page) also checks the shader pack. Players with an older pack get a **Shader pack update** popup with **Download now** and **Later**; it waits until after a port update, since that restarts the launcher.
 - Shader pack 2: 4,931 pipelines and 2,438 shaders (pack 1 had 4,652 and 2,362).
 - For bug reports: a hidden setting, `kk_hitch_report_ms`, writes a report to the `logs` folder when a frame takes longer than that many milliseconds, showing what the game was waiting on. Off by default.
 
@@ -624,7 +634,7 @@ The freezes came as the chapter started, when the game meets the most new effect
 
 ### What's new
 - **No more antivirus warnings.** Some antivirus programs, including Windows Defender, wrongly flagged a file that comes with the port (`rexruntime.dll`, part of the ReXGlue toolkit the port is built with) as a virus. It was a false alarm, but it could block the download. This release ships that file rebuilt from the exact same ReXGlue source, and antivirus programs no longer flag it.
-- **Saving always works.** Some players were told to sign in before they could save, and the game never offered their save slots. This happened when the PC saw more than one controller, which is common with Steam Input, DS4Windows, or a handheld's built-in controls. The game then treated the player as player 2, and only player 1 can save. Every controller, plus keyboard and mouse, now counts as player 1, so saving works whichever one you use (#9).
+- **Saving always works.** Some players were told to sign in before they could save, and the game never offered their save slots. This happened when the PC saw more than one controller, which is common with Steam Input, DS4Windows, or a handheld's built in controls. The game then treated the player as player 2, and only player 1 can save. Every controller, plus keyboard and mouse, now counts as player 1, so saving works whichever one you use (#9).
 - **Rumble reaches your controller.** The game shakes the controller, for example when you fire a gun, but that rumble only went to the first controller Windows listed. With Steam Input, a wireless receiver or more than one pad, that wasn't always the one in your hands. It now reaches every connected controller, so you feel it whichever one you use.
 - **Freeze reports.** If the game ever stops responding for 20 seconds, the port now writes a freeze report to the `logs` folder. If the game recovers, the log notes how long it froze. Attaching those files to a bug report lets us find what caused the freeze (#11).
 
@@ -648,28 +658,28 @@ The freezes came as the chapter started, when the game meets the most new effect
 
 ### What's new
 - **Updates from the launcher.** When the launcher opens it checks whether a newer version of the port is out. If one is, it offers to update: **Update now** downloads it, replaces the port's own files and restarts the launcher, with your installed game, saves and settings left as they are. **What's new** opens the release notes. You can turn the check off, or check by hand, on the **About** page. From this version on, you won't need to download releases yourself.
-- **Share my shaders.** The shader pack only covers what has been played so far, and you can help fill in the rest. Once you have played a good part of the game, open the **Play** page and click **Share my shaders**. It packs your shaders into one small file, shows it to you and opens a GitHub form to drop it into. The file holds only shader data: nothing personal, no saves or settings. Shaders that at least two players have sent go into the next shader pack, so everyone after you gets a smoother first play-through.
-- **Your country needs your shaders.** A pop-up when the launcher opens explains the above, with a poster to match. Tick **Don't show this message again** and it won't appear again.
+- **Share my shaders.** The shader pack only covers what has been played so far, and you can help fill in the rest. Once you have played a good part of the game, open the **Play** page and click **Share my shaders**. It packs your shaders into one small file, shows it to you and opens a GitHub form to drop it into. The file holds only shader data: nothing personal, no saves or settings. Shaders that at least two players have sent go into the next shader pack, so everyone after you gets a smoother first playthrough.
+- **Your country needs your shaders.** A popup when the launcher opens explains the above, with a poster to match. Tick **Don't show this message again** and it won't appear again.
 - **MSAA is no longer a setting.** 2x MSAA is how the Xbox 360 drew those surfaces, so it now always matches the console, and the shader pack covers everyone.
 
 ### Full changelog
-- Launcher: automatic update check at startup (About page: Updates, Off / At startup, plus **Check for updates now**), with **Update now**, **What's new** and **Later**. Updates are staged next to the old files and swapped in, so a failed download never leaves a half-updated game.
+- Launcher: automatic update check at startup (About page: Updates, Off / At startup, plus **Check for updates now**), with **Update now**, **What's new** and **Later**. Updates are staged next to the old files and swapped in, so a failed download never leaves a half updated game.
 - Launcher: **Share my shaders** on the Play page, and the **Share shaders** issue form on GitHub.
-- Launcher: the "Players wants your shaders" pop-up at startup, with **Don't show this message again**.
+- Launcher: the "Players wants your shaders" popup at startup, with **Don't show this message again**.
 - Launcher: the Multisampling setting is removed (2x MSAA stays on, as on the Xbox 360). The About page shows the port's version.
 - New `tools/collect_shader_shares.py` builds the next shader pack from players' submissions, taking only records that at least two players sent.
-- The poster is Alfred Leete's 1914 "Britons wants you" (public domain), re-lettered.
+- The poster is Alfred Leete's 1914 "Britons wants you" (public domain), relettered.
 
 ## v1.3.0 (6 October 2026)
 
 ### What's new
-- **Shader pack: no more pauses for new effects.** The game prepares each effect (a shader) the first time it appears, which caused the short pauses many of you reported on a first play-through. A test build has now played every chapter on its own and collected those effects into a shader pack. On the launcher's **Play** page, click **Download shader pack**: it is added to your shader cache, and every time the game starts it prepares everything in the cache before you play. Anything your own game has already prepared is kept.
-  - Pack 1 holds 4,652 prepared effects from all 42 chapters. In a hand-played test of a chapter, it already covered about 97% of what the game needed, and the rest showed up only as a few tiny pauses (under 75 ms, about two frames). Bigger packs will follow, and **Check for a newer pack** on the Play page fetches them without needing a new release of the port.
+- **Shader pack: no more pauses for new effects.** The game prepares each effect (a shader) the first time it appears, which caused the short pauses many of you reported on a first playthrough. A test build has now played every chapter on its own and collected those effects into a shader pack. On the launcher's **Play** page, click **Download shader pack**: it is added to your shader cache, and every time the game starts it prepares everything in the cache before you play. Anything your own game has already prepared is kept.
+  - Pack 1 holds 4,652 prepared effects from all 42 chapters. In a hand played test of a chapter, it already covered about 97% of what the game needed, and the rest showed up only as a few tiny pauses (under 75 ms, about two frames). Bigger packs will follow, and **Check for a newer pack** on the Play page fetches them without needing a new release of the port.
 - **A warning before playing above 30 FPS.** Pressing Play with a frame rate above 30 (or unlimited) now explains that some animations can look wrong, and offers to play at 30 or 60 FPS instead. 30 FPS plays every animation correctly. At 60 the issues are still there but much less noticeable. This will be fixed in a future update.
 
 ### Full changelog
 - Launcher: **Download shader pack** on the Play page. It downloads from the `shader-packs` release on GitHub and merges into `Documents\king_kong\cache`. The launcher only contacts GitHub when you click.
-- Launcher: frame-rate pop-up when pressing Play above 30 FPS, with Play at 30, Play at 60, Keep and Back.
+- Launcher: frame rate popup when pressing Play above 30 FPS, with Play at 30, Play at 60, Keep and Back.
 - New `tools/make_shader_pack.py` builds a pack from one or more shader caches.
 - Developer test build: the automatic tour that plays every chapter (cheats, chapter select, skip videos, walk around), used to build the pack. It is never in release builds.
 - README: a section on the shader pack.
@@ -678,13 +688,13 @@ The freezes came as the chapter started, when the game meets the most new effect
 
 ### What's new
 - **No more vanishing objects, silhouettes or bright flashes the first time you play.** While the game prepared a new effect in the background, it skipped drawing everything that needed it, so characters could turn into silhouettes for a moment and some frames flashed bright. Effects are now prepared before they are drawn. The first time you see something new there can be a short pause instead, and only once, because prepared effects are saved for next time. If you prefer the old behaviour, set **Graphics > Shader preparing** to Background.
-- **Steadier frame pacing on more PCs.** The game now asks Windows for precise 1 ms timers and opts out of power throttling. Without this, Windows 10 and 11 can stretch the game's short waits to about 16 ms, and on laptops with Intel's newer mixed P-core/E-core processors Windows 11 can move the game onto the slower cores. Both cause stutter.
+- **Steadier frame pacing on more PCs.** The game now asks Windows for precise 1 ms timers and opts out of power throttling. Without this, Windows 10 and 11 can stretch the game's short waits to about 16 ms, and on laptops with Intel's newer mixed performance core and efficiency core processors Windows 11 can move the game onto the slower cores. Both cause stutter.
 - **Better bug reports.** Every 10 seconds the log notes the average frame rate, the 1% low, the worst frame and how many frames took over 50 or 100 ms. If the game ever crashes, it writes `crash-<date>.txt` and `crash-<date>.dmp` into the `logs` folder. The README explains what to send.
 
 ### Full changelog
 - Shaders now finish preparing before they are used (no skipped draws). The new launcher setting **Graphics > Shader preparing** switches between Wait (default) and Background.
-- 1 ms timer resolution and Windows power-throttling opt-out at startup. The log records how long a 1 ms sleep really takes.
-- Frame-time summary in the log every 10 seconds.
+- 1 ms timer resolution and Windows power throttling opt out at startup. The log records how long a 1 ms sleep really takes.
+- Frame time summary in the log every 10 seconds.
 - Crash reports (`.txt` and minidump) in the `logs` folder.
 - New developer test build (`kk-dev` preset, never in releases). It can skip straight into gameplay and walk around on its own, for testing performance.
 - README: a new "Reporting a problem" section, and updated known issues.
@@ -717,5 +727,5 @@ The freezes came as the chapter started, when the game meets the most new effect
 - A launcher that installs the game from your disc, with art from your copy of the game
 - Up to 8K resolution, FXAA, 2x MSAA and 16x texture filtering
 - 30 fps like the console, or up to 240 and unlimited (some animations are not right above 30 yet)
-- Xbox 360 style achievement pop-ups, with your own choice of sound
+- Xbox 360 style achievement popups, with your own choice of sound
 - Camera inversion and speed, deadzone, vibration, button remapping, keyboard and mouse

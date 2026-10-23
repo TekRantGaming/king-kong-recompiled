@@ -23,6 +23,7 @@
 
 #include "http.h"
 #include "platform.h"
+#include "update_channel.h"
 
 namespace kk {
 namespace {
@@ -183,8 +184,10 @@ bool RunUpdatePickTests() {
 }
 #endif
 
-void CheckForUpdate(UpdateStatus& status, const std::string& channel, bool switching) {
+void CheckForUpdate(UpdateStatus& status, const std::string& wanted, bool switching) {
   status.busy = true;
+  // A stable build never asks the beta repo, whatever channel it is asked for (update_channel.h).
+  const std::string channel = CheckChannel(kBuildChannel, wanted);
   // Stable is read on both channels (a beta's final release is a stable one); beta only on beta.
   std::optional<UpdateInfo> stable, beta;
   if (UpdateInfo s; LatestRelease(kReleasesApi, s)) stable = s;
@@ -270,7 +273,7 @@ void InstallUpdate(const UpdateInfo& info, UpdateStatus& status) {
     tmp += ".new";
     if (!fs::copy_file(e.path(), tmp, fs::copy_options::overwrite_existing, ec)) {
       unstage();
-      return fail("Could not write the update into the game folder. Is it read-only?");
+      return fail("Could not write the update into the game folder. Is it read only?");
     }
     staged.push_back(tmp);
   }
@@ -311,7 +314,7 @@ void InstallUpdate(const UpdateInfo& info, UpdateStatus& status) {
   {
     std::ofstream f(tmp, std::ios::binary | std::ios::trunc);
     if (!f.write(reinterpret_cast<const char*>(data.data()), std::streamsize(data.size())))
-      return fail("Could not save the update beside the AppImage. Is its folder read-only?");
+      return fail("Could not save the update beside the AppImage. Is its folder read only?");
   }
   fs::permissions(tmp, fs::perms::owner_all | fs::perms::group_read | fs::perms::group_exec | fs::perms::others_read |
                            fs::perms::others_exec, ec);

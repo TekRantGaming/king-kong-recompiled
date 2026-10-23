@@ -19,6 +19,7 @@
 #include "amd_shader_cache.h"
 #include "setup_again.h"
 #include "easter_egg_logic.h"
+#include "update_channel.h"
 
 #include <bit>
 #include <cstdio>
@@ -513,16 +514,16 @@ void SettingsLayoutChecks() {
             std::string(L::kPageNames[6]) == "Advanced" && L::kPageCount == 7,
         "categories: Display, Graphics, Audio, Controls, Gameplay, Cheats, Advanced (owner, 16 Oct evening)");
   Check(in_order(L::kDisplay, {"Window mode", "Monitor", "Resolution", "Refresh rate", "VSync", "Frame rate"}),
-        "Display: window mode, monitor, resolution, refresh rate, VSync, frame-rate cap");
+        "Display: window mode, monitor, resolution, refresh rate, VSync, frame rate cap");
   // Owner, 21 Oct (Beta 14): HDR is experimental, in the F8 graphics panel only: no HDR row on any page.
   for (int page = 0; page < L::kPageCount; ++page)
     for (const char* hdr : {"HDR", "HDR brightness", "Peak brightness (nits)", "Paper white (nits)",
                             "Open Windows HDR Calibration"})
       Check(L::IndexOf(L::Page(page), hdr) < 0 || L::IndexOf(L::Page(page), hdr) == L::IndexOf(L::Page(page), "*"),
             (std::string("no HDR row in Settings: ") + hdr).c_str());
-  Check(in_order(L::kGraphics, {"Preset", "Graphics API", "Upscaler", "Upscaler mode", "Anti-aliasing",
+  Check(in_order(L::kGraphics, {"Preset", "Graphics API", "Upscaler", "Upscaler mode", "Antialiasing",
                                 "Ambient occlusion", "Global illumination", "Screen blur", "Texture pack"}),
-        "Graphics: preset, API, upscaler and quality, anti-aliasing, effects, advanced last");
+        "Graphics: preset, API, upscaler and quality, antialiasing, effects, advanced last");
   Check(L::IndexOf(L::kGraphics, "Look") < L::IndexOf(L::kGraphics, "Graphics API"), "the look is with the preset");
   Check(std::string(L::RowsOf(L::kGraphics).begin()[L::IndexOf(L::kGraphics, "Rebuild shaders")].section) == "Advanced",
         "Rebuild shaders is in Graphics' advanced section");
@@ -554,7 +555,7 @@ void SettingsLayoutChecks() {
               L::IndexOf(L::kDisplay, "Camera shake strength") + 1 == int(L::RowsOf(L::kDisplay).size),
           "Display ends with Camera: field of view, motion blur, camera shake and its strength");
     Check(section(L::kDisplay, "Frame rate") == "Frame rate", "the frame rate cap stays in Display");
-    Check(in_order(L::kGameplay, {"Pop-up style", "Performance metrics", "Startup logos"}) &&
+    Check(in_order(L::kGameplay, {"Popup style", "Performance metrics", "Startup logos"}) &&
               section(L::kGameplay, "Performance metrics") == "Overlay",
           "Gameplay: Performance metrics (Overlay) after the HUD");
     for (const char* moved : {"Field of view", "Motion blur", "Camera shake", "Camera shake strength",
@@ -635,7 +636,7 @@ void WhatsNewChecks() {
     const bool show = kk::ShowWhatsNewNow(g);
     if (!show) continue;
     ++shown;
-    Check(g.pending && !g.modal_open, "only a waiting one, never over another pop-up");
+    Check(g.pending && !g.modal_open, "only a waiting one, never over another popup");
     Check(g.files_ok, "never before the game files are given");
     Check(!g.in_setup, "never during any setup page (disc, install, artwork, shaders, downloads, graphics, prompts)");
     Check(!g.new_screen, "never over the New in this update screen");
@@ -820,7 +821,7 @@ void SetupAgainChecks() {
   Check(sa::kRound >= 1, "Beta 14's round is 1 or later");
   Check(sa::Due(true, 0, false), "an existing install that has not had the round goes through the setup again");
   Check(!sa::Due(true, sa::kRound, false), "once had, never again (the player's later choices stay)");
-  Check(!sa::Due(false, 0, false), "a fresh install has its own first-time setup instead");
+  Check(!sa::Due(false, 0, false), "a fresh install has its own first time setup instead");
   Check(!sa::Due(true, 0, true), "automated test runs keep their settings");
   // What the setup's pages show goes back to the defaults ...
   for (const char* name : {"native_backend", "kk_graphics_preset", "kk_original_look", "native_gi", "native_upscaler",
@@ -989,8 +990,71 @@ void EasterEggCodeChecks() {
         "only B, A and Start of the code are kept from the launcher");
 }
 
+// Task 358: the code from the keyboard too, mixed with the controller (easter_egg_logic.h).
+void EasterEggKeyboardChecks() {
+  using kk::egg::Code;
+  using kk::egg::FromKey;
+  using kk::egg::Key;
+  using kk::egg::Pad;
+  using kk::egg::Step;
+  auto keys = [](Code& c, std::initializer_list<Key> presses) {
+    Step last = Step::kNone;
+    for (Key k : presses) last = c.Press(FromKey(k));
+    return last;
+  };
+  Code c;
+  Check(keys(c, {Key::kUp, Key::kUp, Key::kDown, Key::kDown, Key::kLeft, Key::kRight, Key::kLeft, Key::kRight, Key::kB,
+                 Key::kA, Key::kEnter}) == Step::kComplete && c.progress() == 0,
+        "the whole code from the keyboard: arrows, B, A, Enter");
+  // Mixed: the controller's directions, the keyboard's B, the controller's A, Enter for Start.
+  for (Pad p : {Pad::kUp, Pad::kUp, Pad::kDown, Pad::kDown, Pad::kLeft, Pad::kRight, Pad::kLeft, Pad::kRight})
+    Check(c.Press(p) == Step::kMatched, "mixed code: controller directions");
+  Check(c.Press(FromKey(Key::kB)) == Step::kMatched, "mixed code: the keyboard's B");
+  Check(c.Press(Pad::kA) == Step::kMatched, "mixed code: the controller's A");
+  Check(c.Press(FromKey(Key::kEnter)) == Step::kComplete, "mixed code: Enter as Start");
+  Check(keys(c, {Key::kUp, Key::kUp, Key::kDown}) == Step::kMatched && c.Press(Pad::kDown) == Step::kMatched &&
+            keys(c, {Key::kLeft, Key::kRight, Key::kLeft, Key::kRight, Key::kB, Key::kA}) == Step::kMatched &&
+            c.Press(Pad::kStart) == Step::kComplete,
+        "mixed code: keyboard arrows and B A, the controller's Down and Start");
+  Check(keys(c, {Key::kUp, Key::kUp, Key::kDown, Key::kOther}) == Step::kNone && c.progress() == 0,
+        "another key resets the code");
+  Check(keys(c, {Key::kUp, Key::kUp, Key::kDown, Key::kDown, Key::kLeft, Key::kRight, Key::kLeft, Key::kRight, Key::kB,
+                 Key::kA, Key::kA}) == Step::kNone && c.progress() == 0,
+        "A instead of Enter resets");
+  Check(FromKey(Key::kEnter) == Pad::kStart && FromKey(Key::kB) == Pad::kB && FromKey(Key::kA) == Pad::kA &&
+            FromKey(Key::kUp) == Pad::kUp && FromKey(Key::kOther) == Pad::kOther,
+        "key mapping");
+  Check(kk::egg::KeySwallowed(Key::kEnter, Step::kMatched) && kk::egg::KeySwallowed(Key::kEnter, Step::kComplete) &&
+            !kk::egg::KeySwallowed(Key::kEnter, Step::kNone) && !kk::egg::KeySwallowed(Key::kUp, Step::kMatched) &&
+            !kk::egg::KeySwallowed(Key::kB, Step::kMatched),
+        "only Enter of the code is kept from the launcher (B and A keys have no launcher action)");
+}
+
+// Task 358: the update channel comes from the build (update_channel.h).
+void UpdateChannelChecks() {
+  using kk::ChannelAtStart;
+  Check(ChannelAtStart("stable", "") == "stable", "stable build, no channel saved: stable");
+  Check(ChannelAtStart("stable", "beta") == "stable", "stable build over a beta install: stable");
+  Check(ChannelAtStart("stable", "stable") == "stable", "stable build, stable saved: stable");
+  Check(ChannelAtStart("beta", "") == "beta", "beta build over a stable or fresh install: beta (as before)");
+  Check(ChannelAtStart("beta", "stable") == "stable", "beta build keeps a chosen stable channel (as before)");
+  Check(ChannelAtStart("beta", "beta") == "beta", "beta build keeps the beta channel");
+  Check(!kk::OffersChannelChoice("stable") && kk::OffersChannelChoice("beta"), "Change version only on beta builds");
+  Check(kk::CheckChannel("stable", "beta") == "stable" && kk::CheckChannel("stable", "stable") == "stable",
+        "a stable build never asks the beta repo");
+  Check(kk::CheckChannel("beta", "beta") == "beta" && kk::CheckChannel("beta", "stable") == "stable",
+        "a beta build asks what it is asked");
+  Check(kk::IsStableBuild("stable") && !kk::IsStableBuild("beta"), "build kinds");
+  Check(kk::StableLacksNativeRenderer("1.9.12") && kk::StableLacksNativeRenderer("v1.9.5") &&
+            !kk::StableLacksNativeRenderer("2.0.0") && !kk::StableLacksNativeRenderer("2.0.1") &&
+            !kk::StableLacksNativeRenderer("10.0.0") && !kk::StableLacksNativeRenderer(""),
+        "switching to stable resets the beta's settings only for versions before 2.0.0");
+}
+
 int main() {
   EasterEggCodeChecks();
+  EasterEggKeyboardChecks();
+  UpdateChannelChecks();
   // Extras playback does not set either story-movie flag. SKIP must still
   // send Start, and must stop sending it once playback ends.
   std::map<uint32_t, uint32_t> movie;

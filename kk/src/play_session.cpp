@@ -1127,7 +1127,7 @@ bool OnGameMenuPage(const char* page) {
     // The start menu's texts (the chapter names, if they are text) with KK_DEV_TEXT_DUMP.
     if (std::getenv("KK_DEV_TEXT_DUMP") && kk::g_guest_base) kk::DevDumpTexts(kk::g_guest_base, "texts-menu.txt");
 #endif
-    ReturnToLauncher(chapter_run ? "the chapter-select run is over" : "the game left play",
+    ReturnToLauncher(chapter_run ? "the chapter select run is over" : "the game left play",
                      g_extra_session ? "extras" : "play");
   }
   return true;
@@ -1279,7 +1279,7 @@ REX_HOOK_RAW(sub_8253DB80) {
       } else {
         // A chapter-select run that has reached its end, and Quit game, go back to the Play menu (owner 19 Oct).
         const bool chapter_end = g_chapter_session && !LeftByQuit();
-        ReturnToLauncher(chapter_end ? "the chapter-select run is over" : "the game left play",
+        ReturnToLauncher(chapter_end ? "the chapter select run is over" : "the game left play",
                          g_extra_session ? "extras" : "play");
       }
     }

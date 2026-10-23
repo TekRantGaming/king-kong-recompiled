@@ -201,7 +201,7 @@
               rows);
       TakeRow(graphics, "Ambient occlusion", "Soft shading where surfaces meet, in corners and under rocks and grass.",
               rows);
-      TakeRow(graphics, "Shadows", "Sharper, softer-edged shadows than the game's own.", rows);
+      TakeRow(graphics, "Shadows", "Sharper, softer edged shadows than the game's own.", rows);
       TakeRow(graphics, "Water reflections", "The water reflects the rocks, trees and the ship around it.", rows);
       TakeRow(graphics, "Light shafts", "Sunlight shines through the mist and fog in visible shafts.", rows);
     } else {

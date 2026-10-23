@@ -21,6 +21,7 @@
 #include "hardware_recommendation.h"
 #include "graphics_presets.h"
 #include "ultrawide_logic.h"
+#include "update_channel.h"
 
 REXCVAR_DEFINE_BOOL(kk_launcher, true, "KK",
                     "Show the launcher before starting the game (hold Shift at start to force it)");
@@ -31,7 +32,7 @@ REXCVAR_DEFINE_STRING(kk_start, "", "KK",
                       "new:<slot>[:<name>], chapter:<slot>:<entry>[:<name>]); never saved");
 REXCVAR_DEFINE_BOOL(kk_check_updates, true, "KK", "Check GitHub for a newer version when the launcher opens");
 REXCVAR_DEFINE_BOOL(kk_online_count, true, "KK",
-                    "Show how many people are playing, with an anonymous check-in every 5 minutes (see online.h)");
+                    "Show how many people are playing, with an anonymous check in every 5 minutes (see online.h)");
 REXCVAR_DEFINE_BOOL(kk_online_asked, false, "KK", "Internal: the launcher has asked about the online player count");
 REXCVAR_DEFINE_BOOL(kk_discord_status, true, "KK",
                     "Show on your Discord profile that you're playing, while the Discord app runs on this PC "
@@ -53,7 +54,7 @@ REXCVAR_DEFINE_BOOL(kk_notify_downloads, true, "KK",
 REXCVAR_DEFINE_INT32(kk_settings_version, 0, "KK",
                      "Internal: which defaults the settings file was written with (see MigrateSettings)");
 REXCVAR_DEFINE_STRING(kk_hardware_tier, "", "KK",
-                      "Internal: first-launch hardware recommendation; empty for existing installs")
+                      "Internal: first launch hardware recommendation; empty for existing installs")
     .allowed({"", "low", "mid", "high"});
 REXCVAR_DEFINE_STRING(kk_shaders_prepared, "", "KK",
                       "Internal: the port version whose one shader preparation has run; shaders are prepared again "
@@ -61,13 +62,13 @@ REXCVAR_DEFINE_STRING(kk_shaders_prepared, "", "KK",
 REXCVAR_DEFINE_STRING(kk_last_version, "", "KK",
                       "Last port version the launcher has shown (it shows What's new once after an update)");
 REXCVAR_DEFINE_STRING(kk_setup_version, "", "KK",
-                      "Internal: the port version whose setup steps this player has had (the first-time setup, or "
-                      "the one-time New in this update screen); 'waiting' while that screen is still to be shown");
+                      "Internal: the port version whose setup steps this player has had (the first time setup, or "
+                      "the one time New in this update screen); 'waiting' while that screen is still to be shown");
 REXCVAR_DEFINE_INT32(kk_setup_again, 0, "KK",
-                     "Internal: the round of 'everyone through the first-time setup again' this player has had "
+                     "Internal: the round of 'everyone through the first time setup again' this player has had "
                      "(1: Beta 14, DirectX 12 and the new defaults; setup_again.h)");
 REXCVAR_DEFINE_INT32(kk_frame_rate, 30, "KK/Video",
-                     "Frame-rate cap: 30, 60, 90, 120, 144, 165, 240, or 0 for unlimited");
+                     "Frame rate cap: 30, 60, 90, 120, 144, 165, 240, or 0 for unlimited");
 REXCVAR_DEFINE_BOOL(kk_hfr_fixes, true, "KK/Video",
                     "Above 30 FPS, fix the game systems that assume 30 steps a second (docs/high-frame-rate.md); "
                     "no effect at 30 FPS");
@@ -107,9 +108,9 @@ REXCVAR_DEFINE_STRING(kk_hdr_levels, "auto", "KK/Video",
                       "content brightness) or manual (present_hdr_peak, present_hdr_paper_white)")
     .allowed({"auto", "manual"});
 REXCVAR_DEFINE_BOOL(kk_ps2_cutscenes, false, "KK/Gameplay",
-                    "Play player-owned PS2 between-mission movies during story progression");
+                    "Play player owned PS2 between mission movies during story progression");
 REXCVAR_DEFINE_STRING(kk_ps2_movie_folder, "", "KK/Gameplay",
-                      "Folder containing player-owned BK_xxxx.mp4 movies (empty disables playback)");
+                      "Folder containing player owned BK_xxxx.mp4 movies (empty disables playback)");
 REXCVAR_DEFINE_INT32(kk_deadzone, 5, "KK/Controls", "Extra stick deadzone in percent (0-50)");
 REXCVAR_DEFINE_INT32(kk_camera_sensitivity, 150, "KK/Controls", "Camera (right stick) sensitivity in percent");
 REXCVAR_DEFINE_BOOL(kk_camera_modern, true, "KK/Controls",
@@ -117,10 +118,10 @@ REXCVAR_DEFINE_BOOL(kk_camera_modern, true, "KK/Controls",
 REXCVAR_DEFINE_BOOL(kk_achievement_toasts, true, "KK/Achievements", "Show achievement notifications");
 REXCVAR_DEFINE_BOOL(kk_achievement_sound, true, "KK/Achievements", "Play the achievement sound");
 REXCVAR_DEFINE_STRING(kk_achievement_style, "xbox360", "KK/Achievements",
-                      "Achievement pop-up style: xbox360 or steam")
+                      "Achievement popup style: xbox360 or steam")
     .allowed({"xbox360", "steam"});
 REXCVAR_DEFINE_STRING(kk_achievement_sound_file, "Xbox_360.wav", "KK/Achievements",
-                      "Achievement sound from the sounds folder (empty, or a file that isn't there = built-in chime)");
+                      "Achievement sound from the sounds folder (empty, or a file that isn't there = built in chime)");
 REXCVAR_DEFINE_INT32(kk_achievement_volume, 80, "KK/Achievements", "Achievement sound volume in percent");
 REXCVAR_DEFINE_BOOL(kk_vibration, true, "KK/Controls", "Controller vibration");
 REXCVAR_DEFINE_BOOL(kk_camera_shake, true, "KK/Gameplay", "Camera shake (footsteps, explosions, blows)");
@@ -133,7 +134,7 @@ REXCVAR_DEFINE_BOOL(kk_invert_rs_y, false, "KK/Controls", "Invert right stick ve
 REXCVAR_DEFINE_BOOL(kk_invert_ls_x, false, "KK/Controls", "Invert left stick horizontal");
 REXCVAR_DEFINE_BOOL(kk_invert_ls_y, false, "KK/Controls", "Invert left stick vertical");
 REXCVAR_DEFINE_STRING(kk_original_look_keep, "", "KK/Debug",
-                      "Settings (comma-separated cvar names) the Original look leaves as given, e.g. "
+                      "Settings (comma separated cvar names) the Original look leaves as given, e.g. "
                       "ao_mode,ao_strength,kk_frame_rate (testing)");
 // Task 295: default 1 (owner, 19 Oct; REPORT-295).
 REXCVAR_DEFINE_INT32(kk_cpu_priority, 1, "KK/Performance",
@@ -147,7 +148,7 @@ REXCVAR_DEFINE_BOOL(kk_cheats, false, "KK/Cheats", "Switch on the cheats chosen 
 #define KK_CHEAT_CVAR(id, label) REXCVAR_DEFINE_BOOL(kk_cheat_##id, false, "KK/Cheats", label)
 KK_CHEAT_CVAR(bonus, "All bonus content (KKmuseum)");
 KK_CHEAT_CVAR(healing, "Fast healing for Jack (8wonder)");
-KK_CHEAT_CVAR(one_hit, "One-hit kills with bullets (GrosBras)");
+KK_CHEAT_CVAR(one_hit, "One hit kills with bullets (GrosBras)");
 KK_CHEAT_CVAR(ammo, "999 bullets (KK 999 mun)");
 KK_CHEAT_CVAR(spears, "Unlimited spears (lance 1nf)");
 KK_CHEAT_CVAR(revolver, "Revolver (KKtigun)");
@@ -158,7 +159,7 @@ KK_CHEAT_CVAR(sniper, "Sniper rifle (KKsn1per)");
 REXCVAR_DEFINE_BOOL(kk_motion_blur, false, "KK/Graphics", "The game's motion blur effect");
 REXCVAR_DEFINE_BOOL(kk_fog, true, "KK/Graphics", "The game's distance fog (the haze over far scenery)");
 REXCVAR_DEFINE_BOOL(kk_big_blur, false, "KK/Graphics",
-                    "The game's full-screen blur in some levels (Necropolis, Brontosaurus), sized for 720p");
+                    "The game's full screen blur in some levels (Necropolis, Brontosaurus), sized for 720p");
 REXCVAR_DEFINE_BOOL(kk_original_look, false, "KK/Graphics",
                     "Play with the Xbox 360's own settings (launcher: Graphics > Look)");
 // Compatibility input only: old values are normalized before graphics setup.
@@ -176,7 +177,7 @@ REXCVAR_DEFINE_STRING(kk_graphics_preset, "", "KK/Graphics",
 REXCVAR_DEFINE_INT32(kk_fov, 69, "KK/Gameplay",
                      "Field of view in degrees for Jack's camera (69 = original); other cameras widen to match");
 REXCVAR_DEFINE_STRING(kk_aspect, "16:9", "KK/Video",
-                      "Experimental (the built-in Ultrawide mod): the picture's shape, 16:9 (the game's own: nothing "
+                      "Experimental (the built in Ultrawide mod): the picture's shape, 16:9 (the game's own: nothing "
                       "changes), 21:9, 32:9 or auto (the chosen resolution's shape, 16:9 to 32:9); wider shows more "
                       "on the sides");
 REXCVAR_DEFINE_BOOL(kk_skip_intros, true, "KK/Gameplay",
@@ -193,10 +194,10 @@ REXCVAR_DEFINE_STRING(kk_pad_prompts, "auto", "KK/Controls",
 // Button remapping: kk_map_<physical> = <game button> (or "none").
 #define KK_MAP_CVAR(id, def, label) \
   REXCVAR_DEFINE_STRING(kk_map_##id, def, "KK/Controls/Remap", label " sends")
-KK_MAP_CVAR(dpad_up, "dpad_up", "D-pad up");
-KK_MAP_CVAR(dpad_down, "dpad_down", "D-pad down");
-KK_MAP_CVAR(dpad_left, "dpad_left", "D-pad left");
-KK_MAP_CVAR(dpad_right, "dpad_right", "D-pad right");
+KK_MAP_CVAR(dpad_up, "dpad_up", "D pad up");
+KK_MAP_CVAR(dpad_down, "dpad_down", "D pad down");
+KK_MAP_CVAR(dpad_left, "dpad_left", "D pad left");
+KK_MAP_CVAR(dpad_right, "dpad_right", "D pad right");
 KK_MAP_CVAR(start, "start", "Start");
 KK_MAP_CVAR(back, "back", "Back");
 KK_MAP_CVAR(ls, "ls", "Left stick click");
@@ -222,10 +223,10 @@ const GpuInfo& Gpu() {
 namespace {
 
 constexpr std::array<PadInfo, kPadCount> kPads = {{
-    {"dpad_up", "D-pad Up", 0x0001},
-    {"dpad_down", "D-pad Down", 0x0002},
-    {"dpad_left", "D-pad Left", 0x0004},
-    {"dpad_right", "D-pad Right", 0x0008},
+    {"dpad_up", "D pad Up", 0x0001},
+    {"dpad_down", "D pad Down", 0x0002},
+    {"dpad_left", "D pad Left", 0x0004},
+    {"dpad_right", "D pad Right", 0x0008},
     {"start", "Start", 0x0010},
     {"back", "Back", 0x0020},
     {"ls", "Left Stick Click", 0x0040},
@@ -899,17 +900,25 @@ void ApplyFixedSettings() {
   // mouse-to-right-stick part is kept at its lowest, where it never gets past
   // the camera's deadzone (kk_mouse_sensitivity is the setting now).
   rex::cvar::SetFlagByName("mnk_sensitivity", "0.010000");
-  // A beta follows the beta channel unless a channel was chosen: one unzipped by hand, rather than
-  // switched to with Change version, would otherwise look for stable versions only and never be
-  // offered the next beta (Beta 1 copies installed by hand). Set, not made the default, so the
-  // settings file keeps it.
-  if (std::string_view(KK_VERSION).find("-beta") != std::string_view::npos)
-    for (const auto& e : rex::cvar::GetRegistry())
-      if (e.name == "kk_update_channel" && e.source == rex::cvar::Source::kDefault) {
-        rex::cvar::SetFlagByName("kk_update_channel", "beta");
-        REXLOG_INFO("KK: a beta with no update channel chosen: on the beta channel");
-        break;
-      }
+  // The update channel comes from the build (update_channel.h). A beta build follows the beta
+  // channel unless a channel was chosen: one unzipped by hand, rather than switched to with Change
+  // version, would otherwise look for stable versions only and never be offered the next beta (Beta 1
+  // copies installed by hand); set, not made the default, so the settings file keeps it. A stable
+  // build is always on stable: a "beta" left by a beta install goes back to the default, so a stable
+  // release never moves anyone to the beta channel.
+  {
+    const bool chosen = rex::cvar::GetFlagSource("kk_update_channel") != rex::cvar::Source::kDefault;
+    const std::string saved = chosen ? rex::cvar::GetFlagByName("kk_update_channel") : std::string();
+    const std::string channel = ChannelAtStart(kBuildChannel, saved);
+    if (IsStableBuild(kBuildChannel)) {
+      if (!saved.empty() && saved != channel)
+        REXLOG_INFO("KK: a stable build: update channel {} from the settings file goes back to stable", saved);
+      if (chosen) rex::cvar::ResetToDefault("kk_update_channel");  // the default is stable; not saved
+    } else if (channel != saved) {
+      rex::cvar::SetFlagByName("kk_update_channel", channel);
+      REXLOG_INFO("KK: a beta with no update channel chosen: on the beta channel");
+    }
+  }
   // Supersampling is no longer offered (Beta 2: Display > Resolution picks the size the game is
   // shown at): a settings file that chose it gets Native.
   if (rex::cvar::GetFlagByName("kk_render_quality") == "supersample")

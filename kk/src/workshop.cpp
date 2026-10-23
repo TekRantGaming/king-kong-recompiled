@@ -920,7 +920,7 @@ struct Workshop::Impl {
         rc.state_bg = ui::WithAlpha(color::kBase, 0.82f);
         rc.state_fg = color::kTextDim;
       }
-      if (m.builtin) rc.corner = T("Built-in"), rc.corner_bg = ui::WithAlpha(color::kAccent, 0.92f);
+      if (m.builtin) rc.corner = T("Built in"), rc.corner_bg = ui::WithAlpha(color::kAccent, 0.92f);
       else if (m.conflict) rc.corner = T("Conflict"), rc.corner_bg = ui::WithAlpha(color::kWarn, 0.92f);
       std::string d = m.description.substr(0, m.description.find('\n'));
       rc.hint = rc.state + (d.empty() ? std::string() : "   " KK_WS_DOT "   " + d);

@@ -325,6 +325,7 @@ void Input::UpdateGamepads(double now) {
 void Input::Update() {
   pressed_ = {};
   pad_presses_ = 0;
+  key_presses_ = 0;
   injected_ = false;
   held_ = {};
   const double now = ImGui::GetTime();
@@ -368,6 +369,29 @@ void Input::Update() {
       key_pressed_at_[size_t(k.action)] = now;
       device_ = Device::kKeyboard;
     }
+    // Task 358: the keyboard's new presses for the Home code (key_presses): every keyboard key but the
+    // modifiers (the gamepad and mouse entries come after the keyboard's in ImGuiKey). A key that stands for a
+    // launcher action a controller is holding (Steam's desktop layout typing it) is skipped.
+    if (!ctrl_or_alt)
+      for (int k = ImGuiKey_NamedKey_BEGIN; k < ImGuiKey_GamepadStart; ++k) {
+        const ImGuiKey key = ImGuiKey(k);
+        if ((key >= ImGuiKey_LeftCtrl && key <= ImGuiKey_RightSuper) || !ImGui::IsKeyPressed(key, false)) continue;
+        Action same = key == ImGuiKey_Tab ? Action::kNextTab : Action::kCount;
+        for (const Key& known : kKeys)
+          if (known.key == key) same = known.action;
+        if (same != Action::kCount && from_pad(same)) continue;
+        switch (key) {
+          case ImGuiKey_UpArrow: key_presses_ |= kPadUp; break;
+          case ImGuiKey_DownArrow: key_presses_ |= kPadDown; break;
+          case ImGuiKey_LeftArrow: key_presses_ |= kPadLeft; break;
+          case ImGuiKey_RightArrow: key_presses_ |= kPadRight; break;
+          case ImGuiKey_B: key_presses_ |= kPadB; break;
+          case ImGuiKey_A: key_presses_ |= kPadA; break;
+          case ImGuiKey_Enter:
+          case ImGuiKey_KeypadEnter: key_presses_ |= kPadStart; break;
+          default: key_presses_ |= kKeyOther; break;
+        }
+      }
     const Action tab = io.KeyShift ? Action::kPrevTab : Action::kNextTab;
     if (!ctrl_or_alt && ImGui::IsKeyPressed(ImGuiKey_Tab, true) && !from_pad(tab)) {
       pressed_[size_t(tab)] = true;

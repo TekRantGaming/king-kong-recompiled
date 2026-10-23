@@ -209,7 +209,7 @@ std::string Hardware() {
     factory->Release();
   } else out << "  unavailable\n";
 #else
-  out << "OS: non-Windows; hardware inventory unavailable\n";
+  out << "OS: non Windows; hardware inventory unavailable\n";
 #endif
   return out.str();
 }

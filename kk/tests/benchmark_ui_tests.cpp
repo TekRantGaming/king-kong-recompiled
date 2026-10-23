@@ -70,11 +70,11 @@ void StartPageNavigation() {
     d.Frame(); d.Frame();
     Check(d.modal.focus == 0, "focus starts on Standard run");
     d.Press(kRight);
-    Check(d.modal.focus == 1, "D-pad right moves the focus");
+    Check(d.modal.focus == 1, "D pad right moves the focus");
     d.Press(kDown);  // no reader: down moves too
-    Check(d.modal.focus == 2, "D-pad down moves the focus");
+    Check(d.modal.focus == 2, "D pad down moves the focus");
     d.Press(kUp); d.Press(kLeft);
-    Check(d.modal.focus == 0, "D-pad up/left move back");
+    Check(d.modal.focus == 0, "D pad up/left move back");
     d.Press(kRight);
     d.Press(kA);
     Check(chosen == 1 && !d.modal.open, "A chooses the focused button");

@@ -26,6 +26,8 @@ class Process {
   bool Running();
   // Its window is up (shown on screen).
   bool WindowShown();
+  // Task 358: one of its windows is the foreground window (the keyboard is the game's then).
+  bool InFront();
   // Its window in front (the launcher is in front then, so Windows allows it).
   void ToFront();
   // Asks its windows to close (the game quits as when its window is closed).
@@ -41,5 +43,10 @@ class Process {
 // Brings a window (an HWND) in front of everything else, minimised or not, even while another program (the
 // game) has the foreground. True when it is the foreground window afterwards.
 bool ForceToFront(void* hwnd);
+
+// Task 358: Enter is held down now, read from the system: while the game is in front the launcher's window gets no
+// keys, so Enter as Start (the pause panel) is read this way, and only while the game is in front (Process::InFront).
+// Windows only (false elsewhere).
+bool EnterKeyDown();
 
 }  // namespace kk::egg

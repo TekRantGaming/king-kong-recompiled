@@ -130,6 +130,18 @@ std::vector<HWND> GameWindows(HANDLE job, DWORD main_pid, bool owned = false) {
 
 bool Process::WindowShown() { return Running() && !GameWindows(s_->job, s_->pid).empty(); }
 
+bool Process::InFront() {
+  if (!Running()) return false;
+  const HWND fg = GetForegroundWindow();
+  DWORD pid = 0;
+  if (!fg || !GetWindowThreadProcessId(fg, &pid)) return false;
+  for (DWORD p : GameProcesses(s_->job, s_->pid))
+    if (p == pid) return true;
+  return false;
+}
+
+bool EnterKeyDown() { return (GetAsyncKeyState(VK_RETURN) & 0x8000) != 0; }
+
 void Process::ToFront() {
   if (!Running()) return;
   const std::vector<HWND> windows = GameWindows(s_->job, s_->pid);
@@ -198,6 +210,8 @@ Process::~Process() = default;
 bool Process::Start(const std::filesystem::path&) { return false; }
 bool Process::Running() { return false; }
 bool Process::WindowShown() { return false; }
+bool Process::InFront() { return false; }
+bool EnterKeyDown() { return false; }
 void Process::ToFront() {}
 void Process::RequestClose() {}
 void Process::Terminate() {}

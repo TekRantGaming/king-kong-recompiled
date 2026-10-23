@@ -17,7 +17,7 @@ struct CheatInfo {
 // owner 18 Oct 2026), so its flag is always on (cheats.cpp, UnlockBonusContent). kk_cheat_bonus is ignored.
 constexpr std::array<CheatInfo, 8> kCheats = {{
     {"healing", "Fast healing (Jack)", "8wonder"},
-    {"one_hit", "One-hit kills (bullets)", "GrosBras"},
+    {"one_hit", "One hit kills (bullets)", "GrosBras"},
     {"ammo", "999 bullets", "KK 999 mun"},
     {"spears", "Unlimited spears", "lance 1nf"},
     {"revolver", "Revolver", "KKtigun"},

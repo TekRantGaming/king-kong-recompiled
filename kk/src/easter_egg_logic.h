@@ -58,4 +58,26 @@ inline bool Swallowed(Pad p, Step step) {
   return step != Step::kNone && (p == Pad::kB || p == Pad::kA || p == Pad::kStart);
 }
 
+// Task 358 (owner, 23 Oct): the code from the keyboard too, mixed with the controller in one code (one Code
+// takes both): the arrow keys are the directions, the B and A keys are B and A, Enter is Start; any other key
+// is a wrong press.
+enum class Key { kUp, kDown, kLeft, kRight, kB, kA, kEnter, kOther };
+
+inline Pad FromKey(Key k) {
+  switch (k) {
+    case Key::kUp: return Pad::kUp;
+    case Key::kDown: return Pad::kDown;
+    case Key::kLeft: return Pad::kLeft;
+    case Key::kRight: return Pad::kRight;
+    case Key::kB: return Pad::kB;
+    case Key::kA: return Pad::kA;
+    case Key::kEnter: return Pad::kStart;
+    default: return Pad::kOther;
+  }
+}
+
+// Whether the launcher leaves this key alone: Enter (the launcher's Accept) while it is the code's next press,
+// as Start is. The arrow keys always move as usual; the B and A keys stand for nothing in the launcher.
+inline bool KeySwallowed(Key k, Step step) { return step != Step::kNone && k == Key::kEnter; }
+
 }  // namespace kk::egg

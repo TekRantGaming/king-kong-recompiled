@@ -40,7 +40,7 @@ namespace {
 // and its name, with its icon. kk_discord_app_id (testing) overrides it.
 constexpr const char* kApplicationId = "1559247649289412788";  // "King Kong Recompiled"
 constexpr const char* kWebsite = "https://kong.tekrantgaming.com";
-constexpr const char* kDiscordInvite = "https://discord.gg/PET2xU5FJq";  // as the launcher's (permanent)
+constexpr const char* kDiscordInvite = "https://discord.gg/8eakYSvBZS";  // as the launcher's
 constexpr auto kPoll = std::chrono::seconds(5);   // pings answered, the status kept current
 constexpr auto kRetry = std::chrono::seconds(20);  // Discord not running
 
