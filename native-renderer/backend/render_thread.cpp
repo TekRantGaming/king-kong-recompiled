@@ -5,6 +5,7 @@
 #include <string>
 
 #include "backend/cpu_profile.h"
+#include "backend/device_capture.h"
 #include "backend/gpu_loss.h"
 #include "backend/guest_device.h"
 #include "backend/thread_scheduling.h"
@@ -69,11 +70,12 @@ const uint8_t* SnapshotGuestMemory::Virtual(uint32_t address) const {
 
 void SnapshotGuestMemory::SetCurrent(const GuestSnapshot* snapshot) { t_snapshot = snapshot; }
 
-ThreadedSink::ThreadedSink(DrawSink& inner, const GuestMemory& memory)
+ThreadedSink::ThreadedSink(DrawSink& inner, const GuestMemory& memory, std::function<void()> on_idle)
     : inner_(inner),
       memory_(memory),
       sent_device_(dev::kSize, 0),
       device_image_(dev::kSize, 0),
+      on_idle_(std::move(on_idle)),
       thread_([this] { Run(); }) {}
 
 ThreadedSink::~ThreadedSink() {
@@ -120,16 +122,18 @@ bool ThreadedSink::CaptureDevice(Command& c, uint32_t device) {
   // Comparing only the parts the renderer reads: the library's dirty bits and counters change at
   // every call elsewhere.
   const bool all = sent_device_address_ != device;
-  const std::vector<DeviceBlock>& blocks = DeviceBlocks();
-  uint8_t* sent = sent_device_.data();
-  for (size_t i = 0; i < blocks.size(); ++i) {
-    const DeviceBlock& b = blocks[i];
-    const bool same = !all && (b.size == 64 ? SameBytes64(live + b.offset, sent + b.offset)
-                                            : std::memcmp(live + b.offset, sent + b.offset, b.size) == 0);
-    if (same) continue;
-    std::memcpy(sent + b.offset, live + b.offset, b.size);
-    c.device_blocks.push_back(uint16_t(i));
-    c.device_bytes.insert(c.device_bytes.end(), live + b.offset, live + b.offset + b.size);
+  if (!TryCaptureDeviceAvx2(live, sent_device_.data(), all, c.device_blocks, c.device_bytes)) {
+    const std::vector<DeviceBlock>& blocks = DeviceBlocks();
+    uint8_t* sent = sent_device_.data();
+    for (size_t i = 0; i < blocks.size(); ++i) {
+      const DeviceBlock& b = blocks[i];
+      const bool same = !all && (b.size == 64 ? SameBytes64(live + b.offset, sent + b.offset)
+                                              : std::memcmp(live + b.offset, sent + b.offset, b.size) == 0);
+      if (same) continue;
+      std::memcpy(sent + b.offset, live + b.offset, b.size);
+      c.device_blocks.push_back(uint16_t(i));
+      c.device_bytes.insert(c.device_bytes.end(), live + b.offset, live + b.offset + b.size);
+    }
   }
   sent_device_address_ = device;
   c.device_address = device;
@@ -286,8 +290,15 @@ void ThreadedSink::Run() {
     if (queue_.empty() && !stop_) {
       // Nothing queued: the render thread waits for the game (the summary's idle time).
       const auto idle = std::chrono::steady_clock::now();
-      work_cv_.wait(lock, [&] { return stop_ || !queue_.empty(); });
+      if (on_idle_) work_cv_.wait_for(lock, std::chrono::milliseconds(10), [&] { return stop_ || !queue_.empty(); });
+      else work_cv_.wait(lock, [&] { return stop_ || !queue_.empty(); });
       stats_.render_idle_us += Micros(idle);
+      if (queue_.empty() && !stop_ && on_idle_) {
+        lock.unlock();
+        on_idle_();
+        lock.lock();
+        continue;
+      }
     }
     if (queue_.empty()) return;  // stopping, and nothing left
     std::unique_ptr<Command> c = std::move(queue_.front());

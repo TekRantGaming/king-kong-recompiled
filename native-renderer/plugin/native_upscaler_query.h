@@ -7,8 +7,10 @@
 //
 // The first nr_upscaler_query starts the question on a thread of the plugin's and returns at once
 // (NR_UPSCALER_QUERY_RUNNING); later calls return the state, and once it is NR_UPSCALER_QUERY_DONE
-// fill `out`. The answer comes from QueryUpscalerSupport (backend/upscaler.h) on a Direct3D 12 device
-// of the query's own on the same graphics card: each SDK says whether it runs on this card and driver.
+// fill `out`. The answer comes from a short-lived process of its own (task 353: king_kong.exe
+// --kk_upscaler_check, plugin/upscaler_check_child.cpp) with a Direct3D 12 device on the same graphics card:
+// each SDK says whether it runs on this card and driver. An SDK whose check crashed or hung that process (15 s
+// limit), and those not reached, are not offered, and the game's process never loads them (SetUpscalerGate).
 // The SDK answer is cached; each call filters it for the current native_backend so changing the API
 // in the launcher immediately changes the choices. With Vulkan, FSR 4 is left out (AMD's FSR 4 has
 // no Vulkan); DLSS and XeSS run on

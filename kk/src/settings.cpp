@@ -21,6 +21,7 @@
 #include "hardware_recommendation.h"
 #include "graphics_presets.h"
 #include "ultrawide_logic.h"
+#include "update_channel.h"
 
 // Standalone settings test targets also compile this file without the game definition.
 #ifndef KK_COOP_DEFAULT_ON
@@ -38,7 +39,7 @@ REXCVAR_DEFINE_STRING(kk_start, "", "KK",
                       "new:<slot>[:<name>], chapter:<slot>:<entry>[:<name>]); never saved");
 REXCVAR_DEFINE_BOOL(kk_check_updates, true, "KK", "Check GitHub for a newer version when the launcher opens");
 REXCVAR_DEFINE_BOOL(kk_online_count, true, "KK",
-                    "Show how many people are playing, with an anonymous check-in every 5 minutes (see online.h)");
+                    "Show how many people are playing, with an anonymous check in every 5 minutes (see online.h)");
 REXCVAR_DEFINE_BOOL(kk_online_asked, false, "KK", "Internal: the launcher has asked about the online player count");
 REXCVAR_DEFINE_BOOL(kk_discord_status, true, "KK",
                     "Show on your Discord profile that you're playing, while the Discord app runs on this PC "
@@ -60,18 +61,25 @@ REXCVAR_DEFINE_BOOL(kk_notify_downloads, true, "KK",
 REXCVAR_DEFINE_INT32(kk_settings_version, 0, "KK",
                      "Internal: which defaults the settings file was written with (see MigrateSettings)");
 REXCVAR_DEFINE_STRING(kk_hardware_tier, "", "KK",
-                      "Internal: first-launch hardware recommendation; empty for existing installs")
+                      "Internal: first launch hardware recommendation; empty for existing installs")
     .allowed({"", "low", "mid", "high"});
 REXCVAR_DEFINE_STRING(kk_shaders_prepared, "", "KK",
                       "Internal: the port version whose one shader preparation has run; shaders are prepared again "
                       "only after an update or when the player asks (owner rule, Beta 8)");
 REXCVAR_DEFINE_STRING(kk_last_version, "", "KK",
                       "Last port version the launcher has shown (it shows What's new once after an update)");
+REXCVAR_DEFINE_STRING(kk_launch_utc, "", "KK",
+                      "Internal: the Remastered update's launch time from the website (the Home countdown)");
+REXCVAR_DEFINE_STRING(kk_launch_title, "", "KK",
+                      "Internal: the Home countdown's title from the website (empty: the built in one)");
 REXCVAR_DEFINE_STRING(kk_setup_version, "", "KK",
-                      "Internal: the port version whose setup steps this player has had (the first-time setup, or "
-                      "the one-time New in this update screen); 'waiting' while that screen is still to be shown");
+                      "Internal: the port version whose setup steps this player has had (the first time setup, or "
+                      "the one time New in this update screen); 'waiting' while that screen is still to be shown");
+REXCVAR_DEFINE_INT32(kk_setup_again, 0, "KK",
+                     "Internal: the round of 'everyone through the first time setup again' this player has had "
+                     "(1: Beta 14, DirectX 12 and the new defaults; setup_again.h)");
 REXCVAR_DEFINE_INT32(kk_frame_rate, 30, "KK/Video",
-                     "Frame-rate cap: 30, 60, 90, 120, 144, 165, 240, or 0 for unlimited");
+                     "Frame rate cap: 30, 60, 90, 120, 144, 165, 240, or 0 for unlimited");
 REXCVAR_DEFINE_BOOL(kk_hfr_fixes, true, "KK/Video",
                     "Above 30 FPS, fix the game systems that assume 30 steps a second (docs/high-frame-rate.md); "
                     "no effect at 30 FPS");
@@ -100,17 +108,20 @@ REXCVAR_DEFINE_DOUBLE(kk_gamma, 1.0, "KK/Video",
 // HDR follows Windows (owner, 17/18 Oct; hdr_logic.h): kk_hdr and kk_hdr_levels decide the presenter's
 // present_hdr, present_hdr_peak and present_hdr_paper_white (hdr_display.cpp sets them at every start and while
 // the settings pages are open). Those three are then not saved, except Peak and Paper white in Manual.
-REXCVAR_DEFINE_STRING(kk_hdr, "auto", "KK/Video",
-                      "HDR output: auto (follow Windows HDR for the game's screen), on or off")
+// Beta 14 (owner, 21 Oct): HDR is off by default and experimental: it is no longer in Settings, the setup or the
+// pause menu, only in the F8 graphics panel ("HDR (experimental)", debug_overlay.cpp). Settings version 5 turns it
+// off once for every existing player (MigrateSettings).
+REXCVAR_DEFINE_STRING(kk_hdr, "off", "KK/Video",
+                      "HDR output (experimental, F8 panel): off, on, or auto (follow Windows HDR for the game's screen)")
     .allowed({"auto", "on", "off"});
 REXCVAR_DEFINE_STRING(kk_hdr_levels, "auto", "KK/Video",
                       "HDR peak brightness and paper white: auto (from Windows HDR Calibration and Windows' SDR "
                       "content brightness) or manual (present_hdr_peak, present_hdr_paper_white)")
     .allowed({"auto", "manual"});
 REXCVAR_DEFINE_BOOL(kk_ps2_cutscenes, false, "KK/Gameplay",
-                    "Play player-owned PS2 between-mission movies during story progression");
+                    "Play player owned PS2 between mission movies during story progression");
 REXCVAR_DEFINE_STRING(kk_ps2_movie_folder, "", "KK/Gameplay",
-                      "Folder containing player-owned BK_xxxx.mp4 movies (empty disables playback)");
+                      "Folder containing player owned BK_xxxx.mp4 movies (empty disables playback)");
 REXCVAR_DEFINE_INT32(kk_deadzone, 5, "KK/Controls", "Extra stick deadzone in percent (0-50)");
 REXCVAR_DEFINE_INT32(kk_camera_sensitivity, 150, "KK/Controls", "Camera (right stick) sensitivity in percent");
 REXCVAR_DEFINE_BOOL(kk_camera_modern, true, "KK/Controls",
@@ -118,10 +129,10 @@ REXCVAR_DEFINE_BOOL(kk_camera_modern, true, "KK/Controls",
 REXCVAR_DEFINE_BOOL(kk_achievement_toasts, true, "KK/Achievements", "Show achievement notifications");
 REXCVAR_DEFINE_BOOL(kk_achievement_sound, true, "KK/Achievements", "Play the achievement sound");
 REXCVAR_DEFINE_STRING(kk_achievement_style, "xbox360", "KK/Achievements",
-                      "Achievement pop-up style: xbox360 or steam")
+                      "Achievement popup style: xbox360 or steam")
     .allowed({"xbox360", "steam"});
 REXCVAR_DEFINE_STRING(kk_achievement_sound_file, "Xbox_360.wav", "KK/Achievements",
-                      "Achievement sound from the sounds folder (empty, or a file that isn't there = built-in chime)");
+                      "Achievement sound from the sounds folder (empty, or a file that isn't there = built in chime)");
 REXCVAR_DEFINE_INT32(kk_achievement_volume, 80, "KK/Achievements", "Achievement sound volume in percent");
 REXCVAR_DEFINE_BOOL(kk_vibration, true, "KK/Controls", "Controller vibration");
 REXCVAR_DEFINE_BOOL(kk_camera_shake, true, "KK/Gameplay", "Camera shake (footsteps, explosions, blows)");
@@ -134,7 +145,7 @@ REXCVAR_DEFINE_BOOL(kk_invert_rs_y, false, "KK/Controls", "Invert right stick ve
 REXCVAR_DEFINE_BOOL(kk_invert_ls_x, false, "KK/Controls", "Invert left stick horizontal");
 REXCVAR_DEFINE_BOOL(kk_invert_ls_y, false, "KK/Controls", "Invert left stick vertical");
 REXCVAR_DEFINE_STRING(kk_original_look_keep, "", "KK/Debug",
-                      "Settings (comma-separated cvar names) the Original look leaves as given, e.g. "
+                      "Settings (comma separated cvar names) the Original look leaves as given, e.g. "
                       "ao_mode,ao_strength,kk_frame_rate (testing)");
 // Task 295: default 1 (owner, 19 Oct; REPORT-295).
 REXCVAR_DEFINE_INT32(kk_cpu_priority, 1, "KK/Performance",
@@ -148,7 +159,7 @@ REXCVAR_DEFINE_BOOL(kk_cheats, false, "KK/Cheats", "Switch on the cheats chosen 
 #define KK_CHEAT_CVAR(id, label) REXCVAR_DEFINE_BOOL(kk_cheat_##id, false, "KK/Cheats", label)
 KK_CHEAT_CVAR(bonus, "All bonus content (KKmuseum)");
 KK_CHEAT_CVAR(healing, "Fast healing for Jack (8wonder)");
-KK_CHEAT_CVAR(one_hit, "One-hit kills with bullets (GrosBras)");
+KK_CHEAT_CVAR(one_hit, "One hit kills with bullets (GrosBras)");
 KK_CHEAT_CVAR(ammo, "999 bullets (KK 999 mun)");
 KK_CHEAT_CVAR(spears, "Unlimited spears (lance 1nf)");
 KK_CHEAT_CVAR(revolver, "Revolver (KKtigun)");
@@ -159,7 +170,7 @@ KK_CHEAT_CVAR(sniper, "Sniper rifle (KKsn1per)");
 REXCVAR_DEFINE_BOOL(kk_motion_blur, false, "KK/Graphics", "The game's motion blur effect");
 REXCVAR_DEFINE_BOOL(kk_fog, true, "KK/Graphics", "The game's distance fog (the haze over far scenery)");
 REXCVAR_DEFINE_BOOL(kk_big_blur, false, "KK/Graphics",
-                    "The game's full-screen blur in some levels (Necropolis, Brontosaurus), sized for 720p");
+                    "The game's full screen blur in some levels (Necropolis, Brontosaurus), sized for 720p");
 REXCVAR_DEFINE_BOOL(kk_original_look, false, "KK/Graphics",
                     "Play with the Xbox 360's own settings (launcher: Graphics > Look)");
 // Compatibility input only: old values are normalized before graphics setup.
@@ -167,6 +178,9 @@ REXCVAR_DEFINE_STRING(kk_renderer, "native", "KK/Graphics", "Legacy renderer sel
 REXCVAR_DEFINE_STRING(kk_fullscreen_mode, "desktop", "KK/Video",
                       "Fullscreen resolution: desktop (a borderless window at the desktop's resolution) or a display "
                       "mode WIDTHxHEIGHT@HZ, e.g. 2560x1440@144 (exclusive fullscreen at that mode)");
+REXCVAR_DEFINE_STRING(kk_picture_size, "", "KK/Video",
+                      "An ultrawide picture size WIDTHxHEIGHT (e.g. 2560x1080) the game draws whatever the window or "
+                      "screen, fitted into it with black bars; empty: the window's or screen's own size");
 REXCVAR_DEFINE_STRING(kk_upscalers_offered, "", "KK/Graphics",
                       "Internal: the temporal upscalers this PC runs, as the launcher last found ('none' or "
                       "'dlss,fsr3,xess'); empty until it has asked (the default upscaler follows it)");
@@ -174,12 +188,11 @@ REXCVAR_DEFINE_STRING(kk_modern_settings, "", "KK/Graphics",
                       "Internal: the Modern settings to put back when leaving the Original look");
 REXCVAR_DEFINE_STRING(kk_graphics_preset, "", "KK/Graphics",
                       "Internal: the chosen preset label when presets have identical values");
-REXCVAR_DEFINE_INT32(kk_fov, 69, "KK/Gameplay",
-                     "Field of view in degrees for Jack's camera (69 = original); other cameras widen to match");
-REXCVAR_DEFINE_STRING(kk_aspect, "16:9", "KK/Video",
-                      "Experimental (the built-in Ultrawide mod): the picture's shape, 16:9 (the game's own: nothing "
-                      "changes), 21:9, 32:9 or auto (the chosen resolution's shape, 16:9 to 32:9); wider shows more "
-                      "on the sides");
+// Task 365 (owner, 23 Oct): 80 is the default (recommended); a settings file from before keeps its value
+// (MigrateSettings, version 6: a file without kk_fov had the old default, 69).
+REXCVAR_DEFINE_INT32(kk_fov, 80, "KK/Gameplay",
+                     "Field of view in degrees for Jack's camera (80 = recommended, 69 = original); other cameras "
+                     "widen to match");
 REXCVAR_DEFINE_BOOL(kk_skip_intros, true, "KK/Gameplay",
                     "Skip the Ubisoft, Universal and WingNut logo movies when the game starts");
 REXCVAR_DEFINE_BOOL(kk_toggle_aim, false, "KK/Controls",
@@ -194,10 +207,10 @@ REXCVAR_DEFINE_STRING(kk_pad_prompts, "auto", "KK/Controls",
 // Button remapping: kk_map_<physical> = <game button> (or "none").
 #define KK_MAP_CVAR(id, def, label) \
   REXCVAR_DEFINE_STRING(kk_map_##id, def, "KK/Controls/Remap", label " sends")
-KK_MAP_CVAR(dpad_up, "dpad_up", "D-pad up");
-KK_MAP_CVAR(dpad_down, "dpad_down", "D-pad down");
-KK_MAP_CVAR(dpad_left, "dpad_left", "D-pad left");
-KK_MAP_CVAR(dpad_right, "dpad_right", "D-pad right");
+KK_MAP_CVAR(dpad_up, "dpad_up", "D pad up");
+KK_MAP_CVAR(dpad_down, "dpad_down", "D pad down");
+KK_MAP_CVAR(dpad_left, "dpad_left", "D pad left");
+KK_MAP_CVAR(dpad_right, "dpad_right", "D pad right");
 KK_MAP_CVAR(start, "start", "Start");
 KK_MAP_CVAR(back, "back", "Back");
 KK_MAP_CVAR(ls, "ls", "Left stick click");
@@ -223,10 +236,10 @@ const GpuInfo& Gpu() {
 namespace {
 
 constexpr std::array<PadInfo, kPadCount> kPads = {{
-    {"dpad_up", "D-pad Up", 0x0001},
-    {"dpad_down", "D-pad Down", 0x0002},
-    {"dpad_left", "D-pad Left", 0x0004},
-    {"dpad_right", "D-pad Right", 0x0008},
+    {"dpad_up", "D pad Up", 0x0001},
+    {"dpad_down", "D pad Down", 0x0002},
+    {"dpad_left", "D pad Left", 0x0004},
+    {"dpad_right", "D pad Right", 0x0008},
     {"start", "Start", 0x0010},
     {"back", "Back", 0x0020},
     {"ls", "Left Stick Click", 0x0040},
@@ -332,7 +345,7 @@ std::pair<int, int> UpscalerOutputSize(int screen_w, int screen_h, int cap_w, in
     w = std::min(w, cap_w);
     h = std::min(h, cap_h);
   }
-  if (ultrawide::WidthFactor(aspect) != 1.0) {  // the Ultrawide mod: the largest picture of its shape
+  if (ultrawide::WidthFactor(aspect) != 1.0) {  // ultrawide: the largest picture of its shape
     const auto [uw, uh] = ultrawide::LargestInside(w, h, aspect);
     return {std::clamp(uw, 320, 10240), std::clamp(uh, 180, 5760)};
   }
@@ -356,7 +369,7 @@ std::pair<int, int> UpscalerOutputFor(int screen_w, int screen_h, double aspect)
 
 std::pair<int, int> NoUpscalerFrameSize(int screen_w, int screen_h, int draw_w, int draw_h, double aspect) {
   const auto [pw, ph] = UpscalerOutputSize(screen_w, screen_h, 0, 0, aspect);
-  // The Ultrawide mod: the draw resolution scale's height, as wide as the picture's shape.
+  // Ultrawide: the draw resolution scale's height, as wide as the picture's shape.
   if (const double a = ultrawide::WidthFactor(aspect); a != 1.0) draw_w = int(std::lround(draw_w * a));
   return {std::clamp(std::min(draw_w, pw), 320, 10240), std::clamp(std::min(draw_h, ph), 180, 5760)};
 }
@@ -365,6 +378,24 @@ namespace {
 std::atomic<float> ultrawide_factor{1.0f};
 }
 float UltrawideFactor() { return ultrawide_factor.load(std::memory_order_relaxed); }
+
+bool UltrawideSwitchedOff() {
+  static const bool off = [] {
+    const char* e = std::getenv("KK_ULTRAWIDE");
+    return e && *e == '0';
+  }();
+  return off;
+}
+
+std::optional<std::pair<int, int>> ChosenPictureSize() {
+  if (UltrawideSwitchedOff()) return std::nullopt;
+  return ultrawide::ParsePictureSize(REXCVAR_GET(kk_picture_size));
+}
+
+double PictureAspectFor(int output_width, int output_height) {
+  return UltrawideSwitchedOff() ? ultrawide::kGameAspect
+                                : ultrawide::AspectFor("auto", output_width, output_height);
+}
 
 namespace {
 // Without a temporal upscaler: the frame the native renderer draws (native_frame_size, read by its
@@ -384,18 +415,21 @@ void ApplyRenderPreset(int output_width, int output_height) {
   // itself; the renderer takes that size from native_upscaler_output (set as a default: not saved).
   std::string quality = REXCVAR_GET(kk_render_quality);
   const bool temporal = TemporalUpscalerOn();
-  // The Ultrawide mod (kk_aspect, ultrawide_logic.h): a wider picture, the presenter shown its shape
-  // (native_display_aspect, not saved) and the game's 3D views widened (ultrawide.cpp). 16:9: nothing changes.
-  const double aspect = ultrawide::AspectFor(REXCVAR_GET(kk_aspect), output_width, output_height);
+  // Ultrawide (task 360, Beta 17: built in, always on; ultrawide_logic.h): a screen or window wider than 16:9
+  // gets a picture of its own shape (up to 32:9), the presenter is shown that shape (native_display_aspect, not
+  // saved) and the game's 3D views are widened (ultrawide.cpp). 16:9 or narrower: nothing changes.
+  const double aspect = PictureAspectFor(output_width, output_height);
   const double factor = ultrawide::WidthFactor(aspect);
   ultrawide_factor.store(float(factor), std::memory_order_relaxed);
   if (factor != 1.0) {
     const auto [pw, ph] = UpscalerOutputSize(output_width, output_height, 0, 0, aspect);
     SetCvarDefault("native_display_aspect", std::to_string(pw) + "x" + std::to_string(ph));
-    REXLOG_INFO("KK: ultrawide (experimental): {} at {}x{} -> a {}x{} picture, views {:.3f} times wider",
-                REXCVAR_GET(kk_aspect), output_width, output_height, pw, ph, factor);
+    REXLOG_INFO("KK: ultrawide: {}x{} -> a {}x{} picture, views {:.3f} times wider{}", output_width, output_height, pw,
+                ph, factor,
+                ChosenPictureSize() ? " (chosen picture size, fitted into the window or screen)" : "");
   } else {
     SetCvarDefault("native_display_aspect", "");
+    if (UltrawideSwitchedOff()) REXLOG_INFO("KK: ultrawide: off (KK_ULTRAWIDE=0)");
   }
   if (temporal) {
     const auto [ow, oh] = UpscalerOutputFor(output_width, output_height, aspect);
@@ -474,11 +508,6 @@ void ClearModSettings() {
   std::lock_guard lock(temporary_mutex);
   mod_overlay.clear();
 }
-namespace {
-std::atomic<bool> g_audio_mute_held{false};  // task 293 (SetAudioMuteHeld)
-}  // namespace
-void SetAudioMuteHeld(bool held) { g_audio_mute_held = held; }
-
 bool SaveSettings(const std::filesystem::path& path, bool include_temporary) {
   std::lock_guard lock(temporary_mutex);
   // Like rex::cvar::SaveConfig, but values that came from the command line or
@@ -494,8 +523,6 @@ bool SaveSettings(const std::filesystem::path& path, bool include_temporary) {
     if (source == rex::cvar::Source::kCommandLine || source == rex::cvar::Source::kEnvironment) continue;
     // Set by the port at every start (ApplyRuntimeOverrides).
     if (e.name == "video_mode_width" || e.name == "video_mode_height") continue;
-    // Task 293: held on by a PS2 cutscene the level loads under, never the player's choice.
-    if (e.name == "audio_mute" && g_audio_mute_held.load()) continue;
     // Set from kk_hdr and kk_hdr_levels at every start (hdr_display.cpp, HDR follows Windows).
     if (e.name == "present_hdr" || ((e.name == "present_hdr_peak" || e.name == "present_hdr_paper_white") &&
                                     REXCVAR_GET(kk_hdr_levels) != "manual"))
@@ -546,13 +573,13 @@ void MigrateFrameCounter() {
 }
 
 void MigrateHdrSettings() {
-  // Beta 10: HDR follows Windows. A settings file from before has present_hdr only when the player turned HDR on
-  // (On stays On), and Peak brightness or Paper white only when the player moved them (Manual keeps them). Newer
-  // files never save present_hdr, and save the two levels only in Manual, so this changes nothing after that.
+  // Beta 10: HDR follows Windows. A settings file from before has Peak brightness or Paper white only when the
+  // player moved them (Manual keeps them). Newer files never save present_hdr, and save the two levels only in
+  // Manual, so this changes nothing after that. (Beta 10 to 13 also kept an old file's HDR On as On; since Beta 14
+  // HDR is off for everyone until it is switched on in the F8 panel, settings version 5, so an old present_hdr
+  // no longer turns it on.)
   using rex::cvar::GetFlagSource, rex::cvar::Source;
   const bool hdr_saved = GetFlagSource("present_hdr") == Source::kConfig;
-  if (hdr_saved && GetFlagSource("kk_hdr") == Source::kDefault && rex::cvar::GetFlagByName("present_hdr") == "true")
-    rex::cvar::SetFlagByName("kk_hdr", "on");
   bool levels_saved = false;
   for (const char* name : {"present_hdr_peak", "present_hdr_paper_white"})
     levels_saved |= GetFlagSource(name) == Source::kConfig;
@@ -563,6 +590,62 @@ void MigrateHdrSettings() {
                 rex::cvar::GetFlagByName("kk_hdr"), rex::cvar::GetFlagByName("kk_hdr_levels"));
 }
 
+namespace {
+// The settings file's version (kk_settings_version; MigrateSettings lists what each one changed).
+constexpr int32_t kSettingsVersion = 6;
+// 4: DirectX 12 is the default graphics API on Windows (task 350a, MigrateGraphicsApi).
+constexpr int32_t kD3d12DefaultVersion = 4;
+// 5: HDR is off for everyone (owner, 21 Oct; experimental, F8 panel only).
+constexpr int32_t kHdrOffVersion = 5;
+// 6: the field of view's default is 80 (task 365, owner 23 Oct); a file from before without kk_fov had 69 and keeps it.
+constexpr int32_t kFovDefaultVersion = 6;
+}  // namespace
+
+bool IntelIntegratedGraphics() {
+#if defined(_WIN32)
+  static const bool intel = IntelIntegratedNotArc(Gpu());  // (first called before the log exists: no log here)
+  return intel;
+#else
+  return false;
+#endif
+}
+
+bool Fsr4AllowedOnThisGpu() {
+  const GpuInfo& gpu = Gpu();
+  // An unknown card (no DXGI answer) is left to the renderer, which checks the device's own vendor.
+  if (!gpu.vendor_id && gpu.vendor == GpuVendor::kUnknown) return true;
+  return gpu.vendor_id ? gpu.vendor_id == 0x1002 : gpu.vendor == GpuVendor::kAmd;
+}
+
+bool MigrateGraphicsApi() {
+#if defined(_WIN32)
+  if (IntelIntegratedGraphics())
+    REXLOG_INFO("KK: Intel integrated graphics ({}, {} MiB): Vulkan is the default graphics API, and the setup "
+                "skips the DirectX 12 shader pack unless DirectX 12 is chosen (native_backend now {})", Gpu().name,
+                Gpu().dedicated_memory >> 20, rex::cvar::GetFlagByName("native_backend"));
+  // Read before MigrateSettings brings the version up to date (that runs once the paths are final, after the
+  // renderer has started). A new install (no file: version 0) is already on the default, DirectX 12.
+  if (REXCVAR_GET(kk_settings_version) >= kD3d12DefaultVersion) return false;
+  const rex::cvar::FlagEntry* flag = nullptr;
+  for (const auto& e : rex::cvar::GetRegistry())
+    if (e.name == "native_backend") flag = &e;
+  if (!flag) return false;  // no native renderer
+  // A command-line or environment value is this run's own (tests, --native_backend=vulkan): left alone.
+  if (flag->source == rex::cvar::Source::kCommandLine || flag->source == rex::cvar::Source::kEnvironment)
+    return false;
+  const std::string before = flag->getter();
+  if (before == "d3d12") return false;
+  // Task 368: Intel integrated graphics stay on Vulkan (its default there; "auto" runs Vulkan too).
+  if (IntelIntegratedGraphics()) return false;
+  rex::cvar::SetFlagByName("native_backend", "d3d12");
+  REXLOG_INFO("KK: settings from before Beta 14: graphics API {} -> d3d12 (DirectX 12 is the default on Windows; "
+              "Vulkan stays the fallback when DirectX 12 cannot start)", before);
+  return true;
+#else
+  return false;
+#endif
+}
+
 void MigrateSettings(const std::filesystem::path& config_path) {
   // 2: FSR 1 at Quality became the default (it was no upscaler at Native).
   // A settings file only keeps values that differ from the defaults, so an
@@ -570,7 +653,12 @@ void MigrateSettings(const std::filesystem::path& config_path) {
   // an update doesn't change a player's picture (or turn their High, Ultra or
   // Steam Deck preset into Custom). New installs get the new defaults.
   // 3: GI follows the preset. Saved GI values, including an explicit Off, win.
-  constexpr int32_t kVersion = 3;
+  // 4: DirectX 12 on Windows (MigrateGraphicsApi, before the renderer started; nothing more to do here).
+  // 5: HDR off once for every existing player, also one who had it On or on Follow Windows (owner, 21 Oct): it is
+  //    experimental now, in the F8 panel only. A command-line or environment value is that run's own and stays.
+  // 6: Field of view 80 is the default (task 365); an older file that did not save kk_fov had the old default, 69,
+  //    and keeps it (owner: an existing player's value does not change).
+  constexpr int32_t kVersion = kSettingsVersion;
   if (REXCVAR_GET(kk_settings_version) >= kVersion) return;
   std::error_code ec;
   if (std::filesystem::exists(config_path, ec)) {
@@ -597,42 +685,61 @@ void MigrateSettings(const std::filesystem::path& config_path) {
       REXLOG_INFO("KK: settings from an older version: kept its upscaler settings ({}, {})",
                   rex::cvar::GetFlagByName("present_effect"), rex::cvar::GetFlagByName("kk_render_quality"));
     }
-    auto preset_gi = [](auto get) {
-      for (const auto& p : kGraphicsPresets)
-        if (MatchesGraphicsPresetSettings(p, get, false)) return p.gi;
-      // Custom settings retain their hardware recommendation, or Medium when
-      // they predate hardware detection. Do not change any other graphics value.
-      for (const auto& t : kHardwareTiers)
-        if (REXCVAR_GET(kk_hardware_tier) == t.id) return t.gi;
-      return "medium";
-    };
-    if (REXCVAR_GET(kk_original_look)) {
-      // The live Off belongs to Original. Migrate the saved Modern settings
-      // instead, so switching back restores GI with the rest of that look.
-      std::string modern = REXCVAR_GET(kk_modern_settings);
-      if (!modern.empty()) {
-        std::map<std::string, std::string> values;
-        for (size_t pos = 0, end; pos < modern.size(); pos = end + 1) {
-          end = modern.find(';', pos);
-          if (end == std::string::npos) end = modern.size();
-          const auto eq = modern.find('=', pos);
-          if (eq < end) values[modern.substr(pos, eq - pos)] = modern.substr(eq + 1, end - eq - 1);
+    if (REXCVAR_GET(kk_settings_version) < 3) {
+      auto preset_gi = [](auto get) {
+        for (const auto& p : kGraphicsPresets)
+          if (MatchesGraphicsPresetSettings(p, get, false)) return p.gi;
+        // Custom settings retain their hardware recommendation, or Medium when
+        // they predate hardware detection. Do not change any other graphics value.
+        for (const auto& t : kHardwareTiers)
+          if (REXCVAR_GET(kk_hardware_tier) == t.id) return t.gi;
+        return "medium";
+      };
+      if (REXCVAR_GET(kk_original_look)) {
+        // The live Off belongs to Original. Migrate the saved Modern settings
+        // instead, so switching back restores GI with the rest of that look.
+        std::string modern = REXCVAR_GET(kk_modern_settings);
+        if (!modern.empty()) {
+          std::map<std::string, std::string> values;
+          for (size_t pos = 0, end; pos < modern.size(); pos = end + 1) {
+            end = modern.find(';', pos);
+            if (end == std::string::npos) end = modern.size();
+            const auto eq = modern.find('=', pos);
+            if (eq < end) values[modern.substr(pos, eq - pos)] = modern.substr(eq + 1, end - eq - 1);
+          }
+          if (!values.count("native_gi")) {
+            values["native_gi"] = preset_gi([&](const char* name) {
+              const auto it = values.find(name);
+              return it != values.end() ? it->second : rex::cvar::GetFlagByName(name);
+            });
+            modern.clear();
+            for (const auto& [name, value] : values) modern += name + "=" + value + ";";
+            rex::cvar::SetFlagByName("kk_modern_settings", modern);
+          }
         }
-        if (!values.count("native_gi")) {
-          values["native_gi"] = preset_gi([&](const char* name) {
-            const auto it = values.find(name);
-            return it != values.end() ? it->second : rex::cvar::GetFlagByName(name);
-          });
-          modern.clear();
-          for (const auto& [name, value] : values) modern += name + "=" + value + ";";
-          rex::cvar::SetFlagByName("kk_modern_settings", modern);
-        }
+      } else if (rex::cvar::GetFlagSource("native_gi") == rex::cvar::Source::kDefault) {
+        rex::cvar::SetFlagByName("native_gi", preset_gi(rex::cvar::GetFlagByName));
       }
-    } else if (rex::cvar::GetFlagSource("native_gi") == rex::cvar::Source::kDefault) {
-      rex::cvar::SetFlagByName("native_gi", preset_gi(rex::cvar::GetFlagByName));
+      REXLOG_INFO("KK: GI settings migrated to version 3: {} (Original look {})",
+                  rex::cvar::GetFlagByName("native_gi"), REXCVAR_GET(kk_original_look));
     }
-    REXLOG_INFO("KK: GI settings migrated to version 3: {} (Original look {})",
-                rex::cvar::GetFlagByName("native_gi"), REXCVAR_GET(kk_original_look));
+    if (REXCVAR_GET(kk_settings_version) < kHdrOffVersion) {
+      const auto source = rex::cvar::GetFlagSource("kk_hdr");
+      const std::string before = REXCVAR_GET(kk_hdr);
+      if (source != rex::cvar::Source::kCommandLine && source != rex::cvar::Source::kEnvironment && before != "off") {
+        rex::cvar::SetFlagByName("kk_hdr", "off");
+        REXLOG_INFO("KK: settings from before version 5: HDR {} -> off (experimental now, in the F8 panel only)",
+                    before);
+      }
+    }
+    if (REXCVAR_GET(kk_settings_version) < kFovDefaultVersion &&
+        rex::cvar::GetFlagSource("kk_fov") == rex::cvar::Source::kDefault) {
+      rex::cvar::SetFlagByName("kk_fov", "69");
+      REXLOG_INFO("KK: settings from before version 6: field of view kept at 69 (the old default; new installs start "
+                  "at 80)");
+    }
+    REXLOG_INFO("KK: settings file brought up to version {} (was {}); graphics API {}", kVersion,
+                REXCVAR_GET(kk_settings_version), rex::cvar::GetFlagByName("native_backend"));
     rex::cvar::SetFlagByName("kk_settings_version", std::to_string(kVersion));
     SaveSettings(config_path);
     return;
@@ -710,23 +817,26 @@ void ApplyUpscalerDefaults() {
   SetCvarDefault("present_effect", temporal != "off" ? "bilinear" : SpatialDefault());
 }
 
-void ApplyHardwareRecommendation(bool detect, int width, int height) {
+void ApplyHardwareRecommendation(bool detect, int width, int height, bool first_setup) {
 #if !defined(_WIN32)
-  // Only GI follows detection on Linux in this update; the existing resolution
-  // and upscaler recommendation behaviour is unchanged.
-  if (detect) {
-    const auto& tier = kHardwareTiers[HardwareTierIndex(DetectHardware())];
-    rex::cvar::SetFlagByName("kk_hardware_tier", tier.id);
+  // Existing Linux installs retain their GI-only recommendation behaviour.
+  // GPU details are unavailable here; only a positively identified Steam Deck
+  // receives the lighter render defaults at first setup.
+  if (!first_setup || !DetectHardware().steam_deck) {
+    if (detect) {
+      const auto& tier = kHardwareTiers[HardwareTierIndex(DetectHardware())];
+      rex::cvar::SetFlagByName("kk_hardware_tier", tier.id);
+    }
+    if (!REXCVAR_GET(kk_original_look)) {
+      for (const auto& tier : kHardwareTiers)
+        if (REXCVAR_GET(kk_hardware_tier) == tier.id) SetCvarDefault("native_gi", tier.gi);
+    }
+    return;
   }
-  if (!REXCVAR_GET(kk_original_look)) {
-    for (const auto& tier : kHardwareTiers)
-      if (REXCVAR_GET(kk_hardware_tier) == tier.id) SetCvarDefault("native_gi", tier.gi);
-  }
-  return;
 #endif
   if (detect) {
     const HardwareProfile h = DetectHardware();
-    const auto& tier = kHardwareTiers[HardwareTierIndex(h)];
+    const auto& tier = kHardwareTiers[first_setup ? FirstSetupHardwareTierIndex(h) : HardwareTierIndex(h)];
     rex::cvar::SetFlagByName("kk_hardware_tier", tier.id);
     REXLOG_INFO("KK: hardware recommendation {}: GPU {} ({} MiB), {} physical cores, {} MiB RAM, display {}x{}@{}",
                 tier.id, h.gpu.name, h.gpu.dedicated_memory >> 20, h.physical_cores,
@@ -765,7 +875,24 @@ void InitializeHardwareRecommendation(const std::filesystem::path& config_path, 
   std::error_code ec;
   const bool exists = std::filesystem::exists(config_path, ec);
   // A pre-existing config, including one predating this feature, never gets a new tier automatically.
-  ApplyHardwareRecommendation(!exists && !ec && REXCVAR_GET(kk_hardware_tier).empty(), width, height);
+  const bool first_setup = !exists && !ec && REXCVAR_GET(kk_hardware_tier).empty();
+  if (first_setup) ApplyFirstSetupHardwareRecommendation(width, height);
+  else ApplyHardwareRecommendation(false, width, height, false);
+}
+
+void ApplyFirstSetupHardwareRecommendation(int width, int height) {
+  ApplyHardwareRecommendation(true, width, height, true);
+#if !defined(_WIN32)
+  // Later Linux launches keep the old GI-only policy. Persist a new Deck's
+  // initial render choices so they survive that path; overrides still win.
+  if (DetectHardware().steam_deck) {
+    for (const char* name : {"kk_render_quality", "native_upscaler_quality", "native_gi_distance",
+                             "native_ao_quality", "native_ao_samples", "ao_mode"}) {
+      if (rex::cvar::GetFlagSource(name) == rex::cvar::Source::kDefault)
+        rex::cvar::SetFlagByName(name, rex::cvar::GetFlagByName(name));
+    }
+  }
+#endif
 }
 
 void SetOfferedUpscalers(const std::string& offered) {
@@ -819,6 +946,13 @@ void ApplyFixedSettings() {
                 BestTemporalUpscaler(), SpatialDefault(),
                 REXCVAR_GET(kk_upscalers_offered).empty() ? "not asked yet" : REXCVAR_GET(kk_upscalers_offered));
   }
+  // Task 368 (owner, 23 Oct): FSR 4 only on AMD cards. A saved FSR 4 on another card goes back to the default
+  // upscaler for this card and tier (ApplyUpscalerDefaults), and is saved that way.
+  if (Flag("native_upscaler") && rex::cvar::GetFlagByName("native_upscaler") == "fsr4" && !Fsr4AllowedOnThisGpu()) {
+    rex::cvar::ResetToDefault("native_upscaler");
+    REXLOG_INFO("KK: FSR 4 was chosen but runs on AMD graphics cards only: upscaler back to the default ({})",
+                rex::cvar::GetFlagByName("native_upscaler"));
+  }
   // FXAA Extreme is no longer offered: a settings file that chose it gets FXAA.
   if (rex::cvar::GetFlagByName("swap_post_effect") == "fxaa_extreme")
     rex::cvar::SetFlagByName("swap_post_effect", "fxaa");
@@ -832,17 +966,25 @@ void ApplyFixedSettings() {
   // mouse-to-right-stick part is kept at its lowest, where it never gets past
   // the camera's deadzone (kk_mouse_sensitivity is the setting now).
   rex::cvar::SetFlagByName("mnk_sensitivity", "0.010000");
-  // A beta follows the beta channel unless a channel was chosen: one unzipped by hand, rather than
-  // switched to with Change version, would otherwise look for stable versions only and never be
-  // offered the next beta (Beta 1 copies installed by hand). Set, not made the default, so the
-  // settings file keeps it.
-  if (std::string_view(KK_VERSION).find("-beta") != std::string_view::npos)
-    for (const auto& e : rex::cvar::GetRegistry())
-      if (e.name == "kk_update_channel" && e.source == rex::cvar::Source::kDefault) {
-        rex::cvar::SetFlagByName("kk_update_channel", "beta");
-        REXLOG_INFO("KK: a beta with no update channel chosen: on the beta channel");
-        break;
-      }
+  // The update channel comes from the build (update_channel.h). A beta build follows the beta
+  // channel unless a channel was chosen: one unzipped by hand, rather than switched to with Change
+  // version, would otherwise look for stable versions only and never be offered the next beta (Beta 1
+  // copies installed by hand); set, not made the default, so the settings file keeps it. A stable
+  // build is always on stable: a "beta" left by a beta install goes back to the default, so a stable
+  // release never moves anyone to the beta channel.
+  {
+    const bool chosen = rex::cvar::GetFlagSource("kk_update_channel") != rex::cvar::Source::kDefault;
+    const std::string saved = chosen ? rex::cvar::GetFlagByName("kk_update_channel") : std::string();
+    const std::string channel = ChannelAtStart(kBuildChannel, saved);
+    if (IsStableBuild(kBuildChannel)) {
+      if (!saved.empty() && saved != channel)
+        REXLOG_INFO("KK: a stable build: update channel {} from the settings file goes back to stable", saved);
+      if (chosen) rex::cvar::ResetToDefault("kk_update_channel");  // the default is stable; not saved
+    } else if (channel != saved) {
+      rex::cvar::SetFlagByName("kk_update_channel", channel);
+      REXLOG_INFO("KK: a beta with no update channel chosen: on the beta channel");
+    }
+  }
   // Supersampling is no longer offered (Beta 2: Display > Resolution picks the size the game is
   // shown at): a settings file that chose it gets Native.
   if (rex::cvar::GetFlagByName("kk_render_quality") == "supersample")
@@ -871,6 +1013,16 @@ void SetCvarDefault(std::string_view name, std::string_view value) {
 void ApplyPortDefaults() {
   // Windowed by default so the launcher isn't a giant fullscreen dialog.
   SetCvarDefault("fullscreen", "false");
+#if defined(_WIN32)
+  // Task 350a (owner, 21 Oct): DirectX 12 is the graphics API on Windows; startup recovery switches to Vulkan when
+  // DirectX 12 cannot start (startup_recovery.cpp). Linux keeps the renderer's own "auto" (Vulkan). A settings file
+  // from before Beta 14 is moved over once (MigrateGraphicsApi).
+  // Task 368 (owner, 23 Oct): Intel integrated graphics (not Arc) default to Vulkan and the setup skips the DirectX
+  // 12 shader pack (IntelIntegratedNotArc). A saved choice of DirectX 12 stays (config wins over a default).
+  const bool intel = IntelIntegratedGraphics();
+  SetCvarDefault("native_backend", intel ? "vulkan" : "d3d12");
+  if (intel) SetCvarDefault("native_setup_skip_d3d12", "true");
+#endif
   SetCvarDefault("mnk_sensitivity", "0.010000");  // as the setting writes it, so it is not saved
   // Keyboard & mouse: laid out like other first-person games. The mouse turns
   // the camera (mouse_look.cpp; the runtime's own mouse-to-stick part is off,

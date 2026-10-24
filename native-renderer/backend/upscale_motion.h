@@ -20,6 +20,7 @@
 #include <array>
 #include <cstdint>
 #include <unordered_map>
+#include <utility>
 #include <vector>
 
 namespace nr {
@@ -80,7 +81,24 @@ class MotionHistory {
     mutable size_t next_guess = 0;
     // How many leading floats all its draws share (bit for bit; SIZE_MAX: not measured yet).
     mutable size_t common_prefix = SIZE_MAX;
+    mutable size_t common_suffix = 1024;  // first float of the shared suffix
+    mutable bool prefix_finite = false, suffix_finite = false;
+    // Task 351, the closest-constants search of a key with many draws: its draws sorted by one
+    // float that tells them apart (a translation, typically), so a search measures only the draws
+    // whose difference in that float alone is not already more than the best sum so far.
+    // Several such floats (task 351 follow-up: when the camera swings, the floats it moves leave
+    // every draw near; a world position still tells them apart): each search takes the one whose
+    // window is narrowest, and the others drop draws whose difference in them alone is too big.
+    static constexpr int kIndexes = 4;
+    mutable bool index_built = false;
+    mutable int index_count = 0;  // 0: no usable float (the plain search)
+    mutable int index_column[kIndexes] = {};
+    mutable std::vector<std::pair<float, uint32_t>> index[kIndexes];  // (that float, draw), ascending
+    mutable std::vector<std::pair<double, uint32_t>> ranked;  // the search's scratch (sum before the shared floats, draw)
   };
+  // Draws per key from which the closest-constants search uses the index.
+  static constexpr size_t kIndexedSearchMin = 24;
+  static void BuildIndex(const Slot& s);
   using Map = std::unordered_map<uint64_t, std::vector<Slot>>;  // hash -> keys with that hash
   static const Slot* Find(const Map& m, const MotionDrawKey& key);
   static Slot& FindOrAdd(Map& m, const MotionDrawKey& key);
@@ -115,6 +133,16 @@ class CameraReprojectionVote {
   std::vector<Candidate> candidates_;
   uint32_t offers_ = 0;
   uint64_t frame_ = UINT64_MAX;
+  // The last offer (task 351): draws in a row with the same rows (a field of grass under one camera,
+  // a thousand draws a frame in Ann's chapter) give the same matrix and join the same candidate, so
+  // the inversion and the search are done once. The same arithmetic on the same bits: identical sums.
+  struct LastOffer {
+    bool valid = false;
+    float current[16], previous[16];
+    bool counted = false;     // invertible: it was counted as an offer
+    int candidate = -1;       // the candidate it joined or started (-1: none, the list was full)
+    Mat4 r;
+  } last_;
 };
 
 // How the guest's viewport puts clip space on the scene target, with the host's render scale and the

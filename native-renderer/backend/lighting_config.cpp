@@ -7,7 +7,7 @@ namespace nr {
 float ShadowScaleForQuality(ShadowQuality q) {
   switch (q) {
     case ShadowQuality::kHigh: return 2.0f;
-    case ShadowQuality::kUltra: return 2.0f;
+    case ShadowQuality::kUltra: return 1.5f;  // Beta 14, task 348a (2 before): PCSS blurs the finer texels away
     default: return 0.0f;
   }
 }

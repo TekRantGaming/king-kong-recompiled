@@ -123,6 +123,7 @@ void MotionHistory::Recycle(Map& m, bool drop_unused) {
       s.constants.clear();
       s.next_guess = 0;
       s.common_prefix = SIZE_MAX;
+      s.index_built = false;
     }
     it = list.empty() ? m.erase(it) : std::next(it);
   }
@@ -182,10 +183,30 @@ const VsConstants* MotionHistory::FindPrevious(const MotionDrawKey& key, uint32_
       p = k;
     }
     s->common_prefix = p;
+    s->prefix_finite = std::all_of(c0.begin(), c0.begin() + p, [](float f) { return std::isfinite(f); });
+    size_t tail = c0.size() - p;  // the suffix need not overlap the already measured prefix
+    for (size_t i = 1; i < n && tail; ++i) {
+      const VsConstants& c = s->constants[i];
+      size_t k = 0;
+      while (k < tail && std::memcmp(&c[c.size() - 1 - k], &c0[c0.size() - 1 - k], sizeof(float)) == 0) ++k;
+      tail = k;
+    }
+    s->common_suffix = c0.size() - tail;
+    s->suffix_finite = std::all_of(c0.end() - tail, c0.end(), [](float f) { return std::isfinite(f); });
   }
   const size_t prefix = s->common_prefix;
   double prefix_d = 0;
-  for (size_t k = 0; k < prefix; ++k) prefix_d += std::fabs(double(s->constants[0][k]) - double(current[k]));
+  const VsConstants& c0 = s->constants[0];
+  if (!s->prefix_finite || std::memcmp(c0.data(), current.data(), prefix * sizeof(float)) != 0)
+    for (size_t k = 0; k < prefix; ++k) prefix_d += std::fabs(double(c0[k]) - double(current[k]));
+  // Equal finite floats contribute +0. Skipping only a shared, byte-identical suffix leaves all
+  // nonzero additions in exactly their old order, including ties and early exits. NaN/Inf must
+  // take the original path: even identical infinities subtract to NaN.
+  size_t end = current.size();
+  const size_t suffix = s->common_suffix;
+  if (s->suffix_finite && std::memcmp(c0.data() + suffix, current.data() + suffix,
+                                    (end - suffix) * sizeof(float)) == 0)
+    end = std::max(prefix, suffix);
   const auto distance = [&](size_t i, double limit, bool equal_continues) {
     const auto go = [&](double d) { return d < limit || (equal_continues && d == limit); };
     // The shared part: the same partial sums for every draw, so stopping inside it is stopping
@@ -197,7 +218,7 @@ const VsConstants* MotionHistory::FindPrevious(const MotionDrawKey& key, uint32_
     }
     double d = prefix_d;
     const VsConstants& c = s->constants[i];
-    for (size_t k = prefix; k < c.size() && go(d); ++k) d += std::fabs(double(c[k]) - double(current[k]));
+    for (size_t k = prefix; k < end && go(d); ++k) d += std::fabs(double(c[k]) - double(current[k]));
     return d;
   };
   size_t best = first;
@@ -206,10 +227,161 @@ const VsConstants* MotionHistory::FindPrevious(const MotionDrawKey& key, uint32_
     const double d = distance(guess, best_d, guess < best);
     if (d < best_d || (guess < best && d == best_d)) best_d = d, best = guess;
   }
-  if (std::isnan(best_d)) {
-    // Not a number in its constants (never seen): measure in order, as before.
+  // Not a number in the first measured draw's sum: the others are measured in order from no best,
+  // as before (a draw whose sum is not a number never wins; the first of the smallest; draw 0 when
+  // none has a sum).
+  const bool nan_first = std::isnan(best_d);
+  if (nan_first) {
     best = 0;
     best_d = INFINITY;
+    // A NaN in this draw's own constants makes every sum NaN (every float is measured, or shared
+    // and folded in): none wins, draw 0, without measuring them all (task 351: half the plants of
+    // Ann's chapter carry one).
+    bool current_nan = false;
+    for (const float f : current) current_nan |= f != f;
+    if (current_nan) return &s->constants[0];
+  }
+  if (n >= kIndexedSearchMin && !nan_first && end == current.size() &&
+      std::max(prefix, suffix) + 64 <= end) {
+    // Task 351 follow-up: this draw differs from last frame's in the floats they all share (the
+    // camera swung, a light changed): every draw's sum then runs on through those shared floats,
+    // a thousand terms each, and a frame took 100-230 ms. A draw's sum is its sum up to the shared
+    // part, S, carried through the same additions (F, the same for every draw, and never
+    // decreasing in S), so the draws are ranked by S and F is worked out for the few with the
+    // smallest S: the same smallest sum and first of equals.
+    const size_t tail_from = std::max(prefix, suffix);
+    const VsConstants& shared = s->constants[0];
+    const auto carry = [&](double x) {  // F
+      for (size_t k = tail_from; k < end; ++k) x += std::fabs(double(shared[k]) - double(current[k]));
+      return x;
+    };
+    const auto head = [&](size_t i, double limit) {  // S, or a value at or past `limit` when cut short
+      double d = prefix_d;
+      const VsConstants& c = s->constants[i];
+      for (size_t k = prefix; k < tail_from && d < limit; ++k) d += std::fabs(double(c[k]) - double(current[k]));
+      return d;
+    };
+    const double s_best = head(best, INFINITY);
+    // A sum just above the best draw's whose F is already more than the best sum: every draw whose S
+    // reaches it cannot win.
+    const double probe = s_best + std::max(std::fabs(s_best) * 1e-9, 1e-300);
+    if (std::isfinite(probe) && carry(probe) > best_d) {
+      auto& ranked = s->ranked;
+      ranked.clear();
+      ranked.emplace_back(s_best, uint32_t(best));
+      for (size_t i = 0; i < n; ++i) {
+        if (i == best) continue;
+        const double si = head(i, probe);
+        if (si < probe) ranked.emplace_back(si, uint32_t(i));  // NaN: never wins
+      }
+      std::sort(ranked.begin(), ranked.end());
+      double min_d = INFINITY;
+      size_t winner = best;
+      for (size_t j = 0; j < ranked.size(); ++j) {
+        const double d = carry(ranked[j].first);
+        if (j == 0) {
+          min_d = d;
+          winner = ranked[0].second;
+        } else if (d == min_d) {
+          winner = std::min<size_t>(winner, ranked[j].second);
+        } else {
+          break;  // F never decreases: no later draw ties
+        }
+      }
+      best = winner;
+      s->next_guess = best + 1;
+      return &s->constants[best];
+    }
+  }
+  if (n >= kIndexedSearchMin) {
+    // Task 351: many draws of one key (Ann's chapter: hundreds of plants, each its own world matrix)
+    // made this search measure every draw for every draw, milliseconds a frame whenever culling
+    // changed their number. The answer does not change: a draw's sum is at least its difference in
+    // any one float (the terms are never negative and rounding is monotonic), so a draw whose
+    // difference in the indexed float is more than the best sum cannot win, and one equal to it can
+    // only win when it comes earlier. The draws are measured from the nearest in that float outwards,
+    // each against the best so far, and the winner is the same smallest sum and first of equals.
+    if (!s->index_built) BuildIndex(*s);
+    // The index whose window (the draws within the best sum so far in its float) is narrowest.
+    int pick = -1;
+    size_t pick_right = 0, pick_count = SIZE_MAX;
+    for (int x = 0; x < s->index_count; ++x) {
+      const float cx = current[size_t(s->index_column[x])];
+      if (!std::isfinite(cx)) continue;
+      const auto& ix = s->index[x];
+      const auto bx = [&](size_t j) { return std::fabs(double(ix[j].first) - double(cx)); };
+      const size_t r = size_t(std::lower_bound(ix.begin(), ix.end(), cx,
+                                               [](const std::pair<float, uint32_t>& e, float v) { return e.first < v; }) -
+                              ix.begin());
+      size_t count = ix.size();
+      if (!nan_first) {
+        size_t lo = 0, hi = r;  // first left entry within the window
+        while (lo < hi) { const size_t m = (lo + hi) / 2; if (bx(m) > best_d) lo = m + 1; else hi = m; }
+        size_t lo2 = r, hi2 = ix.size();  // first right entry past it
+        while (lo2 < hi2) { const size_t m = (lo2 + hi2) / 2; if (bx(m) <= best_d) lo2 = m + 1; else hi2 = m; }
+        count = lo2 - lo;
+      }
+      if (count < pick_count) pick = x, pick_right = r, pick_count = count;
+    }
+    // A draw whose difference in one indexed float alone is more than the best sum cannot win.
+    const auto too_far = [&](size_t i) {
+      for (int x = 0; x < s->index_count; ++x) {
+        const size_t k = size_t(s->index_column[x]);
+        if (std::fabs(double(s->constants[i][k]) - double(current[k])) > best_d) return true;
+      }
+      return false;
+    };
+    // When most draws are in even the narrowest window, the in-order search below is cheaper (memory
+    // in order): the same answer.
+    if (pick >= 0 && (nan_first || pick_count * 2 <= s->index[pick].size())) {
+      const auto& idx = s->index[pick];
+      const float cur = current[size_t(s->index_column[pick])];
+      const auto bound = [&](size_t j) { return std::fabs(double(idx[j].first) - double(cur)); };
+      bool has_best = !nan_first;
+      size_t right = pick_right, left = pick_right;  // the left side's next is idx[left - 1]
+      while (left > 0 || right < idx.size()) {
+        const double lb_left = left > 0 ? bound(left - 1) : INFINITY;
+        const double lb_right = right < idx.size() ? bound(right) : INFINITY;
+        const bool take_left = lb_left < lb_right;
+        const double lb = take_left ? lb_left : lb_right;
+        if (!(lb <= best_d)) break;  // both sides are past the best sum (each side's bounds only grow)
+        const size_t i = take_left ? idx[--left].second : idx[right++].second;
+        if (i == first) continue;  // measured in full above (or its sum is not a number)
+        const bool earlier = has_best && i < best;
+        if (lb == best_d && !earlier) continue;  // at best a tie, and a later draw loses ties
+        if (too_far(i)) continue;
+        const double d = distance(i, best_d, earlier);
+        if (d < best_d || (earlier && d == best_d)) {
+          best_d = d;
+          best = i;
+          has_best = true;
+        }
+      }
+      if (!nan_first) s->next_guess = best + 1;
+      return &s->constants[best];
+    }
+    if (!nan_first && s->index_count) {
+      for (size_t i = 0; i < n && best_d > 0; ++i) {
+        if (i == first || too_far(i)) continue;
+        const bool earlier = i < best;
+        const double d = distance(i, best_d, earlier);
+        if (d < best_d || (earlier && d == best_d)) {
+          best_d = d;
+          best = i;
+        }
+      }
+      if (best_d == 0) {
+        for (size_t i = 0; i < best; ++i)
+          if (distance(i, 0, true) == 0) {
+            best = i;
+            break;
+          }
+      }
+      s->next_guess = best + 1;
+      return &s->constants[best];
+    }
+  }
+  if (nan_first) {
     for (size_t i = 0; i < n; ++i)
       if (const double d = distance(i, best_d, false); d < best_d) best_d = d, best = i;
     return &s->constants[best];
@@ -235,6 +407,71 @@ const VsConstants* MotionHistory::FindPrevious(const MotionDrawKey& key, uint32_
   return &s->constants[best];
 }
 
+void MotionHistory::BuildIndex(const Slot& s) {
+  // Which floats: ones every draw has finite, that many draws do not share, spread widest (a few
+  // dozen draws sampled; a float most draws share would leave the search measuring most of them).
+  s.index_built = true;
+  s.index_count = 0;
+  const size_t n = s.constants.size();
+  const size_t lo = std::min(s.common_prefix, s.constants[0].size());
+  const size_t hi = std::max(lo, s.common_suffix);
+  constexpr size_t kSamples = 32;
+  const size_t step = std::max<size_t>(1, n / kSamples);
+  float sample[kSamples];
+  std::pair<double, int> top[Slot::kIndexes];  // (spread, float), widest first
+  int found = 0;
+  for (size_t k = lo; k < hi; ++k) {
+    size_t m = 0;
+    bool finite = true;
+    for (size_t i = 0; i < n && m < kSamples; i += step) {
+      const float v = s.constants[i][k];
+      if (!std::isfinite(v)) {
+        finite = false;
+        break;
+      }
+      sample[m++] = v;
+    }
+    if (!finite || m < 8) continue;
+    std::sort(sample, sample + m);
+    size_t distinct = 1;
+    for (size_t j = 1; j < m; ++j) distinct += sample[j] != sample[j - 1];
+    if (distinct * 4 < m * 3) continue;
+    const double spread = double(sample[m - 1 - m / 10]) - double(sample[m / 10]);
+    if (!(spread > 0)) continue;
+    int at = found < Slot::kIndexes ? found++ : Slot::kIndexes;
+    if (at == Slot::kIndexes) {
+      if (!(spread > top[Slot::kIndexes - 1].first)) continue;
+      at = Slot::kIndexes - 1;
+    }
+    while (at > 0 && top[at - 1].first < spread) {
+      top[at] = top[at - 1];
+      --at;
+    }
+    top[at] = {spread, int(k)};
+  }
+  // A draw with a NaN anywhere has a NaN sum against any draw (every float is measured, or shared
+  // and folded in): it never wins, so it is left out of the indexes.
+  std::vector<uint32_t> usable;
+  usable.reserve(n);
+  for (size_t i = 0; i < n; ++i) {
+    bool nan = false;
+    for (const float f : s.constants[i]) nan |= f != f;
+    if (!nan) usable.push_back(uint32_t(i));
+  }
+  for (int x = 0; x < found; ++x) {
+    const size_t column = size_t(top[x].second);
+    bool finite = true;
+    for (size_t i = 0; i < n && finite; ++i) finite = std::isfinite(s.constants[i][column]);
+    if (!finite) continue;
+    auto& ix = s.index[s.index_count];
+    ix.clear();
+    for (const uint32_t i : usable) ix.emplace_back(s.constants[i][column], i);
+    std::sort(ix.begin(), ix.end(), [](const auto& a, const auto& b) {
+      return a.first < b.first || (a.first == b.first && a.second < b.second);
+    });
+    s.index_column[s.index_count++] = int(column);
+  }
+}
 // ---------------------------------------------------------------- camera vote
 
 void CameraReprojectionVote::BeginFrame(uint64_t frame) {
@@ -242,6 +479,7 @@ void CameraReprojectionVote::BeginFrame(uint64_t frame) {
   frame_ = frame;
   candidates_.clear();
   offers_ = 0;
+  last_.valid = false;
 }
 
 bool CameraReprojectionVote::Close(const Mat4& a, const Mat4& b) {
@@ -254,6 +492,25 @@ bool CameraReprojectionVote::Close(const Mat4& a, const Mat4& b) {
 }
 
 void CameraReprojectionVote::Offer(const float current_rows[16], const float previous_rows[16]) {
+  if (last_.valid && std::memcmp(last_.current, current_rows, sizeof(last_.current)) == 0 &&
+      std::memcmp(last_.previous, previous_rows, sizeof(last_.previous)) == 0) {
+    // The same offer again: what the code below would do with it. The candidates before the one it
+    // joined have not changed (their first member never does) and still do not match; the one it
+    // joined (or started: Close(r, r) holds) still matches first; a full list still has no room.
+    if (!last_.counted) return;
+    ++offers_;
+    if (last_.candidate >= 0) {
+      Candidate& c = candidates_[size_t(last_.candidate)];
+      ++c.votes;
+      for (int i = 0; i < 16; ++i) c.sum[i] += last_.r[i];
+    }
+    return;
+  }
+  last_.valid = true;
+  std::memcpy(last_.current, current_rows, sizeof(last_.current));
+  std::memcpy(last_.previous, previous_rows, sizeof(last_.previous));
+  last_.counted = false;
+  last_.candidate = -1;
   Mat4 cur_inv;
   if (!Mat4Invert(Mat4FromRows(current_rows), cur_inv)) return;
   Mat4 r = Mat4Multiply(Mat4FromRows(previous_rows), cur_inv);
@@ -264,16 +521,23 @@ void CameraReprojectionVote::Offer(const float current_rows[16], const float pre
     for (double& v : r) v *= inv;
   }
   ++offers_;
-  for (Candidate& c : candidates_) {
+  last_.counted = true;
+  last_.r = r;
+  for (size_t k = 0; k < candidates_.size(); ++k) {
+    Candidate& c = candidates_[k];
     if (Close(c.m, r)) {
       ++c.votes;
       // The members' mean: each draw's matrix carries the rounding of its float constants (worst for
       // objects far from the world's origin), which averages out.
       for (int i = 0; i < 16; ++i) c.sum[i] += r[i];
+      last_.candidate = int(k);
       return;
     }
   }
-  if (candidates_.size() < 16) candidates_.push_back({r, r, 1});
+  if (candidates_.size() < 16) {
+    candidates_.push_back({r, r, 1});
+    last_.candidate = int(candidates_.size() - 1);
+  }
 }
 
 bool CameraReprojectionVote::Result(Mat4& reprojection, uint32_t* votes, uint32_t* offers) const {

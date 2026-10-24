@@ -14,6 +14,9 @@ namespace kk::exit_evidence {
 
 // Once per process, after the log is open. `role`: "launcher" or "game".
 void Install(const std::filesystem::path& logs_dir, const char* role);
+// Task 353: the last-words handlers alone (abort, std::terminate, invalid C runtime argument, pure virtual
+// call), before the window and graphics device are made; Install does it too.
+void InstallHandlers();
 // The launcher started the game in this process.
 void SetRole(const char* role);
 // A frame was drawn (launcher or game). Any thread; cheap.

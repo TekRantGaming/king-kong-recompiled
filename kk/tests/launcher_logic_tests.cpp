@@ -17,6 +17,10 @@
 #include "cheats.h"
 #include "startup_recovery_state.h"
 #include "amd_shader_cache.h"
+#include "setup_again.h"
+#include "easter_egg_logic.h"
+#include "update_channel.h"
+#include "setup_progress.h"
 
 #include <bit>
 #include <cstdio>
@@ -28,6 +32,7 @@
 #include <cstdlib>
 #include <fstream>
 #include <iostream>
+#include <algorithm>
 #include <iterator>
 #include <map>
 #include <string>
@@ -119,38 +124,153 @@ void ExtrasChecks() {
         "alternate ending uses its original level, score and completion requirements");
 }
 
+// Task 350b (owner, 21 Oct): every graphics setting follows the preset. The whole table, written out here on its
+// own (not read from graphics_presets.h), so a change to a preset has to change this test too. "-": the preset
+// leaves the setting alone (the AO rows with AO off: they are hidden then).
+struct ExpectedPreset {
+  const char* label;
+  std::map<std::string, std::string> values;
+};
+const std::vector<std::string> kPresetSettingNames = {
+    "kk_render_quality", "swap_post_effect", "native_sharpness", "anisotropic_override", "ao_mode", "ao_strength",
+    "native_ao_samples", "native_ao_quality", "native_ao_normal_smoothing", "native_gi", "native_gi_distance",
+    "native_gi_quality", "native_shadow_quality", "native_water_reflections", "native_volumetrics",
+    "native_effect_buffers", "kk_graphics_preset"};
+const ExpectedPreset kExpectedPresets[] = {
+    {"Low", {{"kk_render_quality", "performance"}, {"swap_post_effect", "fxaa"}, {"native_sharpness", "off"},
+             {"anisotropic_override", "2"}, {"ao_mode", "0"}, {"ao_strength", "-"}, {"native_ao_samples", "-"},
+             {"native_ao_quality", "-"}, {"native_ao_normal_smoothing", "-"}, {"native_gi", "low"},
+             {"native_gi_distance", "near"}, {"native_gi_quality", "auto"}, {"native_shadow_quality", "original"},
+             {"native_water_reflections", "original"}, {"native_volumetrics", "off"},
+             {"native_effect_buffers", "true"}, {"kk_graphics_preset", "Low"}}},
+    {"Medium", {{"kk_render_quality", "quality"}, {"swap_post_effect", "fxaa"}, {"native_sharpness", "off"},
+                {"anisotropic_override", "3"}, {"ao_mode", "0"}, {"ao_strength", "-"}, {"native_ao_samples", "-"},
+                {"native_ao_quality", "-"}, {"native_ao_normal_smoothing", "-"}, {"native_gi", "medium"},
+                {"native_gi_distance", "medium"}, {"native_gi_quality", "auto"}, {"native_shadow_quality", "original"},
+                {"native_water_reflections", "original"}, {"native_volumetrics", "off"},
+                {"native_effect_buffers", "true"}, {"kk_graphics_preset", "Medium"}}},
+    {"High", {{"kk_render_quality", "native"}, {"swap_post_effect", "fxaa"}, {"native_sharpness", "off"},
+              {"anisotropic_override", "5"}, {"ao_mode", "1"}, {"ao_strength", "3"}, {"native_ao_samples", "2"},
+              {"native_ao_quality", "auto"}, {"native_ao_normal_smoothing", "2"}, {"native_gi", "high"},
+              {"native_gi_distance", "far"}, {"native_gi_quality", "auto"}, {"native_shadow_quality", "high"},
+              {"native_water_reflections", "ssr"}, {"native_volumetrics", "low"},
+              {"native_effect_buffers", "true"}, {"kk_graphics_preset", "High"}}},
+    {"Ultra", {{"kk_render_quality", "native"}, {"swap_post_effect", "fxaa"}, {"native_sharpness", "off"},
+               {"anisotropic_override", "5"}, {"ao_mode", "1"}, {"ao_strength", "3"}, {"native_ao_samples", "3"},
+               {"native_ao_quality", "auto"}, {"native_ao_normal_smoothing", "2"}, {"native_gi", "high"},
+               {"native_gi_distance", "far"}, {"native_gi_quality", "auto"}, {"native_shadow_quality", "ultra"},
+               {"native_water_reflections", "ssr"}, {"native_volumetrics", "high"},
+               {"native_effect_buffers", "true"}, {"kk_graphics_preset", "Ultra"}}},
+    {"Steam Deck", {{"kk_render_quality", "native"}, {"swap_post_effect", "fxaa"}, {"native_sharpness", "off"},
+                    {"anisotropic_override", "2"}, {"ao_mode", "0"}, {"ao_strength", "-"}, {"native_ao_samples", "-"},
+                    {"native_ao_quality", "-"}, {"native_ao_normal_smoothing", "-"}, {"native_gi", "low"},
+                    {"native_gi_distance", "near"}, {"native_gi_quality", "auto"},
+                    {"native_shadow_quality", "original"}, {"native_water_reflections", "original"},
+                    {"native_volumetrics", "off"}, {"native_effect_buffers", "true"},
+                    {"kk_graphics_preset", "Steam Deck"}}},
+};
+// The temporal upscaler's mode each preset sets with the default upscaler (launcher.cpp ApplyGraphicsPreset).
+const char* const kExpectedTemporal[] = {"performance", "quality", "quality", "quality", "quality"};
+
+// A value no preset uses, for each setting (a "player's own" choice before a preset is picked).
+std::string OtherValue(const std::string& name) {
+  static const std::map<std::string, std::string> other = {
+      {"kk_render_quality", "balanced"}, {"swap_post_effect", "smaa"}, {"native_sharpness", "high"},
+      {"anisotropic_override", "4"}, {"ao_mode", "2"}, {"ao_strength", "1"}, {"native_ao_samples", "9"},
+      {"native_ao_quality", "full"}, {"native_ao_normal_smoothing", "1"}, {"native_gi", "off"},
+      {"native_gi_distance", "full"}, {"native_gi_quality", "full"}, {"native_shadow_quality", "custom"},
+      {"native_water_reflections", "custom"}, {"native_volumetrics", "custom"}, {"native_effect_buffers", "false"},
+      {"kk_graphics_preset", ""}};
+  return other.at(name);
+}
+
 void GraphicsPresetChecks() {
+  Check(kk::kGraphicsPresetCount == int(std::size(kExpectedPresets)), "every preset is in the expected table");
   const char* expected[] = {"low", "medium", "high", "high", "low"};
   const char* distances[] = {"near", "medium", "far", "far", "near"};  // Ultra: Far since Beta 8 (Full is F8 only)
   for (int i = 0; i < kk::kGraphicsPresetCount; ++i) {
     const auto& p = kk::kGraphicsPresets[i];
+    const ExpectedPreset& want = kExpectedPresets[i];
+    Check(std::string_view(p.label) == want.label, "preset order");
+    Check(std::string_view(p.temporal) == kExpectedTemporal[i], "preset temporal upscaler mode");
     Check(std::string_view(p.gi) == expected[i], "preset GI mapping");
     Check(std::string_view(p.gi_distance) == distances[i], "preset GI distance mapping");
+    Check(want.values.size() == kPresetSettingNames.size(), "expected table lists every setting");
+
+    // Applied over the player's own value in every setting, and over every other preset: each setting ends at
+    // the table's value ("-": left as it was).
+    for (int from = -1; from < kk::kGraphicsPresetCount; ++from) {
+      std::map<std::string, std::string> settings;
+      for (const auto& name : kPresetSettingNames) settings[name] = OtherValue(name);
+      auto set = [&](const char* name, const char* value) { settings[name] = value; };
+      if (from >= 0) kk::ApplyGraphicsPresetSettings(kk::kGraphicsPresets[from], set);
+      const std::map<std::string, std::string> before = settings;
+      kk::ApplyGraphicsPresetSettings(p, set);
+      for (const auto& name : kPresetSettingNames) {
+        const std::string& v = want.values.at(name);
+        const bool ok = v == "-" ? settings[name] == before.at(name) : settings[name] == v;
+        if (!ok) std::cerr << want.label << ": " << name << " = " << settings[name] << ", expected " << v << '\n';
+        Check(ok, "preset sets every setting of the table");
+      }
+      for (const auto& entry : settings)
+        Check(std::find(kPresetSettingNames.begin(), kPresetSettingNames.end(), entry.first) !=
+                  kPresetSettingNames.end(),
+              "a preset sets nothing outside the table");
+      auto get = [&](const char* name) { return settings[name]; };
+      Check(kk::MatchesGraphicsPresetSettings(p, get), "applied preset matches");
+      Check(kk::FindGraphicsPreset(get, [](const auto&) { return true; }) == i, "applied preset is the one shown");
+    }
+
+    // A manual change to any one setting the preset owns turns it into Custom.
     std::map<std::string, std::string> settings;
     auto get = [&](const char* name) { return settings[name]; };
-    kk::ApplyGraphicsPresetSettings(p, [&](const char* name, const char* value) { settings[name] = value; });
-    Check(kk::MatchesGraphicsPresetSettings(p, get), "applied preset matches");
+    auto set = [&](const char* name, const char* value) { settings[name] = value; };
+    kk::ApplyGraphicsPresetSettings(p, set);
+    for (const auto& name : kPresetSettingNames) {
+      if (want.values.at(name) == "-" || name == "kk_graphics_preset") continue;
+      const std::string keep = settings[name];
+      // AO: the other way round (any value but 0 is on: F8's "AO only" test view still counts as the preset's).
+      settings[name] = name == "ao_mode" ? (p.ao ? "0" : "1") : OtherValue(name);
+      if (kk::MatchesGraphicsPresetSettings(p, get)) std::cerr << want.label << ": " << name << " change not Custom\n";
+      Check(!kk::MatchesGraphicsPresetSettings(p, get), "a manual change makes the preset Custom");
+      Check(kk::FindGraphicsPreset(get, [](const auto&) { return true; }) == -1, "a manual change shows Custom");
+      settings[name] = keep;
+    }
+    Check(kk::MatchesGraphicsPresetSettings(p, get), "putting it back matches again");
+
+    // The migration of version 2 settings (MigrateSettings, include_effects false) still reads old presets by
+    // their render quality, anti-aliasing, filtering and AO alone.
     settings["native_gi"] = "off";
+    settings["native_shadow_quality"] = "high";
     Check(!kk::MatchesGraphicsPresetSettings(p, get), "different GI makes the preset Custom");
     Check(kk::MatchesGraphicsPresetSettings(p, get, false), "old preset is recognised without GI");
     settings["anisotropic_override"] = "-1";
     Check(!kk::MatchesGraphicsPresetSettings(p, get, false), "other custom settings do not match");
   }
+  // High and Ultra differ now (shadows, light shafts, AO quality): each is recognised as itself, marked or not.
   std::map<std::string, std::string> settings;
   auto get = [&](const char* name) { return settings[name]; };
   auto set = [&](const char* name, const char* value) { settings[name] = value; };
   auto match = [&] { return kk::FindGraphicsPreset(get, [](const auto&) { return true; }); };
   kk::ApplyGraphicsPresetSettings(kk::kGraphicsPresets[2], set);
   Check(settings["anisotropic_override"] == "5", "High uses 16x");
-  Check(match() == 2, "High selection survives identical Ultra values");
+  Check(match() == 2, "High selection is kept");
+  settings.erase("kk_graphics_preset");
+  Check(match() == 2, "unmarked High is recognised");
   kk::ApplyGraphicsPresetSettings(kk::kGraphicsPresets[3], set);
   Check(settings["anisotropic_override"] == "5", "Ultra uses 16x");
   Check(match() == 3, "Ultra selection is kept");
   settings.erase("kk_graphics_preset");
-  Check(match() == 3, "unmarked old Ultra is still recognised");
+  Check(match() == 3, "unmarked Ultra is recognised");
   settings["kk_graphics_preset"] = "High";
+  Check(match() == 3, "a High mark over Ultra's values shows Ultra");
   settings["anisotropic_override"] = "4";
   Check(match() == -1 && settings["anisotropic_override"] == "4", "existing 8x choice remains Custom and is not overwritten");
+  // Low and Steam Deck differ only in render quality (and the upscaler mode, checked by the launcher).
+  kk::ApplyGraphicsPresetSettings(kk::kGraphicsPresets[4], set);
+  Check(match() == 4, "Steam Deck selection is kept");
+  settings["kk_render_quality"] = "performance";
+  Check(match() == 0, "Low's render quality shows Low");
 }
 
 // The ONE definition of "the shaders are prepared" (shader_prepared.h; owner, 18 Oct): exactly one preparation
@@ -394,11 +514,17 @@ void SettingsLayoutChecks() {
             std::string(L::kPageNames[4]) == "Gameplay" && std::string(L::kPageNames[5]) == "Cheats" &&
             std::string(L::kPageNames[6]) == "Advanced" && L::kPageCount == 7,
         "categories: Display, Graphics, Audio, Controls, Gameplay, Cheats, Advanced (owner, 16 Oct evening)");
-  Check(in_order(L::kDisplay, {"Window mode", "Monitor", "Resolution", "Refresh rate", "VSync", "Frame rate", "HDR"}),
-        "Display: window mode, monitor, resolution, refresh rate, VSync, frame-rate cap, HDR");
-  Check(in_order(L::kGraphics, {"Preset", "Graphics API", "Upscaler", "Upscaler mode", "Anti-aliasing",
+  Check(in_order(L::kDisplay, {"Window mode", "Monitor", "Resolution", "Refresh rate", "VSync", "Frame rate"}),
+        "Display: window mode, monitor, resolution, refresh rate, VSync, frame rate cap");
+  // Owner, 21 Oct (Beta 14): HDR is experimental, in the F8 graphics panel only: no HDR row on any page.
+  for (int page = 0; page < L::kPageCount; ++page)
+    for (const char* hdr : {"HDR", "HDR brightness", "Peak brightness (nits)", "Paper white (nits)",
+                            "Open Windows HDR Calibration"})
+      Check(L::IndexOf(L::Page(page), hdr) < 0 || L::IndexOf(L::Page(page), hdr) == L::IndexOf(L::Page(page), "*"),
+            (std::string("no HDR row in Settings: ") + hdr).c_str());
+  Check(in_order(L::kGraphics, {"Preset", "Graphics API", "Upscaler", "Upscaler mode", "Antialiasing",
                                 "Ambient occlusion", "Global illumination", "Screen blur", "Texture pack"}),
-        "Graphics: preset, API, upscaler and quality, anti-aliasing, effects, advanced last");
+        "Graphics: preset, API, upscaler and quality, antialiasing, effects, advanced last");
   Check(L::IndexOf(L::kGraphics, "Look") < L::IndexOf(L::kGraphics, "Graphics API"), "the look is with the preset");
   Check(std::string(L::RowsOf(L::kGraphics).begin()[L::IndexOf(L::kGraphics, "Rebuild shaders")].section) == "Advanced",
         "Rebuild shaders is in Graphics' advanced section");
@@ -413,7 +539,7 @@ void SettingsLayoutChecks() {
         "Advanced: the PS2 cutscenes switch, Download and Remove (job J2)");
   // Owner, 18 Oct: brightness and gamma on Display (Picture), and the frame counter became Performance metrics
   // (the pause menu shows it too).
-  Check(in_order(L::kDisplay, {"Aspect ratio", "Brightness", "Gamma", "VSync", "HDR"}) &&
+  Check(in_order(L::kDisplay, {"Aspect ratio", "Brightness", "Gamma", "VSync"}) &&
             std::string(L::RowsOf(L::kDisplay).begin()[L::IndexOf(L::kDisplay, "Gamma")].section) == "Picture",
         "Display: Picture (brightness, gamma) after the screen rows");
   // Owner, 18 Oct (after task 222): Field of view, Motion blur and Camera shake (with its strength) moved to Display
@@ -423,14 +549,14 @@ void SettingsLayoutChecks() {
       const int at = L::IndexOf(p, label);
       return at < 0 ? std::string() : std::string(L::RowsOf(p).begin()[at].section);
     };
-    Check(in_order(L::kDisplay, {"VSync", "Frame rate", "HDR", "Field of view", "Motion blur", "Camera shake",
+    Check(in_order(L::kDisplay, {"VSync", "Frame rate", "Field of view", "Motion blur", "Camera shake",
                                  "Camera shake strength"}) &&
               section(L::kDisplay, "Field of view") == "Camera" && section(L::kDisplay, "Motion blur") == "Camera" &&
               section(L::kDisplay, "Camera shake strength") == "Camera" &&
               L::IndexOf(L::kDisplay, "Camera shake strength") + 1 == int(L::RowsOf(L::kDisplay).size),
           "Display ends with Camera: field of view, motion blur, camera shake and its strength");
     Check(section(L::kDisplay, "Frame rate") == "Frame rate", "the frame rate cap stays in Display");
-    Check(in_order(L::kGameplay, {"Pop-up style", "Performance metrics", "Startup logos"}) &&
+    Check(in_order(L::kGameplay, {"Popup style", "Performance metrics", "Startup logos"}) &&
               section(L::kGameplay, "Performance metrics") == "Overlay",
           "Gameplay: Performance metrics (Overlay) after the HUD");
     for (const char* moved : {"Field of view", "Motion blur", "Camera shake", "Camera shake strength",
@@ -511,7 +637,7 @@ void WhatsNewChecks() {
     const bool show = kk::ShowWhatsNewNow(g);
     if (!show) continue;
     ++shown;
-    Check(g.pending && !g.modal_open, "only a waiting one, never over another pop-up");
+    Check(g.pending && !g.modal_open, "only a waiting one, never over another popup");
     Check(g.files_ok, "never before the game files are given");
     Check(!g.in_setup, "never during any setup page (disc, install, artwork, shaders, downloads, graphics, prompts)");
     Check(!g.new_screen, "never over the New in this update screen");
@@ -690,6 +816,62 @@ void WorkshopChecks() {
 
 // Task 228: the launcher's start marker (startup_recovery_state.h) and emptying the AMD driver
 // shader caches (amd_shader_cache.h), in a made-up local app data folder.
+// Task 350a: DirectX 12 first on Windows, Vulkan when it cannot start; everyone through the setup once more.
+void SetupAgainChecks() {
+  namespace sa = kk::setup_again;
+  Check(sa::kRound >= 1, "Beta 14's round is 1 or later");
+  Check(sa::Due(true, 0, false), "an existing install that has not had the round goes through the setup again");
+  Check(!sa::Due(true, sa::kRound, false), "once had, never again (the player's later choices stay)");
+  Check(!sa::Due(false, 0, false), "a fresh install has its own first time setup instead");
+  Check(!sa::Due(true, 0, true), "automated test runs keep their settings");
+  // What the setup's pages show goes back to the defaults ...
+  for (const char* name : {"native_backend", "kk_graphics_preset", "kk_original_look", "native_gi", "native_upscaler",
+                           "kk_render_quality", "native_shadow_quality", "native_water_reflections",
+                           "native_volumetrics", "ao_mode", "kk_frame_rate", "fullscreen", "kk_fullscreen_mode",
+                           "kk_hdr", "kk_fov", "kk_motion_blur", "kk_camera_shake", "kk_button_prompts",
+                           "kk_pad_prompts", "mnk_mode", "kk_camera_sensitivity", "kk_map_a", "kk_deadzone"})
+    Check(sa::Resets(name, "KK"), name);
+  Check(sa::Resets("keybind_a", "Input/Keybinds/Controller"), "the keyboard bindings go back too");
+  // The setup starts on the named preset the tier recommends, one of the preset table's.
+  Check(sa::RecommendedPreset("low", false) == "Low", "low tier: Low");
+  Check(sa::RecommendedPreset("mid", false) == "Medium", "mid tier: Medium");
+  Check(sa::RecommendedPreset("high", false) == "High", "high tier: High");
+  Check(sa::RecommendedPreset("", false) == "Medium", "no tier: Medium");
+  Check(sa::RecommendedPreset("low", true) == "Steam Deck", "a Steam Deck: Steam Deck");
+  for (const char* tier : {"low", "mid", "high"}) for (bool deck : {false, true}) {
+    bool found = false;
+    for (const auto& p : kk::kGraphicsPresets) found = found || sa::RecommendedPreset(tier, deck) == p.label;
+    Check(found, "the recommended preset is in the preset table");
+  }
+  // ... and the rest stays: installed downloads, the game files, audio, gameplay, cheats, setup records.
+  for (const char* name : {"native_texture_pack", "native_texture_pack_folder", "kk_texture_pack_own_folder",
+                           "kk_ps2_cutscenes", "kk_ps2_movie_folder", "game_data_root", "kk_upscalers_offered",
+                           "kk_launcher_music", "kk_launcher_music_volume", "kk_skip_intros", "user_language",
+                           "kk_cheats", "kk_cheat_infinite_ammo", "kk_achievement_toasts", "kk_performance_metrics",
+                           "kk_setup_version", "kk_setup_again", "kk_settings_version", "kk_shaders_prepared",
+                           "kk_last_version", "kk_update_channel", "kk_mods", "gpu_plugin", "kk_renderer"})
+    Check(!sa::Resets(name, "KK"), name);
+
+  // Startup recovery with DirectX 12 preferred: a DirectX 12 that cannot start switches to Vulkan (Windows), and
+  // Vulkan failing too ends the chain; on Linux DirectX 12 is never a renderer.
+  const fs::path dir = fs::temp_directory_path() /
+      ("kk-recovery-d3d12-" + std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()));
+  kk::startup::RecoveryState state(dir);
+  state.preferred = state.selected = "d3d12";
+#if defined(__linux__)
+  Check(!state.Advance("could not start"), "Linux: DirectX 12 is not a native API");
+#else
+  Check(state.Advance("could not start"), "a DirectX 12 failure is recorded");
+  Check(state.selected == "vulkan", "DirectX 12 could not start: Vulkan");
+  Check(state.reason.find("DirectX 12") == 0 && state.reason.find("Using Vulkan") != std::string::npos,
+        "the notice names both APIs");
+  kk::startup::RecoveryState loaded(dir);
+  Check(loaded.Load() && loaded.preferred == "d3d12" && loaded.selected == "vulkan", "the fallback is kept");
+  Check(state.Advance("could not start"), "Vulkan failing as well is recorded");
+  Check(state.selected == "failed", "both failed: the chain ends");
+#endif
+}
+
 void LauncherGuardChecks() {
   using kk::startup::LauncherGuard;
   const fs::path dir = fs::temp_directory_path() /
@@ -776,7 +958,202 @@ void KeyGlyphChecks() {
   Check(std::string(kMouseMove) == "Mouse_Simple" && PictureName("RMB") == kMouseRight, "mouse movement picture");
 }
 
+// Task 357: the controller code on Home (easter_egg_logic.h).
+void EasterEggCodeChecks() {
+  using kk::egg::Code;
+  using kk::egg::Pad;
+  using kk::egg::Step;
+  auto enter = [](Code& c, std::initializer_list<Pad> presses) {
+    Step last = Step::kNone;
+    for (Pad p : presses) last = c.Press(p);
+    return last;
+  };
+  const std::initializer_list<Pad> full = {Pad::kUp,   Pad::kUp,    Pad::kDown, Pad::kDown, Pad::kLeft, Pad::kRight,
+                                           Pad::kLeft, Pad::kRight, Pad::kB,    Pad::kA,    Pad::kStart};
+  Code c;
+  Check(enter(c, full) == Step::kComplete && c.progress() == 0, "the whole code completes and starts again");
+  Check(enter(c, full) == Step::kComplete, "the code works a second time");
+  Check(enter(c, {Pad::kUp, Pad::kUp, Pad::kUp, Pad::kDown, Pad::kDown, Pad::kLeft, Pad::kRight, Pad::kLeft, Pad::kRight,
+                  Pad::kB, Pad::kA, Pad::kStart}) == Step::kComplete,
+        "a third Up keeps Up, Up");
+  Check(enter(c, {Pad::kUp, Pad::kUp, Pad::kDown, Pad::kOther}) == Step::kNone && c.progress() == 0, "a wrong button resets");
+  Check(enter(c, {Pad::kUp, Pad::kUp, Pad::kDown, Pad::kDown, Pad::kLeft, Pad::kRight, Pad::kLeft, Pad::kRight, Pad::kA}) ==
+                Step::kNone && c.progress() == 0,
+        "A before B resets");
+  Check(enter(c, {Pad::kUp, Pad::kUp, Pad::kDown, Pad::kDown, Pad::kLeft, Pad::kRight, Pad::kLeft, Pad::kRight, Pad::kB,
+                  Pad::kA, Pad::kA}) == Step::kNone && c.progress() == 0,
+        "A instead of Start resets");
+  c.Reset();
+  Check(c.Press(Pad::kA) == Step::kNone && c.Press(Pad::kB) == Step::kNone && c.Press(Pad::kStart) == Step::kNone,
+        "A, B and Start out of the code act as usual");
+  Check(!kk::egg::Swallowed(Pad::kA, Step::kNone) && !kk::egg::Swallowed(Pad::kUp, Step::kMatched) &&
+            kk::egg::Swallowed(Pad::kB, Step::kMatched) && kk::egg::Swallowed(Pad::kStart, Step::kComplete),
+        "only B, A and Start of the code are kept from the launcher");
+}
+
+// Task 358: the code from the keyboard too, mixed with the controller (easter_egg_logic.h).
+void EasterEggKeyboardChecks() {
+  using kk::egg::Code;
+  using kk::egg::FromKey;
+  using kk::egg::Key;
+  using kk::egg::Pad;
+  using kk::egg::Step;
+  auto keys = [](Code& c, std::initializer_list<Key> presses) {
+    Step last = Step::kNone;
+    for (Key k : presses) last = c.Press(FromKey(k));
+    return last;
+  };
+  Code c;
+  Check(keys(c, {Key::kUp, Key::kUp, Key::kDown, Key::kDown, Key::kLeft, Key::kRight, Key::kLeft, Key::kRight, Key::kB,
+                 Key::kA, Key::kEnter}) == Step::kComplete && c.progress() == 0,
+        "the whole code from the keyboard: arrows, B, A, Enter");
+  // Mixed: the controller's directions, the keyboard's B, the controller's A, Enter for Start.
+  for (Pad p : {Pad::kUp, Pad::kUp, Pad::kDown, Pad::kDown, Pad::kLeft, Pad::kRight, Pad::kLeft, Pad::kRight})
+    Check(c.Press(p) == Step::kMatched, "mixed code: controller directions");
+  Check(c.Press(FromKey(Key::kB)) == Step::kMatched, "mixed code: the keyboard's B");
+  Check(c.Press(Pad::kA) == Step::kMatched, "mixed code: the controller's A");
+  Check(c.Press(FromKey(Key::kEnter)) == Step::kComplete, "mixed code: Enter as Start");
+  Check(keys(c, {Key::kUp, Key::kUp, Key::kDown}) == Step::kMatched && c.Press(Pad::kDown) == Step::kMatched &&
+            keys(c, {Key::kLeft, Key::kRight, Key::kLeft, Key::kRight, Key::kB, Key::kA}) == Step::kMatched &&
+            c.Press(Pad::kStart) == Step::kComplete,
+        "mixed code: keyboard arrows and B A, the controller's Down and Start");
+  Check(keys(c, {Key::kUp, Key::kUp, Key::kDown, Key::kOther}) == Step::kNone && c.progress() == 0,
+        "another key resets the code");
+  Check(keys(c, {Key::kUp, Key::kUp, Key::kDown, Key::kDown, Key::kLeft, Key::kRight, Key::kLeft, Key::kRight, Key::kB,
+                 Key::kA, Key::kA}) == Step::kNone && c.progress() == 0,
+        "A instead of Enter resets");
+  Check(FromKey(Key::kEnter) == Pad::kStart && FromKey(Key::kB) == Pad::kB && FromKey(Key::kA) == Pad::kA &&
+            FromKey(Key::kUp) == Pad::kUp && FromKey(Key::kOther) == Pad::kOther,
+        "key mapping");
+  Check(kk::egg::KeySwallowed(Key::kEnter, Step::kMatched) && kk::egg::KeySwallowed(Key::kEnter, Step::kComplete) &&
+            !kk::egg::KeySwallowed(Key::kEnter, Step::kNone) && !kk::egg::KeySwallowed(Key::kUp, Step::kMatched) &&
+            !kk::egg::KeySwallowed(Key::kB, Step::kMatched),
+        "only Enter of the code is kept from the launcher (B and A keys have no launcher action)");
+}
+
+// Task 364: the original game's cheat menu codes, entered while shoulder buttons are held (easter_egg_logic.h).
+void EasterEggHeldCodeChecks() {
+  using kk::egg::HeldCodes;
+  using kk::egg::Pad;
+  using kk::egg::Step;
+  using namespace kk::egg;
+  auto enter = [](HeldCodes& c, unsigned held, std::initializer_list<Pad> presses) {
+    Step last = Step::kNone;
+    for (Pad p : presses) {
+      c.SetHeld(held);
+      last = c.Press(p);
+    }
+    return last;
+  };
+  const std::initializer_list<Pad> ps2 = {Pad::kDown, Pad::kB, Pad::kUp, Pad::kX,
+                                          Pad::kDown, Pad::kDown, Pad::kUp, Pad::kUp};
+  const std::initializer_list<Pad> xbox = {Pad::kDown, Pad::kX, Pad::kUp, Pad::kY,
+                                           Pad::kDown, Pad::kDown, Pad::kUp, Pad::kUp};
+  const std::initializer_list<Pad> x360 = {Pad::kDown, Pad::kUp, Pad::kY, Pad::kX,
+                                           Pad::kDown, Pad::kDown, Pad::kY, Pad::kY};
+  const unsigned bumpers = kHoldLB | kHoldRB, triggers = kHoldLT | kHoldRT, all = bumpers | triggers;
+  HeldCodes c;
+  Check(enter(c, bumpers, ps2) == Step::kComplete && c.completed() == 0, "PS2 code with LB and RB held");
+  Check(enter(c, bumpers, xbox) == Step::kComplete && c.completed() == 1, "Xbox code with LB and RB held");
+  Check(enter(c, triggers, xbox) == Step::kComplete && c.completed() == 1, "Xbox code with the triggers held");
+  Check(enter(c, kHoldLB | kHoldRT, xbox) == Step::kComplete && c.completed() == 1,
+        "Xbox code with a bumper and a trigger held");
+  Check(enter(c, all, x360) == Step::kComplete && c.completed() == 2, "Xbox 360 code with all four held");
+  Check(enter(c, all, ps2) == Step::kComplete && c.completed() == 0, "PS2 code with all four held (extra holds are fine)");
+  Check(enter(c, all, xbox) == Step::kComplete && c.completed() == 1, "Xbox code with all four held");
+  Check(enter(c, bumpers, x360) == Step::kNone && c.progress(2) == 0, "Xbox 360 code needs the triggers too");
+  c.Reset();
+  Check(enter(c, triggers, ps2) == Step::kNone && c.progress(0) == 0, "PS2 code needs LB and RB, not the triggers");
+  c.Reset();
+  Check(enter(c, kHoldLB, ps2) == Step::kNone && c.progress(0) == 0 && c.progress(1) == 0, "one bumper is not a hold");
+  Check(enter(c, 0, ps2) == Step::kNone && c.progress(0) == 0, "nothing held: no code");
+  // Letting go early starts the code again.
+  Check(enter(c, bumpers, {Pad::kDown, Pad::kB, Pad::kUp, Pad::kX, Pad::kDown}) == Step::kMatched && c.progress(0) == 5,
+        "PS2 code half way");
+  c.SetHeld(kHoldLB);  // RB let go
+  Check(c.progress(0) == 0 && !c.Holding(), "letting go of RB resets");
+  Check(enter(c, bumpers, {Pad::kDown, Pad::kUp, Pad::kUp}) == Step::kNone && c.progress(0) == 0,
+        "the rest of the code after letting go does not finish it");
+  c.Reset();
+  Check(enter(c, all, {Pad::kDown, Pad::kUp, Pad::kY, Pad::kX}) == Step::kMatched && c.progress(2) == 4, "360 half way");
+  c.SetHeld(bumpers);  // the triggers let go
+  Check(c.progress(2) == 0 && c.Holding(), "letting go of the triggers resets the 360 code (LB and RB still a hold)");
+  // Wrong presses.
+  c.Reset();
+  Check(enter(c, bumpers, {Pad::kDown, Pad::kB, Pad::kUp, Pad::kA}) == Step::kNone && c.progress(0) == 0,
+        "A instead of Square resets the PS2 code");
+  // (The Down is also the Xbox code's first press, same hold: kMatched overall.)
+  Check(enter(c, bumpers, {Pad::kDown, Pad::kB, Pad::kUp, Pad::kX, Pad::kDown, Pad::kDown, Pad::kUp, Pad::kDown}) ==
+                Step::kMatched && c.progress(0) == 1 && c.progress(1) == 1,
+        "a wrong last press keeps only what starts the code again (Down)");
+  c.Reset();
+  Check(enter(c, all, {Pad::kDown, Pad::kUp, Pad::kY, Pad::kX, Pad::kDown, Pad::kDown, Pad::kY, Pad::kOther}) ==
+                Step::kNone && c.progress(2) == 0,
+        "Back or another button resets the 360 code");
+  Check(enter(c, all, {Pad::kStart, Pad::kLeft, Pad::kRight}) == Step::kNone, "Start, Left and Right are in no code");
+  c.Reset();
+  Check(enter(c, bumpers, {Pad::kDown, Pad::kDown, Pad::kB, Pad::kUp, Pad::kX, Pad::kDown, Pad::kDown, Pad::kUp, Pad::kUp}) ==
+            Step::kComplete,
+        "an extra Down first still finishes the PS2 code");
+  c.SetHeld(0);
+  Check(!c.Holding(), "nothing held: Home works as usual");
+  c.SetHeld(bumpers);
+  Check(c.Holding(), "LB and RB held: Home keeps the controller to the codes");
+  c.SetHeld(kHoldLT | kHoldRB);
+  Check(c.Holding(), "a trigger and a bumper held: the Xbox code's hold");
+  Check(enter(c, bumpers, ps2) == Step::kComplete && enter(c, bumpers, ps2) == Step::kComplete,
+        "the code works a second time");
+}
+
+// Task 358: the update channel comes from the build (update_channel.h).
+// Task 365: the first time setup's top right row (setup_progress.h): the page order, the progress bar by page until
+// the Finish page, Next page and where Auto detect is offered.
+void SetupProgressChecks() {
+  namespace sp = kk::setup_progress;
+  const std::vector<int> with = sp::Pages(true), without = sp::Pages(false);
+  Check(with == std::vector<int>({16, 17, 18, 12, 6, 7, 15, 13}), "365: the setup's pages in order (with PS2 cutscenes)");
+  Check(without == std::vector<int>({16, 17, 18, 12, 6, 15, 13}), "365: no PS2 cutscene page where they do not play");
+  const sp::Bar first = sp::For(16, true), prompts = sp::For(12, true), workshop = sp::For(15, false);
+  Check(first.shown && first.index == 1 && first.count == 8, "365: Display is page 1 of 8");
+  Check(prompts.shown && prompts.index == 4 && prompts.count == 8, "365: the button prompts are page 4 of 8");
+  Check(workshop.shown && workshop.index == 6 && workshop.count == 7, "365: the Workshop is page 6 of 7 without cutscenes");
+  Check(!sp::For(13, true).shown && !sp::For(13, false).shown, "365: nothing at the top right of the Finish page");
+  for (const int other : {0, 1, 2, 3, 4, 8, 9, 10, 11, 14})
+    Check(!sp::For(other, true).shown, "365: no progress bar on the game files, shaders, graphics or New screens");
+  Check(sp::Next(16, true) == 17 && sp::Next(18, true) == 12 && sp::Next(12, true) == 6, "365: Next page in order");
+  Check(sp::Next(6, true) == 7 && sp::Next(6, false) == 15 && sp::Next(7, true) == 15 && sp::Next(15, true) == 13,
+        "365: Next page past the content pages");
+  Check(sp::Next(13, true) == -1 && sp::Next(4, true) == -1, "365: no Next page from the Finish page or shaders");
+  for (const int stage : {16, 17, 18, 12}) Check(sp::AutoDetectOffered(stage), "365: Auto detect on the settings pages");
+  for (const int stage : {6, 7, 15, 13, 4}) Check(!sp::AutoDetectOffered(stage), "365: no Auto detect after the prompts");
+}
+
+void UpdateChannelChecks() {
+  using kk::ChannelAtStart;
+  Check(ChannelAtStart("stable", "") == "stable", "stable build, no channel saved: stable");
+  Check(ChannelAtStart("stable", "beta") == "stable", "stable build over a beta install: stable");
+  Check(ChannelAtStart("stable", "stable") == "stable", "stable build, stable saved: stable");
+  Check(ChannelAtStart("beta", "") == "beta", "beta build over a stable or fresh install: beta (as before)");
+  Check(ChannelAtStart("beta", "stable") == "stable", "beta build keeps a chosen stable channel (as before)");
+  Check(ChannelAtStart("beta", "beta") == "beta", "beta build keeps the beta channel");
+  Check(!kk::OffersChannelChoice("stable") && kk::OffersChannelChoice("beta"), "Change version only on beta builds");
+  Check(kk::CheckChannel("stable", "beta") == "stable" && kk::CheckChannel("stable", "stable") == "stable",
+        "a stable build never asks the beta repo");
+  Check(kk::CheckChannel("beta", "beta") == "beta" && kk::CheckChannel("beta", "stable") == "stable",
+        "a beta build asks what it is asked");
+  Check(kk::IsStableBuild("stable") && !kk::IsStableBuild("beta"), "build kinds");
+  Check(kk::StableLacksNativeRenderer("1.9.12") && kk::StableLacksNativeRenderer("v1.9.5") &&
+            !kk::StableLacksNativeRenderer("2.0.0") && !kk::StableLacksNativeRenderer("2.0.1") &&
+            !kk::StableLacksNativeRenderer("10.0.0") && !kk::StableLacksNativeRenderer(""),
+        "switching to stable resets the beta's settings only for versions before 2.0.0");
+}
+
 int main() {
+  SetupProgressChecks();
+  EasterEggCodeChecks();
+  EasterEggKeyboardChecks();
+  EasterEggHeldCodeChecks();
+  UpdateChannelChecks();
   // Extras playback does not set either story-movie flag. SKIP must still
   // send Start, and must stop sending it once playback ends.
   std::map<uint32_t, uint32_t> movie;
@@ -903,6 +1280,7 @@ int main() {
   ExtrasChecks();
   ShaderProgressChecks();
   ShaderPreparedChecks();
+  SetupAgainChecks();
   SettingsLayoutChecks();
   WhatsNewChecks();
   AllSavesChecks();

@@ -387,7 +387,7 @@ void AchievementToast::DrawXbox(ImGuiIO& io, const Toast& toast, float t) {
   }
 
   const std::string line1 = "Achievement unlocked";
-  const std::string line2 = toast.gamerscore ? std::to_string(toast.gamerscore) + "G - " + toast.title : toast.title;
+  const std::string line2 = toast.gamerscore ? std::to_string(toast.gamerscore) + "G  " + toast.title : toast.title;
   const float h = 70 * s, r = h * 0.5f;
   const float text_w = std::max(regular->CalcTextSizeA(16 * s, FLT_MAX, 0, line1.c_str()).x,
                                 semibold->CalcTextSizeA(20 * s, FLT_MAX, 0, line2.c_str()).x);

@@ -9,6 +9,12 @@
 
 namespace kk::menu_scene {
 
+// Task 349c (owner, 21 Oct): "I never want the slide show ever unless the scene has failed to load entirely over a
+// threshold time and a second attempt." Every PC runs the scene (the low tier and the Steam Deck too, with the
+// scene's lighter effects); the setup, an update's screen and a shader preparation keep their own screens, and the
+// scene starts after them under the loading loop. The pictures show only after a start that failed twice
+// (loading_loop_logic.h SceneStep), or after kMaxFailedStarts such starts in a row (a scene start that ends the
+// process each time: the launcher must still open).
 // What the launcher knows as it opens.
 struct StartFacts {
   bool files_ok = true;          // the game files are installed
@@ -16,30 +22,25 @@ struct StartFacts {
   bool shaders_prepared = true;  // this version's one shader preparation has run (shader_prepared.h)
   bool shader_job = false;       // a shader job is running or about to (setup, update, Rebuild)
   bool setup = false;            // the first-run setup or the New in this update screen is up
-  bool low_end = false;          // kk_hardware_tier "low" (a Steam Deck, a GPU under 4 GB, ...)
-  bool off_this_session = false; // --kk_menu_scene_off (a launcher restarted for a Rebuild)
-  bool failed_this_version = false;  // the scene did not come up last time in this version
+  bool off_this_session = false; // --kk_menu_scene_off (a launcher restarted for a Rebuild, until it is done)
+  bool failed_this_version = false;  // kMaxFailedStarts starts in a row did not get the scene up in this version
 };
 
 enum class Reason {
   kLive,
   kNoFiles,
-  kNotNative,
   kShadersNotPrepared,
   kShaderJob,
   kSetup,
-  kLowEnd,
   kOffThisSession,
   kFailedBefore,
 };
 
 inline Reason Decide(const StartFacts& f) {
   if (!f.files_ok) return Reason::kNoFiles;
-  if (!f.native_renderer) return Reason::kNotNative;
-  if (!f.shaders_prepared) return Reason::kShadersNotPrepared;
+  if (f.native_renderer && !f.shaders_prepared) return Reason::kShadersNotPrepared;
   if (f.shader_job) return Reason::kShaderJob;
   if (f.setup) return Reason::kSetup;
-  if (f.low_end) return Reason::kLowEnd;
   if (f.off_this_session) return Reason::kOffThisSession;
   if (f.failed_this_version) return Reason::kFailedBefore;
   return Reason::kLive;
@@ -49,36 +50,58 @@ inline const char* ReasonText(Reason r) {
   switch (r) {
     case Reason::kLive: return "live";
     case Reason::kNoFiles: return "no game files";
-    case Reason::kNotNative: return "not the native renderer";
     case Reason::kShadersNotPrepared: return "shaders not prepared for this version";
     case Reason::kShaderJob: return "a shader job runs";
     case Reason::kSetup: return "setup or the New in this update screen";
-    case Reason::kLowEnd: return "low-end hardware tier";
-    case Reason::kOffThisSession: return "off for this launcher (restarted for a shader rebuild)";
-    case Reason::kFailedBefore: return "the scene did not come up last time in this version";
+    case Reason::kOffThisSession: return "not while this launcher rebuilds the shaders (it restarted for that)";
+    case Reason::kFailedBefore: return "the scene did not come up in the last 3 starts of this version";
   }
   return "?";
 }
 
-// The stills only for now: a fresh install's game files, its setup and shader preparation (or an update's) are
-// still to come in this launcher. Once they are done (the launcher is back on Home) the scene starts after all.
+// Not yet: a fresh install's game files, its setup and shader preparation (or an update's, or a Rebuild's) are
+// still to come in this launcher, on their own screens. Once they are done (the launcher is back on Home) the scene
+// starts after all, under the loading loop.
 inline bool MayStartLater(Reason r) {
-  return r == Reason::kNoFiles || r == Reason::kShadersNotPrepared || r == Reason::kShaderJob || r == Reason::kSetup;
+  return r == Reason::kNoFiles || r == Reason::kShadersNotPrepared || r == Reason::kShaderJob || r == Reason::kSetup ||
+         r == Reason::kOffThisSession;
 }
 
-// The failure marker (<user data>/menu-scene.txt) holds "starting <version>" from the scene's start until it has
-// been shown, then nothing. A launcher that finds "starting" of its own version did not survive the scene's
-// start: the stills for the rest of this version ("failed <version>").
-enum class MarkerState { kNone, kFailedThisVersion };
-inline MarkerState ReadMarker(std::string_view text, std::string_view version) {
-  for (std::string_view word : {std::string_view("starting "), std::string_view("failed ")}) {
-    if (text.substr(0, word.size()) == word) {
-      std::string_view v = text.substr(word.size());
-      while (!v.empty() && (v.back() == '\n' || v.back() == '\r' || v.back() == ' ')) v.remove_suffix(1);
-      if (v == version) return MarkerState::kFailedThisVersion;
+// The failure marker (<user data>/menu-scene.txt) holds "starting <version> <n>" from the scene's start until it has
+// been shown, then nothing; n = the starts in a row before this one that did not get the scene up. A launcher that
+// finds "starting" of its own version: that start failed (the process ended before the scene was up, or both its
+// attempts ran out of time). A launcher started again for the second attempt (`retry`) counts the same start, not
+// another. kMaxFailedStarts in a row: "failed <version>", the pictures for the rest of this version.
+constexpr int kMaxFailedStarts = 3;
+struct MarkerRead {
+  int failed_starts = 0;  // failed starts in a row before this launcher
+  bool gave_up = false;   // "failed <version>"
+};
+inline MarkerRead ReadMarker(std::string_view text, std::string_view version, bool retry = false) {
+  MarkerRead r;
+  while (!text.empty() && (text.back() == '\n' || text.back() == '\r' || text.back() == ' ')) text.remove_suffix(1);
+  if (text.substr(0, 7) == "failed ") {
+    if (text.substr(7) == version) r.gave_up = true;
+    return r;
+  }
+  if (text.substr(0, 9) != "starting ") return r;
+  std::string_view rest = text.substr(9);
+  int before = 0;  // "starting <version>" (Beta 13 / 14 before 349c): no count
+  if (rest != version) {
+    const size_t sp = rest.rfind(' ');
+    if (sp == std::string_view::npos || rest.substr(0, sp) != version) return r;
+    before = 0;
+    for (char c : rest.substr(sp + 1)) {
+      if (c < '0' || c > '9') return r;
+      before = std::min(before * 10 + (c - '0'), 1000);
     }
   }
-  return MarkerState::kNone;
+  r.failed_starts = retry ? before : before + 1;
+  r.gave_up = r.failed_starts >= kMaxFailedStarts;
+  return r;
+}
+inline std::string StartingMarker(std::string_view version, int failed_starts) {
+  return "starting " + std::string(version) + " " + std::to_string(failed_starts);
 }
 
 // The game thread's view of the boot, from the universe's variables (frames counted in pad reads).

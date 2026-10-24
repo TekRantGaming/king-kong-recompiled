@@ -106,7 +106,7 @@ FIRST = [
     "How dark the shading gets and how far it spreads from each corner.", "How many samples the shading uses.",
     "How far from the camera bounced light is worked out.", "How sharp and detailed the game's shadows are.",
     "How the water reflects its surroundings.",
-    "Some levels (Necropolis, Brontosaurus) blur the whole picture slightly.", "The haze over far-away scenery.",
+    "Some levels (Necropolis, Brontosaurus) blur the whole picture slightly.", "The haze over far away scenery.",
 ]
 for s in FIRST:
     if s not in launcher:

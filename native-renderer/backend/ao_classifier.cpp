@@ -293,10 +293,23 @@ AoRuleTable::AoRuleTable(std::vector<AoRule> first) : rules_(std::move(first)) {
     r.line = -r.line;  // negative: a built-in rule
     rules_.push_back(r);
   }
+  for (size_t i = 0; i < rules_.size(); ++i) {
+    if (rules_[i].ps_hash) ps_rules_[rules_[i].ps_hash].push_back(i);
+    else any_ps_rules_.push_back(i);
+  }
 }
 
 AoDrawClass AoRuleTable::Classify(const AoDrawState& s, const AoRule** matched) const {
-  for (const AoRule& r : rules_) {
+  const auto it = ps_rules_.find(s.ps_hash);
+  const std::vector<size_t>* specific = it == ps_rules_.end() ? nullptr : &it->second;
+  size_t a = 0, b = 0;
+  // Merge the shader's rules with the wildcard rules in their original order. Arbitrary file
+  // rules still win by first match, including wildcards before a shader-specific rule.
+  while (a < any_ps_rules_.size() || (specific && b < specific->size())) {
+    const size_t i = !specific || b == specific->size() ||
+                             (a < any_ps_rules_.size() && any_ps_rules_[a] < (*specific)[b])
+                         ? any_ps_rules_[a++] : (*specific)[b++];
+    const AoRule& r = rules_[i];
     if (r.Matches(s)) {
       if (matched) *matched = &r;
       return r.result;

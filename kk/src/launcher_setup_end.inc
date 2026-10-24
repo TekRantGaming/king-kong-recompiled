@@ -315,7 +315,7 @@
     float y = DrawEndHeader(dl, "Button prompts", "Choose your button prompts",
                             T(std::string("Pick which buttons the game and this launcher show in menus and hints.")),
                             x0, list_w);
-    DrawSkipAll(dl);
+    DrawSetupTop(dl);
 
     const std::string chosen = ChosenPromptStyle(), automatic = AutoPromptStyle();
     std::vector<EndCard> cards;
@@ -511,8 +511,7 @@
                               T("More options, such as field of view, audio, subtitles, controls and much more, are "
                                 "in Settings on the main menu. Enjoy the game.");
     float y = DrawEndHeader(dl, "You're all set", "You're all set", intro, x0, list_w);
-    y += 6 * s;
-    DrawSkipAll(dl);
+    y += 6 * s;  // task 365: the Finish page has no row at the top right (no progress bar, no Skip all)
 
     std::vector<EndCard> cards;
     {

@@ -2085,11 +2085,12 @@ REX_HOOK_RAW(sub_826ECDF8) {
   if (on) kk::PuppetObserveInit(base, actor, ai, true);
 }
 #if defined(KK_DEV_TOOLS)
+void KkDevBugSpawnerInit(PPCContext& __restrict ctx, uint8_t* base);  // dev_bug_trace.cpp (KK_DEV_BUG_TRACE=waves)
 REX_HOOK_RAW(sub_826EB8C0) {
   const bool on = kk::Enabled() && kk::Opt().spawn;
   const uint32_t actor = on ? kk::hfr::Load32(base, 0x82CCBF6C) : 0;
   const uint32_t ai = on ? kk::hfr::Load32(base, 0x82CCBF64) : 0;
-  __imp__sub_826EB8C0(ctx, base);
+  KkDevBugSpawnerInit(ctx, base);  // calls the original
   if (on) kk::PuppetObserveSpawner(base, actor, ai);
 }
 #endif

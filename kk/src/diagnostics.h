@@ -6,6 +6,8 @@
 namespace kk {
 // Local, redacted text only. Dumps can contain process memory and stay local.
 void InitDiagnostics();
+// Clean exit: drain background output and keep final runtime messages direct.
+void StopBackgroundLogOutput();
 void RefreshDiagnostics();
 std::string DiagnosticsReport();
 std::string RedactDiagnostics(std::string text);

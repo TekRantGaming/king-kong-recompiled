@@ -743,6 +743,34 @@ TEST(GameUpscale_InputAndOutputSizes) {
   CHECK(mean < 0.03);
 }
 
+// Task 349a: a small effect surface (pitch 320) drawn before the upscale point is at the scene's input
+// scale (as without an upscaler, where the input is the frame), not the output's.
+TEST(GameUpscale_SmallEffectSurfaceAtTheInputScale) {
+  Options o;
+  o.scale = 2.0f;
+  o.config.quality = UpscaleQuality::kQuality;  // input 256x144 (scale 4/3), output 384x216 (scale 2)
+  Fixture f(o);
+  if (!f.Init()) return;
+  const uint32_t effect = f.NewSurface(320, 180, 700, 0);
+  for (int i = 0; i < 2; ++i) {
+    f.DrawScene({});
+    f.SetDepthStencil(0);
+    f.SetRenderTarget(0, effect);
+    f.SetViewport(0, 0, 320, 180);
+    f.Clear(kClearTarget0, 0xFF336699);
+    f.SetRenderTarget(0, f.rt);
+    f.SetDepthStencil(f.ds);
+    f.Present(f.rt, "effect_scale_" + std::to_string(i));
+  }
+  // (The output generation's twin, used in frames without a known scene, keeps the output's scale.)
+  bool input = false;
+  for (const GameRenderer::TargetInfo& t : f.game->DebugTargets()) {
+    if (t.depth || t.edram_base != 700) continue;
+    if (t.host_width == 427 && t.host_height == 240) input = true;
+  }
+  CHECK(input);
+}
+
 TEST(GameUpscale_JitterMovesTheInputPicture) {
   // A vertical edge of the floor's far end against the sky moves by the jitter: native mode, the
   // stretch is a copy, so the picture is the input. Each frame the column the edge crosses must be on

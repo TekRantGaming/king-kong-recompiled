@@ -29,9 +29,17 @@ REXCVAR_DEFINE_INT32(draw_resolution_scale_x, 1, "Test", "Test");
 REXCVAR_DEFINE_INT32(draw_resolution_scale_y, 1, "Test", "Test");
 REXCVAR_DEFINE_STRING(native_gi, "off", "Test", "Test");
 REXCVAR_DEFINE_STRING(native_gi_distance, "medium", "Test", "Test");
+REXCVAR_DEFINE_STRING(native_shadow_quality, "original", "Test", "Test");
 REXCVAR_DEFINE_STRING(swap_post_effect, "none", "Test", "Test");
 REXCVAR_DEFINE_INT32(anisotropic_override, -1, "Test", "Test");
 REXCVAR_DEFINE_INT32(ao_strength, 1, "Test", "Test");
+// The rest of what a graphics preset sets (task 350b), with the native renderer's defaults (plugin_main.cpp).
+REXCVAR_DEFINE_STRING(native_water_reflections, "original", "Test", "Test");
+REXCVAR_DEFINE_STRING(native_volumetrics, "off", "Test", "Test");
+REXCVAR_DEFINE_STRING(native_sharpness, "off", "Test", "Test");
+REXCVAR_DEFINE_BOOL(native_effect_buffers, true, "Test", "Test");
+REXCVAR_DEFINE_STRING(native_gi_quality, "auto", "Test", "Test");
+REXCVAR_DEFINE_INT32(native_ao_normal_smoothing, 0, "Test", "Test");
 
 namespace kk {
 HardwareProfile fake;
@@ -101,6 +109,97 @@ int main() {
     fake = {{c.vendor, c.model, c.vram * GiB}, c.cores, c.ram * GiB, 1920, 1080, 144, c.deck};
     Check(HardwareTierIndex(fake) == c.tier, c.model);
   }
+  // Task 338: exaggerated UMA reservations and core counts isolate name/ID
+  // rules from the low-memory/core fallbacks. Dedicated Arc cards stay distinct.
+  const Case first_setup_cases[] = {
+    {GpuVendor::kAmd, "AMD Radeon(TM) Graphics", 16, 8, 32, false, 0},
+    {GpuVendor::kAmd, "AMD Radeon(TM)Graphics", 16, 8, 32, false, 0},
+    {GpuVendor::kAmd, "AMD RADEON GRAPHICS", 16, 8, 32, false, 0},
+    {GpuVendor::kAmd, "AMD Radeon 780M Graphics", 16, 8, 32, false, 0},
+    {GpuVendor::kAmd, "AMD Radeon 890M Graphics", 16, 12, 32, false, 0},
+    {GpuVendor::kAmd, "AMD Radeon 760M", 16, 8, 32, false, 0},
+    {GpuVendor::kAmd, "AMD Radeon 860M", 16, 8, 32, false, 0},
+    {GpuVendor::kAmd, "AMD Radeon 880M", 16, 8, 32, false, 0},
+    {GpuVendor::kAmd, "AMD Ryzen Z1 Extreme", 16, 8, 32, false, 0},
+    {GpuVendor::kAmd, "AMD Ryzen Z2 Extreme", 16, 8, 32, false, 0},
+    {GpuVendor::kIntel, "Intel(R) Arc(TM) Graphics", 16, 16, 32, false, 0},
+    {GpuVendor::kIntel, "Intel(R)Arc(TM)Graphics", 16, 16, 32, false, 0},
+    {GpuVendor::kIntel, "Intel Arc 140V GPU", 16, 8, 32, false, 0},
+    {GpuVendor::kIntel, "Intel Arc 130V GPU", 16, 8, 32, false, 0},
+    {GpuVendor::kIntel, "Intel Arc 140T GPU", 16, 16, 32, false, 0},
+    {GpuVendor::kIntel, "Intel Arc 8-Core iGPU", 16, 16, 32, false, 0},
+    {GpuVendor::kIntel, "Intel Arc 7-Core iGPU", 16, 16, 32, false, 0},
+    {GpuVendor::kIntel, "Intel Arc integrated GPU", 16, 16, 32, false, 0},
+    {GpuVendor::kIntel, "Intel(R) Arc(TM) B370 GPU", 16, 14, 32, false, 0},
+    {GpuVendor::kIntel, "Intel(R) Arc(TM) B390 GPU", 16, 16, 32, false, 0},
+    {GpuVendor::kIntel, "Intel Arc Pro B370 Graphics", 16, 14, 32, false, 0},
+    {GpuVendor::kIntel, "Intel Arc Pro B390 Graphics", 16, 16, 32, false, 0},
+    {GpuVendor::kNvidia, "NVIDIA GeForce RTX 4050 Laptop GPU", 8, 12, 32, false, 0},
+    {GpuVendor::kNvidia, "NVIDIA GeForce RTX 4050 (Laptop GPU)", 8, 12, 32, false, 0},
+    {GpuVendor::kNvidia, "NVIDIA GeForce RTX 3050 Laptop GPU", 8, 12, 32, false, 0},
+    {GpuVendor::kNvidia, "NVIDIA GeForce RTX 2050 Laptop GPU", 8, 12, 32, false, 0},
+    {GpuVendor::kNvidia, "RTX 4050 Notebook", 8, 12, 32, false, 0},
+    {GpuVendor::kNvidia, "RTX 2050 Mobile", 8, 12, 32, false, 0},
+    {GpuVendor::kAmd, "AMD Custom GPU 0405", 16, 8, 32, true, 0},
+    {GpuVendor::kAmd, "AMD Custom GPU 0932", 16, 8, 32, true, 0},
+    {GpuVendor::kNvidia, "RTX 3060", 6, 8, 32, false, 0},
+    {GpuVendor::kNvidia, "RTX 3060", 12, 6, 32, false, 2},  // 6 cores and a strong GPU: not Low
+    {GpuVendor::kNvidia, "RTX 4070 Ti", 12, 8, 32, false, 2},
+    {GpuVendor::kIntel, "Intel Arc A770", 16, 8, 32, false, 2},
+    {GpuVendor::kIntel, "Intel Arc B580", 12, 8, 32, false, 2},
+    {GpuVendor::kIntel, "Intel Arc A750", 8, 8, 32, false, 1},
+    {GpuVendor::kAmd, "AMD Radeon RX 7900 XTX", 24, 8, 32, false, 2},
+    {GpuVendor::kAmd, "AMD Radeon RX 6600", 8, 8, 32, false, 1},
+    {GpuVendor::kUnknown, "Unknown", 0, 0, 0, false, 0},
+  };
+  for (const auto& c : first_setup_cases) {
+    fake = {{c.vendor, c.model, c.vram * GiB}, c.cores, c.ram * GiB, 1920, 1080, 144, c.deck};
+    Check(FirstSetupHardwareTierIndex(fake) == c.tier, c.model);
+  }
+  for (uint32_t id : {0x7D51, 0x7DD1, 0x7D41, 0x7D67, 0xB640, 0x7D40, 0x7D45,
+                     0x7D55, 0x7D60, 0x7DD5, 0x6420, 0x64A0, 0x64B0,
+                     0xB080, 0xB081, 0xB082, 0xB083, 0xB084, 0xB085,
+                     0xB086, 0xB087, 0xB08F, 0xB090, 0xB0A0, 0xB0B0}) {
+    fake = {{GpuVendor::kIntel, "Generic display adapter", 16 * GiB, "", 0x8086, id}, 16, 32 * GiB};
+    Check(FirstSetupHardwareTierIndex(fake) == 0, "integrated Intel PCI ID");
+    fake.gpu.vendor = GpuVendor::kNvidia;
+    fake.gpu.vendor_id = 0x10DE;
+    Check(FirstSetupHardwareTierIndex(fake) == 1, "PCI ID must match its vendor");
+  }
+  // Task 368: older Intel integrated graphics (Vulkan by default, no DirectX 12 pack at setup); never Arc.
+  {
+    constexpr uint64_t MiB = uint64_t(1) << 20;
+    struct IntelCase { GpuInfo gpu; bool expected; const char* what; };
+    const IntelCase cases[] = {
+        {{GpuVendor::kIntel, "Intel(R) UHD Graphics 600", 128 * MiB, "", 0x8086, 0x3185}, true, "UHD 600 (N4020)"},
+        {{GpuVendor::kIntel, "Intel(R) UHD Graphics", 128 * MiB, "", 0x8086, 0x46D0}, true, "UHD (N200)"},
+        {{GpuVendor::kIntel, "Intel(R) Iris(R) Xe Graphics", 128 * MiB, "", 0x8086, 0x9A49}, true, "Iris Xe"},
+        {{GpuVendor::kIntel, "Intel(R) HD Graphics 620", 0, "", 0, 0}, true, "HD 620, vendor only"},
+        {{GpuVendor::kIntel, "Intel(R) Arc(TM) A770 Graphics", 16 * GiB, "", 0x8086, 0x56A0}, false, "Arc A770"},
+        {{GpuVendor::kIntel, "Intel(R) Arc(TM) 140V GPU (16GB)", 128 * MiB, "", 0x8086, 0x64A0}, false, "Arc 140V"},
+        {{GpuVendor::kIntel, "Intel(R) Graphics", 128 * MiB, "", 0x8086, 0x7D55}, false, "Meteor Lake ID"},
+        {{GpuVendor::kIntel, "Intel(R) Future Graphics", 2 * GiB, "", 0x8086, 0x1234}, false, "2 GiB of its own"},
+        {{GpuVendor::kNvidia, "NVIDIA GeForce RTX 4050 Laptop GPU", 6 * GiB, "", 0x10DE, 0x28A1}, false, "NVIDIA"},
+        {{GpuVendor::kNvidia, "Intel(R) UHD Graphics 620", 128 * MiB, "", 0x10DE, 0x3EA0}, false, "ID wins"},
+        {{GpuVendor::kUnknown, "", 0, "", 0, 0}, false, "unknown card"},
+    };
+    for (const auto& c : cases) Check(IntelIntegratedNotArc(c.gpu) == c.expected, c.what);
+  }
+  fake = {{GpuVendor::kIntel, "Intel Arc A770", 16 * GiB, "", 0x8086, 0x56A0}, 8, 32 * GiB};
+  Check(FirstSetupHardwareTierIndex(fake) == 2, "dedicated Intel ID retains high");
+  fake = {{GpuVendor::kIntel, "Intel Arc B580", 12 * GiB, "", 0x8086, 0xE20B}, 8, 32 * GiB};
+  Check(FirstSetupHardwareTierIndex(fake) == 2, "dedicated B-series ID retains high");
+  fake = {{GpuVendor::kNvidia, "RTX 4070 Ti", 6 * GiB + 1}, 7, 32 * GiB};
+  Check(FirstSetupHardwareTierIndex(fake) == 1, "just above both low thresholds");
+  fake.gpu.dedicated_memory = 6 * GiB;
+  Check(FirstSetupHardwareTierIndex(fake) == 0, "6 GiB inclusive");
+  fake.gpu.dedicated_memory = 12 * GiB;
+  fake.physical_cores = 6;
+  Check(FirstSetupHardwareTierIndex(fake) != 0, "a 6-core desktop with a strong GPU is not low");
+  fake.physical_cores = 5;
+  Check(FirstSetupHardwareTierIndex(fake) == 0, "fewer than 6 cores is low");
+  fake.physical_cores = 6;
+  Check(HardwareTierIndex(fake) == 2, "later explicit recommendation policy unchanged");
   for (const auto& tier : kHardwareTiers) {
     Check(std::string(RecommendedRenderQuality(tier, 3840, 2160)) ==
           (std::string(tier.id) == "high" ? "quality" : "performance"), "4K policy");
@@ -126,6 +225,25 @@ int main() {
       std::chrono::steady_clock::now().time_since_epoch().count()));
   std::filesystem::create_directories(dir);
   const auto config = dir / "king_kong.toml";
+  // Only a missing config receives the new policy. The setup's second pass
+  // reuses the selected tier, and later launches retain it even on another GPU.
+  const auto first_config = dir / "first-setup.toml";
+  fake = {{GpuVendor::kNvidia, "NVIDIA GeForce RTX 4050 Laptop GPU", 8 * GiB}, 12, 32 * GiB};
+  ApplyPortDefaults();
+  InitializeHardwareRecommendation(first_config, 1920, 1080);
+  Equals("kk_hardware_tier", "low");
+  Equals("native_upscaler_quality", "performance");
+  Equals("native_gi", "low");
+  ApplyHardwareRecommendation(false, 1920, 1080); // setup must not redetect with the old policy
+  Equals("kk_hardware_tier", "low");
+  Check(SaveSettings(first_config), "save first-setup low tier");
+  fake = {{GpuVendor::kNvidia, "RTX 4070 Ti", 12 * GiB}, 8, 32 * GiB};
+  rex::cvar::ResetAllToDefaults();
+  rex::cvar::LoadConfig(first_config);
+  InitializeHardwareRecommendation(first_config, 1920, 1080);
+  Equals("kk_hardware_tier", "low");
+  Equals("native_upscaler_quality", "performance");
+  rex::cvar::ResetAllToDefaults();
   ApplyPortDefaults();
   Equals("native_gi", "medium");
   fake = {{GpuVendor::kNvidia, "RTX 4070 Ti", 12 * GiB}, 8, 32 * GiB, 3840, 2160, 120, false};
@@ -135,7 +253,11 @@ int main() {
   Equals("native_ao_samples", "3");
   Equals("native_ao_quality", "auto");
   Equals("kk_frame_rate", "30");
+#if defined(_WIN32)
+  Equals("native_backend", "d3d12");  // task 350a: DirectX 12 is the default on Windows
+#else
   Equals("native_backend", "auto");
+#endif
   Equals("native_upscaler", "dlss");
   Equals("native_gi", "high");
   Equals("native_gi_distance", "far");
@@ -395,20 +517,104 @@ int main() {
     Check(!SetModSetting("no_such_setting_x", "1"), "mod: unknown setting refused");
     ClearModSettings();
   }
+  // A preset owns its shadows only on an explicit selection: a saved custom shadow setting survives startup.
+  // Since task 350b every preset sets shadows (owner's table: Original, Original, High, Ultra, Steam Deck Original).
+  {
+    auto set = [](const char* n, const char* v) { rex::cvar::SetFlagByName(n, v); };
+    auto get = [](const char* n) { return rex::cvar::GetFlagByName(n); };
+    rex::cvar::ResetAllToDefaults();
+    ApplyPortDefaults();
+    ApplyGraphicsPresetSettings(kGraphicsPresets[1], set);
+    set("kk_hardware_tier", "high");
+    set("native_shadow_quality", "high");
+    Check(SaveSettings(config), "save custom shadows before startup");
+    rex::cvar::ResetAllToDefaults();
+    rex::cvar::LoadConfig(config);
+    InitializeHardwareRecommendation(config, 1920, 1080);
+    Equals("native_shadow_quality", "high");
+    Check(FindGraphicsPreset(get, [](const GraphicsPreset&) { return true; }) == -1,
+          "custom expensive shadows are not labelled Medium");
+    ApplyGraphicsPresetSettings(kGraphicsPresets[1], set);
+    Equals("native_shadow_quality", "original");
+    const char* shadows[] = {"original", "original", "high", "ultra", "original"};
+    for (int index = 0; index < kGraphicsPresetCount; ++index) {
+      set("native_shadow_quality", index == 2 ? "ultra" : "high");
+      ApplyGraphicsPresetSettings(kGraphicsPresets[index], set);
+      Equals("native_shadow_quality", shadows[index]);
+    }
+  }
+  // Task 350b: each preset through the real settings registry, then saved and read back as at the next start
+  // (a setting at its default is left out of the file): every value of the table, and the same preset shown.
+  {
+    struct Row {
+      const char *shadows, *water, *shafts, *ao_mode, *ao_samples;
+    };
+    const Row rows[] = {{"original", "original", "off", "0", "9"},
+                        {"original", "original", "off", "0", "9"},
+                        {"high", "ssr", "low", "1", "2"},
+                        {"ultra", "ssr", "high", "1", "3"},
+                        {"original", "original", "off", "0", "9"}};
+    auto set = [](const char* n, const char* v) { rex::cvar::SetFlagByName(n, v); };
+    auto get = [](const char* n) { return rex::cvar::GetFlagByName(n); };
+    for (int i = 0; i < kGraphicsPresetCount; ++i) {
+      for (int from = 0; from < kGraphicsPresetCount; ++from) {
+        rex::cvar::ResetAllToDefaults();
+        ApplyPortDefaults();
+        // The player's own values first (AO quality 9: none of the presets'), or another preset.
+        for (const auto& [name, value] : std::initializer_list<std::pair<const char*, const char*>>{
+                 {"native_sharpness", "high"}, {"native_effect_buffers", "false"}, {"native_gi_quality", "full"},
+                 {"native_ao_quality", "half"}, {"native_ao_samples", "9"}, {"native_ao_normal_smoothing", "1"},
+                 {"native_water_reflections", "ssr"}, {"native_volumetrics", "high"}, {"native_shadow_quality", "ultra"}})
+          set(name, value);
+        if (from != i) ApplyGraphicsPresetSettings(kGraphicsPresets[from], set);
+        if (from != i) set("native_ao_samples", "9");
+        ApplyGraphicsPresetSettings(kGraphicsPresets[i], set);
+        for (int pass = 0; pass < 2; ++pass) {
+          const Row& r = rows[i];
+          Equals("native_shadow_quality", r.shadows);
+          Equals("native_water_reflections", r.water);
+          Equals("native_volumetrics", r.shafts);
+          Equals("ao_mode", r.ao_mode);
+          Equals("native_ao_samples", r.ao_samples);
+          Equals("native_sharpness", "off");
+          Equals("native_effect_buffers", "true");
+          Equals("native_gi_quality", "auto");
+          Equals("native_gi", kGraphicsPresets[i].gi);
+          Equals("native_gi_distance", kGraphicsPresets[i].gi_distance);
+          Equals("kk_render_quality", kGraphicsPresets[i].quality);
+          Equals("swap_post_effect", kGraphicsPresets[i].aa);
+          Equals("anisotropic_override", kGraphicsPresets[i].filtering);
+          if (kGraphicsPresets[i].ao) {
+            Equals("ao_strength", "3");
+            Equals("native_ao_normal_smoothing", "2");
+            Equals("native_ao_quality", "auto");
+          }
+          Equals("kk_graphics_preset", kGraphicsPresets[i].label);
+          Check(FindGraphicsPreset(get, [](const GraphicsPreset&) { return true; }) == i,
+                pass == 0 ? "the chosen preset is shown" : "the chosen preset is shown after the next start");
+          Check(SaveSettings(config), "save the preset");
+          rex::cvar::ResetAllToDefaults();
+          rex::cvar::LoadConfig(config);
+        }
+      }
+    }
+  }
   // Version 3 recognises every old preset without touching its other settings.
   for (const auto& p : kGraphicsPresets) {
     rex::cvar::ResetAllToDefaults();
     ApplyPortDefaults();
     rex::cvar::SetFlagByName("kk_settings_version", "2");
     ApplyGraphicsPresetSettings(p, [](const char* n, const char* v) { rex::cvar::SetFlagByName(n, v); });
+    rex::cvar::SetFlagByName("native_shadow_quality", "high"); // legacy presets did not own shadows
     rex::cvar::ResetToDefault("native_gi"); // old files omitted the default Off
     Check(SaveSettings(config), "write old preset");
     rex::cvar::ResetAllToDefaults();
     rex::cvar::LoadConfig(config);
     MigrateSettings(config);
     Equals("native_gi", p.gi);
-    Equals("kk_settings_version", "3");
+    Equals("kk_settings_version", "6");
     Equals("kk_render_quality", p.quality);
+    Equals("native_shadow_quality", "high");
     Check(!std::filesystem::exists(config.string() + ".bak"), "valid version 2 is not mistaken for unread settings");
     MigrateSettings(config);
     Equals("native_gi", p.gi);
@@ -462,7 +668,7 @@ int main() {
   Equals("present_effect", "bilinear");
   Equals("kk_render_quality", "native");
   Equals("kk_frame_rate", "144");
-  Equals("kk_settings_version", "3");
+  Equals("kk_settings_version", "6");
   // A failed config load still must not overwrite the player's settings.
   rex::cvar::ResetAllToDefaults();
   const std::string unread = "kk_settings_version = 2\ninvalid settings\n";
@@ -474,7 +680,7 @@ int main() {
   rex::cvar::ResetAllToDefaults();
   ApplyPortDefaults();
   MigrateSettings(dir / "new-install.toml");
-  Equals("kk_settings_version", "3");
+  Equals("kk_settings_version", "6");
   InitializeHardwareRecommendation(dir / "new-install.toml", 1920, 1080);
   Equals("native_gi", "high");
   Check(!std::filesystem::exists(dir / "new-install.toml"), "migration does not create a new-install config early");
@@ -499,15 +705,187 @@ int main() {
   const std::string recaptured_text((std::istreambuf_iterator<char>(recaptured_file)), {});
   Check(recaptured_text.find("native_ao_samples = 2") != std::string::npos, "new saved baseline replaces an older trial baseline");
   ClearTemporarySettingBaselines();
-  // Ultrawide mod: ApplyRenderPreset: 16:9 leaves the presenter's shape alone; auto at 2560x1080 sets it and the factor.
+  // Ultrawide, built in and always on (task 360): ApplyRenderPreset: a 16:9 (or narrower) size leaves the
+  // presenter's shape alone; 2560x1080 sets it and the factor, with no setting.
   rex::cvar::ResetAllToDefaults();
-  ApplyRenderPreset(2560, 1080);
+  ApplyRenderPreset(1920, 1080);
   Equals("native_display_aspect", "");
   Check(UltrawideFactor() == 1.0f, "16:9: factor 1");
-  rex::cvar::SetFlagByName("kk_aspect", "auto");
+  ApplyRenderPreset(1920, 1200);
+  Equals("native_display_aspect", "");
+  Check(UltrawideFactor() == 1.0f, "16:10: factor 1");
+  Check(!UltrawideSwitchedOff() && PictureAspectFor(2560, 1080) == 2560.0 / 1080.0, "on without a setting");
   ApplyRenderPreset(2560, 1080);
   Equals("native_display_aspect", "2560x1080");
   Check(std::abs(UltrawideFactor() - float(2560.0 / 1080.0 / (16.0 / 9.0))) < 1e-5f, "auto at 2560x1080: factor 1.333");
+  // Task 363: ultrawide sizes in the resolution lists (kk_picture_size).
+  {
+    namespace uw = kk::ultrawide;
+    for (const auto& s : uw::kWideSizes) {
+      Check(uw::ParsePictureSize(std::to_string(s.w) + "x" + std::to_string(s.h)).has_value(), "every listed size parses");
+      Check(s.w <= uw::kMaxPictureWidth && s.h <= uw::kMaxPictureHeight, "no listed size past 7680x2160");
+      const double a = double(s.w) / s.h;
+      Check(a > uw::kGameAspect && a <= uw::kMaxAspect + 1e-9, "every listed size is wider than 16:9, at most 32:9");
+    }
+    Check(!uw::ParsePictureSize(""), "empty: none chosen");
+    Check(!uw::ParsePictureSize("1920x1080"), "16:9 is not a picture size (the window or screen decides)");
+    Check(!uw::ParsePictureSize("1920x1200"), "16:10 neither");
+    Check(!uw::ParsePictureSize("10240x2160"), "past 7680 wide: ignored");
+    Check(!uw::ParsePictureSize("2560x1080x"), "junk after the size: ignored");
+    Check(uw::ParsePictureSize("7680x2160") == std::pair<int, int>{7680, 2160}, "7680x2160 parses");
+    Check(uw::WideSizeOffered(2160, 2160) && !uw::WideSizeOffered(2160, 1440), "a size taller than the screen is not offered");
+    Check(uw::FitWindow(2560, 1080, 3840, 2160) == std::pair<int, int>{2560, 1080}, "fits: the window is the size");
+    const auto [fw, fh] = uw::FitWindow(5120, 1440, 2560, 1440);  // room 2304x1296
+    Check(fw == 2304 && fh <= 1296 && std::abs(double(fw) / fh - 32.0 / 9.0) < 0.01, "too wide: same shape, inside 90%");
+    const auto [gw, gh] = uw::FitWindow(3440, 1440, 1920, 1080);
+    Check(gw <= 1728 && gh <= 972 && gw % 2 == 0 && gh % 2 == 0 && std::abs(double(gw) / gh - 3440.0 / 1440) < 0.01,
+          "3440x1440 on 1080p: even, same shape");
+    rex::cvar::ResetAllToDefaults();
+    Check(!ChosenPictureSize(), "no picture size by default");
+    rex::cvar::SetFlagByName("kk_picture_size", "2560x1080");
+    Check(ChosenPictureSize() == std::pair<int, int>{2560, 1080}, "a chosen picture size is used");
+    rex::cvar::SetFlagByName("kk_picture_size", "2560x1440");
+    Check(!ChosenPictureSize(), "a 16:9 size in the setting is ignored");
+    rex::cvar::ResetAllToDefaults();
+  }
+  // Task 350a: DirectX 12 is the default graphics API on Windows; a settings file from before Beta 14 (version 3 or
+  // older) moves to it once, before the renderer starts; the player's later choice stays. Linux keeps Vulkan.
+  {
+    auto load = [&](const std::string& text) {
+      std::ofstream(config) << text;
+      rex::cvar::ResetAllToDefaults();
+      ApplyPortDefaults();
+      rex::cvar::LoadConfig(config);
+    };
+    auto file_text = [&] {
+      std::ifstream in(config);
+      return std::string((std::istreambuf_iterator<char>(in)), {});
+    };
+#if defined(_WIN32)
+    for (const char* old : {"vulkan", "auto"}) {
+      for (const char* version : {"2", "3"}) {
+        load(std::string("kk_settings_version = ") + version + "\nnative_backend = \"" + old + "\"\n");
+        Equals("native_backend", old);
+        Check(MigrateGraphicsApi(), "a file from before Beta 14 moves to DirectX 12");
+        Equals("native_backend", "d3d12");
+        MigrateSettings(config);
+        Equals("kk_settings_version", "6");
+        Equals("native_backend", "d3d12");
+        Check(file_text().find("native_backend") == std::string::npos, "DirectX 12 is the default: not written");
+        Check(file_text().find("kk_settings_version = 6") != std::string::npos, "the migration is recorded");
+      }
+      // The next start: the player picks Vulkan by hand, and it stays.
+      rex::cvar::SetFlagByName("native_backend", "vulkan");
+      Check(SaveSettings(config), "save a Vulkan choice made after the update");
+      load(file_text());
+      Check(!MigrateGraphicsApi(), "once only");
+      MigrateSettings(config);
+      Equals("native_backend", "vulkan");
+    }
+    load("kk_settings_version = 3\nnative_backend = \"d3d12\"\n");
+    Check(!MigrateGraphicsApi(), "already DirectX 12: nothing to do");
+    Equals("native_backend", "d3d12");
+    load("kk_settings_version = 3\n");
+    Check(rex::cvar::SetFlagFromCommandLine("native_backend", "vulkan"), "command-line API");
+    Check(!MigrateGraphicsApi(), "a command-line API is this run's own");
+    Equals("native_backend", "vulkan");
+    rex::cvar::ResetAllToDefaults();
+    ApplyPortDefaults();
+    Check(!MigrateGraphicsApi(), "a new install is on DirectX 12 already");
+    Equals("native_backend", "d3d12");
+#else
+    load("kk_settings_version = 3\nnative_backend = \"vulkan\"\n");
+    Check(!MigrateGraphicsApi(), "Linux keeps Vulkan");
+    Equals("native_backend", "vulkan");
+    rex::cvar::ResetAllToDefaults();
+    ApplyPortDefaults();
+    Equals("native_backend", "auto");
+#endif
+  }
+  // Settings version 5 (owner, 21 Oct): HDR is off for every existing player once, also On and Follow Windows; it is
+  // experimental now (F8 panel only), and a later F8 choice saved in a version 5 file stays.
+  {
+    auto load = [&](const std::string& text) {
+      std::ofstream(config) << text;
+      rex::cvar::ResetAllToDefaults();
+      ApplyPortDefaults();
+      rex::cvar::LoadConfig(config);
+    };
+    auto file_text = [&] {
+      std::ifstream in(config);
+      return std::string((std::istreambuf_iterator<char>(in)), {});
+    };
+    rex::cvar::ResetAllToDefaults();
+    Equals("kk_hdr", "off");
+    for (const char* version : {"2", "3", "4"}) {
+      for (const char* mode : {"on", "auto"}) {
+        load(std::string("kk_settings_version = ") + version + "\nkk_hdr = \"" + mode + "\"\n");
+        Equals("kk_hdr", mode);
+        MigrateSettings(config);
+        Equals("kk_hdr", "off");
+        Equals("kk_settings_version", "6");
+        Check(file_text().find("kk_hdr") == std::string::npos, "HDR off is the default: not written");
+      }
+      load(std::string("kk_settings_version = ") + version + "\n");  // Follow Windows was the old default
+      MigrateSettings(config);
+      Equals("kk_hdr", "off");
+    }
+    load("kk_settings_version = 5\nkk_hdr = \"on\"\n");
+    MigrateSettings(config);
+    Equals("kk_hdr", "on");
+    load("kk_settings_version = 4\n");
+    Check(rex::cvar::SetFlagFromCommandLine("kk_hdr", "on"), "command-line HDR");
+    MigrateSettings(config);
+    Equals("kk_hdr", "on");
+    rex::cvar::ResetAllToDefaults();
+  }
+  // Settings version 6 (task 365, owner 23 Oct): Field of view 80 is the default for new installs; a file from before
+  // that did not save kk_fov had the old default, 69, and keeps it; a saved value stays; a version 6 file is left alone.
+  {
+    auto load = [&](const std::string& text) {
+      std::ofstream(config) << text;
+      rex::cvar::ResetAllToDefaults();
+      ApplyPortDefaults();
+      rex::cvar::LoadConfig(config);
+    };
+    auto file_text = [&] {
+      std::ifstream in(config);
+      return std::string((std::istreambuf_iterator<char>(in)), {});
+    };
+    rex::cvar::ResetAllToDefaults();
+    Equals("kk_fov", "80");
+    for (const char* version : {"2", "4", "5"}) {
+      load(std::string("kk_settings_version = ") + version + "\n");
+      MigrateSettings(config);
+      Equals("kk_fov", "69");
+      Equals("kk_settings_version", "6");
+      Check(file_text().find("kk_fov = 69") != std::string::npos, "the old default is written down");
+      load(std::string("kk_settings_version = ") + version + "\nkk_fov = 95\n");
+      MigrateSettings(config);
+      Equals("kk_fov", "95");
+      load(std::string("kk_settings_version = ") + version + "\nkk_fov = 80\n");
+      MigrateSettings(config);
+      Equals("kk_fov", "80");
+    }
+    load("kk_settings_version = 6\n");
+    MigrateSettings(config);
+    Equals("kk_fov", "80");
+    rex::cvar::ResetAllToDefaults();  // a new install: no settings file, the new default
+    ApplyPortDefaults();
+    MigrateSettings(config.parent_path() / "no-settings-file.toml");
+    Equals("kk_fov", "80");
+    rex::cvar::ResetAllToDefaults();
+  }
+  // Task 350a: the setup again gives an existing install a new install's recommendation (the first-setup policy),
+  // whatever tier it had.
+  rex::cvar::ResetAllToDefaults();
+  ApplyPortDefaults();
+  rex::cvar::SetFlagByName("kk_hardware_tier", "high");
+  fake = {{GpuVendor::kNvidia, "NVIDIA GeForce RTX 4050 Laptop GPU", 8 * GiB}, 12, 32 * GiB};
+  ApplyFirstSetupHardwareRecommendation(1920, 1080);
+  Equals("kk_hardware_tier", "low");
+  Equals("native_upscaler_quality", "performance");
+  Equals("native_gi", "low");
   rex::cvar::ResetAllToDefaults();
   std::cout << "PASS: " << checks << " hardware/settings checks; evidence " << dir.string() << '\n';
 }

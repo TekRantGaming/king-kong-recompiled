@@ -16,7 +16,8 @@
 // with its own fixed angle (sub_827C6660 sets 1.0 directly) and is unchanged.
 // The menus keep their own angle (see g_views_since_menu); the port's pause menu does not (task 243).
 //
-// The Ultrawide mod (task 311): the view's angle is also made UltrawideFactor() times wider (the half-angle
+// Ultrawide (task 311; built in and always on since task 360, Beta 17, menus included): the view's angle is
+// also made UltrawideFactor() times wider (the half-angle
 // tangent) so the frustum that skips objects covers the wider picture (no pop-in at the new edges); the
 // projection's height is put back in ultrawide.cpp (ViewWidened), so the picture stays hor+ (the same height).
 
@@ -127,12 +128,21 @@ REX_HOOK_RAW(sub_82872DB8) {
   if (since_menu < 1000) g_views_since_menu.store(since_menu + 1, std::memory_order_relaxed);
   const bool photo = kk::photo::Active();
   const bool menus = since_menu < 8 && !kk::play::PauseMenuOpen() && !photo;
-  // The Ultrawide mod (1 with it off, and in the menus): the angle also widened for the frustum (see the top).
+  // Ultrawide (1 on a 16:9 screen): the angle also widened for the frustum (see the top). Task 360: the menus too
+  // (hor+ keeps their 3D pieces where they were relative to the middle and the same size, and their 2D is boxed
+  // the same way in ultrawide.cpp, so both still line up); the menus keep their own angle otherwise (no kk_fov).
   static const bool old_cull = [] {  // KK_ULTRAWIDE_OLD_CULL=1 (diagnostics): the 16:9 frustum of task 223
     const char* e = std::getenv("KK_ULTRAWIDE_OLD_CULL");
     return e && *e == '1';
   }();
-  const float uw = menus || old_cull ? 1.0f : kk::UltrawideFactor();
+  const float uw = old_cull ? 1.0f : kk::UltrawideFactor();
+  if (menus && uw != 1.0f && fov > 0.01f && fov < 3.0f) {
+    ViewWidenedScope widened(uw);
+    StoreF(base, at, WidenAngle(fov, uw));
+    __imp__sub_82872DB8(ctx, base);
+    StoreF(base, at, fov);
+    return;
+  }
   // Photo mode: its own field of view for the scene view it flies (the pause's menu script runs meanwhile).
   if (freecam && photo && fov > 0.01f && fov < 3.0f) {
     const float wide = k == 1.0f ? fov : 2.0f * std::atan(k * std::tan(fov * 0.5f));

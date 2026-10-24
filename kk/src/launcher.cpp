@@ -8,7 +8,6 @@
 #include "benchmark.h"
 #include "launcher_benchmark.h"
 #include "launcher_art.h"
-#include "hdr_display.h"
 #include "setup_compare.h"
 #include "workshop_art.h"
 #include "launcher_music.h"
@@ -18,10 +17,16 @@
 #include "social_panel.h"
 #include "input_diag.h"
 #include "coop_runtime.h"
+#include "easter_egg.h"
+#include "easter_egg_logic.h"
+#include "countdown.h"
 #include "menu_scene.h"
 #include "loading_loop.h"
 #include "startup_movies.h"
 #include "startup_movies_logic.h"
+#include "setup_again.h"
+#include "setup_progress.h"
+#include "hardware_recommendation.h"
 #include "notify_logic.h"
 #include "system_notify.h"
 #include "ps2_movies.h"
@@ -30,6 +35,7 @@
 #include "display_modes.h"
 #include "steam_shortcut.h"
 #include "update.h"
+#include "update_channel.h"
 #include "glyphs.h"
 #include "key_glyphs.h"
 #include "discord_presence.h"
@@ -38,11 +44,13 @@
 #include "exit_evidence.h"
 #include "exit_evidence_logic.h"
 #include "dev_launcher_chain.h"
-#include "hooks/kk_native_ui.h"  // the temporal upscalers this PC runs
+#include "hooks/kk_native_ui.h"
+#include "backend/startup_steps.h"  // the temporal upscalers this PC runs
 #include "debug_overlay_logic.h"  // the upscalers the running game offers (as F8 lists them)
 #include "ultrawide_logic.h"  // the Ultrawide mod's picture shape (task 311)
 
 #include <algorithm>
+#include <array>
 #include <atomic>
 #include <cctype>
 #include <chrono>
@@ -144,7 +152,7 @@ struct TexturePackZipChoice {
   kk::content::ImportTarget target = kk::content::ImportTarget::kTexturePack;  // task 209: which import button
 } texture_pack_zip_choice;
 constexpr const char* kProjectUrl = "https://github.com/TekRantGaming/king-kong-recompiled";
-constexpr const char* kDiscordUrl = "https://discord.gg/PET2xU5FJq";  // permanent (expires_at null)
+constexpr const char* kDiscordUrl = "https://discord.gg/8eakYSvBZS";  // the owner's invite (23 Oct)
 #include "discord_icon.inc"
 #include "steam_icon.inc"
 constexpr const char* kOnlineAbout =
@@ -153,7 +161,7 @@ constexpr const char* kOnlineAbout =
     "versions can prepare them in advance. It also sends an anonymous performance summary when you quit (frame "
     "rate per chapter, graphics card, driver and main graphics settings) and, after a crash, the crash report "
     "with your user name and personal folders removed. To count you, the launcher sends a tiny anonymous "
-    "check-in every 5 minutes: a random number that isn't linked to you, the port's version (stable or beta), "
+    "check in every 5 minutes: a random number that isn't linked to you, the port's version (stable or beta), "
     "Windows or Linux, and whether you're in the game. No name, account, IP address or personal files are "
     "kept, and switching it off stops all of this and deletes the random number.";
 #define KK_TIMES "\xC3\x97"
@@ -316,7 +324,7 @@ constexpr std::pair<int, const char*> kLanguages[] = {
 // native_upscaler: on Vulkan, DLSS and XeSS need the device made with their extensions (the native
 // renderer asks for them when it makes the device, before the launcher opens).
 // VSync: Vulkan chooses its present mode when the swapchain is created.
-constexpr const char* kRestartCvars[] = {"present_effect", "window_width", "window_height", "monitor", "gpu_plugin",
+constexpr const char* kRestartCvars[] = {"present_effect", "window_width", "window_height", "kk_picture_size", "monitor", "gpu_plugin",
                                          "native_upscaler", "native_backend",
                                          "d3d12_allow_variable_refresh_rate_and_tearing"};
 
@@ -410,7 +418,7 @@ OfferedUpscalers OfferedTemporalUpscalers() {
   o.known = o.known || c.state == 0 || c.state == 3;
 #endif
   o.fsr3 = c.fsr3;
-  o.fsr4 = c.fsr4;
+  o.fsr4 = c.fsr4 && Fsr4AllowedOnThisGpu();  // task 368: AMD cards only
   o.dlss = c.dlss;
   o.xess = c.xess;
   return o;
@@ -439,10 +447,10 @@ OfferedUpscalers OfferedWhilePlaying() {
 }
 
 // ------------------------------------------------------------ presets ---
-// Graphics presets set the upscaler, render quality, anti-aliasing, texture
-// filtering, ambient occlusion and GI (motion blur and fog are left to taste).
+// Graphics presets set the upscaler and every quality setting of the Graphics page (graphics_presets.h: render
+// quality, anti-aliasing, sharpness, texture filtering, ambient occlusion, GI, shadows, water reflections, light
+// shafts, effect resolution); motion blur, screen blur and fog are left to taste.
 // The preset shown is the one the settings match; anything else is Custom.
-// Medium is the default settings (the default upscaler at Quality).
 
 // The upscaler modes (kk_render_quality); -1 for another render quality.
 constexpr const char* kUpscalerModes[] = {"native", "quality", "balanced", "performance"};
@@ -533,10 +541,12 @@ bool UsingNativeRenderer() { return Get("gpu_plugin") == "native"; }
 // this graphics card (with that preset's global illumination), the native renderer's GTAO at Strong and 60 FPS.
 // What every new install starts with (StartFullSetup, job J6) and what "Use recommended for my PC" on graphics
 // page 4 gives. Keeps the native renderer. native-renderer/docs/beta.md.
-void ApplyRemastered() {
+void ApplyRemastered(bool first_setup = false) {
   SetOriginalLook(false);
   const auto output = PrimaryScreenSize();
-  ApplyHardwareRecommendation(true, output.first, output.second);
+  // First setup keeps the tier already chosen before the launcher opened.
+  // Later explicit Remastered actions continue to detect as before.
+  ApplyHardwareRecommendation(!first_setup, output.first, output.second);
   SetInt("ao_mode", 1);
   SetInt("ao_strength", 3);  // Strong: GTAO's default since Beta 3 (the owner's choice)
   SetInt("native_ao_normal_smoothing", 2);  // High (owner 17 Oct): smooths the faceted AO on low-poly models
@@ -554,7 +564,7 @@ void ResetBetaOnlySettings() {
     if (e.type == rex::cvar::FlagType::Command) continue;
     if (e.source == rex::cvar::Source::kCommandLine || e.source == rex::cvar::Source::kEnvironment) continue;
     const bool beta = e.name.rfind("native_", 0) == 0 || e.category == "Native renderer" || e.name == "kk_renderer" ||
-                      e.name == "kk_fullscreen_mode" || e.name == "gpu_plugin";
+                      e.name == "kk_fullscreen_mode" || e.name == "kk_picture_size" || e.name == "gpu_plugin";
     if (beta && e.getter() != e.default_value) REXLOG_INFO("KK: switching to stable: {} back to its default", e.name);
     if (beta) rex::cvar::ResetToDefault(e.name);
   }
@@ -979,7 +989,7 @@ class SettingsPages {
       }
     }
     items.push_back(Section("Achievements"));
-    items.push_back(CvarToggle("Sound", "The sound that plays with each pop-up.", "kk_achievement_sound"));
+    items.push_back(CvarToggle("Sound", "The sound that plays with each popup.", "kk_achievement_sound"));
     const bool sound = GetBool("kk_achievement_sound");
     const char* sound_note = "Switch Sound on to choose it.";
     {
@@ -992,7 +1002,7 @@ class SettingsPages {
       it.type = ItemType::kChoice;
       it.label = "Sound to play";
       it.description =
-          "The built-in chime or a sound you added. Put .wav files in the sounds folder to see them here.";
+          "The built in chime or a sound you added. Put .wav files in the sounds folder to see them here.";
       const std::string cur = Get("kk_achievement_sound_file");
       it.index = 0;
       std::vector<std::string> values;
@@ -1082,18 +1092,12 @@ class SettingsPages {
     return std::move(Disable(it, GetBool("kk_original_look"), kSetByOriginal));
   }
 
-  // The experimental Ultrawide mod (task 311): the shape of the picture the game draws for out_w x out_h (16:9
-  // when the mod is off, so every size below is as before). In game: the shape the running game draws
-  // (UltrawideFactor, set at the start). In the main menu: the shape the next start gives (kk_aspect, or "auto"
-  // while the built-in Ultrawide mod is switched on: its value, put over the player's at the start).
+  // Ultrawide (task 311; built in since task 360, Beta 17): the shape of the picture the game draws for
+  // out_w x out_h (16:9 on a 16:9 or narrower screen, so every size below is as before). In game: the shape the
+  // running game draws (UltrawideFactor, set at the start). In the main menu: the shape the next start gives.
   double PictureAspect(int out_w, int out_h) const {
     if (in_game_) return ultrawide::kGameAspect * double(UltrawideFactor());
-    std::string setting = Get("kk_aspect");
-    if (ultrawide::WidthFactor(ultrawide::AspectFor(setting, out_w, out_h)) == 1.0) {
-      const std::string mods = "|" + Get("kk_mods") + "|";
-      if (mods.find("|builtin:ultrawide|") != std::string::npos) setting = "auto";
-    }
-    const double aspect = ultrawide::AspectFor(setting, out_w, out_h);
+    const double aspect = PictureAspectFor(out_w, out_h);
     return ultrawide::WidthFactor(aspect) == 1.0 ? ultrawide::kGameAspect : aspect;
   }
 
@@ -1103,7 +1107,9 @@ class SettingsPages {
     const auto [out_w, out_h] = cb_.output_size ? cb_.output_size() : std::pair<int, int>{1280, 720};
     const double aspect = PictureAspect(out_w, out_h);  // 16:9 unless the Ultrawide mod is on
     const bool original = GetBool("kk_original_look");
-    const char* draws = GetBool("fullscreen") ? "Draws {0} for your {1} screen." : "Draws {0} for your {1} window.";
+    const char* draws = ChosenPictureSize()    ? "Draws {0} for a {1} picture."  // task 363: a chosen ultrawide size
+                        : GetBool("fullscreen") ? "Draws {0} for your {1} screen."
+                                                : "Draws {0} for your {1} window.";
     items.push_back(Section("Upscaling"));
     const std::string temporal = CurrentTemporalUpscaler();
     {
@@ -1325,10 +1331,13 @@ class SettingsPages {
     if (ExclusiveFullscreen()) {
       items.push_back(ResolutionItem());
       items.push_back(RefreshRateItem());
+    } else if (GetBool("fullscreen")) {
+      items.push_back(BorderlessResolutionItem());  // task 363
     }
     {
-      // The Ultrawide mod on (task 311): the picture is already wider than 16:9 (its shape, up to 32:9), so the
-      // row says so instead of "Letterbox 16:9"; the setting still decides what a screen wider still shows.
+      // A screen or window wider than 16:9 (task 311, built in since task 360): the picture is already wider (its
+      // shape, up to 32:9), so the row says so instead of "Letterbox 16:9"; the setting still decides what a
+      // screen wider still shows.
       const auto [out_w, out_h] = cb_.output_size ? cb_.output_size() : std::pair<int, int>{1280, 720};
       const double aspect = PictureAspect(out_w, out_h);
       if (aspect == ultrawide::kGameAspect) {
@@ -1337,10 +1346,11 @@ class SettingsPages {
                                    "present_letterbox", {{"Letterbox 16:9", "true"}, {"Stretch", "false"}}));
       } else {
         Item it = CvarChoice("Aspect ratio",
-                             "What the game's wider picture (the Ultrawide mod) does on a screen of another shape.",
+                             "What the game's wider picture does on a screen wider still.",
                              "present_letterbox", {{"Letterbox", "true"}, {"Stretch", "false"}});
         const auto [pw, ph] = ultrawide::LargestInside(out_w, out_h, aspect);
-        it.facts.push_back(F("The Ultrawide mod (experimental) is on: the game's picture is {0}.", {Size(pw, ph)}));
+        it.facts.push_back(F("Ultrawide: the game fills your wide screen with a {0} picture and shows more at the sides.",
+                             {Size(pw, ph)}));
         items.push_back(std::move(it));
       }
     }
@@ -1350,18 +1360,22 @@ class SettingsPages {
                                "Makes each frame wait for your screen's next refresh.",
                                "d3d12_allow_variable_refresh_rate_and_tearing", "Off", "On", /*invert=*/true));
     items.push_back(FrameRateItem());
-    if (FindFlag("present_hdr")) HdrItems(items);
+    // HDR (owner, 21 Oct, Beta 14): experimental, off by default, only in the F8 graphics panel
+    // (debug_overlay.cpp); no longer a row here, in the setup or in the pause menu.
     // Camera (owner, 18 Oct, after task 222): Field of view, Motion blur and Camera shake moved here from Gameplay
     // and Graphics; Performance metrics went to Gameplay. The pause menu's Display page follows.
     items.push_back(Section("Camera"));
     {
       Item it = CvarSlider("Field of view",
-                           "How wide the camera sees. 69" KK_DEG " is the original for Jack; Kong, cutscene and other "
-                           "cameras widen by the same amount. Jack's gun keeps its usual size.",
+                           "How wide the camera sees. 80" KK_DEG " is recommended and 69" KK_DEG " is the original for "
+                           "Jack; Kong, cutscene and other cameras widen by the same amount. Jack's gun keeps its usual "
+                           "size.",
                            "kk_fov", 69, 110, 1, [](float v) {
+                             // Task 365 (owner, 23 Oct): 80 is the default and marked recommended, 69 the original.
                              const int d = int(std::lround(v));
-                             return d <= 69 ? F("{0}" KK_DEG " (original)", {std::to_string(d)})
-                                            : std::to_string(d) + KK_DEG;
+                             return d <= 69   ? F("{0}" KK_DEG " (original)", {std::to_string(d)})
+                                    : d == 80 ? F("{0}" KK_DEG " (recommended)", {std::to_string(d)})
+                                              : std::to_string(d) + KK_DEG;
                            });
       items.push_back(std::move(Disable(it, original, kSetByOriginal)));
     }
@@ -1386,93 +1400,12 @@ class SettingsPages {
     return items;
   }
 
-  // Display > HDR output (owner, 17/18 Oct, HDR follows Windows; hdr_display.h): HDR follows Windows by
-  // default, with Peak brightness and Paper white from Windows HDR Calibration and Windows' SDR content
-  // brightness; On, Off and Manual levels are the player's overrides. The rows say what Windows reports.
-  // A choice that changes what the presenter is asked for: applied at once, not at the next refresh.
-  static Item& ApplyHdrAtOnce(Item& it) {
-    if (auto set = it.on_choice) it.on_choice = [set](int i) { set(i); hdr::Apply("setting"); };
-    if (auto reset = it.on_default) it.on_default = [reset] { reset(); hdr::Apply("setting"); };
-    return it;
-  }
-
-  void HdrItems(std::vector<Item>& items) {
-    hdr::ApplyIfStale();  // follows Windows (and the calibration app) while the page is open
-    const hdr::DisplayInfo d = hdr::LastDisplay();
-    auto nits = [](float value) { return std::to_string(int(std::lround(value))); };
-    items.push_back(Section("HDR output"));
-    {
-      Item it = CvarChoice("HDR",
-                           "Follow Windows uses HDR when Windows HDR is on for the screen the game is on. On always "
-                           "asks for HDR, which also needs Windows HDR. Off always uses SDR.",
-                           "kk_hdr", {{"Follow Windows", "auto"}, {"On", "on"}, {"Off", "off"}});
-      if (!d.detected) it.facts.push_back("Windows HDR could not be detected, so Follow Windows uses SDR.");
-      else if (d.hdr_on) it.facts.push_back("Windows HDR is on for this screen.");
-      else if (d.hdr_supported)
-        it.facts.push_back("Windows HDR is off for this screen. It can be turned on in Windows Settings > System > "
-                           "Display.");
-      else it.facts.push_back("Windows HDR is off for this screen.");
-      items.push_back(std::move(ApplyHdrAtOnce(it)));
-    }
-    if (!GetBool("present_hdr")) return;
-    const bool manual = Get("kk_hdr_levels") == "manual";
-    {
-      Item it = CvarChoice("HDR brightness",
-                           "Automatic takes Peak brightness from Windows HDR Calibration and Paper white from the SDR "
-                           "content brightness in Windows. Manual uses the sliders below.",
-                           "kk_hdr_levels", {{"Automatic (from Windows)", "auto"}, {"Manual", "manual"}});
-      switch (hdr::AutoPeakSource(d)) {
-        case hdr::PeakSource::kCalibration:
-          it.facts.push_back(F("Windows HDR Calibration: {0} nits peak brightness.", {nits(d.profile->max_nits)}));
-          break;
-        case hdr::PeakSource::kScreen:
-          it.facts.push_back(F("No Windows HDR Calibration found. The screen reports {0} nits peak brightness.",
-                               {nits(d.dxgi_max_nits)}));
-          break;
-        case hdr::PeakSource::kDefault:
-          it.facts.push_back(F("No peak brightness found, so {0} nits is used.", {nits(hdr::kPeakDefault)}));
-          break;
-      }
-      if (d.sdr_white_nits >= hdr::kPaperMin)
-        it.facts.push_back(F("SDR content brightness in Windows: {0} nits.", {nits(d.sdr_white_nits)}));
-      else
-        it.facts.push_back(F("SDR content brightness in Windows not found, so {0} nits is used.",
-                             {nits(hdr::kPaperDefault)}));
-      items.push_back(std::move(ApplyHdrAtOnce(it)));
-    }
-    auto value = [](float v) { return std::to_string(int(std::lround(v))) + " nits"; };
-    constexpr const char* kSetByWindows = "Set from Windows. Choose Manual under HDR brightness to change it.";
-    {
-      Item it = CvarSlider("Peak brightness (nits)", "Highlight ceiling, limited to the display's reported peak brightness.",
-                           "present_hdr_peak", 80, 10000, 20, value);
-      items.push_back(std::move(Disable(it, !manual, kSetByWindows)));
-    }
-    {
-      Item it = CvarSlider("Paper white (nits)", "Brightness of neutral whites and menus. Limited by peak brightness.",
-                           "present_hdr_paper_white", 80, 500, 10, value);
-      items.push_back(std::move(Disable(it, !manual, kSetByWindows)));
-    }
-#if defined(_WIN32)
-    if (!in_game_) {  // the launcher only (not in the pause menu: the app takes the whole screen)
-      const bool installed = hdr::CalibrationAppInstalled();
-      Item it = ActionItem("Open Windows HDR Calibration",
-                           installed ? "Opens the Windows HDR Calibration app to measure your screen. The values here "
-                                       "are read again when you come back."
-                                     : "Opens the free Windows HDR Calibration app in the Microsoft Store. Install it, "
-                                       "then select this again to measure your screen.",
-                           "", [] { hdr::OpenCalibrationApp(); });
-      items.push_back(std::move(it));
-    }
-#endif
-  }
-
   // Display > Picture (owner, 18 Oct; GitHub issue #44): brightness and gamma of the game's picture, applied
   // by the renderer as it shows each frame (native-renderer/backend/picture_adjust.h), so they change at once
   // in the launcher and in the pause menu. Only the game's picture changes: the launcher, the menus and the
-  // overlays stay as they are. The defaults are the game's own picture; with HDR, white stays at Paper white.
+  // overlays stay as they are. The defaults are the game's own picture (with HDR, white stays at Paper white).
   void PictureItems(std::vector<Item>& items) {
     items.push_back(Section("Picture"));
-    const bool hdr = GetBool("present_hdr");
     {
       Item it = CvarSlider("Brightness",
                            "Raises or lowers the darkest parts of the game's picture. Higher shows more in dark "
@@ -1482,7 +1415,6 @@ class SettingsPages {
                              const int n = int(std::lround(v));
                              return n > 0 ? "+" + std::to_string(n) : std::to_string(n);
                            });
-      if (hdr) it.facts.push_back("With HDR, white stays at the Paper white brightness.");
       items.push_back(std::move(it));
     }
     {
@@ -1500,7 +1432,6 @@ class SettingsPages {
         std::snprintf(b, sizeof(b), "%.2f", std::clamp(std::round(v * 20.0f) / 20.0f, 0.5f, 1.5f));
         Set("kk_gamma", b);
       };
-      if (hdr) it.facts.push_back("With HDR, white stays at the Paper white brightness.");
       items.push_back(std::move(it));
     }
   }
@@ -1534,30 +1465,81 @@ class SettingsPages {
                                                  {1920, 1080}, {2560, 1440}, {3200, 1800}};
     const auto [screen_w, screen_h] = cb_.screen_size ? cb_.screen_size() : std::pair<int, int>{1 << 16, 1 << 16};
     auto close_to = [](int a, int b) { return std::abs(a - b) <= 2; };
+    const auto picture = ChosenPictureSize();
     Item it;
     it.type = ItemType::kChoice;
     it.label = "Window size";
     it.description = "The size of the game's window.";
     it.index = -1;
-    it.value_text = Size(w, h);
+    it.value_text = picture ? Size(picture->first, picture->second) : Size(w, h);
     it.default_text = "Default";
     std::vector<std::pair<int, int>> sizes;
+    std::vector<bool> wide;  // an ultrawide picture size (task 363), not a window size
     for (auto [sw, sh] : kSizes) {
       if (sw >= screen_w || sh >= screen_h) continue;  // must fit with its frame
-      if (close_to(sw, w) && close_to(sh, h)) it.index = int(sizes.size());
+      if (!picture && close_to(sw, w) && close_to(sh, h)) it.index = int(sizes.size());
       it.options.push_back(sw == 0 ? std::string("Default") : Size(sw, sh));
       sizes.emplace_back(sw, sh);
+      wide.push_back(false);
     }
-    it.on_choice = [sizes, scale](int i) {
-      const auto [sw, sh] = sizes[size_t(i)];
+    // Task 363: the ultrawide sizes too, even wider than the screen: the window then takes the largest size of that
+    // shape that fits (FitWindow) and the game still draws the chosen size.
+    WideOptions(screen_h, picture, it, sizes, wide);
+    it.on_choice = [sizes, wide, scale, fit_w = screen_w, fit_h = screen_h](int i) {
+      auto [sw, sh] = sizes[size_t(i)];
+      if (wide[size_t(i)]) {
+        Set("kk_picture_size", std::to_string(sw) + "x" + std::to_string(sh));
+        const auto window = ultrawide::FitWindow(sw, sh, fit_w, fit_h);
+        sw = window.first;
+        sh = window.second;
+      } else {
+        Reset("kk_picture_size");
+      }
+      if (sw == 0) {
+        Reset("window_width");
+        Reset("window_height");
+        return;
+      }
       SetInt("window_width", int(sw / scale + 0.5));
       SetInt("window_height", int(sh / scale + 0.5));
     };
     it.on_default = [] {
+      Reset("kk_picture_size");
       Reset("window_width");
       Reset("window_height");
     };
+    if (picture)
+      it.facts.push_back(F("The game draws a {0} picture and fits it into your {1} window.",
+                           {Size(picture->first, picture->second), Size(w, h)}));
     return it;
+  }
+
+  // Task 363 (Beta 17): the ultrawide sizes (ultrawide_logic.h kWideSizes) a resolution list offers for a screen
+  // screen_h tall, as "2560 x 1080  .  21:9", after the list's own; the chosen one (kk_picture_size) is always there
+  // and selected. Skips sizes the list already has as its own (a real ultrawide monitor's modes).
+  static void WideOptions(int screen_h, const std::optional<std::pair<int, int>>& picture, Item& it,
+                          std::vector<std::pair<int, int>>& sizes, std::vector<bool>& wide) {
+    const size_t own = sizes.size();
+    auto listed = [&](int w, int h) {
+      for (size_t i = 0; i < own; ++i)
+        if (sizes[i] == std::pair<int, int>{w, h}) return true;
+      return false;
+    };
+    auto add = [&](int w, int h, const char* shape) {
+      if (picture && *picture == std::pair<int, int>{w, h}) it.index = int(sizes.size());
+      it.options.push_back(Size(w, h) + "  " KK_DOT "  " + shape);
+      sizes.emplace_back(w, h);
+      wide.push_back(true);
+    };
+    bool chosen_added = false;
+    for (const auto& s : ultrawide::kWideSizes) {
+      const bool chosen = picture && *picture == std::pair<int, int>{s.w, s.h};
+      if (!chosen && (!ultrawide::WideSizeOffered(s.h, screen_h) || listed(s.w, s.h))) continue;
+      add(s.w, s.h, s.shape);
+      chosen_added = chosen_added || chosen;
+    }
+    if (picture && !chosen_added)  // from the settings file, not one of the list's
+      add(picture->first, picture->second, double(picture->first) / picture->second > 3.0 ? "32:9" : "21:9");
   }
 
   // Fullscreen resolution (display_modes.h): Desktop, or one of the monitor's sizes, with its refresh
@@ -1618,9 +1600,19 @@ class SettingsPages {
     it.on_choice = [this](int i) {
       if (i == 1) Set("kk_fullscreen_mode", "desktop");
       if (i == 2 && !ParseDisplayMode(Get("kk_fullscreen_mode"))) Set("kk_fullscreen_mode", DesktopModeValue());
+      // Task 363: an ultrawide picture size stays chosen; Windowed gets a window of its shape that fits.
+      if (const auto picture = ChosenPictureSize(); i == 0 && picture) {
+        const double scale = cb_.dpi_scale ? cb_.dpi_scale() : 1.0;
+        const auto [screen_w, screen_h] =
+            cb_.screen_size ? cb_.screen_size() : std::pair<int, int>{picture->first * 2, picture->second * 2};
+        const auto [ww, wh] = ultrawide::FitWindow(picture->first, picture->second, screen_w, screen_h);
+        SetInt("window_width", int(ww / scale + 0.5));
+        SetInt("window_height", int(wh / scale + 0.5));
+      }
       SetFullscreen(i != 0);
     };
     it.on_default = [this] {
+      Reset("kk_picture_size");
       Reset("kk_fullscreen_mode");
       Reset("fullscreen");
       if (cb_.set_fullscreen) cb_.set_fullscreen(GetBool("fullscreen"));
@@ -1630,10 +1622,43 @@ class SettingsPages {
     return it;
   }
 
+  // Borderless only (task 363): the desktop's own size, or an ultrawide picture size, drawn at that size and fitted
+  // into the screen (black bars above and below on a 16:9 screen; the Aspect ratio row can stretch it instead).
+  Item BorderlessResolutionItem() {
+    const auto picture = ChosenPictureSize();
+    const auto desktop = ParseDisplayMode(DesktopModeValue());
+    const auto [screen_w, screen_h] = desktop ? std::pair<int, int>{desktop->width, desktop->height}
+                                      : cb_.screen_size ? cb_.screen_size()
+                                                        : std::pair<int, int>{1920, 1080};
+    Item it;
+    it.type = ItemType::kChoice;
+    it.label = "Resolution";
+    it.description = "The size of the game's picture: your desktop's, or a wider one shown with black bars above and "
+                     "below.";
+    it.options.push_back("Desktop");
+    it.index = 0;
+    it.default_text = "Desktop";
+    std::vector<std::pair<int, int>> sizes = {{0, 0}};
+    std::vector<bool> wide = {false};
+    WideOptions(screen_h, picture, it, sizes, wide);
+    it.value_text = picture ? Size(picture->first, picture->second) : Size(screen_w, screen_h);
+    it.on_choice = [sizes](int i) {
+      const auto [w, h] = sizes[size_t(i)];
+      if (w == 0) Reset("kk_picture_size");
+      else Set("kk_picture_size", std::to_string(w) + "x" + std::to_string(h));
+    };
+    it.on_default = [] { Reset("kk_picture_size"); };
+    it.facts.push_back(picture ? F("The game draws a {0} picture and fits it into your {1} screen.",
+                                   {Size(picture->first, picture->second), Size(screen_w, screen_h)})
+                               : F("The game will be shown at {0}.", {Size(screen_w, screen_h)}));
+    return it;
+  }
+
   // Fullscreen only: the screen's size while the game runs.
   Item ResolutionItem() {
     LoadDisplayModes();
     const auto cur = ParseDisplayMode(Get("kk_fullscreen_mode"));
+    const auto picture = ChosenPictureSize();
     Item it;
     it.type = ItemType::kChoice;
     it.label = "Resolution";
@@ -1645,17 +1670,31 @@ class SettingsPages {
       it.options.push_back(Size(m.width, m.height));
     }
     it.index = -1;
-    for (size_t i = 0; i < sizes.size(); ++i)
-      if (sizes[i] == std::pair<int, int>{cur->width, cur->height}) it.index = int(i);
-    if (it.index < 0) {  // a size this display doesn't have (another monitor's, or the settings file's)
+    if (!picture)
+      for (size_t i = 0; i < sizes.size(); ++i)
+        if (sizes[i] == std::pair<int, int>{cur->width, cur->height}) it.index = int(i);
+    if (it.index < 0 && !picture) {  // a size this display doesn't have (another monitor's, or the settings file's)
       it.index = int(sizes.size());
       sizes.emplace_back(cur->width, cur->height);
       it.options.push_back(F("{0} (not on this display)", {Size(cur->width, cur->height)}));
     }
-    it.facts.push_back(F("The game will be shown at {0}.", {Size(cur->width, cur->height)}));
+    // Task 363: the ultrawide sizes this display has no mode for: the screen stays at the desktop's mode and the game
+    // draws the chosen size, fitted into it.
+    std::vector<bool> wide(sizes.size(), false);
     const auto desktop = ParseDisplayMode(DesktopModeValue());
+    WideOptions(desktop ? desktop->height : cur->height, picture, it, sizes, wide);
+    it.facts.push_back(picture ? F("The game draws a {0} picture and fits it into your {1} screen.",
+                                   {Size(picture->first, picture->second), Size(cur->width, cur->height)})
+                               : F("The game will be shown at {0}.", {Size(cur->width, cur->height)}));
     if (desktop) it.default_text = Size(desktop->width, desktop->height);
-    it.on_choice = [this, sizes, cur](int i) {
+    it.on_choice = [this, sizes, wide, cur](int i) {
+      if (wide[size_t(i)]) {
+        const auto [w, h] = sizes[size_t(i)];
+        Set("kk_picture_size", std::to_string(w) + "x" + std::to_string(h));
+        Set("kk_fullscreen_mode", DesktopModeValue());
+        return;
+      }
+      Reset("kk_picture_size");
       const auto [w, h] = sizes[size_t(i)];
       const std::vector<float> rates = RatesAt(w, h);
       // The rate chosen before when this size has it, else this size's highest.
@@ -1664,7 +1703,10 @@ class SettingsPages {
         if (cur && std::fabs(r - cur->refresh) < 0.01f) rate = r;
       Set("kk_fullscreen_mode", DisplayMode{w, h, rate}.Value());
     };
-    it.on_default = [this] { Set("kk_fullscreen_mode", DesktopModeValue()); };
+    it.on_default = [this] {
+      Reset("kk_picture_size");
+      Set("kk_fullscreen_mode", DesktopModeValue());
+    };
     return it;
   }
 
@@ -1726,8 +1768,7 @@ class SettingsPages {
       Item it;
       it.type = ItemType::kChoice;
       it.label = "Preset";
-      it.description = "Sets render quality, upscaling, anti-aliasing, texture filtering, ambient occlusion and global "
-                       "illumination together. Changing one of them shows Custom.";
+      it.description = "Sets every quality setting on this page at once. Changing one of them shows Custom.";
       for (const auto& p : kGraphicsPresets) it.options.push_back(p.label);
       it.options.push_back("Custom");
       const int match = MatchGraphicsPreset();
@@ -1745,7 +1786,7 @@ class SettingsPages {
       Item it;
       it.label = "Recommended";
       it.description = "Detect your hardware and recommend render resolution, upscaling, ambient occlusion and global illumination. "
-                       "Settings you changed are kept. The frame-rate cap, graphics API and other lighting effects are kept.";
+                       "Settings you changed are kept. The frame rate cap, graphics API and other lighting effects are kept.";
       const std::string tier = Get("kk_hardware_tier");
       it.value_text = tier == "low" ? "Low" : tier == "mid" ? "Medium" : tier == "high" ? "High" : tier;
       it.on_activate = [this] {
@@ -1760,7 +1801,7 @@ class SettingsPages {
     UpscalingItems(items);
     items.push_back(Section("Image"));
     {
-      Item it = CvarChoice("Anti-aliasing", "Smooths jagged edges after the frame is drawn.", "swap_post_effect",
+      Item it = CvarChoice("Antialiasing", "Smooths jagged edges after the frame is drawn.", "swap_post_effect",
                            {{"Off", "none"}, {"FXAA", "fxaa"}, {"SMAA", "smaa"}});
       items.push_back(std::move(Disable(it, original, kSetByOriginal)));
     }
@@ -1836,7 +1877,7 @@ class SettingsPages {
     }
     {
       Item it = CvarToggle("Distance fog",
-                           "The haze over far-away scenery.",
+                           "The haze over far away scenery.",
                            "kk_fog");
       items.push_back(std::move(Disable(it, original, kSetByOriginal)));
     }
@@ -2091,20 +2132,32 @@ class SettingsPages {
       Item api;
       api.type = ItemType::kChoice;
       api.label = "Graphics API";
+      const std::string backend = Get("native_backend");
 #if defined(__linux__)
       api.description = "How the renderer talks to your graphics card.";
       api.options = {"Auto", "Vulkan"};
-#else
-      api.description = "How the renderer talks to your graphics card.";
-      api.options = {"Auto", "Vulkan", "DirectX 12"};
-#endif
-      const std::string backend = Get("native_backend");
-      api.index = backend == "auto" ? 0 : backend == "vulkan" ? 1 : backend == "d3d12" ? 2 : -1;
-      api.value_text = backend;
+      api.index = backend == "auto" ? 0 : backend == "vulkan" ? 1 : -1;
       api.default_text = "Auto";
+#else
+      // Task 350a (owner, 21 Oct): DirectX 12 is the recommended API and the default on Windows; Vulkan is the
+      // other choice and the fallback when DirectX 12 cannot start. "auto" (the renderer's own, Vulkan) is not
+      // offered any more: a value of it from the command line shows as Vulkan, which it runs.
+      api.description = "How the renderer talks to your graphics card.";
+      // Task 368: on Intel integrated graphics Vulkan is the default and the recommended one.
+      const bool intel = IntelIntegratedGraphics();
+      api.options = intel ? std::vector<std::string>{"DirectX 12", "Vulkan (recommended)"}
+                          : std::vector<std::string>{"DirectX 12 (recommended)", "Vulkan"};
+      api.index = backend == "d3d12" ? 0 : backend == "vulkan" || backend == "auto" ? 1 : -1;
+      api.default_text = intel ? "Vulkan (recommended)" : "DirectX 12 (recommended)";
+#endif
+      api.value_text = backend;
       api.on_choice = [](int i) {
         startup::ManualChoice();  // the player's choice wins over a startup fallback
-        Set("native_backend", i == 0 ? "auto" : i == 1 ? "vulkan" : "d3d12");
+#if defined(__linux__)
+        Set("native_backend", i == 0 ? "auto" : "vulkan");
+#else
+        Set("native_backend", i == 0 ? "d3d12" : "vulkan");
+#endif
         ApplyUpscalerDefaults();
       };
       api.on_default = [] {
@@ -2179,11 +2232,11 @@ class SettingsPages {
       items.push_back(ProfileToggle("Inventory", "Show the game's inventory indicators.", play::ProfileOption::kInventory,
                                     profile.inventory));
     }
-    items.push_back(CvarToggle("Notifications", "A pop-up when you unlock an achievement in game.",
+    items.push_back(CvarToggle("Notifications", "A popup when you unlock an achievement in game.",
                                "kk_achievement_toasts"));
-    items.push_back(CvarChoice("Pop-up style",
+    items.push_back(CvarChoice("Popup style",
                                "Xbox 360 unfolds from a green ring at the bottom of the screen. Steam slides up in "
-                               "the bottom-right corner. Try them with Test notification.",
+                               "the bottom right corner. Try them with Test notification.",
                                "kk_achievement_style", {{"Xbox 360", "xbox360"}, {"Steam", "steam"}}));
     // Performance metrics moved here from Display (owner, 18 Oct); the camera rows went to Display > Camera.
     items.push_back(Section("Overlay"));
@@ -2294,7 +2347,7 @@ class SettingsPages {
     {
       Item it = CvarSlider("Mouse sensitivity",
                            "How far the camera turns as you move the mouse. It turns the same however fast you move "
-                           "it, as in other first-person games.",
+                           "it, as in other first person games.",
                            "kk_mouse_sensitivity", 0.1f, 5.0f, 0.05f, [](float v) {
                              char buf[32];
                              std::snprintf(buf, sizeof(buf), "%.2f" KK_TIMES, v);
@@ -2689,6 +2742,12 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
     LoadArt();
     // Installed before the launcher took its art from the game files: take it now.
     if (files_ok_ && !art::HasLauncherArt(ArtDir())) StartArtExtraction(false);
+    {
+      // An install that has run before (a settings file, or a version remembered): not a fresh one. Decided now,
+      // before this start writes the settings file and kk_last_version (task 350a, StartFullSetup).
+      std::error_code config_ec;
+      existing_install_ = !Get("kk_last_version").empty() || std::filesystem::exists(paths_.config_path, config_ec);
+    }
     // The native renderer's shaders (native_shaders.h): checked each time the launcher opens, built
     // in the background from the game files when missing or stale, and built again in full after
     // every update (a version this launcher hasn't run: an update, a beta, a channel switch), shown by
@@ -2720,7 +2779,21 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
       }
       // ... then the texture pack and PS2 cutscene pages, the graphics pages and the rest, as after an install.
       if (first_start) StartFullSetup(false);  // saved below with kk_last_version
-      if (updated && NativeShaderPack::Wanted()) {
+      // Task 350a (owner, 21 Oct): updating to Beta 14 takes every existing player through the first-time setup once
+      // more, from the new defaults (setup_again.h); the game files page is skipped (they are here). The shaders this
+      // update prepares (both packs: the DirectX 12 one too) show as the setup's shader step, not the after-update
+      // screen (task 365: it stays until they are ready, as in a first setup).
+      const bool again = !first_start && setup_again::Due(existing_install_, GetInt("kk_setup_again"),
+                                                         std::getenv("KK_AUTOPLAY") != nullptr);
+      if (again) {
+        if (NativeShaderPack::Wanted() && native_pack_.Busy()) setup_shaders_ = true;
+        REXLOG_INFO("KK: setup again (round {}, kk_setup_again {}): the first-time setup from the new defaults{}",
+                    setup_again::kRound, GetInt("kk_setup_again"),
+                    setup_shaders_ ? ", the shaders as its first step" : ", shaders already prepared");
+        StartFullSetup(false);  // saved below with kk_last_version (or at once: SaveSettings after it)
+        SaveSettings(paths_.config_path);
+      }
+      if (updated && NativeShaderPack::Wanted() && !again) {
         update_shaders_ = true;
         REXLOG_INFO("KK: first start of v{} (last v{}): the native renderer's shaders are built again", KK_VERSION,
                     Get("kk_last_version"));
@@ -2730,11 +2803,16 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
     StartContent();
     StartNotifications();
     CleanUpAfterUpdate();
+    // Task 370: nothing an update installs or removes may be in the user or game data folders; then the first start
+    // check (FinishUpdate): files an older updater left out are downloaded again (the update screen shows it).
+    SetProtectedFolders({paths_.user_dir, paths_.game_dir});
+    StartFinishCheck();
     online::Start();
     discord::Start();
     const bool testing = std::getenv("KK_AUTOPLAY") != nullptr;
     if (GetBool("kk_check_updates") && !testing) StartUpdateCheck(false);
     StartSteamCheck();
+    StartLaunchTime(!testing);  // task 373: the Home countdown's time from the website
     // Menu sounds (the device opens in OnDraw while they're on).
     ui::SetSoundHandler([this](ui::Sound sound, float value) {
       if (!GetBool("kk_launcher_sounds")) return;
@@ -2797,7 +2875,9 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
     // Task 332: opened from the desktop with the setup done, the startup movies first (unless kk_skip_intros), then
     // the save notice loop; task 331: otherwise the owner's loading loop from the first frame (decoding starts now,
     // while the scene starts).
-    if (startup_movies::AtLauncherStart(open_on, files_ok_, InSetup(), GetBool("kk_skip_intros"))) {
+    // Task 349c: a launcher started again for the scene's second attempt does not play them again.
+    if (!menu_scene::SecondAttempt() &&
+        startup_movies::AtLauncherStart(open_on, files_ok_, InSetup(), GetBool("kk_skip_intros"))) {
       StartStartupMovies("the launcher opened");
     } else {
       if (open_on.empty())
@@ -2811,6 +2891,7 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
       else
         StartLoadingLoop(open_on);
     }
+    loop_open_on_ = open_on;  // task 349c: the second attempt opens as this one did
     MaybeStartScene(!open_on.empty());  // back from the game (or a restart): before the first frame
     saved_changes_ = seen_changes_ = g_changes;
     StartHeartbeat();
@@ -2935,6 +3016,11 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
     if (leaving_) {  // the game is starting in a new process (StartGame): the backdrop only, the music fading
       if (music_) music_->Update(0.0f, io.DeltaTime);
       FadeSceneSound(0.0f, io.DeltaTime);  // task 330: the scene's sound fades with it
+      // Task 349c: starting again for the scene's second attempt: the loading loop stays until the new window shows.
+      if (scene_retrying_ && DrawLoadingLoop(dl, io.DeltaTime)) {
+        ImGui::End();
+        return;
+      }
       DrawBackdrop(dl);
       ImGui::End();
       return;
@@ -2963,7 +3049,7 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
       }
       if (const std::string summary = focus_log_.Summary(now_ms); !summary.empty()) REXLOG_INFO("{}", summary);
       pads_active_ = active;
-      input_.set_pads_active(active);
+      input_.set_pads_active(active || egg_running_);  // task 357: Start over the Easter egg
     }
     input_.set_social_triggers(GetBool("kk_coop_enabled") && play_ != PlayView::kArtbook);
     input_.Update();
@@ -2980,6 +3066,12 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
     DevTour();
     DevInput();
 #endif
+    // Task 357: the Easter egg game is running: only its pause panel (Start) is drawn and answered.
+    if (egg_running_ && DrawEgg(dl, io)) {
+      ImGui::End();
+      NoteActivity(io);
+      return;
+    }
     // Back from a benchmark: its results page opens first (owner, 19 Oct: a pop-up covered it). Every pop-up
     // that opens by itself (update offer, What's new, the startup notices below) waits for a free moment, so
     // they come after the player closes the results.
@@ -3080,9 +3172,15 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
       ImGui::End();
       return;
     }
+    // Beta 17 merge: on Home the Easter egg codes hold RT together with LB, RB or LT (task 364). RT with any of
+    // those held is part of a code, not the Social button; RT alone still opens Social.
+    if (!social_.blocking() && play_ == PlayView::kNone && page_ == kHome &&
+        (input_.pad_held() & (ui::Input::kPadLB | ui::Input::kPadRB | ui::Input::kPadLT)))
+      input_.Consume(Action::kSocial);
     social_.Update(GetBool("kk_coop_enabled"), SocialContext(), input_, coop::Social());
     input_.set_social_blocking(social_.blocking());
     DrawBackdrop(dl);
+    if (ShaderScreen() || InSetup()) card_focus_ = -1;  // the Home countdown's buttons are Home's only
     if (ShaderScreen()) {
       DrawShaderScreen(dl);
     } else if (InSetup()) {
@@ -3092,8 +3190,12 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
         open_benchmark_results_ = false;
         OpenBenchmarkResults();
       }
+      // Task 357: the controller code, on Home only.
+      if (!PageInputBlocked() && play_ == PlayView::kNone && page_ == kHome) EggCodeInput();
+      else egg_code_.Reset(), egg_held_codes_.Reset(), egg_holding_ = false;
       if (!PageInputBlocked()) HandleGlobalInput();
       if (play_ != PlayView::kNone) {
+        card_focus_ = -1;
         DrawPlayHeader(dl);
         if (play_ == PlayView::kMenu) DrawPlayMenu(dl);
         else DrawPlayPage(dl);
@@ -3126,6 +3228,10 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
 #if defined(KK_DEV_TOOLS)
     DevPerf(draw_start);
 #endif
+    if (!first_frame_noted_) {
+      first_frame_noted_ = true;
+      nr::steps::Note("launcher: first frame drawn");  // task 353
+    }
   }
 
   // What keeps the launcher at its full frame rate (OnDraw): input of any kind, a page, view, pop-up or
@@ -3510,6 +3616,7 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
     if (IsSettingsPage(page) || about_tab) settings_page_ = page;
     extras_return_focus_ = -1;  // only the Graphics visit an Extras row opened returns there
     side_focus_ = -1;
+    card_focus_ = -1;
     play_ = PlayView::kNone;
     const bool opening_workshop = page == kWorkshop && page_ != kWorkshop;
     page_ = page;
@@ -3569,7 +3676,7 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
       if (modal_.cancel >= 0) p.push_back({Action::kBack, "Back"});
       return p;
     }
-    if (ShaderScreen()) return {{Action::kAccept, "Continue in the background"}};
+    if (ShaderScreen()) return {};  // task 365: nothing to press while the shaders are prepared
     if (InSetup()) {
       switch (SetupStage()) {
         case 0:
@@ -3600,6 +3707,9 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
       return p;
     }
     if (page_ == kHome) {
+      if (card_focus_ >= 0)  // as CardButtons: Check for updates (once it's out), then Join the Discord
+        return {{Action::kAccept, LaunchIsOut() && card_focus_ == 0 ? "Select" : "Open in browser"},
+                {Action::kBack, "Back"}};
       if (status_focus_) return {{Action::kAccept, "Rebuild shaders"}, {Action::kBack, "Back"}};
       if (side_focus_ < 0 && menu_value_) p.push_back({Action::kLeft, "Change"});
       p.push_back({Action::kAccept, side_focus_ >= 0 ? SidePanelVerb(true) : "Select"});
@@ -3662,7 +3772,8 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
       } else if (page_ == kWorkshop && workshop_) {  // task 209: an inner page back to its card, then Home
         if (!workshop_->Back()) GoTo(kHome);
       } else if (page_ != kHome) GoTo(kHome);
-      else if (status_focus_ || side_focus_ >= 0) status_focus_ = false, side_focus_ = -1;  // back to the menu
+      else if (status_focus_ || side_focus_ >= 0 || card_focus_ >= 0)  // back to the menu
+        status_focus_ = false, side_focus_ = -1, card_focus_ = -1;
       else OpenQuit();
     }
   }
@@ -3703,7 +3814,7 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
     focus = std::clamp(focus, 0, n - 1);
     const int focus_before = focus;
     menu_value_ = bool(entries[size_t(focus)].change);
-    const bool active = focusable && !PageInputBlocked() && side_focus_ < 0 && !status_focus_;
+    const bool active = focusable && !PageInputBlocked() && side_focus_ < 0 && !status_focus_ && card_focus_ < 0;
     // Home: down from the last entry (or up from the first) moves to the shaders' status below.
     if (active && menu_to_status_ && n > 1 &&
         ((focus == n - 1 && input_.Pressed(Action::kDown)) || (focus == 0 && input_.Pressed(Action::kUp)))) {
@@ -3742,7 +3853,7 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
           chosen = i;
         }
       }
-      const bool on = focusable && i == focus && side_focus_ < 0 && !status_focus_;
+      const bool on = focusable && i == focus && side_focus_ < 0 && !status_focus_ && card_focus_ < 0;
       home_offset_[size_t(i)] = ui::Approach(home_offset_[size_t(i)], on ? 22 * s : 0.0f, 18.0f);
       const float off = home_offset_[size_t(i)];
       const float k = off / (22 * s);
@@ -3890,6 +4001,7 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
           const int next = a == Action::kLeft ? side_focus_ - 1 : a == Action::kRight ? side_focus_ + 1 : -1;
           if (next >= n) continue;  // already the last
           side_focus_ = next;
+          if (a == Action::kUp && home) card_focus_ = 0;  // task 373: Up to the countdown's buttons above them
           ui::Cue(a == Action::kBack ? ui::Sound::kBack : ui::Sound::kMove);
         }
         if (side_focus_ >= 0 && input_.Pressed(Action::kAccept)) {
@@ -4617,6 +4729,249 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
     return y;
   }
 
+  // ----------------------------------------------- Remastered countdown ---
+  // Task 373 (Beta 17, ported from stable 1.9.12): a card at the top right of Home counting down to the King Kong Remastered
+  // update (countdown.h), with the Discord invite; at zero it says the update
+  // is out and offers Check for updates. Right from the menu (or the mouse)
+  // moves to its buttons; Left and Right between them; Down to the side
+  // panels; Left from the first or B back to the menu.
+  struct CardButton {
+    std::string label;
+    bool enabled;
+    bool discord;  // shows the Discord mark
+    std::function<void()> action;
+  };
+
+  bool LaunchIsOut() const { return countdown::NowUtc() >= launch_utc_; }
+
+  std::vector<CardButton> CardButtons() {
+    std::vector<CardButton> b;
+    if (LaunchIsOut()) {
+      if (update_ && update_->busy && !installing_update_)
+        b.push_back({T("Checking for updates"), false, false, nullptr});
+      else
+        b.push_back({T("Check for updates"), true, false, [this] {
+                       if (update_ && update_->found) OpenUpdatePrompt();
+                       else StartUpdateCheck(true);  // the normal check; it offers the update when found
+                     }});
+    }
+    b.push_back({T("Join the Discord"), true, true, [] { OpenUrl(kDiscordUrl); }});
+    return b;
+  }
+
+  // The launch time: the last one the website gave (kept in the settings), else
+  // the built-in one; the website's launch.json is fetched in the background.
+  void StartLaunchTime(bool fetch) {
+    launch_utc_ = *countdown::ParseUtc(countdown::kBuiltInUtc);
+    if (const auto cached = countdown::ParseUtc(Get("kk_launch_utc"))) {
+      launch_utc_ = *cached;
+      launch_title_ = Get("kk_launch_title");
+    }
+#if defined(KK_DEV_TOOLS)
+    // Developer aids: KK_DEV_LAUNCH_JSON='{"utc": "...", "title": "..."}' stands in
+    // for the website's file (applied and cached like it); KK_DEV_COUNTDOWN=<seconds>
+    // puts the launch that far from now (0 or less: already out), not cached.
+    if (const char* j = std::getenv("KK_DEV_LAUNCH_JSON"); j && *j) {
+      launch_fetch_ = std::make_shared<countdown::Fetch>();
+      launch_fetch_->info = countdown::ParseLaunchJson(j);
+      launch_fetch_->done = true;
+      fetch = false;
+    }
+    if (const char* v = std::getenv("KK_DEV_COUNTDOWN"); v && *v) {
+      dev_countdown_ = true;
+      launch_utc_ = countdown::NowUtc() + std::atoll(v);
+      fetch = false;
+    }
+#endif
+    if (fetch) launch_fetch_ = countdown::StartFetch();
+  }
+
+  void TickLaunchTime() {
+    if (!launch_fetch_ || !launch_fetch_->done) return;
+    const std::optional<countdown::LaunchInfo> info = launch_fetch_->info;
+    launch_fetch_.reset();
+    if (!info) {
+      REXLOG_INFO("KK: launch.json not available; countdown to {}", launch_utc_);
+      return;
+    }
+    if (!dev_countdown_) {
+      launch_utc_ = info->utc;
+      launch_title_ = info->title;
+    }
+    REXLOG_INFO("KK: launch.json: {} \"{}\"", info->utc_text, info->title);
+    Set("kk_launch_utc", info->utc_text);  // saved with the other settings a moment later
+    Set("kk_launch_title", info->title);
+  }
+
+  // Text with every digit in a cell of the same width, so a ticking clock
+  // doesn't shift sideways. Returns the width (draw = false only measures).
+  float DrawSteadyDigits(ImDrawList* dl, ImFont* font, float size, ImVec2 pos, ImU32 col, const std::string& text,
+                         bool draw = true) {
+    float cell = 0;
+    for (char c = '0'; c <= '9'; ++c) cell = std::max(cell, ui::TextSize(font, size, std::string(1, c)).x);
+    float x = pos.x;
+    for (const char c : text) {
+      const std::string one(1, c);
+      const float w = ui::TextSize(font, size, one).x;
+      const bool digit = c >= '0' && c <= '9';
+      if (draw) dl->AddText(font, size, ImVec2(std::round(x + (digit ? (cell - w) * 0.5f : 0.0f)), pos.y), col, one.c_str());
+      x += digit ? cell : w;
+    }
+    return x - pos.x;
+  }
+
+  void DrawCountdown(ImDrawList* dl, float alpha, const std::vector<HomeEntry>& entries, int focus) {
+    const float s = S();
+    const ui::Fonts f = ui::GetFonts();
+    const bool out = LaunchIsOut();
+    const std::vector<CardButton> buttons = CardButtons();
+    const int n = int(buttons.size());
+    if (card_focus_ >= n) card_focus_ = n - 1;
+
+    // Controller and keyboard.
+    auto use = [&](int i) {
+      const CardButton& b = buttons[size_t(i)];
+      ui::Cue(b.enabled ? ui::Sound::kSelect : ui::Sound::kDeny);
+      if (b.enabled && b.action) b.action();
+    };
+    if (!modal_.open) {
+      const bool right_free =
+          entries.empty() || !entries[size_t(std::clamp(focus, 0, int(entries.size()) - 1))].change;
+      if (card_focus_ < 0 && side_focus_ < 0 && right_free && input_.Pressed(Action::kRight)) {
+        input_.Consume(Action::kRight);
+        card_focus_ = 0;
+        ui::Cue(ui::Sound::kMove);
+      } else if (card_focus_ >= 0) {
+        if (input_.Pressed(Action::kLeft)) {
+          input_.Consume(Action::kLeft);
+          card_focus_ -= 1;  // from the first: back to the menu
+          ui::Cue(ui::Sound::kMove);
+        } else if (input_.Pressed(Action::kRight)) {
+          input_.Consume(Action::kRight);
+          if (card_focus_ < n - 1) {
+            ++card_focus_;
+            ui::Cue(ui::Sound::kMove);
+          }
+        } else if (input_.Pressed(Action::kDown)) {
+          input_.Consume(Action::kDown);
+          card_focus_ = -1;
+          side_focus_ = 0;  // the side panels below
+          ui::Cue(ui::Sound::kMove);
+        } else if (input_.Pressed(Action::kUp)) {
+          input_.Consume(Action::kUp);
+        } else if (input_.Pressed(Action::kAccept)) {
+          input_.Consume(Action::kAccept);
+          use(card_focus_);
+        }
+      }
+    }
+
+    // Layout: right-aligned under the tabs, clear of the logo and menu on the left.
+    const float cw = 404 * s, pad = 24 * s, inner = cw - 2 * pad;
+    const float x1 = o_.x + w_ - Margin(), x0 = x1 - cw, y0 = o_.y + 104 * s;
+    const std::string title = launch_title_.empty() ? countdown::kBuiltInTitle : launch_title_;
+    const std::string caption = Upper(T(title));
+    const float cap_fs = 13 * s, cap_tr = 2.4f * s;
+    const float big_fs = 50 * s;
+    const std::string out_text = title == countdown::kBuiltInTitle ? T("The King Kong Remastered update is out")
+                                                                   : F("{0} is out", {T(title)});
+    const float out_fs = 24 * s;
+    const std::string date = countdown::DateLine(launch_utc_);
+    const float date_fs = 15 * s;
+    const std::string invite =
+        T("Join our Discord to follow development, get behind the scenes previews and have your say on new features.");
+    const float inv_fs = 14.5f * s;
+    const float bh = 38 * s, b_fs = 15.5f * s, b_pad = 18 * s, icon = 18 * s, b_gap = 10 * s;
+
+    float h = pad + cap_fs * 1.2f + 10 * s;
+    const float headline_h = out ? ui::TextSize(f.semibold, out_fs, out_text, inner).y : big_fs * 1.05f;
+    h += headline_h + 8 * s;
+    const float date_h = out ? 0.0f : ui::TextSize(f.text, date_fs, date, inner).y;
+    if (!out) h += date_h + 16 * s;
+    else h += 10 * s;
+    const float inv_h = ui::TextSize(f.text, inv_fs, invite, inner).y;
+    h += inv_h + 18 * s + bh + pad;
+
+    // The buttons' places (needed for the mouse before drawing).
+    std::vector<std::pair<ImVec2, ImVec2>> rects;
+    {
+      float bx = x0 + pad;
+      const float by = y0 + h - pad - bh;
+      for (const CardButton& b : buttons) {
+        const float bw = b_pad * 2 + ui::TextSize(f.semibold, b_fs, b.label).x + (b.discord ? icon + 10 * s : 0.0f);
+        rects.push_back({ImVec2(bx, by), ImVec2(bx + bw, by + bh)});
+        bx += bw + b_gap;
+      }
+    }
+    int hovered = -1;
+    for (int i = 0; i < n && !modal_.open; ++i)
+      if (ImGui::IsMouseHoveringRect(rects[size_t(i)].first, rects[size_t(i)].second, false)) hovered = i;
+    if (input_.mouse_moved()) {
+      card_focus_ = hovered;
+      if (hovered >= 0) side_focus_ = -1;
+    }
+    if (hovered >= 0 && ImGui::IsMouseClicked(0)) use(hovered);
+#if defined(KK_DEV_TOOLS)
+    static int logged_focus = -1;
+    if (card_focus_ != logged_focus) REXLOG_INFO("KK dev: countdown focus {}", card_focus_);
+    logged_focus = card_focus_;
+#endif
+
+    // The card, in the side panels' style, with a brass edge.
+    const ImVec2 p0(x0, y0), p1(x1, y0 + h);
+    const float r = 10 * s;
+    dl->AddRectFilled(ImVec2(p0.x, p0.y + 6 * s), ImVec2(p1.x, p1.y + 6 * s),
+                      ui::WithAlpha(IM_COL32(0, 0, 0, 255), 0.2f * alpha), r);
+    dl->AddRectFilled(p0, p1, ui::WithAlpha(IM_COL32(16, 18, 22, 255), 0.72f * alpha), r);
+    dl->AddRect(p0, p1, ui::WithAlpha(color::kText, 0.10f * alpha), r, 0, 1.0f * s);
+    dl->AddRectFilled(ImVec2(p0.x, p0.y + r), ImVec2(p0.x + 3 * s, p1.y - r), ui::WithAlpha(color::kAccent, alpha));
+
+    float y = y0 + pad;
+    const float x = x0 + pad;
+    float tr = cap_tr;
+    std::string cap = caption;
+    if (ui::TrackedWidth(f.display, cap_fs, cap, tr) > inner) {  // a long title from the website
+      tr = 0;
+      cap = ui::Ellipsize(f.display, cap_fs, cap, inner);
+    }
+    ui::DrawTracked(dl, f.display, cap_fs, ImVec2(x, y), ui::WithAlpha(color::kAccent, alpha), cap, tr);
+    y += cap_fs * 1.2f + 10 * s;
+    if (out) {
+      dl->AddText(f.semibold, out_fs, ImVec2(x, y), ui::WithAlpha(color::kText, alpha), out_text.c_str(), nullptr,
+                  inner);
+      y += headline_h + 18 * s;
+    } else {
+      const std::string clock = countdown::CountdownText(launch_utc_ - countdown::NowUtc());
+      DrawSteadyDigits(dl, f.display, big_fs, ImVec2(x - 2 * s, y), ui::WithAlpha(color::kText, alpha), clock);
+      y += headline_h + 8 * s;
+      dl->AddText(f.text, date_fs, ImVec2(x, y), ui::WithAlpha(color::kTextDim, alpha), date.c_str(), nullptr, inner);
+      y += date_h + 16 * s;
+    }
+    dl->AddText(f.text, inv_fs, ImVec2(x, y), ui::WithAlpha(color::kTextDim, alpha), invite.c_str(), nullptr, inner);
+
+    // The buttons, as in the pop-ups: the focused one filled.
+    for (int i = 0; i < n; ++i) {
+      const CardButton& b = buttons[size_t(i)];
+      const ImVec2 a = rects[size_t(i)].first, c = rects[size_t(i)].second;
+      const bool on = card_focus_ == i, hot = hovered == i;
+      if (on) dl->AddRectFilled(a, c, ui::WithAlpha(color::kFocus, alpha));
+      else dl->AddRect(a, c, ui::WithAlpha(color::kText, (hot ? 0.45f : 0.22f) * alpha));
+      const ImU32 tc = !b.enabled ? (on ? color::kOnFocusDim : color::kTextFaint) : on ? color::kOnFocus : color::kText;
+      float lx = a.x + b_pad;
+      if (b.discord) {
+        if (auto* t = BrandIcon(discord_icon_, kDiscordIcon, kDiscordIconSize)) {
+          const float iy = a.y + (bh - icon) * 0.5f;
+          dl->AddImage(ui::Tex(t), ImVec2(lx, iy), ImVec2(lx + icon, iy + icon), ImVec2(0, 0), ImVec2(1, 1),
+                       ui::WithAlpha(on ? color::kOnFocus : IM_COL32(255, 255, 255, 255), alpha));
+        }
+        lx += icon + 10 * s;
+      }
+      const ImVec2 ls = ui::TextSize(f.semibold, b_fs, b.label);
+      dl->AddText(f.semibold, b_fs, ImVec2(std::round(lx), std::round(a.y + (bh - ls.y) * 0.5f)),
+                  ui::WithAlpha(tc, alpha), b.label.c_str());
+    }
+  }
+
   void DrawHome(ImDrawList* dl) {
     const float s = S();
     const float x = o_.x + Margin();
@@ -4627,8 +4982,9 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
     // up rather than run into the status row.
     const float room = o_.y + h_ - 150 * s - y;
     const float item_h = std::clamp(room / float(std::max<size_t>(entries.size(), 1)), 28 * s, 42 * s);
+    DrawCountdown(dl, a, entries, home_focus_);  // task 373: before the side panels (Right goes to it first)
     DrawSidePanels(dl, a, true, entries, home_focus_, o_.y + h_ - 120 * s);
-    if (side_focus_ >= 0) status_focus_ = false;
+    if (side_focus_ >= 0 || card_focus_ >= 0) status_focus_ = false;
     HomeStatusInput(int(entries.size()));
     menu_to_status_ = ShaderStatusSelectable();
     if (const int i = DrawMenu(dl, entries, home_focus_, x, y, a, item_h); i >= 0) entries[size_t(i)].action();
@@ -4648,7 +5004,7 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
       status_focus_ = false;
       return;
     }
-    if (PageInputBlocked() || side_focus_ >= 0) return;
+    if (PageInputBlocked() || side_focus_ >= 0 || card_focus_ >= 0) return;
     const bool hovered = status_rect_[1].x > status_rect_[0].x &&
                          ImGui::IsMouseHoveringRect(status_rect_[0], status_rect_[1], false);
     if (input_.mouse_moved()) status_focus_ = hovered;
@@ -4688,7 +5044,7 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
     if (dev_setup_ >= 0) return true;
 #endif
     return !files_ok_ || installing_ || setup_art_ || setup_shaders_ || setup_textures_ || setup_cutscenes_ ||
-           setup_graphics_ || setup_prompts_ || setup_all_set_ || update_new_ || installing_update_ || update_shaders_ ||
+           setup_graphics_ || setup_prompts_ || setup_all_set_ || update_new_ || UpdateScreen() || update_shaders_ ||
            setup_settings_ || setup_workshop_;
   }
 
@@ -4705,7 +5061,7 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
   // The native renderer's shaders being prepared, as a screen of its own: the setup's step (after the
   // artwork, before the texture pack page) and after every update.
   bool ShaderScreen() const {
-    if (installing_update_ || installing_ || setup_art_) return false;
+    if (UpdateScreen() || installing_ || setup_art_) return false;
 #if defined(KK_DEV_TOOLS)
     if (dev_setup_ >= 0) return dev_setup_ == 4;
 #endif
@@ -4723,8 +5079,9 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
   }
 
   // Home's look (the stills, blurred; the game's logo; the music), with a centred panel: what is
-  // happening and why, the PC being slower meanwhile, the progress, and Continue in the background
-  // (A, Enter or a click). The build goes on behind Home after that, and Play waits for it.
+  // happening and why, the PC being slower meanwhile, and the progress. Task 365 (owner, 23 Oct): no Continue in
+  // the background and no Skip all any more (first setup, after an update, Rebuild shaders): the screen stays until
+  // the shaders are ready, then the setup (or Home, or the Graphics page) comes up by itself (TickNativeShaders).
   void DrawShaderScreen(ImDrawList* dl) {
     const float s = S();
     const ui::Fonts f = ui::GetFonts();
@@ -4760,12 +5117,10 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
         "The game's shaders are translated for your graphics card from your copy of the game, once, so effects "
         "never stutter the first time they appear.");
     const std::string slow = T(KK_SLOW_PC);
-    const std::string button = T("Continue in the background");
     const float pw = std::min(760 * s, w_ - Margin() * 2), pad = 34 * s, r = 12 * s, wrap = pw - pad * 2;
     const float why_h = ui::TextSize(f.text, 16 * s, why, wrap).y, slow_h = ui::TextSize(f.text, 14.5f * s, slow, wrap).y;
-    const float bh = 48 * s;
     const float ph = pad + 16 * s + 14 * s + 36 * s + 18 * s + why_h + 10 * s + slow_h + 30 * s + 3 * s + 14 * s +
-                     20 * s + 30 * s + bh + pad;
+                     20 * s + pad;
     float lw = 0, lh = 0;
     if (logo_) {
       lh = std::clamp(h_ - ph - 150 * s, 0.0f, 150 * s);
@@ -4810,34 +5165,7 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
     dl->AddText(f.text, 15 * s, ImVec2(tx, ty), color::kTextDim, left.c_str());
     dl->AddText(f.text, 15 * s, ImVec2(tx + wrap - ui::TextSize(f.text, 15 * s, right).x, ty), color::kTextDim,
                 right.c_str());
-    ty += 20 * s + 30 * s;
-    // Continue in the background: the panel's one button, with the focus.
-    const float bw = std::max(300 * s, ui::TextSize(f.semibold, 16 * s, button).x + 60 * s);
-    const ImVec2 b0(x1 - pad - bw, ty), b1(x1 - pad, ty + bh);
-    const bool hovered = !PageInputBlocked() && ImGui::IsMouseHoveringRect(b0, b1, false);
-    dl->AddRectFilled(b0, b1, hovered ? IM_COL32_WHITE : color::kFocus, 4 * s);
-    const ImVec2 ts = ui::TextSize(f.semibold, 16 * s, button);
-    dl->AddText(f.semibold, 16 * s, ImVec2(b0.x + (bw - ts.x) * 0.5f, b0.y + (bh - ts.y) * 0.5f), color::kOnFocus,
-                button.c_str());
-    if (!PageInputBlocked() && (input_.Pressed(Action::kAccept) || (hovered && ImGui::IsMouseClicked(0)))) {
-      input_.Consume(Action::kAccept);
-      ContinueShadersInBackground();
-    }
-    DrawSkipAll(dl);  // task 332: the first-time setup's shader screen
-  }
-
-  void ContinueShadersInBackground() {
-    ui::Cue(ui::Sound::kSelect);
-    const bool rebuild = rebuild_shaders_screen_ && !setup_shaders_ && !update_shaders_;
-    setup_shaders_ = false;  // the setup goes on to the texture pack page
-    update_shaders_ = false;
-    rebuild_shaders_screen_ = false;
-#if defined(KK_DEV_TOOLS)
-    if (dev_setup_ == 4) dev_setup_ = 6;
-#endif
-    if (rebuild) return;  // back to the Graphics page it was asked for on
-    page_ = kHome;
-    home_focus_ = 0;
+    // Task 365: no button on the panel and nothing at the top right (the screen moves on by itself).
   }
 
   // Task 332: 15 the Workshop page, 16 to 18 the Settings pages Display, Graphics, Controls (launcher_setup_pages.inc);
@@ -4855,7 +5183,7 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
 #endif
     // Task 332: the first-time setup's pages in the owner's order (each page clears its own flag; Back sets the
     // one before again): shaders, the Settings pages, button prompts, texture pack, PS2 cutscenes, Workshop, all set.
-    return installing_update_ ? 3 : installing_ ? 1 : setup_art_ ? 2 : setup_shaders_ ? 4
+    return UpdateScreen() ? 3 : installing_ ? 1 : setup_art_ ? 2 : setup_shaders_ ? 4
            : setup_settings_ ? kSettingsFirstStage + std::clamp(setup_settings_page_, 0, kSettingsSetupPages - 1)
            : setup_prompts_ ? kPromptsStage : setup_textures_ ? 6 : setup_cutscenes_ ? 7
            : setup_workshop_ ? kWorkshopStage : setup_all_set_ ? kAllSetStage
@@ -4870,9 +5198,24 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
   // preset, and the global illumination of that preset), 60 FPS and Strong GTAO, set now so a setup left half
   // way still plays Remastered. A player who had the setup on an older build (a reinstall, kk_setup_version
   // 'waiting' or a version) keeps the settings they chose. The setup also stands in for the New screen.
+  // Task 350a: an existing install that has not had this round of the setup again (setup_again.h) starts it from the
+  // new defaults too: its Display, Graphics and Controls settings and button prompts back to their defaults first
+  // (ResetForSetupAgain), then Remastered as for a new install. Once started the round counts as had (as a new
+  // install's setup does): closing the launcher half way does not reset the settings again.
   void StartFullSetup(bool save = true) {
-    if (Get("kk_setup_version").empty()) {
-      ApplyRemastered();
+    if (setup_again::Due(existing_install_, GetInt("kk_setup_again"), std::getenv("KK_AUTOPLAY") != nullptr)) {
+      ResetForSetupAgain();
+      ApplyRemastered(true);
+      ApplyRecommendedPreset();
+      REXLOG_INFO("KK: setup again: new defaults (native_backend={} kk_frame_rate={} native_gi={} tier {} preset '{}' "
+                  "render {} upscaler {} / {})",
+                  FindFlag("native_backend") ? Get("native_backend") : std::string("-"), Get("kk_frame_rate"),
+                  FindFlag("native_gi") ? Get("native_gi") : std::string("-"), Get("kk_hardware_tier"),
+                  Get("kk_graphics_preset"), Get("kk_render_quality"),
+                  FindFlag("native_upscaler") ? Get("native_upscaler") : std::string("-"), Get("present_effect"));
+    } else if (Get("kk_setup_version").empty()) {
+      ApplyRemastered(true);
+      ApplyRecommendedPreset();
       REXLOG_INFO("KK: setup: new install: Remastered defaults (kk_frame_rate={} ao_strength={} native_gi={} tier {})",
                   Get("kk_frame_rate"), Get("ao_strength"), FindFlag("native_gi") ? Get("native_gi") : std::string("-"),
                   Get("kk_hardware_tier"));
@@ -4881,10 +5224,48 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
                   Get("kk_setup_version"));
     }
     Set("kk_setup_version", KK_VERSION);
+    SetInt("kk_setup_again", setup_again::kRound);  // a new install's setup counts as this round too
     update_new_ = false;
     gfx_from_new_ = false;
     if (save) SaveSettings(paths_.config_path);  // the constructor saves later (a saved file now would look like an update)
     AskContentInSetup();
+  }
+
+  // Task 350a (coordinator, 21 Oct): the first-time setup starts on a named preset, the one the hardware tier
+  // recommends (setup_again::RecommendedPreset), applied whole like a choice on the Preset row: every row of it
+  // matches and the Preset row shows its name, not Custom. The frame rate (60) and the look stay ApplyRemastered's.
+  void ApplyRecommendedPreset() {
+    const std::string tier = Get("kk_hardware_tier");
+    const bool deck = DetectHardware().steam_deck;
+    const std::string_view label = setup_again::RecommendedPreset(tier, deck);
+    for (int i = 0; i < kGraphicsPresetCount; ++i)
+      if (label == kGraphicsPresets[i].label) ApplyGraphicsPreset(i);
+    ++g_changes;
+    const int now = MatchGraphicsPreset();
+    REXLOG_INFO("KK: setup: starts on the {} preset (tier '{}'{}); the Preset row shows {}", label, tier,
+                deck ? ", Steam Deck" : "", now >= 0 ? kGraphicsPresets[now].label : "Custom");
+  }
+
+  // Task 350a: the settings the setup's pages show, back to their defaults (setup_again::Resets), and the hardware
+  // recommendation a new install gets. Saves, the game files, the texture pack and the PS2 cutscenes, Audio,
+  // Gameplay, Cheats and Advanced stay. A startup fallback in force (DirectX 12 could not start here) keeps its API.
+  void ResetForSetupAgain() {
+    const bool fallback = !startup::Message().empty();
+    std::string changed;
+    for (auto& e : rex::cvar::GetRegistry()) {
+      if (e.type == rex::cvar::FlagType::Command || !setup_again::Resets(e.name, e.category)) continue;
+      if (e.source == rex::cvar::Source::kCommandLine || e.source == rex::cvar::Source::kEnvironment) continue;
+      if (fallback && e.name == "native_backend") continue;
+      if (e.getter() != e.default_value) changed += (changed.empty() ? "" : " ") + e.name + "=" + e.getter();
+      rex::cvar::ResetToDefault(e.name);
+    }
+    REXLOG_INFO("KK: setup again: back to the defaults from: {}{}", changed.empty() ? "(all at their defaults)" : changed,
+                fallback ? "; the graphics API kept (a startup fallback is in force)" : "");
+    const auto output = PrimaryScreenSize();
+    ApplyFirstSetupHardwareRecommendation(output.first, output.second);
+    ++g_changes;
+    ApplyRendererChoice();
+    if (cb_.set_fullscreen) cb_.set_fullscreen(GetBool("fullscreen"));
   }
 
   // The first-time setup's content steps (setup-flow.md 3 and 4): the cutscene page only where the PS2
@@ -5036,7 +5417,7 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
       y += 30 * s;
     } else if (stage == 6 || stage == 7) {
       // Setup steps 7 and 8 (setup-flow.md, task 332): the HD texture pack, and the restored PS2 cutscenes.
-      DrawSkipAll(dl);
+      DrawSetupTop(dl);
       const auto kind = stage == 6 ? content::Kind::kTexturePack : content::Kind::kCutscenes;
       const content::Info& info = content::InfoFor(kind);
       auto para = [&](const std::string& text, float size, ImU32 col) {
@@ -5089,27 +5470,48 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
     } else {
       float got = 0, size = 0;
       std::string version;
-      if (update_) {
+      int phase = 0;
+      const bool files = FinishScreen();  // task 370: the first start check's download
+      if (files) {
+        got = float(finish_->bytes.load());
+        size = float(finish_->total.load());
+        phase = finish_->phase.load();
+        version = KK_VERSION;
+      } else if (update_) {
         got = float(update_->bytes.load());
         size = float(update_->total.load());
+        phase = update_->phase.load();
         if (update_->found) version = update_->found->version;
       }
-      bool finishing = update_ && !update_->busy && update_->done;
+      bool finishing = !files && update_ && !update_->busy && update_->done;
 #if defined(KK_DEV_TOOLS)
       if (dev_setup_ >= 0) version = "9.9.9", size = 61.4e6f, got = size * 0.42f, finishing = false;
 #endif
-      heading(finishing ? "Restarting" : "Updating");
-      body(F("Downloading version {0} of the port. The launcher restarts by itself when it's done; your installed "
-             "game, saves and settings stay as they are.",
-             {version}));
+      if (files) {
+        heading("Finishing the update");
+        body(F("Some files of version {0} are missing, so the launcher is downloading them again. Your installed "
+               "game, saves and settings stay as they are.",
+               {version}));
+      } else {
+        heading(finishing ? "Restarting" : "Updating");
+        body(F("Downloading version {0} of the port. The launcher restarts by itself when it's done; your installed "
+               "game, saves and settings stay as they are.",
+               {version}));
+      }
       bar(finishing ? 1.0f : size > 0 ? got / size : -1.0f);
       auto mb = [](float bytes) {
         char buf[32];
         std::snprintf(buf, sizeof(buf), "%.1f", bytes / 1e6f);
         return std::string(buf);
       };
-      caption_pair(size > 0 ? F("{0} of {1} MB", {mb(got), mb(size)}) : T(std::string("Connecting")),
-                   size > 0 ? std::to_string(int(got / size * 100)) + "%" : "");
+      // Task 370: below the bar, what the updater is doing once the download is over.
+      const bool downloading = phase == int(UpdatePhase::kDownloading) && !finishing;
+      const char* step = phase == int(UpdatePhase::kInstalling) || finishing ? "Installing the files." : "Checking the download.";
+      caption_pair(!downloading ? T(std::string(step))
+                   : size > 0   ? F("{0} of {1} MB", {mb(got), mb(size)})
+                                : T(std::string("Connecting")),
+                   downloading && size > 0 ? std::to_string(int(got / size * 100)) + "%" : "");
+      if (files) entries.push_back({"Continue in the background", true, [this] { finish_hidden_ = true; }});
     }
     if (stage == 0) DrawSidePanels(dl, 1.0f, false, entries, setup_focus_, o_.y + h_ - 120 * s);
     else side_focus_ = -1;
@@ -5196,7 +5598,7 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
     const bool on = GetBool("kk_online_count");
     const std::string text = T(
         "Shows how many players are online, at the top right of the launcher. Help reduce stutter: share "
-        "graphics pipeline data. It sends a tiny anonymous check-in every 5 minutes (a random number, the "
+        "graphics pipeline data. It sends a tiny anonymous check in every 5 minutes (a random number, the "
         "port's version, Windows or Linux, and whether you're playing) and, when you quit, the game's graphics "
         "pipeline data and an anonymous performance summary. After a crash, it sends the crash report with "
         "your user name and personal folders removed. Nothing that identifies you or your PC is kept. Switch "
@@ -5824,7 +6226,8 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
       };
       items.push_back(std::move(it));
     }
-    {
+    // Task 358: a stable build follows stable only and never offers the beta channel (update_channel.h).
+    if (OffersChannelChoice(kBuildChannel)) {
       Item it = ActionItem("Change version",
                            "Stable is the tested version of the port. Beta gets test builds of upcoming features "
                            "early, which can have problems. Your saves and settings are kept either way.",
@@ -5903,9 +6306,8 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
   static std::vector<std::string> PageSettings(Page page) {
     switch (page) {
       case kDisplay:
-        return {"fullscreen", "kk_fullscreen_mode", "window_width", "window_height", "monitor", "kk_frame_rate",
+        return {"fullscreen", "kk_fullscreen_mode", "kk_picture_size", "window_width", "window_height", "monitor", "kk_frame_rate",
                 "d3d12_allow_variable_refresh_rate_and_tearing", "present_letterbox", "kk_brightness", "kk_gamma",
-                "kk_hdr", "kk_hdr_levels", "present_hdr", "present_hdr_peak", "present_hdr_paper_white",
                 "kk_performance_metrics"};
       case kGraphics:
         return {"kk_original_look", "kk_modern_settings", "kk_graphics_preset", "native_backend", "kk_renderer",
@@ -6136,7 +6538,8 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
     if (Get("kk_update_channel") == "beta") {
       OpenModal("Switch back to stable?",
                 "This installs the newest stable version of the port and restarts the launcher. If your beta is "
-                "newer than it, this goes back a version.\n\nStable has no native renderer, so the beta's own "
+                "newer than it, this goes back a version.\n\nStable versions before 2.0.0 have no native renderer, so when going "
+                "back to one of those, the beta's own "
                 "settings (the renderer, its ambient occlusion method and the fullscreen resolution) go back to "
                 "their defaults. Your installed game, saves and other settings stay as they are.",
                 {"Switch to stable", "Cancel"}, 1, [this](int i) {
@@ -6180,8 +6583,10 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
       return;
     }
     Set("kk_update_channel", channel);
-    // Stable has no native renderer: it must find only settings it knows (ResetBetaOnlySettings).
-    if (channel == "stable" && update_->found) ResetBetaOnlySettings();
+    // A stable version before 2.0.0 has no native renderer: it must find only settings it knows
+    // (ResetBetaOnlySettings). Stable 2.0.0 and later have them, so they stay (task 358).
+    if (channel == "stable" && update_->found && StableLacksNativeRenderer(update_->found->version))
+      ResetBetaOnlySettings();
     SaveSettings(paths_.config_path);
     if (update_->found) {
       BeginUpdateInstall(*update_->found);
@@ -6208,6 +6613,20 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
 
   // No reminder about the online player count ever opens by itself (owner, 16 Oct): it is explained and
   // switched in the first-time setup, and on the About page, and nowhere else.
+
+  // Task 370: the first start check runs on its own thread; the update screen (SetupStage 3) shows it only while it
+  // downloads files an older updater left out, until Continue in the background. A failure is only logged.
+  void StartFinishCheck() {
+    finish_ = std::make_shared<FinishStatus>();
+    std::thread([s = finish_, file = paths_.user_dir / "update-check.txt"] { FinishUpdate(*s, file); }).detach();
+  }
+  bool FinishScreen() const { return finish_ && finish_->downloading && !finish_hidden_ && !installing_update_; }
+  bool UpdateScreen() const { return installing_update_ || FinishScreen(); }
+  void TickFinish() {
+    if (!finish_ || finish_reported_ || finish_->busy || !(finish_->done || finish_->failed)) return;
+    finish_reported_ = true;
+    if (finish_->done && finish_->installed > 0) Status(F("Every file of version {0} is now installed.", {KK_VERSION}));
+  }
 
   // The update screen shows the download (SetupStage 3).
   void BeginUpdateInstall(const UpdateInfo& info) {
@@ -6253,10 +6672,24 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
     if (!installing_update_ || update_->busy) return;
     if (update_->failed) {
       installing_update_ = false;
-      OpenModal("Update failed", update_->message, {"Close"}, 0, nullptr);
+      OpenModal("Update failed", F(update_->message.c_str(), {update_->detail}), {"Close"}, 0, nullptr);
     } else if (update_->done && !relaunched_) {  // start the new version, then close this one
       relaunched_ = true;
-      RelaunchSelf(L"");
+      std::wstring extra;
+#if defined(KK_DEV_TOOLS) && defined(_WIN32)
+      // Task 370: a KK_DEV_UPDATE_ZIP test. The new process must not offer it again (nor its steps install it again),
+      // and it must not log over this run's log (with the second --log_file it writes logs\king_kong_NNN.log in the
+      // program folder, as a run without one does).
+      if (const char* zip = std::getenv("KK_DEV_UPDATE_ZIP"); zip && *zip) {
+        _putenv_s("KK_DEV_UPDATE_RELAUNCHED", "1");
+        _putenv_s("KK_DEV_LAUNCHER_INPUT", "");
+        const std::filesystem::path log = rex::cvar::GetFlagByName("log_file");
+        if (!log.empty())
+          extra = L"--log_file=\"" +
+                  (log.parent_path() / (log.stem().wstring() + L"-relaunch" + log.extension().wstring())).wstring() + L"\"";
+      }
+#endif
+      RelaunchSelf(extra);
       if (cb_.quit) cb_.quit();
     }
   }
@@ -6282,10 +6715,10 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
     if (!steam_ || steam_->busy) return;
     const bool running = steam::SteamRunning();
     OpenModal("Add to Steam",
-              running ? "Adds King Kong to your Steam library as a non-Steam game, with artwork from SteamGridDB, so "
+              running ? "Adds King Kong to your Steam library as a non Steam game, with artwork from SteamGridDB, so "
                         "you can start it from Steam, Big Picture or a Steam Deck.\n\nSteam reads its list of games "
                         "only when it starts, so it closes for a moment and opens again afterwards."
-                      : "Adds King Kong to your Steam library as a non-Steam game, with artwork from SteamGridDB, so "
+                      : "Adds King Kong to your Steam library as a non Steam game, with artwork from SteamGridDB, so "
                         "you can start it from Steam, Big Picture or a Steam Deck.",
               {running ? "Close Steam and add" : "Add to Steam", "Cancel"}, 1, [this](int i) {
                 if (i == 0) StartAddToSteam();
@@ -6574,10 +7007,18 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
     if (!loop_) return false;
     rex::ui::ImmediateTexture* frame = loop_->Frame(dt);
     loop_wait_ += std::clamp(dt, 0.0f, 0.1f);
-    if (!frame && (loop_->Failed() || loop_wait_ > loading_loop::kMinSeconds)) {
-      REXLOG_INFO("KK loading loop: not shown ({})", loop_->Failed() ? "it cannot be played" : "no picture in time");
-      loop_.reset();
-      return false;
+    if (!frame && !loop_black_ && (loop_->Failed() || loop_wait_ > loading_loop::kMinSeconds)) {
+      // Task 349c: with the scene starting, a plain black cover in its place until the scene is up (never the
+      // pictures); without one, the launcher at once.
+      const bool scene_coming = loop_scene_ || scene_start_pending_;
+      REXLOG_INFO("KK loading loop: not shown ({}){}", loop_->Failed() ? "it cannot be played" : "no picture in time",
+                  scene_coming ? "; a black cover until the scene is up" : "");
+      if (!scene_coming) {
+        loop_.reset();
+        return false;
+      }
+      loop_black_ = true;
+      loop_first_ = ImGui::GetTime();
     }
     // On screen since its first picture, in real time (the scene's start holds the UI thread with it on screen).
     if (frame && loop_first_ < 0) {
@@ -6586,10 +7027,27 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
     }
     loop_shown_ = loop_first_ < 0 ? 0.0f : float(ImGui::GetTime() - loop_first_);
     const bool scene_ready = menu_scene::Active() && menu_scene::Ready();
-    if (loop_end_ < 0 && loading_loop::MayEnd(loop_shown_, loop_scene_, scene_ready)) {
+    // Task 349c (owner, 21 Oct): up until the scene is up; an attempt not up in 30 s starts the launcher again for a
+    // second attempt; only a second attempt that fails too fades into the pictures.
+    const float since_start = scene_started_at_ < 0 ? 0.0f : float(ImGui::GetTime() - scene_started_at_);
+    const loading_loop::SceneStep step =
+        loop_end_ >= 0 || scene_start_pending_ || scene_retrying_
+            ? loading_loop::SceneStep::kWait
+            : loading_loop::Step(loop_shown_, loop_scene_, scene_ready, since_start, menu_scene::SecondAttempt());
+    if (step == loading_loop::SceneStep::kRetry && !RetrySceneStart()) {
+      menu_scene::NoteAttemptFailed();
+      REXLOG_WARN("KK loading loop: the scene is not up after {:.0f} s and cannot be tried again here: the pictures",
+                  since_start);
+      loop_end_ = 0;
+    } else if (step == loading_loop::SceneStep::kPictures) {
+      menu_scene::NoteAttemptFailed();
+      REXLOG_WARN("KK loading loop: the second attempt's scene is not up after {:.0f} s either: fading into the "
+                  "pictures", since_start);
+      loop_end_ = 0;
+    } else if (step == loading_loop::SceneStep::kEnd) {
       loop_end_ = 0;
       REXLOG_INFO("KK loading loop: fading into the launcher after {:.1f} s ({})", loop_shown_,
-                  !loop_scene_ ? "no live scene: the pictures" : scene_ready ? "the scene is up" : "the scene is not up yet");
+                  !loop_scene_ ? "no live scene" : "the scene is up");
     } else if (loop_end_ >= 0) {
       loop_end_ += std::clamp(dt, 0.0f, 0.1f);
     }
@@ -6671,7 +7129,6 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
     f.shaders_prepared = ShadersPreparedForThisVersion();
     f.shader_job = native_pack_.Busy() || update_shaders_ || setup_shaders_ || rebuild_shaders_screen_;
     f.setup = InSetup() || update_new_ || ShaderScreen();
-    f.low_end = Get("kk_hardware_tier") == "low";
     // Co-op starts in this process to retain its peer. The live scene reserves
     // that runtime and requires Play to restart, so keep the stills for co-op.
     f.off_this_session = GetBool("kk_coop_enabled");
@@ -6684,19 +7141,60 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
     scene_retry_ = r != menu_scene::Reason::kLive && menu_scene::MayStartLater(r);
     if (r != menu_scene::Reason::kLive || !cb_.start_scene) return;
     loop_scene_ = true;  // task 331: a loading loop on screen waits for it (loading_loop_logic.h)
+    scene_started_at_ = ImGui::GetTime();  // task 349c: its attempt's clock (loading_loop_logic.h Step)
     cb_.start_scene(before_first_frame);
+  }
+  // Task 349c: the attempt failed (not up in time): the launcher starts again as it opened (a new process: the game
+  // cannot start twice in one) for the second attempt, its loop over this one's until its window has drawn.
+  bool RetrySceneStart() {
+    if (!cb_.restart_launcher || menu_scene::SecondAttempt() || scene_retrying_) return false;
+    scene_retrying_ = true;
+    menu_scene::NoteAttemptFailed();
+    REXLOG_WARN("KK menu scene: not up after {:.0f} s: the launcher starts again for a second attempt",
+                float(ImGui::GetTime() - scene_started_at_));
+    SaveIfChanged();
+    input_.Release();
+    StopHeartbeat();
+    leaving_ = true;
+    modal_.open = false;
+    const std::string open = loop_open_on_ == "rebuild" ? std::string() : loop_open_on_;
+    std::wstring args = L"--kk_menu_scene_retry=true";
+    if (!open.empty()) args += L" --kk_launcher_open=" + std::wstring(open.begin(), open.end());
+    if (loop_saved_) args += L" --kk_launcher_saved=true";
+    cb_.restart_launcher(args);
+    return true;
   }
   // Back on Home after the setup, an install, the New in this update screen or a shader preparation: the scene
   // starts now (checked about once a second; the runtime's start pauses the launcher about 1.5 s once).
   void TickSceneStart() {
     // Task 332: not while the startup movies play (the scene's start pauses the launcher): it waits for them.
     if (!scene_retry_ || menu_scene::Active() || leaving_ || played_ || modal_.open || page_ != kHome || MoviesPending()) return;
+    // Task 349c: the loading loop first; the scene starts once its first picture is on screen (the start pauses
+    // the launcher about 1.5 s), so the launcher's pictures never show while it comes up.
+    if (scene_start_pending_) {
+      if (loop_ && loop_first_ < 0) return;
+      scene_start_pending_ = false;
+      MaybeStartScene(false);
+      return;
+    }
     if (ImGui::GetTime() < scene_retry_at_) return;
     scene_retry_at_ = ImGui::GetTime() + 1.0;
     const menu_scene::Reason r = menu_scene::Decide(SceneFacts());
     if (r == menu_scene::Reason::kLive) {
-      REXLOG_INFO("KK menu scene: the setup and the shaders are done; starting the scene now");
-      MaybeStartScene(false);
+      REXLOG_INFO("KK menu scene: the setup and the shaders are done; the save notice loop, then the scene");
+      if (!loop_ || loop_end_ >= 0) {
+        loop_.reset();
+        loop_first_ = -1;
+        loop_end_ = -1.0f;
+        loop_wait_ = 0.0f;
+        loop_shown_ = 0.0f;
+        loop_black_ = false;
+        loop_saved_ = false;
+        loop_tip_.clear();
+        loop_kind_ = loading_loop::Kind::kNotice;
+        loop_ = std::make_unique<LoadingLoop>(immediate_, LoadingLoopFile(loop_kind_));
+      }
+      scene_start_pending_ = true;
     } else if (!menu_scene::MayStartLater(r)) {
       scene_retry_ = false;
       REXLOG_INFO("KK menu scene: {}", menu_scene::ReasonText(r));
@@ -7078,8 +7576,8 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
                                         : "Downloading the PS2 cutscenes";
     OpenModal(title,
               importing ? T("Your ZIP file is checked and unpacked. It carries on in the background if you leave "
-                            "this pop-up, and Cancel stops it without changing anything you have installed.")
-                        : T("It carries on in the background if you leave this pop-up. If the connection drops or "
+                            "this popup, and Cancel stops it without changing anything you have installed.")
+                        : T("It carries on in the background if you leave this popup. If the connection drops or "
                             "you close the launcher, it continues from where it stopped."),
               buttons, background,
               [this, kind, mode, background](int i) {
@@ -7361,6 +7859,225 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
     }
 #endif
     return true;
+  }
+
+  // ------------------------------------------------------------ Easter egg ---
+  // Task 357 (owner, 22 Oct): on Home, a controller's Up, Up, Down, Down, Left, Right, Left, Right, B, A, Start
+  // starts the owner's little game (launcher\easter-egg\). While it runs the launcher keeps reading the
+  // controller: Start brings the launcher in front with a pause panel (Resume, Quit to main menu). Its music
+  // and sounds are silent meanwhile. Nothing on screen tells of the code.
+  // Task 358: the keyboard too, mixed with the controller in one code: the arrow keys for the directions, B and A
+  // for B and A, Enter for Start (kept from the launcher while it is the code's next press, as Start is). Any
+  // other key is a wrong press.
+  // Task 364: the original game's cheat menu codes start it too, from a controller only (egg::kHeldCodes): PS2
+  // (hold LB and RB), Xbox and GameCube (hold a left and a right bumper or trigger), Xbox 360 (hold all four).
+  // While a code's hold is down, Home does nothing else with the controller or the keyboard (no moving, no Steam
+  // or Discord or Quit from X, Y or B); with the hold up, Home works as always. LB, RB, LT and RT alone already do
+  // nothing on Home. The game starts on the code's last press (no need to let go first).
+  void EggCodeInput() {
+    const uint32_t presses = input_.pad_presses(), keys = input_.key_presses();
+    {
+      const uint32_t held = input_.pad_held();
+      unsigned hold = 0;
+      if (held & ui::Input::kPadLB) hold |= egg::kHoldLB;
+      if (held & ui::Input::kPadRB) hold |= egg::kHoldRB;
+      if (held & ui::Input::kPadLT) hold |= egg::kHoldLT;
+      if (held & ui::Input::kPadRT) hold |= egg::kHoldRT;
+      egg_held_codes_.SetHeld(hold);
+    }
+    const bool holding = egg_held_codes_.Holding();
+#if defined(KK_DEV_TOOLS)
+    if (holding != egg_holding_) REXLOG_INFO("KK dev: easter egg: code hold {}", holding ? "down" : "up");
+#endif
+    egg_holding_ = holding;
+    if (holding) {
+      static constexpr std::pair<uint32_t, egg::Pad> kHeldBits[] = {
+          {ui::Input::kPadUp, egg::Pad::kUp}, {ui::Input::kPadDown, egg::Pad::kDown},
+          {ui::Input::kPadLeft, egg::Pad::kLeft}, {ui::Input::kPadRight, egg::Pad::kRight},
+          {ui::Input::kPadA, egg::Pad::kA}, {ui::Input::kPadB, egg::Pad::kB},
+          {ui::Input::kPadX, egg::Pad::kX}, {ui::Input::kPadY, egg::Pad::kY},
+          {ui::Input::kPadStart, egg::Pad::kStart}, {ui::Input::kPadBack, egg::Pad::kOther},
+      };  // LB, RB, LT and RT are the holds, not presses
+      bool start = false;
+      for (const auto& [bit, pad] : kHeldBits) {
+        if (!(presses & bit)) continue;
+        const egg::Step step = egg_held_codes_.Press(pad);
+#if defined(KK_DEV_TOOLS)
+        REXLOG_INFO("KK dev: easter egg: held code press {} step {}", int(pad), int(step));
+#endif
+        if (step == egg::Step::kComplete) {
+          REXLOG_INFO("KK: easter egg: the original {} code", egg::kHeldCodes[egg_held_codes_.completed()].name);
+          start = true;
+        }
+      }
+      input_.ConsumeAll();
+      egg_code_.Reset();
+      if (start) StartEgg();
+      return;
+    }
+    if (!presses && !keys) return;
+    using P = egg::Pad;
+    struct Bit {
+      uint32_t bit;
+      P pad;
+      Action action;
+    };
+    static constexpr Bit kBits[] = {
+        {ui::Input::kPadUp, P::kUp, Action::kCount},      {ui::Input::kPadDown, P::kDown, Action::kCount},
+        {ui::Input::kPadLeft, P::kLeft, Action::kCount},  {ui::Input::kPadRight, P::kRight, Action::kCount},
+        {ui::Input::kPadB, P::kB, Action::kBack},         {ui::Input::kPadA, P::kA, Action::kAccept},
+        {ui::Input::kPadStart, P::kStart, Action::kPlay}, {ui::Input::kPadX, P::kX, Action::kCount},
+        {ui::Input::kPadY, P::kY, Action::kCount},        {ui::Input::kPadLB, P::kOther, Action::kCount},
+        {ui::Input::kPadRB, P::kOther, Action::kCount},   {ui::Input::kPadBack, P::kOther, Action::kCount},
+        {ui::Input::kPadLT, P::kOther, Action::kCount},   {ui::Input::kPadRT, P::kOther, Action::kCount},
+    };
+    for (const Bit& b : kBits) {
+      if (!(presses & b.bit)) continue;
+      const egg::Step step = egg_code_.Press(b.pad);
+      if (egg::Swallowed(b.pad, step)) input_.Consume(b.action);
+      if (step == egg::Step::kComplete) StartEgg();
+    }
+    // The keyboard (Input::key_presses): Enter is the launcher's Accept, kept from it while it is the code's next press.
+    using K = egg::Key;
+    static constexpr std::pair<uint32_t, K> kKeys[] = {
+        {ui::Input::kPadUp, K::kUp}, {ui::Input::kPadDown, K::kDown}, {ui::Input::kPadLeft, K::kLeft},
+        {ui::Input::kPadRight, K::kRight}, {ui::Input::kPadB, K::kB}, {ui::Input::kPadA, K::kA},
+        {ui::Input::kPadStart, K::kEnter}, {ui::Input::kKeyOther, K::kOther},
+    };
+    for (const auto& [bit, key] : kKeys) {
+      if (!(keys & bit)) continue;
+      const egg::Step step = egg_code_.Press(egg::FromKey(key));
+      if (egg::KeySwallowed(key, step)) input_.Consume(Action::kAccept);
+      if (step == egg::Step::kComplete) StartEgg();
+    }
+  }
+
+  void StartEgg() {
+    const std::filesystem::path exe = egg::AppPath();
+    std::error_code ec;
+    if (exe.empty() || !std::filesystem::is_regular_file(exe, ec)) {
+      REXLOG_WARN("KK: easter egg: launcher\\easter-egg is missing; nothing started");
+      return;
+    }
+    if (!egg_) egg_ = std::make_unique<egg::Process>();
+    if (!egg_->Start(exe)) return;
+    egg_running_ = true;
+    egg_paused_ = egg_quitting_ = false;
+    egg_enter_down_ = true;  // the Enter that ended the code counts only once let go
+    egg_esc_down_ = true;    // task 364: likewise an Esc held as it starts
+  }
+
+  static double SteadySeconds() {
+    return std::chrono::duration<double>(std::chrono::steady_clock::now().time_since_epoch()).count();
+  }
+
+  // TickState (also from the heartbeat while nothing is drawn): the game ended (by itself, or Quit to main menu,
+  // which ends it if it has not closed after 3 s): Home again, the launcher in front.
+  void TickEgg() {
+    if (!egg_running_) return;
+    if (egg_ && egg_->Running()) {
+      if (!egg_quitting_ || SteadySeconds() - egg_close_at_ < 3.0) return;
+      REXLOG_INFO("KK: easter egg did not close within 3 s: ending it");
+      egg_->Terminate();
+    }
+    REXLOG_INFO("KK: easter egg over{}: back to Home", egg_quitting_ ? " (Quit to main menu)" : "");
+    egg_running_ = egg_paused_ = egg_quitting_ = false;
+    egg_code_.Reset();
+    egg_held_codes_.Reset();
+    input_.ConsumeAll();
+    if (cb_.native_window) egg::ForceToFront(cb_.native_window());
+  }
+
+  // The frame while the game runs. False when it has just ended (Home is drawn this frame).
+  bool DrawEgg(ImDrawList* dl, ImGuiIO& io) {
+    if (music_) music_->Update(0.0f, io.DeltaTime);  // silent while it runs, back after
+    FadeSceneSound(0.0f, io.DeltaTime);
+    TickState();  // the launcher's jobs go on (and TickEgg)
+    if (!egg_running_) return false;
+    DrawBackdrop(dl);
+    // Task 358: Enter acts as Start. With the game in front the launcher's window gets no keys, so it is read from
+    // the system then (only while the game's window is the foreground one); a press the launcher sees itself counts
+    // too. A held Enter counts once.
+    const bool enter_down = egg::EnterKeyDown();
+    const bool enter = (enter_down && !egg_enter_down_ && egg_ && egg_->InFront()) ||
+                       (input_.key_presses() & ui::Input::kPadStart);
+    egg_enter_down_ = enter_down;
+    // Task 364 (owner): Esc pauses it too, read the same way as Enter. In the pause panel Esc is Back (Resume) as
+    // before; the Esc that resumed counts once let go, so it does not pause again.
+    const bool esc_down = egg::EscapeKeyDown();
+    const bool esc = (esc_down && !egg_esc_down_ && egg_ && egg_->InFront()) ||
+                     (!egg_paused_ && ImGui::IsKeyPressed(ImGuiKey_Escape, false));
+    egg_esc_down_ = esc_down;
+    if (egg_paused_) {
+      DrawEggPause(dl);
+    } else if (!egg_quitting_ && ((input_.pad_presses() & ui::Input::kPadStart) || enter || esc) && egg_ &&
+               egg_->WindowShown()) {
+      // (only once its window is up: a Start before that does nothing)
+      egg_paused_ = true;
+      egg_focus_ = 0;
+      egg_pause_time_ = ImGui::GetTime();
+      const bool front = cb_.native_window && egg::ForceToFront(cb_.native_window());
+      REXLOG_INFO("KK: easter egg paused ({}): launcher {}", enter ? "Enter" : esc ? "Esc" : "Start",
+                  front ? "in front" : "asked to the front, Windows kept another window in front");
+    }
+    input_.ConsumeAll();
+    return true;
+  }
+
+  // The pause panel over the game, as the game's own pause menu looks: the shade, PAUSED, Resume and Quit to
+  // main menu; B (Esc) or Start resumes.
+  void DrawEggPause(ImDrawList* dl) {
+    const float s = S();
+    const ui::Fonts f = ui::GetFonts();
+    const float t = std::clamp(float(ImGui::GetTime() - egg_pause_time_) / 0.18f, 0.0f, 1.0f);
+    const ImVec2 p1(o_.x + w_, o_.y + h_);
+    const float x = o_.x + 72 * s, list_w = std::min(400 * s, w_ * 0.42f);
+    const float solid = x - o_.x + std::min(500 * s, w_ * 0.5f - 72 * s) + 40 * s;
+    dl->AddRectFilled(o_, p1, ui::WithAlpha(color::kBase, t * 0.28f));
+    const ImU32 c0 = ui::WithAlpha(color::kBase, t * 0.82f), c1 = ui::WithAlpha(color::kBase, 0.0f);
+    dl->AddRectFilled(o_, ImVec2(o_.x + solid, p1.y), c0);
+    dl->AddRectFilledMultiColor(ImVec2(o_.x + solid, o_.y), ImVec2(o_.x + solid + w_ * 0.18f, p1.y), c0, c1, c1, c0);
+    const ImU32 b0 = ui::WithAlpha(color::kBase, t * 0.55f);
+    dl->AddRectFilledMultiColor(ImVec2(o_.x, p1.y - 120 * s), p1, c1, c1, b0, b0);
+    const float cy = o_.y + 72 * s;
+    ui::DrawTracked(dl, f.display, 15 * s, ImVec2(x, cy - 7.5f * s), color::kAccent, text::Upper(T("Paused")), 5 * s);
+    dl->AddRectFilled(ImVec2(x, cy + 17 * s), ImVec2(x + 44 * s, cy + 19 * s), ui::WithAlpha(color::kAccent, 0.7f));
+    static const char* const kEntries[2] = {"Resume", "Quit to main menu"};
+    const float item_h = 40 * s, fs = 23 * s, tr = 1.6f * s;
+    if (input_.Pressed(Action::kUp) || input_.Pressed(Action::kDown)) egg_focus_ = 1 - egg_focus_;
+    int chosen = -1;
+    float iy = o_.y + 118 * s;
+    for (int i = 0; i < 2; ++i) {
+      if (ImGui::IsMouseHoveringRect(ImVec2(x - 8 * s, iy), ImVec2(x + list_w, iy + item_h), false)) {
+        if (input_.mouse_moved()) egg_focus_ = i;
+        if (ImGui::IsMouseClicked(0)) egg_focus_ = chosen = i;
+      }
+      const bool on = i == egg_focus_;
+      egg_offsets_[size_t(i)] = ui::Approach(egg_offsets_[size_t(i)], on ? 1.0f : 0.0f, 14.0f);
+      const float k = egg_offsets_[size_t(i)];
+      if (k > 0.02f)
+        dl->AddRectFilled(ImVec2(x, iy + item_h * 0.5f - fs * 0.55f), ImVec2(x + 4 * s, iy + item_h * 0.5f + fs * 0.55f),
+                          ui::WithAlpha(color::kAccent, k));
+      ui::DrawTracked(dl, f.display, fs, ImVec2(x + 20 * s + 6 * s * k, iy + (item_h - fs) * 0.5f),
+                      on ? color::kText : color::kTextDim, text::Upper(T(kEntries[i])), tr);
+      iy += item_h;
+    }
+    if (input_.Pressed(Action::kAccept)) chosen = egg_focus_;
+    if (input_.Pressed(Action::kBack) || input_.Pressed(Action::kPlay)) chosen = 0;
+    const Action clicked = ui::DrawPrompts(dl, glyphs_, PromptSet(), {{Action::kAccept, "Select"}, {Action::kBack, "Resume"}},
+                                           o_.x + w_ - 72 * s, o_.y + h_ - 48 * s, m_, true);
+    if (clicked != Action::kCount) pending_click_ = clicked;
+    if (chosen == 0) {
+      egg_paused_ = false;
+      REXLOG_INFO("KK: easter egg resumed");
+      if (egg_) egg_->ToFront();
+    } else if (chosen == 1) {
+      egg_paused_ = false;
+      egg_quitting_ = true;
+      egg_close_at_ = SteadySeconds();
+      REXLOG_INFO("KK: easter egg: Quit to main menu");
+      if (egg_) egg_->RequestClose();
+    }
   }
 
   // ---------------------------------------------------------- heartbeat ---
@@ -7860,11 +8577,14 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
     DevNotifyTest();
 #endif
     FlushProfileOptions(false);
+    TickEgg();
     FinishInstallIfDone();
     FinishArtIfDone();
     RefreshPack();
     TickContent();
     TickUpdate();
+    TickLaunchTime();
+    TickFinish();
     TickSteam();
     // Saved crash reports never open a pop-up (owner, 19 Oct: it showed on every start and covered the
     // benchmark results); they are still saved and uploaded as before, and the Settings Diagnostics row
@@ -7910,7 +8630,8 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
     upscaler_answer_taken_ = true;
     upscaler_answer_backend_ = backend;
     std::string offered;
-    for (const auto& [on, name] : {std::pair{c.dlss, "dlss"}, std::pair{c.fsr4, "fsr4"}, std::pair{c.fsr3, "fsr3"},
+    for (const auto& [on, name] : {std::pair{c.dlss, "dlss"}, std::pair{c.fsr4 && Fsr4AllowedOnThisGpu(), "fsr4"},
+                                   std::pair{c.fsr3, "fsr3"},
                                    std::pair{c.xess, "xess"}})
       if (on) offered += (offered.empty() ? "" : ",") + std::string(name);
     if (offered.empty()) offered = "none";
@@ -8075,6 +8796,7 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
   }
   std::chrono::steady_clock::time_point dev_notify_at_{}, dev_history_at_{};
   bool dev_notify_ok_ = true;
+  ImGuiKey dev_key_up_ = ImGuiKey_None;  // task 358: the key a "key:" step pressed (let go next frame)
 
   void DevInput() {
     ImGuiIO& io = ImGui::GetIO();
@@ -8085,6 +8807,10 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
     if (release) {
       io.AddMouseButtonEvent(0, false);
       release = false;
+    }
+    if (dev_key_up_ != ImGuiKey_None) {  // task 358: the key a "key:" step pressed is let go the next frame
+      io.AddKeyEvent(dev_key_up_, false);
+      dev_key_up_ = ImGuiKey_None;
     }
     static std::vector<std::string> steps = [] {
       std::vector<std::string> out;
@@ -8117,6 +8843,8 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
       else if (w == "wait-home") met = !InSetup() && !ShaderScreen() && !loop_ && !MoviesPending();  // task 331/332: the loop and movies gone
       else if (w == "wait-movies") met = movies_ != nullptr;  // task 332: the startup movies are up
       else if (w == "wait-modal") met = modal_.open;  // a pop-up is up (logged with its title)
+      else if (w == "wait-files") met = FinishScreen();  // task 370: the first start check downloads
+      else if (w == "wait-files-done") met = finish_ && !finish_->busy && (finish_->done || finish_->failed);
       else if (w == "wait-artbook") {  // Beta 7: the artbook installed, or its download failed
         const auto st = content::Service::Get().Get(content::Kind::kArtbook);
         met = st.installed || st.stage == content::Stage::kFailed;
@@ -8246,6 +8974,12 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
       }
       for (int p = 0; p < kPageCount; ++p)
         if (text::Upper(t.substr(5)) == text::Upper(kPageNames[p])) GoTo(Page(p));
+      return;
+    }
+    if (t == "home-play") {  // task 357: Home's focus on Play, as when Home opens
+      home_focus_ = 0;
+      side_focus_ = -1;
+      status_focus_ = false;
       return;
     }
     if (t.rfind("focus:", 0) == 0) {
@@ -8407,6 +9141,36 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
       return;
     }
     if (t == "up") return io.AddMouseButtonEvent(0, false);
+    // Task 358: "key:<name>" presses a real keyboard key (ImGui key events, let go at the next step), so the
+    // keyboard path (Input::key_presses, the Home code) runs as when typed: up, down, left, right, a, b, enter,
+    // space, escape, x.
+    if (t.rfind("key:", 0) == 0) {
+      static const std::map<std::string, ImGuiKey> kKeyNames = {
+          {"up", ImGuiKey_UpArrow}, {"down", ImGuiKey_DownArrow}, {"left", ImGuiKey_LeftArrow},
+          {"right", ImGuiKey_RightArrow}, {"a", ImGuiKey_A}, {"b", ImGuiKey_B}, {"enter", ImGuiKey_Enter},
+          {"space", ImGuiKey_Space}, {"escape", ImGuiKey_Escape}, {"x", ImGuiKey_X}};
+      if (auto it = kKeyNames.find(t.substr(4)); it != kKeyNames.end()) {
+        io.AddKeyEvent(it->second, true);
+        dev_key_up_ = it->second;
+      }
+      return;
+    }
+    // Task 364: "hold:lb+rb+lt+rt" holds those controller buttons down until the next hold step ("hold:none" lets
+    // go), for the Home codes entered while shoulder buttons are held. Presses meanwhile: pad:down, pad:x, ...
+    if (t.rfind("hold:", 0) == 0) {
+      static const std::map<std::string, uint32_t> kHoldNames = {{"lb", ui::Input::kPadLB}, {"rb", ui::Input::kPadRB},
+                                                                 {"lt", ui::Input::kPadLT}, {"rt", ui::Input::kPadRT}};
+      uint32_t bits = 0;
+      std::string rest = t.substr(5);
+      for (size_t at = 0; at <= rest.size();) {
+        const size_t plus = std::min(rest.find('+', at), rest.size());
+        if (auto it = kHoldNames.find(rest.substr(at, plus - at)); it != kHoldNames.end()) bits |= it->second;
+        at = plus + 1;
+      }
+      input_.InjectHeld(bits);
+      REXLOG_INFO("KK dev: held {}", rest);
+      return;
+    }
     if (t.rfind("wheel:", 0) == 0) return io.AddMouseWheelEvent(0, std::stof(t.substr(6)));
     ui::Device d = ui::Device::kKeyboard;
     if (t.rfind("pad:", 0) == 0) d = ui::Device::kXbox, t = t.substr(4);
@@ -8435,6 +9199,18 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
   ImVec2 o_{0, 0};
   float w_ = 1280, h_ = 720;
   Page page_ = kHome;
+  // Task 357: the Easter egg game (EggCodeInput, DrawEgg).
+  egg::Code egg_code_;
+  egg::HeldCodes egg_held_codes_;  // task 364: the original game's codes
+  bool egg_holding_ = false;       // task 364: a code's hold was down last frame (logged once)
+  std::unique_ptr<egg::Process> egg_;
+  bool egg_running_ = false, egg_paused_ = false, egg_quitting_ = false;
+  int egg_focus_ = 0;          // the pause panel: 0 Resume, 1 Quit to main menu
+  double egg_pause_time_ = 0;  // ImGui time the pause panel opened (its shade fades in)
+  double egg_close_at_ = 0;    // SteadySeconds when Quit to main menu asked it to close
+  bool egg_enter_down_ = false;  // task 358: Enter was held last frame (read from the system)
+  bool egg_esc_down_ = false;    // task 364: Esc likewise
+  std::array<float, 2> egg_offsets_{};
   bool recovery_shown_ = false;
   bool crash_notice_shown_ = false;  // task 228
   int shown_frames_ = 0;
@@ -8463,6 +9239,11 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
   bool menu_to_status_ = false; // Home's menu moves down to it (DrawMenu)
   ImVec2 status_rect_[2] = {};  // where it was drawn last frame
   double side_since_ = -1;   // when the side panels were first drawn (their fade-in)
+  int card_focus_ = -1;      // task 373: the countdown card's button with the focus (Home), or -1
+  int64_t launch_utc_ = 0;   // the Remastered update's launch (seconds since 1970 UTC)
+  std::string launch_title_;  // the countdown's title from the website (empty: built in)
+  std::shared_ptr<countdown::Fetch> launch_fetch_;
+  bool dev_countdown_ = false;  // KK_DEV_COUNTDOWN set the time
   std::unique_ptr<rex::ui::ImmediateTexture> discord_icon_, steam_icon_;
   std::vector<float> home_offset_;
   float home_mix_ = 1.0f;
@@ -8477,12 +9258,18 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
   std::unique_ptr<LoadingLoop> loop_;
   loading_loop::Kind loop_kind_ = loading_loop::Kind::kNone;
   bool loop_scene_ = false;   // the live menu scene was started for this launcher: the loop waits for it
+  bool loop_black_ = false;   // task 349c: the loop's video cannot show: a black cover while the scene starts
+  std::string loop_open_on_;  // task 349c: --kk_launcher_open of this launcher (its second attempt opens the same)
+  double scene_started_at_ = -1;  // task 349c: ImGui time of the scene's start (its attempt's clock)
+  bool scene_start_pending_ = false;  // task 349c: the scene starts once the loop's first picture is on screen
+  bool scene_retrying_ = false;       // task 349c: the launcher is starting again for the second attempt
   bool loop_saved_ = false;   // "Game saved at your last checkpoint."
   std::string loop_tip_;      // this time's tip (translated)
   float loop_shown_ = 0.0f;   // seconds on screen (from its first picture)
   double loop_first_ = -1;   // ImGui time of its first picture
   float loop_end_ = -1.0f;    // seconds since it started fading (< 0: not yet)
   float loop_wait_ = 0.0f;   // seconds since the launcher's first frame
+  bool first_frame_noted_ = false;  // task 353: the start-up step log
   float scene_gain_ = 0.0f;  // task 330: the live menu scene's sound (0 .. 1)
   bool scene_retry_ = false;    // task 330: the scene may start later in this launcher (TickSceneStart)
   double scene_retry_at_ = 0;
@@ -8506,6 +9293,8 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
   std::shared_ptr<UpdateStatus> update_;
   std::shared_ptr<SteamState> steam_;
   bool update_manual_ = false, update_prompted_ = false, installing_update_ = false, relaunched_ = false;
+  std::shared_ptr<FinishStatus> finish_;  // task 370: the first start check
+  bool finish_hidden_ = false, finish_reported_ = false;
   std::string switch_to_;  // the channel Change version is switching to, while it checks
   bool open_whats_new_ = false;
   bool whats_new_shown_ = false;  // opened once in this launcher session (FinishSetup asks for it only if not)
@@ -8515,6 +9304,7 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
   int pack_installed_ = -1;        // -1: not read yet
   bool waiting_for_pack_ = false;  // Play was pressed during the download
   NativeShaderPack native_pack_;      // the native renderer's shaders (native_shaders.h)
+  bool existing_install_ = false;     // task 350a: run before this start (StartFullSetup, setup_again.h)
   bool setup_shaders_ = false;        // being prepared as the install's last step
   bool update_shaders_ = false;       // built again in full after an update (DrawShaderScreen)
   bool rebuild_shaders_screen_ = false;  // Graphics > Rebuild shaders: the shader screen until it's done
@@ -8803,6 +9593,16 @@ std::string ApplyRendererChoice() {
   if (Get("native_gi_distance") == "full" && Get("kk_graphics_preset") == "Ultra") Set("native_gi_distance", "far");
   ApplyUpscalerDefaults();
   return startup::ApplyChoice(rex::cvar::GetFlagByName("gpu_plugin"));
+}
+
+void AskUpscalersBeforeWindow() {
+  if (!HasTemporalSetting() || !UsingNativeRenderer()) return;
+  const auto start = std::chrono::steady_clock::now();
+  if (nr::kk::QueryUpscalers().state != 1) return;  // kept by the renderer (or none here): no device made
+  nr::kk::WaitForUpscalers();
+  nr::kk::QueryUpscalers();  // takes the answer, which the renderer then keeps in the settings
+  REXLOG_INFO("KK: upscalers asked before the launcher's window opened ({:.0f} ms)",
+              std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - start).count());
 }
 
 void ShowLauncher(rex::ui::ImGuiDrawer* drawer, rex::ui::ImmediateDrawer* immediate, LauncherPaths paths,

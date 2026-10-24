@@ -79,6 +79,12 @@ struct GameUpscale {
     nvrhi::Rect scissor;
   };
   std::vector<MotionDraw> motion_draws;
+  // The camera register search of the last recorded draw (task 351): the same vertex constants (no
+  // change since, GameRenderer::vs_constants_generation_) give the same answer.
+  bool wvp_known = false;
+  uint64_t wvp_generation = 0;
+  int wvp_register = -1;
+  float wvp_rows[16] = {};
   // Render-thread requests, retained across frames. The shared prewarm set still
   // owns deduplication against lists and cache files under cache_mutex_.
   std::unordered_set<uint64_t> motion_prewarm_seen;

@@ -10,7 +10,7 @@ namespace kk::texpacks {
 
 // The UHD pack's note (owner's words, 18 Oct): on its page, and asked before its download starts.
 inline constexpr const char* kUhdNote =
-    "This pack replaces many surfaces with high-detail materials that were not made for this game, so the game will "
+    "This pack replaces many surfaces with high detail materials that were not made for this game, so the game will "
     "no longer look exactly as its developers intended. Every effort was made to keep the original style: where no "
     "good match was found, the original texture is used, upscaled with AI.";
 

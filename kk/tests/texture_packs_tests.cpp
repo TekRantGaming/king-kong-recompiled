@@ -97,7 +97,7 @@ static void DownloadTable() {
   // and its page offers the Cel shading mod.
   CHECK(uhd && uhd->note == kk::texpacks::kUhdNote && uhd->credits && !uhd->recommended_mod);
   CHECK(std::string(uhd->note) ==
-        "This pack replaces many surfaces with high-detail materials that were not made for this game, so the game "
+        "This pack replaces many surfaces with high detail materials that were not made for this game, so the game "
         "will no longer look exactly as its developers intended. Every effort was made to keep the original style: "
         "where no good match was found, the original texture is used, upscaled with AI.");
   CHECK(comic && !comic->note && !comic->credits && std::string(comic->recommended_mod) == "builtin:cel-shading");
@@ -117,7 +117,7 @@ static void DownloadTable() {
   const char* langs[] = {"1", "3", "5", "4", "6"};  // English, German, Spanish, French, Italian
   const char* comic_text[] = {
       "A comic book style texture pack for King Kong. We recommend also enabling the Cel shading mod.",
-      "Ein Texturpaket im Comic-Stil f\xC3\xBCr King Kong. Wir empfehlen, zus\xC3\xA4tzlich die Mod Cel-Shading zu aktivieren.",
+      "Ein Texturpaket im Comicstil f\xC3\xBCr King Kong. Wir empfehlen, zus\xC3\xA4tzlich die Mod Cel Shading zu aktivieren.",
       "Un paquete de texturas de estilo c\xC3\xB3mic para King Kong. Recomendamos activar tambi\xC3\xA9n el mod Cel shading.",
       "Un pack de textures style bande dessin\xC3\xA9" "e pour King Kong. Nous recommandons d'activer aussi le mod Cel shading.",
       "Un pacchetto texture in stile fumetto per King Kong. Consigliamo di attivare anche la mod Cel shading."};
@@ -154,8 +154,7 @@ static void DownloadTable() {
 // with ranged reads (ReadZipPicture), and the card pictures made from a still (workshop_art.h).
 static void ContentFacts() {
   using kk::workshop_content::FactsFor;
-  for (const char* key : {"original", "hd", "uhd", "comic", "tropical", "cartoon", "folder", "builtin:cel-shading",
-                          "builtin:ultrawide"}) {
+  for (const char* key : {"original", "hd", "uhd", "comic", "tropical", "cartoon", "folder", "builtin:cel-shading"}) {
     const auto* f = FactsFor(key);
     CHECK(f && f->changes && f->needs);
   }
@@ -163,9 +162,8 @@ static void ContentFacts() {
   // Kong Comic Book: the owner's wording only (DECISIONS 18 Oct), so no "how it looks" of ours.
   CHECK(!FactsFor("comic")->looks && std::string(FactsFor("comic")->pairs).find("Cel shading") != std::string::npos);
   CHECK(std::string(FactsFor("builtin:cel-shading")->pairs).find("Kong Comic Book") != std::string::npos);
-  // Task 232: the Ultrawide mod needs an ultrawide screen and keeps saying it is experimental.
-  CHECK(std::string(FactsFor("builtin:ultrawide")->needs).find("ultrawide screen") != std::string::npos);
-  CHECK(std::string(FactsFor("builtin:ultrawide")->looks).find("Experimental") != std::string::npos);
+  // Task 360 (Beta 17): ultrawide is built in, the Ultrawide mod and its Workshop entry are gone.
+  CHECK(!FactsFor("builtin:ultrawide"));
   // The UHD and HD descriptions no longer repeat the size (it is the facts table's Size row).
   for (const auto& page : kDownloadPages) CHECK(std::string(page.description).find("GB") == std::string::npos);
   const char* langs[] = {"1", "3", "5", "4", "6"};

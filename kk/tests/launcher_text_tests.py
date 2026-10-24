@@ -67,6 +67,17 @@ strings |= {
 LOCKED_HELP = 'An original bonus video mode. Unlock it in Extras before changing it.'
 UNLOCKED_HELP = 'An original bonus video mode, unlocked in Extras.'
 strings |= {UNLOCKED_HELP}
+# Task 373: the Remastered update countdown on Home (countdown.cpp, the card in launcher.cpp), from stable 1.9.12.
+strings |= {
+    'King Kong Remastered update', 'The King Kong Remastered update is out', '{0} is out', '{0} {1} {2}, {3} UK time',
+    '({0} your time)', 'Join the Discord', 'Check for updates', 'Checking for updates',
+    'Join our Discord to follow development, get behind the scenes previews and have your say on new features.',
+    'Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'January', 'February', 'March',
+    'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December',
+}
+_countdown = (src / 'countdown.cpp').read_text(encoding='utf-8')
+if 'T-' in _countdown or '"d "' not in _countdown:
+    fail('task 373: the countdown reads like 8d 15:24:51 (no T, no dashes)')
 # Content downloads (task J1): the Settings rows, their values, help, errors and status lines.
 strings |= {
     'HD texture pack',
@@ -178,8 +189,8 @@ strings |= {
     'Installing your texture pack',
     'Downloading the HD texture pack',
     'Downloading the PS2 cutscenes',
-    'Your ZIP file is checked and unpacked. It carries on in the background if you leave this pop-up.',
-    'It carries on in the background if you leave this pop-up. If the connection drops or you close the launcher, it continues from where it stopped.',
+    'Your ZIP file is checked and unpacked. It carries on in the background if you leave this popup.',
+    'It carries on in the background if you leave this popup. If the connection drops or you close the launcher, it continues from where it stopped.',
     'Waiting for the other download to finish',
     'Starting',
     'Connecting',
@@ -268,7 +279,7 @@ strings |= {
     'Brighter highlights and deeper colour on your HDR screen.',
     'Sunlight bounces off surfaces and softly lights the shade beside them.',
     'Soft shading where surfaces meet, in corners and under rocks and grass.',
-    "Sharper, softer-edged shadows than the game's own.",
+    "Sharper, softer edged shadows than the game's own.",
     'The water reflects the rocks, trees and the ship around it.',
     'Sunlight shines through the mist and fog in visible shafts.',
     'Original look',
@@ -380,7 +391,7 @@ strings |= {'Mods', 'Texture packs', 'Other TRG projects and games', 'Not instal
             'A texture pack in a folder of your own (with its pack.txt). Choosing one switches it on.',
             "No texture pack is on. Choose one in the Workshop from the main menu.",
             'Nothing is installed and everything you had stays as it was. Your ZIP file is kept.',
-            'Your ZIP file is checked and unpacked. It carries on in the background if you leave this pop-up, and Cancel '
+            'Your ZIP file is checked and unpacked. It carries on in the background if you leave this popup, and Cancel '
             'stops it without changing anything you have installed.',
             'Comic Book Texture Pack', 'Downloading Comic Book Texture Pack', 'Comic Book Texture Pack installed', 'Switch on {0}', '{0} is on',
             "Kong's Tropical Holiday Texture Pack", "Downloading Kong's Tropical Holiday Texture Pack",
@@ -403,7 +414,7 @@ strings |= {'Mods', 'Texture packs', 'Other TRG projects and games', 'Not instal
             'Already installed. Turn it on or off at any time in the Workshop or Settings > Graphics.',
             'Already installed. Turn them on or off at any time in Settings > Advanced.',
             'Already downloading. It carries on in the background.',
-            'Enabled {0}', 'Disabled', 'Problem', 'Built-in', 'Conflict', 'Version {0}', 'Import mod', 'From a ZIP file'}
+            'Enabled {0}', 'Disabled', 'Problem', 'Built in', 'Conflict', 'Version {0}', 'Import mod', 'From a ZIP file'}
 if len(workshop_strings) < 14:
     fail(f'J8: only {len(workshop_strings)} Workshop strings found')
 strings |= workshop_strings
@@ -419,9 +430,9 @@ if 'Coming soon' in workshop_cpp or 'KongMods' not in workshop_cpp:
     fail('task 200: the Workshop still shows Coming soon instead of the Kong mods row')
 for builtin in ('cel-shading',):  # Hardcore held back until no healing works (owner, Beta 7)
     if not (root / 'mods-builtin' / builtin / 'mod.toml').exists():
-        fail(f'task 200: built-in mod {builtin} missing')
+        fail(f'task 200: built in mod {builtin} missing')
 if (root / 'mods-builtin' / 'hardcore').exists():
-    fail('task 200: the Hardcore mod is held back and must not ship as a built-in mod yet')
+    fail('task 200: the Hardcore mod is held back and must not ship as a built in mod yet')
 if not (root.parent / 'MODDING.md').exists():
     fail('task 200: MODDING.md missing')
 else:
@@ -463,7 +474,7 @@ for needle, why in (
 ):
     if needle not in workshop_cpp:
         fail(why)
-UHD_NOTE = ('This pack replaces many surfaces with high-detail materials that were not made for this game, so the game '
+UHD_NOTE = ('This pack replaces many surfaces with high detail materials that were not made for this game, so the game '
             'will no longer look exactly as its developers intended. Every effort was made to keep the original style: '
             'where no good match was found, the original texture is used, upscaled with AI.')
 _flat = re.sub(r'"\s*\n\s*"', '', texpacks_cpp)
@@ -718,8 +729,7 @@ for needle, why in (
          'the owner\'s order: prompts, texture pack, cutscenes, Workshop, all set'),
         ('startup_movies::AtLauncherStart(open_on, files_ok_, InSetup(), GetBool("kk_skip_intros"))',
          'the movies at a start from the desktop unless kk_skip_intros'),
-        ('startup_movies::AskFirst(true, skip)', 'the pop-up before the movies after the setup with skip on'),
-        ('DrawSkipAll(dl);  // task 332: the first-time setup\'s shader screen', 'Skip all on the shader screen'),
+        ('startup_movies::AskFirst(true, skip)', 'the popup before the movies after the setup with skip on'),
 ):
     if needle.replace('\\n', '\n') not in _l331:
         fail(f'332: {why} ({needle})')
@@ -728,9 +738,8 @@ for needle, why in (
         ('SettingsPageItems(kSetupSettingsPages[page])', 'built by the same code as Settings'),
         ('AttachHelp(items);', 'the same descriptions as Settings'),
         ('ui::DrawDescription(dl, focused, ImVec2(dx, top + 18 * s)', 'the same right-hand description panel'),
-        ('{{Action::kResetPage, "Skip all"}}', 'Skip all at the top'),
-        ('"You can change all of these settings later from Settings on the main menu."', 'the Skip all pop-up'),
-        ('{"OK"}, -1, [this](int) { SkipAllSetup(); }', 'OK then straight on'),
+        ('prompts.push_back({Action::kResetPage, "Skip all"});', 'Skip all at the top'),
+        ('"You can change all of these settings later from Settings on the main menu."', 'the Skip all popup'),
 ):
     if needle not in _pages332:
         fail(f'332: {why} ({needle})')
@@ -740,10 +749,60 @@ for banned in ('Use recommended', 'DrawCompare', 'CompareFor'):
 _end332 = (src / 'launcher_setup_end.inc').read_text(encoding='utf-8')
 if 'StartMoviesAfterSetup();' not in _end332:
     fail('332: Finish setup does not start the movies')
-if _end332.count('DrawSkipAll(dl);') != 2:
-    fail('332: Skip all missing on the button prompts or all set page')
+if _end332.count('DrawSetupTop(dl);') != 1:
+    fail('365: the top right row missing on the button prompts page, or shown on the Finish page')
 if '\u2014' in _pages332 or '\u2013' in _pages332:
     fail('dash in launcher_setup_pages.inc')
+# Task 365 (owner, 23 Oct): the shader screen has no Continue in the background and no Skip all; the setup's top right
+# row (progress bar by page until the Finish page, Auto detect, Skip all with a warning pop-up, Next page); Field of
+# view 80 recommended, 69 original; the Workshop page's description and pictures. Every string in five languages.
+_new365 = {
+    'Auto detect', 'Next page', 'Cancel',
+    'If you do not configure your game correctly, you may have a worse experience.',
+    'Auto detect chose the recommended settings for this PC.', 'How it works', 'Texture packs', 'Mods', 'Texture pack', 'Mod',
+    'Before you download', 'Cel shading',
+    'Texture packs change how the whole game looks. HD and UHD keep the original style with much sharper detail. '
+    'Comic Book, Cartoon and Tropical Holiday give it a fun new look.',
+    'Mods change how the game looks or plays, such as Cel shading, which draws it like a comic book. You can also add '
+    'your own mods; the modding guide in the Workshop shows how.',
+    'Choose a pack or mod in the Workshop to see it, download it, then switch it on there. Only one texture pack is on '
+    'at a time, and you can go back to the original textures at any time.',
+    'Texture packs are big: each one is a download of {0} to {1} GB and takes about {2} GB once installed.',
+    '{0}\u00b0 (recommended)', '{0}\u00b0 (original)',
+    'How wide the camera sees. 80\u00b0 is recommended and 69\u00b0 is the original for Jack; Kong, cutscene and other '
+    'cameras widen by the same amount. Jack\'s gun keeps its usual size.',
+}
+strings |= _new365
+_l365 = (src / 'launcher.cpp').read_text(encoding='utf-8')
+_shader365 = _l365[_l365.index('  void DrawShaderScreen(ImDrawList* dl) {'):_l365.index('  int SetupStage() const {')]
+for banned in ('Continue in the background', 'DrawSkipAll', 'DrawSetupTop', 'ContinueShadersInBackground'):
+    if banned in _shader365:
+        fail(f'365: the shader screen still has {banned}')
+if 'if (ShaderScreen()) return {};' not in _l365:
+    fail('365: the shader screen still shows a button prompt')
+for needle, why in (
+        ('prompts.push_back({Action::kNextTab, "Next page"});', 'Next page at the top right'),
+        ('if (setup_progress::AutoDetectOffered(stage)) prompts.push_back({Action::kPlay, "Auto detect"});',
+         'Auto detect on the Settings pages and the button prompts'),
+        ('{"Cancel", "Skip all"}, 0,', 'the Skip all pop-up: Cancel (focused) or Skip all'),
+        ('"If you do not configure your game correctly, you may have a worse experience."', 'the Skip all warning'),
+        ('ResetForSetupAgain();\n    ApplyRemastered(true);\n    ApplyRecommendedPreset();', 'Auto detect = the setup\'s recommendation'),
+        ('setup_textures_ = true;\n    setup_cutscenes_ = movies::PlaybackAvailable();', 'Auto detect goes on to the texture pack page'),
+        ('workshop_->TexturePackPicture(tile.key, aspect)', 'the Workshop page shows the packs\' own pictures'),
+):
+    if needle.replace('\\n', '\n') not in _pages332:
+        fail(f'365: {why} ({needle})')
+if _pages332.count('DrawSetupTop(dl);') < 2:
+    fail('365: the top right row missing on the Settings or Workshop pages')
+if 'DrawSkipAll' in _pages332 + _end332 + _l365:
+    fail('365: the old Skip all is still drawn')
+_set365 = (src / 'settings.cpp').read_text(encoding='utf-8')
+if 'REXCVAR_DEFINE_INT32(kk_fov, 80,' not in _set365 or 'rex::cvar::SetFlagByName("kk_fov", "69");' not in _set365:
+    fail('365: Field of view 80 by default, 69 kept for an existing settings file')
+for _s in sorted(_new365):
+    for _tr in entries.get(_s, []):
+        if '\u2014' in _tr or '\u2013' in _tr or re.search(r'\w-\w', _tr) or ' - ' in _tr:
+            fail(f'365: dash in a translation of {_s!r}: {_tr!r}')
 _vid332 = root / 'launcher-video' / 'trg-startup.mp4'
 if not _vid332.is_file():
     fail('332: launcher-video/trg-startup.mp4 is missing')
@@ -872,8 +931,8 @@ for needle, why in (
         ('{"Yes, restore them", true,', 'the cutscene page lost Yes'),
         ('{"No thanks", true,', 'the cutscene page lost No thanks'),
         ('    content::Service::Get().Download(kind);\n    REXLOG_INFO("KK content: {} download started ({}); watching the progress"',
-         'a download does not go straight to its progress pop-up (owner 19 Oct)'),
-        ('{"Pause", "Run in background", "Cancel"}', 'the progress pop-up buttons differ'),
+         'a download does not go straight to its progress popup (owner 19 Oct)'),
+        ('{"Pause", "Run in background", "Cancel"}', 'the progress popup buttons differ'),
         ('if (st.stage != content::Stage::kUnpacking)', 'the UI thread logs while unpacking'),
         ('void NotifyContentDone(', 'no notification hook for job J3'),
         # Job J3: the decision (notify_logic.h), the switch, the ding and the system notification.
@@ -924,17 +983,27 @@ if '—' in gfx or '–' in gfx:
 for banned in ('setup-art', '-original.png', '-new.png'):
     if banned in gfx:
         fail(f'task 219: the setup pages still load shipped screenshots ({banned})')
-# Task 219: HDR follows Windows: the Display rows, the calibration button, and present_hdr decided at start.
+# Task 219: present_hdr decided at start (kk_hdr and kk_hdr_levels, hdr_display.cpp).
 _l219 = (src / 'launcher.cpp').read_text(encoding='utf-8')
-for needle, why in (
-        ('"kk_hdr", {{"Follow Windows", "auto"}, {"On", "on"}, {"Off", "off"}}', 'HDR row: Follow Windows / On / Off'),
-        ('"kk_hdr_levels", {{"Automatic (from Windows)", "auto"}, {"Manual", "manual"}}', 'HDR brightness row'),
-        ('[] { hdr::OpenCalibrationApp(); }', 'Open Windows HDR Calibration button'),
-        ('"kk_hdr", "kk_hdr_levels", "present_hdr"', 'Display reset includes the HDR modes')):
-    if needle not in _l219:
-        fail(f'219: {why}')
 if 'kk::hdr::Apply("start");' not in (src / 'king_kong_app.h').read_text(encoding='utf-8'):
     fail('219: present_hdr is not decided at start')
+# Owner, 21 Oct (Beta 14): HDR is off by default and experimental: no HDR rows in Settings > Display, the setup or
+# the pause menu (they share launcher.cpp's DisplayItems), only the F8 graphics panel's "HDR (experimental)".
+for needle, where in (
+        ('"kk_hdr"', 'launcher.cpp'), ('"kk_hdr_levels"', 'launcher.cpp'), ('OpenCalibrationApp', 'launcher.cpp'),
+        ('HdrItems', 'launcher.cpp'), ('"HDR"', 'launcher_setup_graphics.inc'), ('HDR', 'pause_menu_logic.h'),
+        ('"HDR', 'settings_layout.h'), ('{"HDR', 'settings_help.h')):
+    if needle in (src / where).read_text(encoding='utf-8'):
+        fail(f'Beta 14: HDR is F8 only, but {where} still has {needle}')
+_panel = (src / 'debug_overlay.cpp').read_text(encoding='utf-8')
+for needle, why in (
+        ('{"HDR (experimental)", "HDR (experimental)", "kk_hdr", Kind::kToggle, {{"Off", "off"}, {"On", "on"}}',
+         "the F8 panel's HDR (experimental) toggle (kk_hdr, saved)"),
+        ('hdr::Apply("graphics panel")', 'the F8 panel applies an HDR change at once')):
+    if needle not in _panel:
+        fail(f'Beta 14: {why}')
+if not re.search(r'REXCVAR_DEFINE_STRING\(kk_hdr, "off"', (src / 'settings.cpp').read_text(encoding='utf-8')):
+    fail('Beta 14: HDR is not off by default')
 
 # Job J5: setup steps 9 and 10 come after the graphics pages (launcher_setup_end.inc): the button prompt cards
 # set kk_button_prompts (Keyboard and mouse through the Controls page's own input switch).
@@ -993,7 +1062,7 @@ for needle, why in (
         fail(f'J6: {why} ({needle})')
 m = re.search(r'void StartFullSetup\(bool save = true\) \{(.*?)\n  \}\n', launcher, re.S)
 body = m.group(1) if m else ''
-if 'if (Get("kk_setup_version").empty()) {\n      ApplyRemastered();' not in body:
+if 'if (Get("kk_setup_version").empty()) {\n      ApplyRemastered(true);' not in body:
     fail('J6: a new install does not start Remastered')
 if 'Set("kk_setup_version", KK_VERSION);' not in body or 'update_new_ = false;' not in body:
     fail('J6: the full setup does not stand in for the New screen')
@@ -1019,11 +1088,50 @@ if '—' in new_src or '–' in new_src:
 
 # Job J5 part 3: the launcher's controllers press nothing while its window is not the active one (REPORT-188).
 ui_src = (src / 'launcher_ui.cpp').read_text(encoding='utf-8')
-if 'input_.set_pads_active(active);' not in launcher:
+# Task 357: and while the Easter egg game runs (its Start opens the launcher's pause panel over it).
+if 'input_.set_pads_active(active || egg_running_);' not in launcher:
     fail('the launcher does not tell its input whether its window is active')
 if 'if (!pads_active_)' not in ui_src or 'dir_stale_' not in ui_src:
     fail('the input does not ignore controllers while the window is not active')
 
+# Task 370: the new updater's screen and messages: in five languages, no dash of any kind and no hyphenated word
+# (owner), and the messages update.cpp gives are exactly these (the launcher translates them as it draws).
+_upd_cpp = (src / 'update.cpp').read_text(encoding='utf-8')
+_upd_launcher = (src / 'launcher.cpp').read_text(encoding='utf-8')
+_updater_strings = [
+    'Finishing the update',
+    'Some files of version {0} are missing, so the launcher is downloading them again. Your installed game, saves and settings stay as they are.',
+    'Installing the files.',
+    'Every file of version {0} is now installed.',
+    'The download did not pass its check, so nothing was changed. Try again later.',
+    '{0} is in use by another program, so the update was undone and nothing was changed. Close that program and try again.',
+    "The update's file list is damaged, so nothing was changed.",
+    'The download failed. Check your internet connection and try again.',
+    'Could not unpack the update.',
+    "The update did not contain the game's program.",
+    'Could not write the update into the game folder. Is it read only?',
+    'Checking the download.', 'Connecting', 'Continue in the background', 'Update failed',
+]
+strings |= set(_updater_strings)
+_dash = re.compile(r'[\u2010-\u2015\u2212]|\w-\w| - ')
+for _s in _updater_strings:
+    if len(entries.get(_s, [])) != 4 or not all(entries[_s]):
+        fail(f'370: not translated: {_s!r}')
+    for _tr in [_s] + entries.get(_s, []):
+        if _dash.search(_tr):
+            fail(f'370: dash or hyphen in {_tr!r}')
+for _s in _updater_strings[4:11]:
+    _c = _s.replace('"', '\\"')
+    if f'"{_c}"' not in _upd_cpp and not all(f'"{p}' in _upd_cpp for p in [_c[:40]]):
+        fail(f'370: update.cpp does not give {_s!r}')
+for _needle, _why in (
+    ('heading("Finishing the update");', 'the first start check has its screen'),
+    ('entries.push_back({"Continue in the background", true, [this] { finish_hidden_ = true; }});', 'it can be left'),
+    ('F(update_->message.c_str(), {update_->detail})', 'the failure names the file in use'),
+    ('StartFinishCheck();', 'the first start check runs'),
+):
+    if _needle not in _upd_launcher:
+        fail(f'370: {_why} ({_needle})')
 if failures:
     print('\n'.join('FAIL: ' + f for f in failures))
     sys.exit(1)

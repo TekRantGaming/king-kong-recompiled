@@ -74,7 +74,7 @@ inline std::vector<RouteChapter> ParseRouteSpec(std::string_view spec, double de
       if (!(in >> duration) || !in.eof()) bad();
     }
     if (entry > 40 || !std::isfinite(duration) || duration < 1 || duration > 600 || out.size() >= 4) bad();
-    std::string name = "Chapter-select entry " + std::to_string(entry);
+    std::string name = "Chapter select entry " + std::to_string(entry);
     for (const auto& d : DefaultRoute()) if (d.entry == entry) name = d.name;
     if (entry == 9) name = "Ann";
     out.push_back({entry, duration, std::move(name)});

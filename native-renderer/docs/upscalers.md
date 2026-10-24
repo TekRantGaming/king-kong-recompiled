@@ -78,7 +78,12 @@ Intel XeSS (`native_upscaler`), only with the native renderer. DLSS is named in 
 or artwork (see "What a release ships"). No frame generation anywhere.
 
 - **Which are offered.** When the launcher opens it asks the plugin (`nr_upscaler_query`,
-  `plugin/native_upscaler_query.h`; `nr::kk::QueryUpscalers`, `hooks/kk_native_ui.h`). The plugin makes a
+  `plugin/native_upscaler_query.h`; `nr::kk::QueryUpscalers`, `hooks/kk_native_ui.h`). Since task 335 it
+  asks before its window, device and swapchain exist (`kk::AskUpscalersBeforeWindow`, OnPreSetup), and the
+  plugin keeps the answer in `native_upscaler_query_saved` with the adapter, its driver version and the
+  plugin's build stamp: later starts take the saved answer and make no Direct3D 12 device at all (two
+  launchers crashed in NVIDIA's `nvwgf2umx.dll` while this device was made beside NVIDIA's Vulkan
+  presentation, which itself goes through DXGI and Direct3D 12). The plugin makes a
   Direct3D 12 device of its own on the high-performance adapter, on a thread, and runs
   `QueryUpscalerSupport` on it: each SDK says whether it runs on this graphics card and driver (DLSS: NGX's
   `SuperSampling.Available`; FSR 4: AMD's library's versions; XeSS: its context; FSR 3.1: its DLL). When

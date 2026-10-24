@@ -6,6 +6,7 @@
 // (native-renderer/hooks) use it to reach the backend (native_api.h).
 
 #include <filesystem>
+#include "backend/chapter_texture_prepare.h"
 #include <string_view>
 
 #include <rex/cvar.h>
@@ -141,6 +142,13 @@ REXCVAR_DEFINE_STRING(native_pipeline_cache_dir, "", "Native renderer",
 REXCVAR_DEFINE_STRING(native_failed_backends, "", "Native renderer",
                       "Set by the game's startup recovery: the graphics APIs (vulkan, d3d12, comma separated) that "
                       "failed to start on this PC. Setup does not prepare shaders or pipelines for them")
+    .debug_only();
+
+// Task 368: the game turns this on (as a default, never saved) on Intel integrated graphics, where Intel's
+// Direct3D 12 driver crashed while the setup made a device for that API's pipelines.
+REXCVAR_DEFINE_BOOL(native_setup_skip_d3d12, false, "Native renderer",
+                    "Setup does not build the Direct3D 12 shader pack or prepare its pipelines unless Direct3D 12 "
+                    "is the selected API (set by the game on Intel integrated graphics)")
     .debug_only();
 
 REXCVAR_DEFINE_BOOL(native_vk_pipeline_cache, true, "Native renderer",
@@ -467,8 +475,8 @@ REXCVAR_DEFINE_STRING(native_upscaler_output, "", "Native renderer",
     .lifecycle(rex::cvar::Lifecycle::kInitOnly);
 
 REXCVAR_DEFINE_STRING(native_display_aspect, "", "Native renderer",
-                      "The shown picture's shape, WxH (the game sets it, not saved, for the experimental Ultrawide "
-                      "mod); empty: the game's own 16:9")
+                      "The shown picture's shape, WxH (the game sets it, not saved, on a screen wider "
+                      "than 16:9: ultrawide); empty: the game's own 16:9")
     .lifecycle(rex::cvar::Lifecycle::kInitOnly);
 
 REXCVAR_DEFINE_STRING(native_frame_size, "", "Native renderer",
@@ -520,7 +528,7 @@ REXCVAR_DEFINE_STRING(native_upscaler_rules, "", "Native renderer",
 // look keeps them there.
 REXCVAR_DEFINE_STRING(native_shadow_quality, "original", "Native renderer",
                       "Shadows: original (the game's 832x832 shadow maps, hard edges), high (shadow maps at twice "
-                      "the resolution, soft edges from a wide rotated filter) or ultra (four times the resolution, "
+                      "the resolution, soft edges from a wide rotated filter) or ultra (1.5 times the resolution, "
                       "edges that soften with the distance to what casts the shadow). native_shadow_scale, when "
                       "set, still sets the shadow maps' resolution")
     .lifecycle(rex::cvar::Lifecycle::kHotReload);
@@ -675,6 +683,15 @@ extern "C" REX_GPU_PLUGIN_EXPORT const NrPuppetProbeApi* nr_get_puppet_probe(voi
 }
 #endif
 
+// Optional creation-only notification, independent of the versioned draw API.
+extern "C" REX_GPU_PLUGIN_EXPORT void nr_texture_preload_object(uint32_t object) {
+  nr::TextureCreationInbox().Push(object);
+}
+
+extern "C" REX_GPU_PLUGIN_EXPORT void nr_clip_texture_loading(uint32_t level, uint32_t start, uint32_t active) {
+  nr::ChapterTextureClip().store(active ? (uint64_t(level) << 32) | start : 0, std::memory_order_release);
+}
+
 // The launcher's prewarm (native_prewarm.h).
 extern "C" REX_GPU_PLUGIN_EXPORT uint32_t nr_prewarm_start(const NrPrewarmRequest* request) {
   if (!request || request->size < sizeof(NrPrewarmRequest) || request->version != NR_PREWARM_VERSION) {
@@ -742,6 +759,18 @@ extern "C" REX_GPU_PLUGIN_EXPORT void nr_benchmark_enable(uint32_t enabled) {
 extern "C" REX_GPU_PLUGIN_EXPORT uint32_t nr_upscaler_query(NrUpscalerSupport* out) { return nr::UpscalerQuery(out); }
 
 extern "C" REX_GPU_PLUGIN_EXPORT void nr_upscaler_query_wait(void) { nr::WaitUpscalerQuery(); }
+
+// Task 353: the upscaler check's own process (king_kong.exe --kk_upscaler_check=...; kk/src/main.cpp calls this
+// before anything else of the game runs). Returns the process's exit code.
+extern "C" REX_GPU_PLUGIN_EXPORT int nr_upscaler_check_main(const wchar_t* report, const wchar_t* adapter) {
+#if NR_GAME_RENDERER && NR_HAS_D3D12
+  return nr::UpscalerCheckMain(report, adapter);
+#else
+  (void)report;
+  (void)adapter;
+  return 5;
+#endif
+}
 
 // The graphics panel's view of the same answer: never starts the question (the game's device exists).
 extern "C" REX_GPU_PLUGIN_EXPORT uint32_t nr_upscaler_query_peek(NrUpscalerSupport* out) {

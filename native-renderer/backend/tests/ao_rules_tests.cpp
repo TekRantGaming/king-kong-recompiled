@@ -501,7 +501,7 @@ TEST(Lighting_SettingsAndShaders) {
   CHECK(!ParseShadowQuality("max", q));
   CHECK_EQ(ShadowScaleForQuality(ShadowQuality::kOriginal), 0.0f);
   CHECK_EQ(ShadowScaleForQuality(ShadowQuality::kHigh), 2.0f);
-  CHECK_EQ(ShadowScaleForQuality(ShadowQuality::kUltra), 2.0f);
+  CHECK_EQ(ShadowScaleForQuality(ShadowQuality::kUltra), 1.5f);
   WaterReflections w;
   CHECK(ParseWaterReflections("ssr", w) && w == WaterReflections::kSsr);
   CHECK(!ParseWaterReflections("rt", w));

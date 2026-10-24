@@ -6,7 +6,11 @@
 // present a frame (sub_8278D128), which needs the device.
 #if defined(KK_DEV_TOOLS)
 
+#include <atomic>
+#include <bit>
+#include <chrono>
 #include <cstdlib>
+#include <thread>
 
 #include <rex/hook.h>
 #include <rex/logging.h>
@@ -47,6 +51,31 @@ KK_LOAD_HOOK(8278D240, "request take back")
 KK_LOAD_HOOK(8278D2F0, "state = 1")
 KK_LOAD_HOOK(8278D220, "set mode")
 KK_LOAD_HOOK(8278CF00, "post present (8278CF00)")
-KK_LOAD_HOOK(8278D128, "worker present (8278D128)")
+// The worker present, written out (same steps as the original: present, then state = 1 unless the state is 0)
+// so the trace can see the store that can overwrite a stop request (kk-decomp docs/bugs/bug2-swamp-load-freeze.md,
+// race b). KK_DEV_LOAD_RACE_MS=n waits n ms between the read and the store, to make the race happen on purpose.
+REX_EXTERN(sub_8278D0C8);
+REX_HOOK_RAW(sub_8278D128) {
+  constexpr uint32_t kState = 0x82D64080 + 12;
+  static const int race_ms = [] {
+    const char* e = std::getenv("KK_DEV_LOAD_RACE_MS");
+    return e ? std::atoi(e) : 0;
+  }();
+  if (Tracing()) Log("worker present (8278D128)", "in", ctx, base);
+  const uint64_t lr = ctx.lr;
+  ctx.lr = 0x8278D134;  // as the original's bl
+  sub_8278D0C8(ctx, base);
+  ctx.lr = lr;
+  const uint32_t seen = Word(base, kState);
+  if (seen != 0) {
+    if (race_ms > 0) std::this_thread::sleep_for(std::chrono::milliseconds(race_ms));
+    const uint32_t now = Word(base, kState);
+    std::atomic_ref<uint32_t>(*reinterpret_cast<uint32_t*>(base + kState)).store(std::byteswap(uint32_t(1)));
+    if (now == 3)
+      REXLOG_WARN("KK dev load: LOST STOP: the worker present overwrote state 3 (stop) with 1 (read {} before); "
+                  "the loading screen thread will not end and the stop waits forever", int32_t(seen));
+  }
+  if (Tracing()) Log("worker present (8278D128)", "out", ctx, base);
+}
 
 #endif

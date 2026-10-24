@@ -285,7 +285,10 @@ constants are checked against it) drives the swaps:
 `native_effect_buffers` keeps the census's 320x180 and 640x360/480 effect targets at a size
 scaled with output resolution (default on). It uses the smaller output axis scale on both axes,
 preserving each target's aspect, and includes the corresponding depth attachments. These targets
-use output scale even while a temporal upscaler is drawing the scene at input scale. The existing
+follow the scene's scale: with a temporal upscaler, the input scale before the upscale point and the
+output scale after it (before Beta 14, task 349a, the output scale throughout; at 4K DLSS Quality the
+game's own screen-space shadow at the Original shadow setting drew at 3x instead of 2x, 0.33 against
+0.17 ms; with soft shadows on, pitch 640 is the soft shadow mask's, docs/lighting.md). The existing
 viewport/scissor, resolve rectangle and `texInvScale` shader paths carry their new sizes through
 sampling, including VPOS and unnormalised texture fetches. Known shadow-map pitches are excluded.
 Graphics and F8 offer Original/output resolution; Original look selects Original. Changes apply

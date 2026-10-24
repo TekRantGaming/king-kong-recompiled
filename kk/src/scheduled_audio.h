@@ -1,6 +1,5 @@
 #pragma once
 
-#include <atomic>
 #include <chrono>
 #include <cstdlib>
 #include <memory>
@@ -11,6 +10,7 @@
 #include <rex/cvar.h>
 #include <rex/logging.h>
 #include "backend/thread_scheduling.h"
+#include "deferred_audio.h"
 #include "menu_scene.h"
 
 namespace kk {
@@ -23,51 +23,68 @@ class ScheduledAudioSystem : public rex::audio::sdl::SDLAudioSystem {
     return std::make_unique<ScheduledAudioSystem>(dispatcher);
   }
 
-  // Task 285: the game thread opens the audio device here (the game's XAudio client registration, under
-  // the audio system's global lock), between "D3D hooks connected" and "audio endpoint ..." in the log.
-  // It normally takes up to about a second (a virtual device such as SteelSeries Sonar is slow); one
-  // restarted game in ~20 starts (REPORT-271) drew no first frame and logged nothing after "D3D hooks
-  // connected". If the open ever takes long again, the log names it.
+  // RegisterClient calls this on the game thread under the SDK's audio lock.
+  // Device open AND resume may block (task 337: 10.3 s after the endpoint log).
+  // Only queue the open here. DeferredAudioDriver paces the guest mixer with
+  // silence until the unchanged SDK driver is ready, then submits current PCM.
   rex::X_STATUS CreateDriver(size_t index, rex::thread::Semaphore* semaphore,
-                        rex::audio::AudioDriver** out_driver) override {
-    auto done = std::make_shared<std::atomic<bool>>(false);
-    const auto start = std::chrono::steady_clock::now();
-    std::thread([done] {
-      for (int s = 1; s <= 60 && !done->load(); ++s) {
-        std::this_thread::sleep_for(std::chrono::seconds(1));
-        if (!done->load() && (s == 10 || s == 30 || s == 60))
-          REXLOG_WARN("KK audio: still waiting for the audio device to open after {} s (SDL audio / Windows "
-                      "audio endpoint, on the game thread; the game does not go on until it opens)", s);
-      }
-    }).detach();
+                            rex::audio::AudioDriver** out_driver) override {
+    if (!out_driver) return rex::X_STATUS(0xC0000001L);
+    *out_driver = new DeferredAudioDriver(memory_, semaphore,
+        [memory = memory_, index](rex::thread::Semaphore* completion) {
+          rex::thread::set_current_thread_name("KK Audio Open");
+          const auto start = std::chrono::steady_clock::now();
 #if defined(KK_DEV_TOOLS)
-    // Task 286 test aid: KK_DEV_AUDIO_OPEN_DELAY=<s> holds the open that long (the "still waiting" lines and,
-    // from 60 s, the startup hang report).
-    if (const char* d = std::getenv("KK_DEV_AUDIO_OPEN_DELAY"); d && std::atoi(d) > 0) {
-      REXLOG_INFO("KK dev: holding the audio device open for {} s", std::atoi(d));
-      std::this_thread::sleep_for(std::chrono::seconds(std::atoi(d)));
-    }
+          // Same task-286 test aid; the held operation now lives on its worker.
+          if (const char* d = std::getenv("KK_DEV_AUDIO_OPEN_DELAY"); d && std::atoi(d) > 0) {
+            REXLOG_INFO("KK dev: holding the audio device open for {} s", std::atoi(d));
+            std::this_thread::sleep_for(std::chrono::seconds(std::atoi(d)));
+          }
 #endif
-    const rex::X_STATUS status = SDLAudioSystem::CreateDriver(index, semaphore, out_driver);
-    done->store(true);
-    // Task 330: the live menu scene's own sound (its music, the sea) at the launcher's Menu music volume, set by
-    // the launcher through this stream (menu_scene.h SetAudioGain).
-    if (kk::menu_scene::Active() && out_driver && *out_driver)
-      kk::menu_scene::SetAudioStream(DriverStream::Of(static_cast<rex::audio::sdl::SDLAudioDriver*>(*out_driver)));
-    const double ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - start).count();
-    if (ms >= 2000.0) REXLOG_WARN("KK audio: opening the audio device took {:.1f} s", ms / 1000.0);
-    return status;
+          DeferredAudioDriver::Backend driver(new rex::audio::sdl::SDLAudioDriver(memory, completion),
+              [](rex::audio::AudioDriver* p) {
+                auto* sdl = static_cast<rex::audio::sdl::SDLAudioDriver*>(p);
+                sdl->Shutdown();
+                delete sdl;
+              });
+          if (!static_cast<rex::audio::sdl::SDLAudioDriver*>(driver.get())->Initialize()) {
+            REXLOG_WARN("KK audio: device open failed on worker (client {}); game continues silently", index);
+            driver.reset();
+            return driver;
+          }
+          const double seconds = std::chrono::duration<double>(std::chrono::steady_clock::now() - start).count();
+          REXLOG_INFO("KK audio: device ready after {:.3f} s on worker (client {})", seconds, index);
+          return driver;
+        },
+        [](rex::audio::AudioDriver* driver) {
+          // Bind before any real PCM is submitted; detach before destroying the
+          // backend, including when cancellation races a successful open.
+          if (kk::menu_scene::Active())
+            kk::menu_scene::SetAudioStream(driver ? DriverStream::Of(
+                static_cast<rex::audio::sdl::SDLAudioDriver*>(driver)) : nullptr);
+        },
+        [](int seconds) {
+          REXLOG_WARN("KK audio: still waiting for the audio device to open after {} s "
+                      "(SDL audio / Windows audio endpoint, on a worker; game continues silently)", seconds);
+        });
+    REXLOG_INFO("KK audio: device open queued on worker (client {}); game thread continues", index);
+    return rex::X_STATUS(0);
+  }
+
+  void DestroyDriver(rex::audio::AudioDriver* driver) override {
+    // A pending device open owns its completion gate and cleans up by itself.
+    // No join on the game thread, and no late callback into an SDK semaphore.
+    delete static_cast<DeferredAudioDriver*>(driver);
   }
 
  private:
-  // SDLAudioDriver's stream is protected; a class derived from it may name it (never made).
   struct DriverStream : rex::audio::sdl::SDLAudioDriver {
     static SDL_AudioStream* Of(rex::audio::sdl::SDLAudioDriver* d) { return d->*(&DriverStream::sdl_stream_); }
   };
 
  protected:
   void Initialize() override {
-    nr::SetCpuPriorityLevel(std::atoi(rex::cvar::GetFlagByName("kk_cpu_priority").c_str()));  // task 295
+    nr::SetCpuPriorityLevel(std::atoi(rex::cvar::GetFlagByName("kk_cpu_priority").c_str()));
     nr::ScheduleCriticalThread(true);
     SDLAudioSystem::Initialize();
   }

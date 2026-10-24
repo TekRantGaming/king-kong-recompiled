@@ -92,6 +92,8 @@ GpuInfo DetectGpu() {
     WideCharToMultiByte(CP_UTF8, 0, d.Description, -1, name, sizeof(name) - 1, nullptr, nullptr);
     info.name = name;
     info.dedicated_memory = uint64_t(d.DedicatedVideoMemory);
+    info.vendor_id = d.VendorId;
+    info.device_id = d.DeviceId;
     LARGE_INTEGER umd{};
     if (SUCCEEDED(adapter->CheckInterfaceSupport(__uuidof(IDXGIDevice), &umd))) {
       char version[64];
@@ -357,6 +359,13 @@ bool RunCapture(const std::vector<std::string>& argv, std::vector<uint8_t>& out,
 
 void OpenUrl(const std::string& url) {
   if (url.rfind("https://", 0) != 0) return;  // web pages only
+#if defined(KK_DEV_TOOLS)
+  // Developer aid (scripted test runs): KK_DEV_NO_BROWSER=1 only logs the page.
+  if (const char* v = std::getenv("KK_DEV_NO_BROWSER"); v && *v) {
+    REXLOG_INFO("KK dev: open url {}", url);
+    return;
+  }
+#endif
 #if defined(_WIN32)
   const std::wstring w(url.begin(), url.end());
   ShellExecuteW(nullptr, L"open", w.c_str(), nullptr, nullptr, SW_SHOWNORMAL);

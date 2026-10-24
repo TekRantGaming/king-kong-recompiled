@@ -886,6 +886,14 @@ std::string TexturePackShelf::Active() {
   return "original";
 }
 void TexturePackShelf::Enable(const std::string& key) { impl_->Enable(key); }
+rex::ui::ImmediateTexture* TexturePackShelf::Picture(const std::string& key, float* aspect) {
+  for (const auto& p : impl_->Build())
+    if (p.key == key) {
+      if (p.picture) *aspect = p.aspect;
+      return p.picture;
+    }
+  return nullptr;
+}
 void TexturePackShelf::OnModInstalled(const std::string& id) {
   impl_->pending_mod = id;
   impl_->pending_since = std::chrono::steady_clock::now();

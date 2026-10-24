@@ -202,6 +202,8 @@ class SceneLighting {
   std::unique_ptr<AoGpuTimer> timers_[3];
   // Timing a contiguous run of shadow/water draws, including lighting preparation.
   int timing_ = -1;
+  std::unique_ptr<AoGpuTimer> split_[3];  // KK_DEV_LIGHT_SPLIT
+  int split_timing_ = -1;
 };
 
 }  // namespace nr

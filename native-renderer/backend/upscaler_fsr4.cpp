@@ -10,11 +10,13 @@
 // The SDK 2.3 headers (MIT, thirdparty/FSR-SDK-API) differ from the FidelityFX SDK 1.1.4 ones FSR 3.1
 // uses, so they are kept in a namespace of their own here.
 
+#include "backend/startup_steps.h"
 #include "backend/upscaler.h"
 
 #if NR_HAS_FFX && NR_HAS_D3D12
 
 #include <chrono>
+#include <cstdio>
 #include <cstdlib>
 #include <cstring>
 #include <string>
@@ -61,7 +63,9 @@ const Fsr4Functions* Library() {
   static const Fsr4Functions fns = [] {
     Fsr4Functions fn;
     const std::wstring path = UpscalerDllFolder() + L"amd_fidelityfx_loader_dx12.dll";
+    steps::Note("upscaler: loading %s", "FSR 4 loader");  // task 353: the start-up step log
     fn.dll = LoadLibraryExW(path.c_str(), nullptr, LOAD_WITH_ALTERED_SEARCH_PATH);
+    steps::Note("upscaler: %s %s", "FSR 4 loader", fn.dll ? "loaded" : "not loaded");
     if (!fn.dll) return fn;
     fn.CreateContext = reinterpret_cast<f::PfnFfxCreateContext>(GetProcAddress(fn.dll, "ffxCreateContext"));
     fn.DestroyContext = reinterpret_cast<f::PfnFfxDestroyContext>(GetProcAddress(fn.dll, "ffxDestroyContext"));
@@ -228,6 +232,7 @@ class Fsr4Upscaler final : public Upscaler {
 }  // namespace
 
 std::unique_ptr<Upscaler> CreateFsr4Upscaler(nvrhi::IDevice* device, const UpscaleConfig& config, std::string* why) {
+  if (!UpscalerGateAllows(UpscalerKind::kFsr4, why)) return nullptr;  // task 353: confirmed by the upscaler check
   if (device->getGraphicsAPI() != nvrhi::GraphicsAPI::D3D12) {
     if (why) *why = "FSR 4 needs Direct3D 12 (AMD's FSR SDK has no Vulkan version)";
     return nullptr;
@@ -239,6 +244,17 @@ std::unique_ptr<Upscaler> CreateFsr4Upscaler(nvrhi::IDevice* device, const Upsca
   }
   if (!fn->ok()) {
     if (why) *why = "amd_fidelityfx_loader_dx12.dll has no FidelityFX API";
+    return nullptr;
+  }
+  // Task 368 (owner, 23 Oct; crash report G7): FSR 4 only on AMD cards, as the changelog says. The AMD library
+  // also lists an FSR 4 on NVIDIA cards, where its context took seconds and the game then hung. The developer
+  // path test below (NR_DEV_FSR4_ANY_PROVIDER) still runs anywhere.
+  const char* any_provider = std::getenv("NR_DEV_FSR4_ANY_PROVIDER");
+  const bool dev_any = any_provider && std::strcmp(any_provider, "1") == 0;
+  if (const uint32_t vendor = UpscalerDeviceVendor(device); vendor != 0x1002 && !dev_any) {
+    char id[16];
+    std::snprintf(id, sizeof(id), "0x%04X", vendor);
+    if (why) *why = std::string("FSR 4 runs on AMD graphics cards only (this card's vendor is ") + id + ")";
     return nullptr;
   }
   // The upscaler versions the library offers on this device (newest first), and the newest FSR 4.
@@ -272,7 +288,7 @@ std::unique_ptr<Upscaler> CreateFsr4Upscaler(nvrhi::IDevice* device, const Upsca
   // Developer check only (never set by the game or launcher): NR_DEV_FSR4_ANY_PROVIDER=1 takes the newest
   // version the library offers when it has no FSR 4, so this SDK 2.3 path (context, dispatch, jitter and
   // the game's FSR 4 plumbing) can run on a GPU without FSR 4. It is not FSR 4's model.
-  if (const char* any = std::getenv("NR_DEV_FSR4_ANY_PROVIDER"); any && std::strcmp(any, "1") == 0 && count) {
+  if (dev_any && count) {
     const std::string name = names[0] ? names[0] : "?";
     Logf(LogLevel::kWarning, "rexgpu-native: FSR 4 path test: no FSR 4 here (%s); using FSR %s through the same path",
          offered.c_str(), name.c_str());

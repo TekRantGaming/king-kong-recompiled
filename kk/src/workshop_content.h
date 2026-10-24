@@ -44,7 +44,7 @@ inline constexpr Facts kFacts[] = {
     {"uhd",
      "Rock, moss, forest ground, dirt, gravel, wood, bark and rust become photographed materials, recoloured to the "
      "game's look. Everything else is the original texture upscaled with AI.",
-     "More real-world surface detail than the HD texture pack. Where real materials are used, the look moves away "
+     "More real world surface detail than the HD texture pack. Where real materials are used, the look moves away "
      "from the original (see the note).",
      "Texture filtering at 16x (Settings > Graphics) keeps the detailed ground clear into the distance.",
      "About 1 GB of graphics memory per chapter. Replacement textures may use up to a quarter of your graphics "
@@ -77,13 +77,7 @@ inline constexpr Facts kFacts[] = {
      "The Kong Comic Book texture pack (Workshop > Texture packs).",
      "Nothing extra. The Original look switches it off; fine controls (outline, darkness, bands, strength) are in "
      "the F8 panel under Cel shading."},
-    // Task 232: the experimental Ultrawide mod (DECISIONS 18 Oct); its description keeps the experimental warning.
-    {"builtin:ultrawide",
-     "Only the shape of the picture: on a 21:9 or 32:9 screen or window the game's 3D view gets wider and shows "
-     "more on the left and right. Nothing is stretched.",
-     "Experimental. No black bars at the sides, but the HUD, menus and some effects may still look stretched or out "
-     "of place.",
-     nullptr, "An ultrawide screen or window (21:9 up to 32:9). On a 16:9 screen nothing changes."},
+    // Task 360 (Beta 17): the Ultrawide mod is gone; ultrawide is built into the game and always on.
 };
 
 inline const Facts* FactsFor(std::string_view key) {

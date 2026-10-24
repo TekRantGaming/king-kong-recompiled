@@ -312,6 +312,10 @@ inline bool ValidFolderName(std::string_view folder) {
          folder[0] != '.';
 }
 
+// Built in mods that no longer ship (task 360, Beta 17: Ultrawide is built into the game). An update that only
+// adds files may leave their folders behind in mods-builtin; they are never listed or loaded.
+inline bool RetiredBuiltin(std::string_view folder) { return folder == "ultrawide"; }
+
 inline std::string ModId(std::string_view folder, bool builtin) {
   return (builtin ? "builtin:" : "") + std::string(folder);
 }

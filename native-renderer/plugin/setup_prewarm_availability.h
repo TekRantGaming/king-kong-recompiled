@@ -19,6 +19,13 @@ inline bool SetupPipelinesComplete(bool done, uint64_t queued, uint64_t made, ui
 
 // A failed secondary device is remembered only for this preparation plan and
 // driver. Selecting that API always retries it, rather than claiming it ready.
+//
+// Task 368 (crash reports G1): a driver can end the whole program while the device is made (Intel's D3D12
+// driver in CreateCommandSignature), and then nothing was written, so every launcher start crashed again.
+// BeforeDevice writes a crash mark first and DeviceMade clears it. A mark found at the next start means that
+// device ended the program: the other API skips it (as a clean failure), and the selected API does not make it
+// again either (no crash loop; the game makes its own device at Play, where startup recovery switches the API).
+// Both last until the plan or the driver changes (the stamp).
 class SetupPrewarmAvailability {
  public:
   SetupPrewarmAvailability(std::filesystem::path pack, std::string stamp, bool selected)
@@ -26,14 +33,25 @@ class SetupPrewarmAvailability {
     marker_ += ".pipelines-unavailable";
     std::ifstream input(marker_, std::ios::binary);
     const std::string previous((std::istreambuf_iterator<char>(input)), {});
-    unavailable_ = !stamp_.empty() && previous == stamp_;
+    crashed_ = !stamp_.empty() && previous == CrashMark();
+    unavailable_ = !stamp_.empty() && (previous == stamp_ || crashed_);
   }
   bool Skip() const { return unavailable_ && !selected_; }
-  bool Retry() const { return unavailable_ && selected_; }
+  bool Retry() const { return unavailable_ && selected_ && !crashed_; }
+  // The device ended the program at an earlier setup with this plan and driver: do not make it again.
+  bool CrashedBefore() const { return crashed_; }
+  // Right before the device is made, and right after it was made.
+  void BeforeDevice() const {
+    std::ofstream marker(marker_, std::ios::binary | std::ios::trunc);
+    marker << CrashMark();
+  }
+  void DeviceMade() const { std::ofstream(marker_, std::ios::binary | std::ios::trunc); }
   // False means setup must fail: the device belongs to the selected API.
   bool DeviceUnavailable() const {
-    std::ofstream marker(marker_, std::ios::binary | std::ios::trunc);
-    marker << stamp_;
+    if (!crashed_) {  // a crash mark stays (a clean stamp would make the selected API retry and crash again)
+      std::ofstream marker(marker_, std::ios::binary | std::ios::trunc);
+      marker << stamp_;
+    }
     return !selected_;
   }
   void Prepared() const {
@@ -41,8 +59,9 @@ class SetupPrewarmAvailability {
     if (unavailable_) std::ofstream(marker_, std::ios::binary | std::ios::trunc);
   }
  private:
+  std::string CrashMark() const { return "device crashed " + stamp_; }
   std::filesystem::path marker_;
   std::string stamp_;
-  bool selected_, unavailable_;
+  bool selected_, unavailable_, crashed_;
 };
 }  // namespace nr

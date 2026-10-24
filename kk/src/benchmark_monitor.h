@@ -34,10 +34,10 @@ inline const char* Bound(const Metrics& m, double interval_ms = -1) {
   const double gpu = m[kGpuMs].Mean(), game = m[kGameMs].Mean(), render = m[kRenderMs].Mean();
   if (gpu < 0 || game < 0 || render < 0) return "Timing unavailable";
   const double cpu = std::max(game, render);
-  if (interval_ms > 0 && std::max(cpu, gpu) < interval_ms * .75) return "Mixed or cap-limited";
-  if (gpu > cpu * 1.15) return "GPU-bound";
-  if (cpu > gpu * 1.15) return "CPU-bound";
-  return "Mixed or cap-limited";
+  if (interval_ms > 0 && std::max(cpu, gpu) < interval_ms * .75) return "Mixed or capped";
+  if (gpu > cpu * 1.15) return "GPU bound";
+  if (cpu > gpu * 1.15) return "CPU bound";
+  return "Mixed or capped";
 }
 struct MonitorView {
   Stats frames;

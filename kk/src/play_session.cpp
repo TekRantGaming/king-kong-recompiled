@@ -655,6 +655,7 @@ void LoadStartRequestFromSettings() {
 
 bool RelaunchWith(const std::wstring& extra) {
   static constexpr const wchar_t* kDropped[] = {L"--kk_skip_launcher", L"--kk_start", L"--kk_launcher_open", L"--kk_menu_scene_off",
+                                               L"--kk_menu_scene_retry",
                                                L"--kk_launcher_saved",
                                                L"--kk_startup_child", L"--kk_benchmark", L"--kk_benchmark_record",
                                                L"--kk_benchmark_route", L"--kk_benchmark_passes",
@@ -1200,7 +1201,7 @@ bool OnGameMenuPage(const char* page) {
     // The start menu's texts (the chapter names, if they are text) with KK_DEV_TEXT_DUMP.
     if (std::getenv("KK_DEV_TEXT_DUMP") && kk::g_guest_base) kk::DevDumpTexts(kk::g_guest_base, "texts-menu.txt");
 #endif
-    ReturnToLauncher(chapter_run ? "the chapter-select run is over" : "the game left play",
+    ReturnToLauncher(chapter_run ? "the chapter select run is over" : "the game left play",
                      g_extra_session ? "extras" : "play");
   }
   return true;
@@ -1353,7 +1354,7 @@ REX_HOOK_RAW(sub_8253DB80) {
       } else {
         // A chapter-select run that has reached its end, and Quit game, go back to the Play menu (owner 19 Oct).
         const bool chapter_end = g_chapter_session && !LeftByQuit();
-        ReturnToLauncher(chapter_end ? "the chapter-select run is over" : "the game left play",
+        ReturnToLauncher(chapter_end ? "the chapter select run is over" : "the game left play",
                          g_extra_session ? "extras" : "play");
       }
     }
@@ -1361,6 +1362,7 @@ REX_HOOK_RAW(sub_8253DB80) {
   const bool request = g && Load32(base, g + 4) != 0;
   if (request && g_level_loaded) kk::benchmark::Interrupted();
   if (request && g_jump_requested) REXLOG_INFO("KK play: uni_go loads level {}", int32_t(Load32(base, g + 8)));
+  // Task 359: a PS2 cutscene plays to its end inside BeforeLoad; only then does the original loader run.
   const bool ps2_movie = request && kk::movies::BeforeLoad(base, g, g_starting, g_leaving);
   if (request) kk::coop::EnemyBeforeLoad();
   if (request) kk::PartnerBodyBeforeLoad();
@@ -1373,7 +1375,6 @@ REX_HOOK_RAW(sub_8253DB80) {
     kk::DevFacePartnerLevelLoaded();
   }
 #endif
-  if (ps2_movie) kk::movies::AfterLoad();  // task 293: the clip's end, when the level loaded under it
   // The chapter being played, for the per-chapter performance summary (a level change's frames left out).
   if (g) kk::telemetry::NoteChapter(ChapterOfLevel(int32_t(Load32(base, g + 0x18))), request);
   if (g_extra_movie) {

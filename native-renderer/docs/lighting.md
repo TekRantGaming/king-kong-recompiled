@@ -1,5 +1,12 @@
 # Lighting: dynamic shadows, water reflections and light shafts (experimental)
 
+## Graphics presets (Beta 14, task 350b)
+
+Since Beta 14 the graphics presets set all three (owner, 21 Oct; kk/src/graphics_presets.h): Low, Medium and
+Steam Deck Original / Original / Off; High High shadows, Screen space water reflections, Volumetric low light
+shafts; Ultra Ultra shadows, Screen space reflections, Volumetric high shafts. The defaults stay Original/Off, and
+changing one of them by hand shows the preset as Custom.
+
 ## Task 101 candidates (15 October 2026)
 
 All three options remain hidden and default to Original/Off after the six permitted runs. The visual
@@ -8,7 +15,8 @@ and a clearly useful shaft improvement still need verification. GI's preset defa
 `codex/REPORT-101.md` records the per-effect HIDE verdicts, pictures, costs and remaining gaps.
 This section supersedes the implementation details and timer scope in the historical sections below.
 
-- Shadows retain 2x maps for High and Ultra and the existing finer screen-space mask. High uses four
+- Shadows retain 2x maps for High; Ultra uses 1.5x maps (Beta 14, task 348a: 2x before; its PCSS penumbra is
+  measured in guest texels, so the coarser texels are blurred away; 0.08 ms less) and the finer screen-space mask. High uses four
   bilinear PCF gathers over 0.6 guest texels. Ultra uses four blocker-search gathers over three guest
   texels and eight filter gathers, with a 0.35-2 guest-texel penumbra. Softness still scales the kernels.
   Receiver-plane correction now includes each of the four texels in a gather, in both blocker search
@@ -158,8 +166,10 @@ Facts the design rests on:
 **Resolution.** `high` sets the shadow maps' scale to 2 (1664x1664), `ultra` to 4 (3328x3328), through the existing
 shadow scale (`--native_shadow_scale`, which still wins when set; a shadow scale of exactly 1 gives way to the
 quality's, because the soft shadows need the render scale aware shaders). Both also draw the screen-space shadow's
-targets (the pitch psshadowquad draws into, recognised at its first draw) at twice the render scale: the mask becomes
-1280x960 at render scale 1, as fine as the frame. Everything that reads the mask samples it with normalised
+targets (the pitch psshadowquad draws into, recognised at its first draw) at 1.5 times the render scale (with an
+upscaler, its input scale): the mask becomes 960x720 at render scale 1, as tall as the frame (Beta 14, task 348a;
+twice the render scale before, 1280x960: after the game's blur of the mask no visible difference, and 0.4 ms less
+GPU time at 4K DLSS Quality). Everything that reads the mask samples it with normalised
 coordinates or VPOS (aware), so a finer mask is only finer.
 
 **Filtering.** The game's three psshadowquad shaders are drawn with replacements of the renderer's own

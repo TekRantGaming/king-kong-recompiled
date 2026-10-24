@@ -51,6 +51,7 @@
 #include "plugin/ring_skimmer.h"
 #include "backend/thread_scheduling.h"
 #include "plugin/upscaler_query.h"
+#include "backend/startup_steps.h"
 #if NR_GAME_RENDERER
 #include "plugin/shader_pack_service.h"
 #endif
@@ -165,6 +166,8 @@ NativeGraphicsSystem::~NativeGraphicsSystem() {
 bool NativeGraphicsSystem::CreateProvider(bool with_presentation) {
   // The launcher's upscaler question (its Direct3D 12 device and the SDKs it loaded) is over first.
   WaitUpscalerQuery();
+  const char* api_name = api_ == HostApi::kD3D12 ? "Direct3D 12" : "Vulkan";
+  steps::Note("graphics: making the %s device (%s)", api_name, with_presentation ? "with presentation" : "headless");
   switch (api_) {
 #if NR_HAS_D3D12
     case HostApi::kD3D12:
@@ -184,6 +187,7 @@ bool NativeGraphicsSystem::CreateProvider(bool with_presentation) {
     default:
       break;
   }
+  steps::Note("graphics: the %s device %s", api_name, provider_ ? "is made" : "could not be made");
   return provider_ != nullptr;
 }
 
@@ -208,6 +212,7 @@ X_STATUS NativeGraphicsSystem::SetupPresentation(rex::ui::WindowedAppContext* ap
   auto loss_callback = [this](bool is_responsible, bool /*statically_from_ui_thread*/) {
     OnHostGpuLoss(is_responsible);
   };
+  steps::Note("graphics: making the presenter (swapchain)");
   if (app_context_) {
     // Presenters are created on the UI thread.
     app_context_->CallInUIThreadSynchronous(
@@ -215,6 +220,7 @@ X_STATUS NativeGraphicsSystem::SetupPresentation(rex::ui::WindowedAppContext* ap
   } else {
     presenter_ = provider_->CreatePresenter(loss_callback);
   }
+  steps::Note("graphics: the presenter %s", presenter_ ? "is made" : "could not be made");
   if (!presenter_) {
     REXGPU_ERROR("rexgpu-native: unable to create the presenter");
     ReportStartupFailure("could not initialise its presenter");
@@ -253,6 +259,7 @@ X_STATUS NativeGraphicsSystem::SetupGuestGpu(rex::runtime::FunctionDispatcher* f
   }
 
   // NVRHI on the provider's device.
+  steps::Note("game renderer: NVRHI device");
   std::unique_ptr<HostDevice> host;
   switch (api_) {
 #if NR_HAS_D3D12
@@ -284,6 +291,7 @@ X_STATUS NativeGraphicsSystem::SetupGuestGpu(rex::runtime::FunctionDispatcher* f
   rex::kernel::xboxkrnl::VdQueryVideoMode(&video_mode);
   backend_ = std::make_unique<Backend>(std::move(host), memory_);
   const GameSettings game = ReadGameSettings(api_ == HostApi::kVulkan);
+  steps::Note("game renderer: initialising (render targets, upscaler, effects)");
   if (!backend_->Initialize(std::max<uint32_t>(1, video_mode.display_width),
                             std::max<uint32_t>(1, video_mode.display_height), game)) {
     REXGPU_ERROR("rexgpu-native: backend initialisation failed");
@@ -295,6 +303,7 @@ X_STATUS NativeGraphicsSystem::SetupGuestGpu(rex::runtime::FunctionDispatcher* f
     // --native_pipeline_cache_dir wins; otherwise the cache root arrives in InitializeShaderStorage
     // (after this point when the SDK's app runs the game; a place it brought earlier is kept). A
     // shipped list alone needs no folder: it starts now.
+    steps::Note("game renderer: initialised; opening the shader pack and pipelines");
     OpenShaderPackFor(shader_cache_root_);  // when the cache root came first
     if (pipeline_place_.empty()) pipeline_place_ = PipelinePlaceFromCvar();
     if (!pipeline_place_.empty() || !PipelineFilesNeedCacheRoot()) StartPipelines();
@@ -352,6 +361,7 @@ X_STATUS NativeGraphicsSystem::SetupGuestGpu(rex::runtime::FunctionDispatcher* f
   vsync_thread_->Create();
 
   guest_gpu_ready_ = true;
+  steps::Note("game renderer: guest GPU ready");
   REXGPU_INFO("rexgpu-native: guest GPU ready ({}x{} @ {} Hz)", uint32_t(video_mode.display_width),
               uint32_t(video_mode.display_height), uint32_t(video_mode.refresh_rate));
   return X_STATUS_SUCCESS;
@@ -379,8 +389,11 @@ void NativeGraphicsSystem::OpenShaderPackFor(const std::filesystem::path& cache_
     return;
   }
   std::string where;
+  steps::Note("game renderer: shader pack: opening");
   const std::string pack = FindShaderPackForRun(cache_root, api_ == HostApi::kVulkan, &where);
-  if (!pack.empty() && backend_->OpenShaderPack(pack)) {
+  const bool opened = !pack.empty() && backend_->OpenShaderPack(pack);
+  steps::Note("game renderer: shader pack: %s", opened ? "open" : "none (compiled on first use)");
+  if (opened) {
     REXLOG_INFO("rexgpu-native: shader pack from {}: {}", where, pack);
   } else {
     REXLOG_WARN("rexgpu-native: no shader pack{} (the launcher builds it into {}): shaders are compiled with "
@@ -571,7 +584,7 @@ void NativeGraphicsSystem::OnSwap(uint32_t /*frontbuffer_ptr*/, uint32_t width, 
   }
   rex::system::X_VIDEO_MODE mode;
   rex::kernel::xboxkrnl::VdQueryVideoMode(&mode);
-  // The experimental Ultrawide mod (kk_aspect): the picture is wider than the game's 16:9 and the presenter
+  // Ultrawide (built into the game, task 360): the picture is wider than the game's 16:9 and the presenter
   // fits that shape instead (native_display_aspect, WxH, set by the game before the GPU starts).
   static const std::pair<uint32_t, uint32_t> shape = [] {
     unsigned w = 0, h = 0;
@@ -579,9 +592,15 @@ void NativeGraphicsSystem::OnSwap(uint32_t /*frontbuffer_ptr*/, uint32_t width, 
     if (std::sscanf(v.c_str(), "%ux%u", &w, &h) != 2 || !w || !h) w = h = 0;
     return std::pair<uint32_t, uint32_t>{w, h};
   }();
+  static bool first_present = true;  // task 353: the start-up step log
+  if (first_present) steps::Note("game renderer: first present");
   backend_->Present(presenter_.get(), width, height,
                     shape.first ? shape.first : std::max<uint32_t>(1, mode.display_width),
                     shape.second ? shape.second : std::max<uint32_t>(1, mode.display_height));
+  if (first_present) {
+    first_present = false;
+    steps::Note("game renderer: first present done");
+  }
   // With --native_async_present the frame is shown after Present returns: a later swap sees it.
   if (!startup_presented_ && backend_->presented_game_frames()) {
     startup_presented_ = true;

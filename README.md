@@ -6,7 +6,7 @@
 
 [<img src="https://img.shields.io/badge/Download-Windows%20x64-e8a33c?style=for-the-badge&logo=windows&logoColor=white&labelColor=0d0b09" alt="Download for Windows" height="44">](https://github.com/TekRantGaming/king-kong-recompiled/releases/latest)
 &nbsp;
-[<img src="https://img.shields.io/badge/Discord-Join%20the%20community-5865F2?style=for-the-badge&logo=discord&logoColor=white&labelColor=0d0b09" alt="Join the Discord" height="44">](https://discord.gg/PET2xU5FJq)
+[<img src="https://img.shields.io/badge/Discord-Join%20the%20community-5865F2?style=for-the-badge&logo=discord&logoColor=white&labelColor=0d0b09" alt="Join the Discord" height="44">](https://discord.gg/8eakYSvBZS)
 
 [![Latest release](https://img.shields.io/github/v/release/TekRantGaming/king-kong-recompiled?style=flat-square&label=release&color=e8a33c&labelColor=0d0b09)](https://github.com/TekRantGaming/king-kong-recompiled/releases/latest)
 [![Downloads](https://img.shields.io/github/downloads/TekRantGaming/king-kong-recompiled/total?style=flat-square&color=8a5a1c&labelColor=0d0b09)](https://github.com/TekRantGaming/king-kong-recompiled/releases)
@@ -30,8 +30,9 @@
 
 <br>
 
-Future builds use native rendering only: Vulkan is the primary API and Auto selects it; DirectX 12 is
-available on the Graphics page. The Xbox 360 emulation renderer has been removed. Older renderer
+Future builds use native rendering only: on Windows DirectX 12 is the recommended API and the default, and
+the game switches to Vulkan by itself when DirectX 12 cannot start (Vulkan can also be chosen on the Graphics
+page); Linux and the Steam Deck use Vulkan. The Xbox 360 emulation renderer has been removed. Older renderer
 settings migrate automatically. If neither native API can start, update your graphics driver and check
 the requirements below. For help, use the Discord link above and include the logs folder.
 
@@ -43,7 +44,7 @@ the requirements below. For help, use the Discord link above and include the log
 | ✨ **FSR 1 and NIS upscaling**, ambient occlusion, presets | 📺 **Original Xbox 360 look** in one click, or Modern | 🔭 **Wider field of view**, up to 110° |
 | 🏆 **Achievements** with Xbox 360 or Steam style pop-ups | 🕹️ **All ten cheats** as switches | 🎥 **Camera shake**, vibration and every control tunable |
 | 💿 **Install from your own disc** in a few clicks | 🔄 **Updates itself**, with a stable and a beta channel | 🚂 **Add to Steam** with artwork, ready for the Steam Deck |
-| 🐧 **Linux and Steam Deck** through Proton (experimental) | 👥 **See who's playing**, anonymously | 💬 **[Join the Discord](https://discord.gg/PET2xU5FJq)** for news and early builds |
+| 🐧 **Linux and Steam Deck** through Proton (experimental) | 👥 **See who's playing**, anonymously | 💬 **[Join the Discord](https://discord.gg/8eakYSvBZS)** for news and early builds |
 
 <div align="center">
 
@@ -429,7 +430,7 @@ Everything useful is in the `logs` folder next to `king_kong.exe`:
 - `king_kong.log` describes your settings, and every 10 seconds it notes the frame rate, the 1% low and any frames that took over 50 or 100 ms. That shows exactly where stutter happens.
 - If the game crashes, `crash-<date>.txt` and `crash-<date>.dmp` appear next to it.
 
-Please attach them to an [issue](https://github.com/TekRantGaming/king-kong-recompiled/issues) together with your CPU, graphics card and the resolution you play at, or ask on the [Discord](https://discord.gg/PET2xU5FJq).
+Please attach them to an [issue](https://github.com/TekRantGaming/king-kong-recompiled/issues) together with your CPU, graphics card and the resolution you play at, or ask on the [Discord](https://discord.gg/8eakYSvBZS).
 
 ## About the port
 

@@ -920,7 +920,7 @@ struct Workshop::Impl {
         rc.state_bg = ui::WithAlpha(color::kBase, 0.82f);
         rc.state_fg = color::kTextDim;
       }
-      if (m.builtin) rc.corner = T("Built-in"), rc.corner_bg = ui::WithAlpha(color::kAccent, 0.92f);
+      if (m.builtin) rc.corner = T("Built in"), rc.corner_bg = ui::WithAlpha(color::kAccent, 0.92f);
       else if (m.conflict) rc.corner = T("Conflict"), rc.corner_bg = ui::WithAlpha(color::kWarn, 0.92f);
       std::string d = m.description.substr(0, m.description.find('\n'));
       rc.hint = rc.state + (d.empty() ? std::string() : "   " KK_WS_DOT "   " + d);
@@ -1560,6 +1560,9 @@ KongMods& Workshop::Mods() { return *impl_->kong; }
 std::vector<std::pair<std::string, std::string>> Workshop::TexturePackChoices() { return impl_->shelf->Choices(); }
 std::string Workshop::ActiveTexturePack() { return impl_->shelf->Active(); }
 void Workshop::EnableTexturePack(const std::string& key) { impl_->shelf->Enable(key); }
+rex::ui::ImmediateTexture* Workshop::TexturePackPicture(const std::string& key, float* aspect) {
+  return impl_->shelf->Picture(key, aspect);
+}
 void Workshop::OnTexturePackModInstalled(const std::string& id) { impl_->shelf->OnModInstalled(id); }
 void Workshop::OnModsChanged(const std::string& removed_id) {
   if (!removed_id.empty()) impl_->shelf->OnModRemoved(removed_id);

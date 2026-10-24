@@ -2,8 +2,11 @@
 #include "launcher_sounds.h"
 #include "game_sound.h"
 #include <cmath>
+#include <chrono>
+#include <cstdlib>
 #include <iostream>
 #include <stdexcept>
+#include <thread>
 #include <SDL3/SDL.h>
 
 namespace kk {
@@ -15,6 +18,46 @@ std::vector<GameSound> ReadGameSounds(const std::filesystem::path&, const std::v
   return std::vector<GameSound>(keys.size(), clip);
 }
 struct LauncherSoundsTest {
+  static void DeferredOpen() {
+    using namespace std::chrono_literals;
+#if defined(_WIN32)
+    _putenv_s("KK_DEV_UI_AUDIO_MEMORY_STREAM", "1");
+    _putenv_s("KK_DEV_UI_AUDIO_OPEN_DELAY", "1");
+#else
+    setenv("KK_DEV_UI_AUDIO_MEMORY_STREAM", "1", 1);
+    setenv("KK_DEV_UI_AUDIO_OPEN_DELAY", "1", 1);
+#endif
+    const auto start = std::chrono::steady_clock::now();
+    auto sound = std::make_unique<LauncherSounds>("");
+    if (sound->Stream() || std::chrono::steady_clock::now() - start > 250ms)
+      throw std::runtime_error("menu sound open held its caller");
+    std::weak_ptr pending(sound->device_);
+    sound.reset();
+    if (std::chrono::steady_clock::now() - start > 250ms)
+      throw std::runtime_error("menu sound destruction waited for open");
+    const auto deadline = start + 4s;
+    while (!pending.expired() && std::chrono::steady_clock::now() < deadline)
+      std::this_thread::sleep_for(1ms);
+    if (!pending.expired()) throw std::runtime_error("cancelled menu sound open leaked its callback gate");
+#if defined(_WIN32)
+    _putenv_s("KK_DEV_UI_AUDIO_OPEN_DELAY", "");
+#else
+    unsetenv("KK_DEV_UI_AUDIO_OPEN_DELAY");
+#endif
+    sound = std::make_unique<LauncherSounds>("");
+    while (!sound->Stream() && std::chrono::steady_clock::now() < deadline)
+      std::this_thread::sleep_for(1ms);
+    if (!sound->Stream()) throw std::runtime_error("menu sound worker did not publish its stream");
+    sound->SetVolume(0.25f);
+    if (SDL_GetAudioStreamGain(sound->Stream()) != 0.25f)
+      throw std::runtime_error("menu sound worker lost the stream gain");
+    sound.reset();
+#if defined(_WIN32)
+    _putenv_s("KK_DEV_UI_AUDIO_MEMORY_STREAM", "");
+#else
+    unsetenv("KK_DEV_UI_AUDIO_MEMORY_STREAM");
+#endif
+  }
   static void Run() {
     LauncherSounds sound;
     const SDL_AudioSpec spec{SDL_AUDIO_F32,1,48000};
@@ -71,7 +114,7 @@ struct LauncherSoundsTest {
 };
 }
 int main() {
-  try { kk::LauncherSoundsTest::Run(); }
+  try { kk::LauncherSoundsTest::Run(); kk::LauncherSoundsTest::DeferredOpen(); }
   catch (const std::exception& e) { std::cerr << e.what() << '\n'; return 1; }
   std::cout << "menu sound live gain, mute, endpoints, resampling and the download ding passed\n";
 }

@@ -150,6 +150,7 @@ void ScanRoot(const fs::path& root, bool builtin, std::vector<Mod>& out) {
     Mod m;
     m.folder = U8(dir.filename());
     if (!m.folder.empty() && m.folder[0] == '.') continue;  // hidden folders
+    if (builtin && RetiredBuiltin(m.folder)) continue;      // left behind by an update (task 360)
     m.dir = dir;
     m.builtin = builtin;
     m.id = ModId(m.folder, builtin);
