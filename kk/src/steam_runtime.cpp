@@ -427,6 +427,15 @@ struct SteamRuntime::Impl
     StopSession();
     uint64_t token = 0; bool host = false;
     { std::lock_guard lock(mutex); token = resume_token; host = resume_host; }
+#if defined(KK_DEV_TOOLS)
+    // One-account check (C80): the lobby a resumed host recreates, without a partner to reconnect to.
+    if (host && std::getenv("KK_DEV_RESUME_LOBBY_NOW") && !create_call) {
+      presence_lobby = true;
+      create_call = api.SteamAPI_ISteamMatchmaking_CreateLobby(matchmaking, k_ELobbyTypeFriendsOnly, 2);
+      operation_deadline = Now() + 20;
+      REXLOG_INFO("KK dev co-op Steam: KK_DEV_RESUME_LOBBY_NOW: recreating the friends-only lobby now (request {})", create_call ? "sent" : "failed");
+    }
+#endif
     if (!peer || !token || peer == model.self || !Friend(peer)) {
       REXLOG_WARN("KK co-op Steam: resumed partner is not a Steam friend of this account; cannot reconnect");
       Status(SocialStatus::Ended, "Partner unavailable"); return;

@@ -176,6 +176,12 @@ class ResumeDialog final : public rex::ui::ImGuiDialog {
     const float y = vp->Size.y * .40f + size * 4.f;
     ImGui::SetNextWindowPos(ImVec2(vp->Pos.x + vp->Size.x * .5f - button.x - 12 * scale, vp->Pos.y + y), ImGuiCond_Always);
     ImGui::SetNextWindowBgAlpha(0);
+    // The launcher's quiet look: dark buttons, a light edge on hover, no frame around them.
+    ImGui::PushStyleColor(ImGuiCol_Border, IM_COL32(0, 0, 0, 0));
+    ImGui::PushStyleColor(ImGuiCol_Button, IM_COL32(38, 38, 36, 255));
+    ImGui::PushStyleColor(ImGuiCol_ButtonHovered, IM_COL32(72, 70, 64, 255));
+    ImGui::PushStyleColor(ImGuiCol_ButtonActive, IM_COL32(200, 160, 90, 255));
+    ImGui::PushStyleColor(ImGuiCol_Text, IM_COL32(235, 235, 230, 255));
     if (ImGui::Begin("##coop-resume", nullptr, ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_AlwaysAutoResize |
                      ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoFocusOnAppearing)) {
       ImGui::SetWindowFontScale(scale);
@@ -184,6 +190,7 @@ class ResumeDialog final : public rex::ui::ImGuiDialog {
       if (ImGui::Button("Back to menu (B)", button)) BackToMenu();
     }
     ImGui::End();
+    ImGui::PopStyleColor(5);
     if (ImGui::IsKeyPressed(ImGuiKey_Enter, false) || ImGui::IsKeyPressed(ImGuiKey_GamepadFaceDown, false)) TryAgain();
     else if (ImGui::IsKeyPressed(ImGuiKey_Escape, false) || ImGui::IsKeyPressed(ImGuiKey_GamepadFaceRight, false)) BackToMenu();
   }
