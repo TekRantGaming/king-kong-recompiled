@@ -61,7 +61,7 @@ struct SocialModel {
   LobbyChoice choice;
 };
 bool CanStartLobby(const SocialModel& model);
-enum class SocialAction { Open, CreateLobby, Invite, OverlayInvite, Accept, Decline, SetReady, Start, Leave, SelectChapter };
+enum class SocialAction { Open, CreateLobby, Invite, OverlayInvite, Accept, Decline, SetReady, Start, Leave, SelectChapter, Resume };
 struct SocialCommand { SocialAction action = SocialAction::Open; SocialId id = 0; bool ready = false; LobbyChoice choice; };
 // Actions enqueue work, snapshots are value copies. Open explicitly connects to
 // Steam; merely displaying the Social drawer or choosing Direct IP must not call it.

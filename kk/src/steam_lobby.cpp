@@ -166,6 +166,7 @@ bool FakeSocialService::Act(SocialCommand c) {
       world_->lobbies.at(m.lobby).started = true; return true;
     case SocialAction::Leave: leave(); return true;
     case SocialAction::OverlayInvite: return false;
+    case SocialAction::Resume: return false;  // C80: real Steam only
   }
   return false;
 }

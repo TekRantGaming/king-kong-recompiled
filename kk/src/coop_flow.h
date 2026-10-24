@@ -2,6 +2,7 @@
 
 #include "coop_session.h"
 #include "coop_revive.h"
+#include "coop_handover.h"
 #include <algorithm>
 #include <array>
 #include <cmath>
@@ -326,6 +327,21 @@ class FlowMailbox {
     // connection. The next session must learn its own role and start afresh.
     flow_.Fail("Partner disconnected. Return to the launcher.");
     pending_.reset(); local_.clear(); initialized_=false;
+    // A plan both sides agreed on stays for the hand over: the link ends as both restart.
+    if (plan_.Phase()!=handover::PlanPhase::Ready) plan_.Reset();
+    plan_pending_.reset();
+  }
+  // C80: the start plan before the Play restart (coop_handover.h). Host only; sent once connected.
+  bool BeginPlan(const StartPlan& plan) {
+    std::lock_guard lock(mutex_);
+    if (plan_pending_ || plan_.Phase()!=handover::PlanPhase::Idle || (initialized_ && flow_.View().active)) return false;
+    plan_pending_=plan; return true;
+  }
+  handover::PlanPhase PlanState(StartPlan* plan=nullptr, const char** failure=nullptr) const {
+    std::lock_guard lock(mutex_);
+    if (plan) *plan=plan_.Plan();
+    if (failure) *failure=plan_.Failure();
+    return plan_pending_ ? handover::PlanPhase::WaitingAck : plan_.Phase();
   }
   bool Begin(SessionStart start, std::vector<uint8_t> save) {
     std::lock_guard lock(mutex_); if (pending_ || (initialized_ && flow_.View().active)) return false;
@@ -339,10 +355,19 @@ class FlowMailbox {
   void Exchange(CoopSession& session, double now) {
     std::lock_guard lock(mutex_);
     if (!initialized_) { flow_=SessionFlow(session.SessionRole()==Role::Host); initialized_=true; }
+    plan_.Tick(now,session.State());
     if (session.State()==SessionState::Ended) { flow_.Fail("Partner disconnected. Return to the launcher."); return; }
     if (session.State()!=SessionState::Connected) { flow_.Tick(now); return; }
     if (pending_) { flow_.Begin(pending_->first,std::move(pending_->second),now); pending_.reset(); }
-    for (const auto& m : session.TakeFlow()) flow_.Remote(m,now);
+    if (plan_pending_) {
+      if (session.SessionRole()!=Role::Host || !plan_.Begin(*plan_pending_,now)) plan_.Reset();
+      plan_pending_.reset();
+    }
+    for (const auto& m : session.TakeFlow()) {
+      if (IsPlanMessage(m.type)) plan_.Remote(m,now);
+      else flow_.Remote(m,now);
+    }
+    while (!plan_.Outgoing().empty() && session.QueueFlow(plan_.Outgoing().front())) plan_.Sent();
     for (const auto& m : local_) flow_.Local(m,now);
     local_.clear(); flow_.Tick(now);
     while (!flow_.Outgoing().empty() && session.QueueFlow(flow_.Outgoing().front())) flow_.Sent();
@@ -353,5 +378,7 @@ class FlowMailbox {
   bool initialized_=false;
   std::optional<std::pair<SessionStart,std::vector<uint8_t>>> pending_;
   std::vector<Message> local_;
+  handover::PlanExchange plan_;
+  std::optional<StartPlan> plan_pending_;
 };
 }  // namespace kk::coop

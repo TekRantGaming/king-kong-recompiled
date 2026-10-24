@@ -28,6 +28,7 @@ set(KINGKONG_SOURCES
     src/coop_story_game.cpp
     src/coop_desync_game.cpp
     src/coop_runtime.cpp
+    src/coop_resume.cpp
     src/coop_partner_body.cpp
     src/coop_nametag.cpp
     src/coop_observer.cpp
@@ -373,6 +374,9 @@ if(KK_DEV_TOOLS)
     target_include_directories(kk-session-tests PRIVATE src)
     target_compile_definitions(kk-session-tests PRIVATE KK_DEV_TOOLS=1)
     add_test(NAME coop-session-flow COMMAND kk-session-tests)
+    add_executable(kk-handover-tests tests/coop_handover_tests.cpp src/coop_protocol.cpp src/coop_session.cpp)
+    target_include_directories(kk-handover-tests PRIVATE src)
+    add_test(NAME coop-handover COMMAND kk-handover-tests)
     add_executable(kk-story-tests tests/coop_story_tests.cpp src/coop_protocol.cpp src/coop_session.cpp)
     target_include_directories(kk-story-tests PRIVATE src)
     add_test(NAME coop-story-sync COMMAND kk-story-tests)

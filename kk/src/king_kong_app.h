@@ -60,6 +60,7 @@ void InstallFpeGuard();  // fpe_guard.cpp
 #include "menu_scene.h"
 #include "mods.h"
 #include "coop_runtime.h"
+#include "coop_resume.h"
 #include "overlay.h"
 #include "ui_paint.h"
 #include "platform.h"
@@ -228,6 +229,53 @@ class KingKongApp : public rex::ReXApp {
                                  show ? "launcher" : "game");
     }
     rex::cvar::ResetToDefault("kk_skip_launcher");  // never persist it
+    // C80: the co-op hand over after Play's restart. No launcher: a small connecting screen while both games
+    // reconnect, then the game starts here as the launcher's Play does (coop_resume.h).
+    if (!show && kk::coop::ResumeRequested() && REXCVAR_GET(kk_coop_enabled) && !kk::benchmark::Active()) {
+      kk::coop::ResumeCallbacks rc;
+      rc.play = [this, resume, defaults](const kk::play::StartRequest& request) {
+        app_context().CallInUIThreadDeferred([this, resume, defaults, request] {
+          kk::play::SetStartRequest(request);
+          kk::mods::ApplyAtGameStart(defaults.user_data_root);  // Kong mods, for this run only
+          kk::coop::ApplySessionSettings();
+          kk::NoteGameStarting();
+          kk::EnforceOriginalLook();
+          kk::ApplyFullscreenMode(window());
+          kk::ApplyRendererChoice();
+          { const auto out = OutputSize(); kk::ApplyRenderPreset(out.first, out.second); }
+          kk::ApplyVideoMode();
+          kk::online::SetPlaying(true);
+          kk::telemetry::SetGameRunning();
+          kk::online::Start();
+          kk::discord::SetPlaying(true);
+          kk::discord::Start();
+          auto session_paths = defaults;
+          session_paths.user_data_root = kk::coop::SessionUserDir(defaults.user_data_root);
+          kk::play::SetUserDir(session_paths.user_data_root);
+          resume(session_paths);
+        });
+      };
+      rc.back_to_menu = [this] {
+        app_context().CallInUIThreadDeferred([this] {
+#if defined(KK_DEV_TOOLS)
+          // A scripted launcher test is for the first launcher only, never the one this opens.
+#if defined(_WIN32)
+          _putenv_s("KK_DEV_LAUNCHER_INPUT", "");
+#else
+          unsetenv("KK_DEV_LAUNCHER_INPUT");
+#endif
+#endif
+          kk::coop::Shutdown();
+          kk::startup::CleanExit();
+          if (kk::play::RelaunchWith(L"--kk_launcher_open=play"))
+            kk::handoff::QuitWhenChildShown([this] { app_context().CallInUIThreadDeferred([this] { app_context().QuitFromUIThread(); }); });
+          else app_context().QuitFromUIThread();
+        });
+      };
+      kk::coop::BeginResume(imgui_drawer(), defaults.user_data_root, std::move(rc));
+      nr::steps::Note("co-op hand over: reconnecting before the game starts");
+      return std::nullopt;
+    }
     if (!show) {
       std::error_code recommendation_ec;
       if (!std::filesystem::exists(defaults.config_path, recommendation_ec) && !recommendation_ec &&
@@ -284,8 +332,13 @@ class KingKongApp : public rex::ReXApp {
       kk::menu_scene::SetThrottled(true, "handing over to the game");  // its GPU time to the new process
       // The start request chosen on the Play menu goes with it (kk::play::SetStartRequest).
       const std::wstring start = kk::play::StartRequestArg();
+      // C80: a co-op start plan both games agreed on: the new process reconnects (its start comes from the
+      // session, never from --kk_start); this one lets go of the port and Steam first.
+      const std::wstring resume = kk::coop::HandoverArg();
+      if (!resume.empty()) kk::coop::ReleaseLinkForHandover();
       kk::startup::CleanExit();
-      kk::play::RelaunchWith(L"--kk_skip_launcher=true" + (start.empty() ? std::wstring() : L" " + start));
+      kk::play::RelaunchWith(L"--kk_skip_launcher=true" +
+                             (!resume.empty() ? L" " + resume : start.empty() ? std::wstring() : L" " + start));
       // The launcher's window stays until the game's has drawn (handoff.h): no desktop between them.
       kk::handoff::QuitWhenChildShown([this] { CloseLauncherProcess(); });
     };

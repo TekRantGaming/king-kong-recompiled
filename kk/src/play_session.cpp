@@ -655,6 +655,7 @@ void LoadStartRequestFromSettings() {
 
 bool RelaunchWith(const std::wstring& extra) {
   static constexpr const wchar_t* kDropped[] = {L"--kk_skip_launcher", L"--kk_start", L"--kk_launcher_open", L"--kk_menu_scene_off",
+                                               L"--kk_coop_resume",
                                                L"--kk_menu_scene_retry",
                                                L"--kk_launcher_saved",
                                                L"--kk_startup_child", L"--kk_benchmark", L"--kk_benchmark_record",

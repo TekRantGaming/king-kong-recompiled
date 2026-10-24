@@ -7129,9 +7129,9 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
     f.shaders_prepared = ShadersPreparedForThisVersion();
     f.shader_job = native_pack_.Busy() || update_shaders_ || setup_shaders_ || rebuild_shaders_screen_;
     f.setup = InSetup() || update_new_ || ShaderScreen();
-    // Co-op starts in this process to retain its peer. The live scene reserves
-    // that runtime and requires Play to restart, so keep the stills for co-op.
-    f.off_this_session = GetBool("kk_coop_enabled");
+    // C80: co-op keeps the live scene too. Its Start hands the session over through Play's restart
+    // (coop_handover.h), so the stills rule of 20 Oct is gone.
+    f.off_this_session = false;
     return f;
   }
   void MaybeStartScene(bool before_first_frame) {
@@ -7249,6 +7249,8 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
     }
     // Task 330: the live menu scene is the game already running in this process: the game starts as a new one.
     if (menu_scene::Active()) needs_restart = true;
+    // C80: a co-op hand over always restarts (the new process reconnects), with or without the scene.
+    if (coop::HandoverPending()) needs_restart = true;
     FlushProfileOptions();
     if (coop::SessionInProcess()) {
       // A live peer and its worker cannot survive a restart. SessionStart is
@@ -8572,6 +8574,8 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
     if (!played_ && !InSetup() && !ShaderScreen() && CanPlay()) {
       play::StartRequest launch;
       if (coop::TakeSessionLaunch(launch)) { play::SetStartRequest(launch); Play(); return; }
+      // C80: a co-op start plan both games agreed on: Play restarts into the game, which reconnects.
+      if (coop::TakeHandover()) { play::SetStartRequest({}); Play(); return; }
     }
 #if defined(KK_DEV_TOOLS)
     DevNotifyTest();

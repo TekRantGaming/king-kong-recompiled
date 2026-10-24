@@ -36,6 +36,7 @@ inline Message SteamProbeMessage(MessageType type) {
   for (size_t i=0;i<kDigestScriptsPerPage;++i) m.digest.scripts.push_back({123+i,456,1,3,5});
   for (size_t i=0;i<kDigestEnemiesPerPage;++i) m.digest.enemies.push_back({{123+i,0,EnemyFamily::Raptor},EnemyOwner::Host,0,50,0});
   m.shot_receipt={world,1,ShotReject::Origin,false};
+  m.plan={0xC80,StartTransport::Steam,3,0,1,2,0};
   return m;
 }
 }  // namespace kk::coop
