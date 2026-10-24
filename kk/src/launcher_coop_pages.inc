@@ -285,7 +285,11 @@
                  : std::string(T(st.key));
     }
     if (const auto n = social_.notice(); !n.empty()) return *warn = true, std::string(T(n));
-    if (!model.last_error.empty() && !model.direct) return *warn = true, std::string(T(coop::SocialStatusKey(model)));
+    if (!model.last_error.empty() && !model.direct) {
+      *warn = true;
+      const std::string_view key = coop::SocialStatusKey(model);
+      return key == "Versions don't match: {0}" ? F(key.data(), {T(model.last_error)}) : std::string(T(key.data()));
+    }
     switch (coop_page_) {
       case CoopPage::Hub: return T("Host a game for a friend, or join one.");
       case CoopPage::Host: return T(model.lobby ? "Choose another chapter or save." : "Choose what to play together.");

@@ -306,9 +306,11 @@ std::vector<SocialRow> CoopPageRows(const SocialModel& m, CoopPage page, CoopPag
 }
 CoopPage CoopPageFor(const SocialModel& m, CoopPage current) {
   const bool waiting=m.status==SocialStatus::Creating || m.status==SocialStatus::Joining;
+  // The lobby page also stays while Steam starts for an accepted invite (it then checks the lobby).
+  const bool connecting=m.status==SocialStatus::Dormant && m.status_text=="Connecting to Steam";
   if ((m.lobby || waiting) && (current==CoopPage::Hub || current==CoopPage::HostHow || current==CoopPage::Join))
     return CoopPage::Lobby;
-  if (current==CoopPage::Lobby && !m.lobby && !waiting) return CoopPage::Hub;
+  if (current==CoopPage::Lobby && !m.lobby && !waiting && !connecting) return CoopPage::Hub;
   // In a lobby, Host, New game and Load game are the host's Change (before Start) only.
   const bool host_pages=current==CoopPage::Host || current==CoopPage::HostNew || current==CoopPage::HostLoad;
   if (host_pages && (waiting || (m.lobby && (m.owner!=m.self || m.start_requested)))) return CoopPage::Lobby;

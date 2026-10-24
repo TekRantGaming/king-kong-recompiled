@@ -7159,6 +7159,10 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
     // C80: co-op keeps the live scene too. Its Start hands the session over through Play's restart
     // (coop_handover.h), so the stills rule of 20 Oct is gone.
     f.off_this_session = false;
+#if defined(KK_DEV_TOOLS)
+    // C81 tests: a launcher without the scene (as after failed scene starts), for the mixed co-op start.
+    if (const char* off = std::getenv("KK_DEV_SCENE_OFF"); off && *off == '1') f.off_this_session = true;
+#endif
     return f;
   }
   void MaybeStartScene(bool before_first_frame) {

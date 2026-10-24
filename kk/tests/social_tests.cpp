@@ -281,6 +281,10 @@ void CoopPages() {
   m.status = SocialStatus::Idle;
   Check(Find(CoopPageRows(m, CoopPage::HostHow, {true, true}), SocialRowKind::Create).enabled, "Steam host after connecting");
   Check(CoopPageFor(m, CoopPage::Lobby) == CoopPage::Hub, "a lobby page without a lobby goes back");
+  m.status = SocialStatus::Dormant; m.status_text = "Connecting to Steam";
+  Check(CoopPageFor(m, CoopPage::Lobby) == CoopPage::Lobby && CoopPageFor(m, CoopPage::Join) == CoopPage::Join,
+        "a Steam invite start keeps the lobby page while Steam starts; Connect to Steam stays put");
+  m.status_text.clear();
   m.status = SocialStatus::Creating;
   Check(CoopPageFor(m, CoopPage::HostHow) == CoopPage::Lobby, "creating a lobby shows the lobby page");
 
