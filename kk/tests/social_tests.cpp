@@ -333,6 +333,9 @@ void CoopPages() {
   Check(Has(rows, SocialRowKind::Text) && Find(rows, SocialRowKind::Text, 11).focusable(), "IP lobby shares the code");
   d.self = 2; d.members = {{2, "Guest", false}};
   Check(std::string_view(CoopLobbyStatus(d).key) == "Connecting to the host", "IP guest connecting");
+  rows = CoopPageRows(d, CoopPage::Lobby);
+  Check(std::none_of(rows.begin(), rows.end(), [](const auto& r) { return r.key == SocialRowKey{SocialRowKind::Text, 11}; }),
+        "the IP guest is not asked to share the host's details");
 
   SocialModel s; s.pending_invites = {{55, 9}, {77, 0}};
   Check(StartupInvite(s) == 77, "the Steam start lobby is the invite without an inviter");

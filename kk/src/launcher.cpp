@@ -3665,7 +3665,8 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
                   T("Settings saved"));
     }
     auto prompts = Prompts();
-    if (coop::SocialAllowed(GetBool("kk_coop_enabled"), SocialContext())) prompts.push_back({Action::kSocial, "Social"});
+    if (coop::SocialAllowed(GetBool("kk_coop_enabled"), SocialContext()) && !social_.editing())
+      prompts.push_back({Action::kSocial, "Social"});
     const Action clicked = ui::DrawPrompts(dl, glyphs_, PromptSet(), prompts, o_.x + w_ - Margin(), cy, m_,
                                            true);
     if (clicked != Action::kCount) pending_click_ = clicked;

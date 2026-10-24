@@ -195,6 +195,12 @@
         if (model.owner != model.self) it.type = ItemType::kInfo, it.disabled = false, it.description.clear();
         else it.value_text = "Change";
       }
+      if (kind == K::Ready) {  // the drawer names the toggle by what it does; here: Ready, with the current state
+        const bool ready = row.label == "Not ready";
+        it.label = "Ready";
+        it.value_text = ready ? "Ready" : "Not ready";
+        it.value_color = ready ? color::kGood : color::kTextDim;
+      }
       if (kind == K::Member) {
         it.tall = true; it.literal_label = true; it.literal_subtitle = true;
         it.value_text = row.detail;
@@ -308,6 +314,10 @@
       items = CoopItems(rows, model);
       row_data_.clear();
     }
+    // A page opens on its first row that can be pressed (not a greyed Steam row while Steam is off).
+    if (st.focus < 0)
+      for (size_t i = 0; i < items.size(); ++i)
+        if (items[i].type == ItemType::kAction && !items[i].disabled) { st.focus = int(i); break; }
     const bool editing = social_.editing() && !social_.blocking();
     const bool interactive = !PageInputBlocked() && !editing;
     // X invites the focused friend, as in the drawer.
@@ -416,7 +426,7 @@
         if (command.substr(prefix.size()) != name) continue;
         for (size_t i = 0; i < rows.size(); ++i) {
           if (rows[i].key.kind != kind) continue;
-          if (focus) coop_lists_[int(coop_page_)].focus = int(i);
+          if (focus) coop_lists_[int(coop_page_)].focus = int(i), coop_lists_[int(coop_page_)].focus_label = rows[i].label;
           return focus || rows[i].enabled;
         }
       }

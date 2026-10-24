@@ -290,7 +290,7 @@ std::vector<SocialRow> CoopPageRows(const SocialModel& m, CoopPage page, CoopPag
       for (const auto& r : drawer) if (r.key.kind==SocialRowKind::ChapterSelect)
         add(SocialRowKind::ChangeChoice,0,"Chapter or save","",r.enabled);
       copy(SocialRowKind::Text,13);
-      if (m.direct) {
+      if (m.direct && m.owner==m.self) {  // the host's own details; the guest already has them
         add(SocialRowKind::Section,43,"Share these details");
         copy(SocialRowKind::Text,10); copy(SocialRowKind::Text,11); copy(SocialRowKind::Text,12);
       } else if (SteamShown(m)) {
