@@ -36,6 +36,8 @@ set(KINGKONG_SOURCES
     src/steam_runtime.cpp
     src/steam_lobby.cpp
     src/steam_transport.cpp
+    src/steam_pad.cpp
+    src/steam_pad_driver.cpp
     src/social_panel.cpp
     src/social_panel_logic.cpp
     src/social_fake.cpp
@@ -395,7 +397,7 @@ if(KK_DEV_TOOLS)
     target_link_libraries(kk-puppet-mesh-tests PRIVATE nr_draw Threads::Threads)
     add_test(NAME coop-puppet-mesh COMMAND kk-puppet-mesh-tests)
     # Always SDK-free, including the real runtime's compile-time unavailable branch.
-    add_executable(kk-steam-tests tests/steam_tests.cpp src/steam_lobby.cpp src/steam_transport.cpp
+    add_executable(kk-steam-tests tests/steam_tests.cpp src/steam_lobby.cpp src/steam_transport.cpp src/steam_pad.cpp
         src/steam_runtime.cpp src/coop_protocol.cpp src/coop_session.cpp)
     target_include_directories(kk-steam-tests PRIVATE src)
     target_compile_definitions(kk-steam-tests PRIVATE KK_HAS_STEAM=0 KK_DEV_TOOLS=1)
@@ -410,7 +412,7 @@ if(KK_DEV_TOOLS)
     target_compile_definitions(kk-social-tests PRIVATE KK_DEV_TOOLS=1)
     add_test(NAME coop-social-panel COMMAND kk-social-tests)
     add_executable(kk-social-ui-tests tests/social_ui_tests.cpp src/social_panel.cpp src/social_panel_logic.cpp
-        src/launcher_ui.cpp src/launcher_text.cpp src/coop_direct_udp.cpp src/coop_protocol.cpp src/steam_lobby.cpp)
+        src/launcher_ui.cpp src/launcher_text.cpp src/coop_direct_udp.cpp src/coop_protocol.cpp src/steam_lobby.cpp src/steam_pad.cpp)
     target_include_directories(kk-social-ui-tests PRIVATE src)
     target_compile_definitions(kk-social-ui-tests PRIVATE KK_DEV_TOOLS=1)
     target_link_libraries(kk-social-ui-tests PRIVATE rex::runtime)
@@ -517,13 +519,13 @@ if(KK_DEV_TOOLS)
     target_compile_definitions(kk-artbook-tests PRIVATE KK_DEV_TOOLS=1)
     rexglue_apply_target_settings(kk-artbook-tests)
     add_test(NAME artbook COMMAND kk-artbook-tests "${CMAKE_CURRENT_BINARY_DIR}/artbook-test")
-    add_executable(kk-slider-ui-tests tests/slider_ui_tests.cpp src/launcher_ui.cpp src/launcher_text.cpp)
+    add_executable(kk-slider-ui-tests tests/slider_ui_tests.cpp src/launcher_ui.cpp src/steam_pad.cpp src/launcher_text.cpp)
     target_include_directories(kk-slider-ui-tests PRIVATE src)
     target_link_libraries(kk-slider-ui-tests PRIVATE rex::runtime)
     rexglue_apply_target_settings(kk-slider-ui-tests)
     add_test(NAME slider-controller-ui COMMAND kk-slider-ui-tests)
     # The benchmark's launcher pages with controller, keyboard and mouse; results files and pass rules.
-    add_executable(kk-benchmark-ui-tests tests/benchmark_ui_tests.cpp src/launcher_ui.cpp src/launcher_text.cpp
+    add_executable(kk-benchmark-ui-tests tests/benchmark_ui_tests.cpp src/launcher_ui.cpp src/steam_pad.cpp src/launcher_text.cpp
         src/launcher_benchmark.cpp)
     target_include_directories(kk-benchmark-ui-tests PRIVATE src)
     target_link_libraries(kk-benchmark-ui-tests PRIVATE rex::runtime)

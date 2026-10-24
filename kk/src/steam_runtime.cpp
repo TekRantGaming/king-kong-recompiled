@@ -1,6 +1,7 @@
 #include "steam_runtime.h"
 #include "steam_transport.h"
 #include "coop_pose.h"
+#include "steam_pad.h"
 #if KK_HAS_STEAM
 #include <rex/logging.h>
 #if defined(KK_DEV_TOOLS)
@@ -99,7 +100,14 @@ constexpr size_t kMaxInvites = 16, kMaxFriends = 256;
  X(SteamAPI_ISteamNetworkingMessages_AcceptSessionWithUser) \
  X(SteamAPI_ISteamNetworkingMessages_CloseSessionWithUser) \
  X(SteamAPI_ISteamNetworkingMessages_GetSessionConnectionInfo) \
- X(SteamAPI_ISteamNetworkingUtils_InitRelayNetworkAccess) X(SteamAPI_ISteamNetworkingUtils_SetConfigValue)
+ X(SteamAPI_ISteamNetworkingUtils_InitRelayNetworkAccess) X(SteamAPI_ISteamNetworkingUtils_SetConfigValue) \
+ X(SteamAPI_SteamInput_v007) X(SteamAPI_ISteamInput_Init) X(SteamAPI_ISteamInput_Shutdown) \
+ X(SteamAPI_ISteamInput_SetInputActionManifestFilePath) X(SteamAPI_ISteamInput_RunFrame) \
+ X(SteamAPI_ISteamInput_GetConnectedControllers) X(SteamAPI_ISteamInput_GetActionSetHandle) \
+ X(SteamAPI_ISteamInput_ActivateActionSet) X(SteamAPI_ISteamInput_GetDigitalActionHandle) \
+ X(SteamAPI_ISteamInput_GetDigitalActionData) X(SteamAPI_ISteamInput_GetAnalogActionHandle) \
+ X(SteamAPI_ISteamInput_GetAnalogActionData) X(SteamAPI_ISteamInput_TriggerVibration) \
+ X(SteamAPI_ISteamInput_GetInputTypeForHandle)
 struct Api {
 #define DECLARE(name) decltype(&::name) name = nullptr;
   KK_STEAM_EXPORTS(DECLARE)
@@ -276,7 +284,114 @@ struct SteamRuntime::Impl
     api.SteamAPI_ISteamNetworkingUtils_InitRelayNetworkAccess(networking);
     model.overlay_available = api.SteamAPI_ISteamUtils_IsOverlayEnabled(utils);
     if (!self_test) api.SteamAPI_ISteamFriends_SetRichPresence(friends, kPresenceKey, kProductValue);
+    if (!self_test) StartInput();
     return true;
+  }
+  // C82: Steam Input. As app 480 Steam hides a pad it manages and applies Spacewar's action set, which the
+  // game never read (the controller went dead after Connect to Steam). Our own manifest maps every button,
+  // stick and trigger to actions; this thread reads them and publishes one Xbox pad (steam_pad.h) for the
+  // game's input driver and the launcher. It owns only ISteamInput calls; the worker keeps everything else.
+  ISteamInput* input = nullptr;
+  std::thread input_thread;
+  std::atomic<bool> input_stop{false};
+  void StartInput() {
+    input = api.SteamAPI_SteamInput_v007();
+    if (!input || !api.SteamAPI_ISteamInput_Init(input, true)) {
+      REXLOG_WARN("KK co-op Steam Input: init failed; controllers Steam manages may not reach the game");
+      input = nullptr; return;
+    }
+    const auto manifest = steam_pad::WriteManifest(options.input_folder);
+    const auto path = manifest.u8string();
+    const bool set = !manifest.empty() &&
+        api.SteamAPI_ISteamInput_SetInputActionManifestFilePath(input, reinterpret_cast<const char*>(path.c_str()));
+    REXLOG_INFO("KK co-op Steam Input: initialized; action manifest {} ({})", set ? "set" : "NOT set",
+                manifest.empty() ? std::string("not written") : manifest.filename().string());
+    input_stop = false;
+    input_thread = std::thread([this] { InputLoop(); });
+  }
+  void StopInput() {
+    input_stop = true;
+    if (input_thread.joinable()) input_thread.join();
+    if (input) api.SteamAPI_ISteamInput_Shutdown(input);
+    input = nullptr;
+    steam_pad::Stopped();
+  }
+  static const char* InputTypeName(ESteamInputType type) {
+    switch (type) {
+      case k_ESteamInputType_XBox360Controller: return "xbox360";
+      case k_ESteamInputType_XBoxOneController: return "xboxone";
+      case k_ESteamInputType_PS4Controller: return "ps4";
+      case k_ESteamInputType_PS5Controller: return "ps5";
+      case k_ESteamInputType_SwitchProController: return "switch_pro";
+      case k_ESteamInputType_SteamController: return "steam_controller";
+      case k_ESteamInputType_SteamDeckController: return "steam_deck";
+      case k_ESteamInputType_GenericGamepad: return "generic";
+      default: return "other";
+    }
+  }
+  void InputLoop() {
+    InputActionSetHandle_t set = 0;
+    InputDigitalActionHandle_t digital[steam_pad::kDigitalCount] = {};
+    InputAnalogActionHandle_t analog[steam_pad::kAnalogCount] = {};
+    bool resolved = false, warned = false;
+    double next_resolve = 0, give_up_warning = 0;
+    int logged_count = -1; bool logged_resolved = false;
+    while (!input_stop && !stop) {
+      api.SteamAPI_ISteamInput_RunFrame(input, false);
+      const double now = steam_pad::Now();
+      InputHandle_t pads[STEAM_INPUT_MAX_COUNT] = {};
+      const int count = std::clamp(api.SteamAPI_ISteamInput_GetConnectedControllers(input, pads), 0, int(STEAM_INPUT_MAX_COUNT));
+      if (!count) give_up_warning = 0;
+      else if (!give_up_warning) give_up_warning = now + 10;
+      if (!resolved && count && now >= next_resolve) {
+        // Steam resolves handles only once it has loaded a configuration for a connected controller
+        // (with none it logs "No cached sticky mapping"), so ask only while one is connected.
+        next_resolve = now + 1;
+        set = api.SteamAPI_ISteamInput_GetActionSetHandle(input, steam_pad::kActionSet);
+        resolved = set != 0;
+        for (int i = 0; i < steam_pad::kDigitalCount; ++i)
+          resolved &= (digital[i] = api.SteamAPI_ISteamInput_GetDigitalActionHandle(input, steam_pad::kDigitalNames[i])) != 0;
+        for (int i = 0; i < steam_pad::kAnalogCount; ++i)
+          resolved &= (analog[i] = api.SteamAPI_ISteamInput_GetAnalogActionHandle(input, steam_pad::kAnalogNames[i])) != 0;
+        if (!resolved && !warned && now >= give_up_warning) {
+          warned = true;
+          REXLOG_WARN("KK co-op Steam Input: our action set is not available (set={}); Steam may be using another configuration", set);
+        }
+      }
+      steam_pad::State merged;
+      if (resolved) {
+        for (int p = 0; p < count; ++p) {
+          api.SteamAPI_ISteamInput_ActivateActionSet(input, pads[p], set);
+          bool down[steam_pad::kDigitalCount] = {};
+          float axes[steam_pad::kAnalogCount][2] = {};
+          for (int i = 0; i < steam_pad::kDigitalCount; ++i) {
+            const auto d = api.SteamAPI_ISteamInput_GetDigitalActionData(input, pads[p], digital[i]);
+            down[i] = d.bActive && d.bState;
+          }
+          for (int i = 0; i < steam_pad::kAnalogCount; ++i) {
+            const auto a = api.SteamAPI_ISteamInput_GetAnalogActionData(input, pads[p], analog[i]);
+            if (a.bActive) { axes[i][0] = a.x; axes[i][1] = a.y; }
+          }
+          steam_pad::Merge(merged, steam_pad::FromActions(down, axes));
+        }
+      }
+      // Without our actions a managed pad gives the game nothing; report none so nothing is held.
+      steam_pad::Publish(resolved ? count : 0, merged, now);
+      if (count != logged_count || resolved != logged_resolved) {
+        logged_count = count; logged_resolved = resolved;
+        std::string types;
+        for (int p = 0; p < count; ++p) {
+          if (!types.empty()) types += ',';
+          types += InputTypeName(api.SteamAPI_ISteamInput_GetInputTypeForHandle(input, pads[p]));
+        }
+        REXLOG_INFO("KK co-op Steam Input: controllers Steam manages={} [{}] actions={}", count,
+                    types.empty() ? "none" : types, resolved ? "ready" : "not loaded");
+      }
+      uint16_t left = 0, right = 0;
+      if (steam_pad::TakeVibration(left, right))
+        for (int p = 0; p < count; ++p) api.SteamAPI_ISteamInput_TriggerVibration(input, pads[p], left, right);
+      std::this_thread::sleep_for(std::chrono::milliseconds(4));
+    }
   }
   void Friends() {
     // Refresh at most every five seconds; no per-frame avatar allocation or rich-presence request.
@@ -823,6 +938,7 @@ struct SteamRuntime::Impl
     // Drain late async successes during a bounded shutdown window, always freeing callback memory.
     const auto until = Now() + .2;
     while ((create_call || join_call || !abandoned.empty()) && Now() < until) { Pump(); std::this_thread::sleep_for(std::chrono::milliseconds(5)); }
+    StopInput();
     api.SteamAPI_Shutdown(); initialized = false;
     if (self_test) test_log(test_result == 0 ? "Steam self-test: shutdown OK" : "Steam self-test: failed; shutdown OK");
   }

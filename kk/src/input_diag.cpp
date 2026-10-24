@@ -2,6 +2,7 @@
 #include "play_internal.h"
 #include "debug_overlay.h"
 #include "coop_observer.h"
+#include "steam_pad.h"
 #include <rex/cvar.h>
 #include <rex/logging.h>
 #include <rex/ui/imgui_dialog.h>
@@ -127,6 +128,10 @@ class Diagnostics final : public rex::ui::ImGuiDialog, public KeyProbe, public r
           p.Gamepad.bLeftTrigger,p.Gamepad.bRightTrigger,p.Gamepad.sThumbLX,p.Gamepad.sThumbLY,p.Gamepad.sThumbRX,p.Gamepad.sThumbRY);
     }
 #endif
+    // C82: the pad Steam Input holds (app 480), as the game and launcher receive it.
+    std::string steam_pad_text=fmt::format("{}",kk::steam_pad::Controllers());
+    if (kk::steam_pad::State sp; kk::steam_pad::Read(sp,kk::steam_pad::Now()))
+      steam_pad_text+=fmt::format(" [{:04X},t={}/{},l={}/{},r={}/{}]",sp.buttons,sp.lt,sp.rt,sp.lx,sp.ly,sp.rx,sp.ry);
     std::string trace,blocked; uint64_t n; bool active,social,editing; int lp; int32_t title_pad; uint32_t title_block;
     { std::lock_guard lock(mutex); trace=active_stages.empty() ? stages : active_stages; active_stages.clear();
       for (const auto& [name,times] : zeroed) blocked+=fmt::format(" {}:{}",name,times);
@@ -137,8 +142,8 @@ class Diagnostics final : public rex::ui::ImGuiDialog, public KeyProbe, public r
         io.WantCaptureKeyboard,io.WantCaptureMouse,io.WantTextInput,rex::cvar::GetFlagByName("input_backend"),
         rex::cvar::GetFlagByName("mnk_mode"),rex::cvar::GetFlagByName("mnk_mouse"),
         play::CoverScreen(),play::PauseMenuOpen(),DebugOverlayOpen(),coop::observer::Active(),steam_api_loaded,steam_overlay_loaded);
-    REXLOG_INFO("KK input diag: app-SDL-pads={}{} XInput={}{} keys app-SDL={:03X} runtime-window={:03X}/{:03X} game-events={:03X}/{:03X} (held/seen) title-active-pad={} title-block={} game-native/filters reads={} zeroed={} sample={}",
-        count,raw,xinput.empty() ? "none" : "",xinput,sdl_keys,held,seen,game_keys_.held,game_keys_.seen,title_pad,title_block,n,blocked.empty() ? "none" : blocked,
+    REXLOG_INFO("KK input diag: app-SDL-pads={}{} XInput={}{} steam-input={} keys app-SDL={:03X} runtime-window={:03X}/{:03X} game-events={:03X}/{:03X} (held/seen) title-active-pad={} title-block={} game-native/filters reads={} zeroed={} sample={}",
+        count,raw,xinput.empty() ? "none" : "",xinput,steam_pad_text,sdl_keys,held,seen,game_keys_.held,game_keys_.seen,title_pad,title_block,n,blocked.empty() ? "none" : blocked,
         n ? trace : "no game pad read this second");
     seen=game_keys_.seen=0;
   }
