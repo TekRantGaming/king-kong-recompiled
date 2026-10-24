@@ -905,7 +905,8 @@ if 'e.push_back({"Benchmark", CanPlay(), [this] { OpenBenchmark(); }});' not in 
     fail('Home has no Benchmark entry')
 m = re.search(r'std::vector<HomeEntry> HomeEntries\(\) \{(.*?)\n  \}\n', launcher, re.S)
 home = re.findall(r'e\.push_back\(\{"([^"]+)"', m.group(1)) if m else []
-if home != ['Play', 'Settings', 'Workshop', 'Achievements', 'Benchmark', 'Quit']:
+# C81: with co-op enabled, Play Online Co-op sits directly under Play (co-op builds only).
+if home != ['Play', 'Play Online Co-op', 'Settings', 'Workshop', 'Achievements', 'Benchmark', 'Quit']:
     fail(f'Home entries are {home}')
 ingame = (src / 'ingame_settings.h').read_text(encoding='utf-8')
 if 'enum Page { kDisplay, kGraphics, kAudio, kControls, kGameplay, kCheats, kAdvanced, kPageCount };' not in ingame:

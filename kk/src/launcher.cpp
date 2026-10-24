@@ -348,7 +348,8 @@ static_assert(kSettingsTabCount == 8);
 // Sub-pages of Controls.
 enum SubPage { kNoSubPage, kRemapPage, kKeysPage };
 // Play on Home: the Play menu and its pages (docs/menus.md).
-enum class PlayView { kNone, kMenu, kLoad, kNew, kChapters, kExtras, kArtbook, kManual };
+// kCoop (C81): the Play Online Co-op pages (launcher_coop_pages.inc), only with co-op enabled.
+enum class PlayView { kNone, kMenu, kLoad, kNew, kChapters, kExtras, kArtbook, kManual, kCoop };
 
 struct Achievement {
   uint32_t id = 0;
@@ -3177,6 +3178,7 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
     if (!social_.blocking() && play_ == PlayView::kNone && page_ == kHome &&
         (input_.pad_held() & (ui::Input::kPadLB | ui::Input::kPadRB | ui::Input::kPadLT)))
       input_.Consume(Action::kSocial);
+    CoopTick();  // C81
     social_.Update(GetBool("kk_coop_enabled"), SocialContext(), input_, coop::Social());
     input_.set_social_blocking(social_.blocking());
     DrawBackdrop(dl);
@@ -3220,6 +3222,7 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
         return ChapterPicture(play::Chapters()[size_t(entry)].picture,aspect);
       };
     }
+    social_.SetOpenPage([this](bool join) { OpenCoop(join ? coop::CoopPage::Join : coop::CoopPage::Host); });
     social_.Draw(dl, o_, ImVec2(w_, h_), m_, input_, glyphs_, PromptSet(), immediate_, coop::Social(),
                  coop::SocialAllowed(GetBool("kk_coop_enabled"), SocialContext()), [this] { OpenSteamPrompt(); },std::move(social_chapters));
     ImGui::End();
@@ -3639,6 +3642,7 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
       case PlayView::kNew: return P::NewGame;
       case PlayView::kChapters: return P::Chapters;
       case PlayView::kExtras: return P::Extras;
+      case PlayView::kCoop: return P::PlayMenu;
       case PlayView::kNone: break;
     }
     static constexpr P pages[] = {P::Page, P::Display, P::Graphics, P::Audio, P::Controls, P::Gameplay,
@@ -3791,6 +3795,8 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
   std::vector<HomeEntry> HomeEntries() {
     std::vector<HomeEntry> e;
     e.push_back({"Play", CanPlay(), [this] { OpenPlayMenu(); }});
+    // C81: directly under Play, only with co-op enabled (one text key; Craig may change its wording).
+    if (CoopEnabled()) e.push_back({"Play Online Co-op", CanPlay(), [this] { OpenCoop(coop::CoopPage::Hub); }});
     // An update that was found stays one press away; checking, reinstalling and the rest are on About.
     if (update_ && update_->found && !installing_update_)
       e.push_back({F("Update to v{0}", {update_->found->version}), true, [this] { OpenUpdatePrompt(); }});
@@ -4289,6 +4295,7 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
       case PlayView::kExtras: return "Extras";
       case PlayView::kArtbook: return "Artbook";
       case PlayView::kManual: return "User manual";
+      case PlayView::kCoop: return "Play Online Co-op";
       default: return "";
     }
   }
@@ -4333,6 +4340,11 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
     const float s = S();
     const ui::Fonts f = ui::GetFonts();
     const float cy = o_.y + 44 * s;
+    if (play_ == PlayView::kCoop) {
+      if (DrawCrumbs(dl, "Play Online Co-op", coop_page_ != coop::CoopPage::Hub ? CoopPageName(coop_page_) : nullptr))
+        CoopGo(coop::CoopPage::Hub);
+      return;
+    }
     if (DrawCrumbs(dl, "Play", play_ != PlayView::kMenu ? PlayViewName(play_) : nullptr)) play_ = PlayView::kMenu;
     if (play_ == PlayView::kChapters) {
       const int slot = ChapterSlot();
@@ -4454,6 +4466,7 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
   void DrawPlayPage(ImDrawList* dl) {
     if (play_ == PlayView::kArtbook) return DrawArtbook(dl);  // Beta 7: its own page (artbook.h)
     if (play_ == PlayView::kManual) return DrawManual(dl);    // task 333: the artbook's page for the manual
+    if (play_ == PlayView::kCoop) return DrawCoopPage(dl);    // C81
     const float s = S();
     std::vector<Item> items = play_ == PlayView::kLoad     ? LoadItems()
                               : play_ == PlayView::kNew    ? NewGameItems()
@@ -4673,6 +4686,8 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
       case PlayView::kManual:
         if (manual_) return manual_->Prompts();
         return {{Action::kBack, "Back"}};
+      case PlayView::kCoop:
+        return CoopPrompts();
       default:
         return {{Action::kAccept, "Select"}, {Action::kBack, "Back"}};
     }
@@ -4687,6 +4702,16 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
         ui::Cue(ui::Sound::kBack);
         Artbook* book = play_ == PlayView::kManual ? manual_.get() : artbook_.get();
         if (!(book && book->Back())) play_ = PlayView::kExtras;  // on its Extras row again
+      }
+      return;
+    }
+    if (play_ == PlayView::kCoop) {  // C81: the text editor takes B and Start itself
+      if (social_.editing()) return;
+      for (const Action a : {Action::kPrevTab, Action::kNextTab, Action::kPlay}) in.Consume(a);
+      if (in.Pressed(Action::kBack)) {
+        in.Consume(Action::kBack);
+        ui::Cue(ui::Sound::kBack);
+        CoopBack();
       }
       return;
     }
@@ -5532,6 +5557,7 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
 #include "launcher_setup_end.inc"
 #include "launcher_setup_new.inc"
 #include "launcher_setup_pages.inc"
+#include "launcher_coop_pages.inc"
 
   // The status line once the setup is over.
   const char* InstalledMessage() {
@@ -8878,6 +8904,11 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
       if (!social_.DirectInput(t.substr(7),coop::Social())) { --next; at=now+.5; }
       return;
     }
+    // C81: "coop:<page>" opens a co-op page; "coop:wait:<page>" waits until that page shows.
+    if (t.rfind("coop:",0)==0) {
+      if (!CoopDevInput(t.substr(5))) { --next; at=now+.3; }
+      return;
+    }
     // Same SessionStart path as the Social Start action, no direct game boot.
     if (t.rfind("session:",0)==0) {
       const auto value=t.substr(8);
@@ -9230,6 +9261,11 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
   PlayView play_ = PlayView::kNone;      // the Play menu and its pages, over Home
   int play_focus_ = 0;
   std::map<int, ui::ListState> play_lists_;
+  coop::CoopPage coop_page_ = coop::CoopPage::Hub;   // C81: the Play Online Co-op page shown (PlayView::kCoop)
+  std::map<int, ui::ListState> coop_lists_;
+  std::optional<play::StartRequest> coop_choice_;     // the host's chapter or save, before its lobby exists
+  bool coop_startup_checked_ = false;                 // the Steam invite start (+connect_lobby) was looked at
+  coop::SocialRowKind coop_focus_kind_ = coop::SocialRowKind::Section;
   std::vector<play::SaveSlot> saves_;    // read as the Play menu opens and after a delete
   int chapter_slot_ = -1;               // the save Chapter select starts with (Load game's Y); -1 the last played
   std::vector<int> row_data_;           // the Play pages' rows: the slot or chapter entry each stands for

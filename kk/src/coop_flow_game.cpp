@@ -291,9 +291,11 @@ bool RequestSessionStart() {
   REXLOG_INFO("KK co-op lobby: Start uses shown choice revision {} chapter {} level {}",model.choice.revision,s.chapter,s.level);
   // Steam starts the handshake here; dev link is already connected in the launcher.
   if (!social.Act({SocialAction::Start,0,false,model.choice})) return false;
-  if (menu_scene::Active()) {
+  {
     // C80: the live menu scene is the game running in this process, so Play restarts. Agree on a plan with
     // the guest; both restart and reconnect, and the resumed host sends this SessionStart then.
+    // C81: always, also when this host has the scene off. The guest may have it on, and a launcher with the
+    // scene cannot start a chapter in its own process; with the plan both restart and every mix works.
     StartPlan plan;
     std::random_device random;
     plan.token=(uint64_t(random())<<32)^random(); if (!plan.token) plan.token=1;
@@ -304,13 +306,17 @@ bool RequestSessionStart() {
       plan.transport=StartTransport::Steam; plan.host_id=model.self;
       for (const auto& m : model.members) if (m.id!=model.self) plan.guest_id=m.id;
     }
-    if (!BeginStartPlan(plan)) { REXLOG_WARN("KK co-op hand over: the start plan could not be queued"); return false; }
+    if (!BeginStartPlan(plan)) {
+      // The local dev link has no hand over; without the scene it still starts in this process.
+      if (!menu_scene::Active() && BeginSessionFlow(s,std::move(save))) {
+        selected=r; requested=true; requested_lobby=model.lobby; return true;
+      }
+      REXLOG_WARN("KK co-op hand over: the start plan could not be queued"); return false;
+    }
     REXLOG_INFO("KK co-op hand over: host start plan queued ({}, chapter {}, {}); waiting for the guest's answer",
         plan.transport==StartTransport::Steam ? "Steam" : "Direct IP",plan.chapter,plan.continue_game ? "Continue" : "chapter select");
     selected=r; requested=true; requested_lobby=model.lobby; return true;
   }
-  if (!BeginSessionFlow(s,std::move(save))) return false;
-  selected=r; requested=true; requested_lobby=model.lobby; return true;
 }
 bool HandoverPending() { return handover_taken; }
 std::wstring HandoverArg() {

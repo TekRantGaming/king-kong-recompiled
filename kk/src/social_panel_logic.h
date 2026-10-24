@@ -34,7 +34,9 @@ class SocialPanelState {
 };
 enum class SocialRowKind { Section, Member, Accept, Decline, Create, Ready, Start, OverlayInvite, Leave, Friend, Text,
                            AddSteam, DirectAddress, DirectPort, DirectCode, DirectHost, DirectJoin, ChapterSelect,
-                           DirectChooseHost, DirectChooseJoin, ConnectSteam, PlaySteam, PlayIP };
+                           DirectChooseHost, DirectChooseJoin, ConnectSteam, PlaySteam, PlayIP,
+                           // C81 Play Online Co-op pages
+                           CoopHost, CoopJoin, HostNewGame, HostLoadGame, JoinFriend, ChangeChoice };
 struct SocialRowKey {
   SocialRowKind kind = SocialRowKind::Section;
   SocialId id = 0;
@@ -54,4 +56,24 @@ std::optional<SocialCommand> SocialRowCommand(const SocialRow& row, const Social
 const char* SocialFriendState(FriendState state);
 // Only stable text keys leave this layer. Persona names are kept out of status/errors.
 const char* SocialStatusKey(const SocialModel& model);
+
+// C81: the Play Online Co-op pages under the main menu. Their rows come from the same model and row kinds as
+// the Social drawer (SocialRows), so the drawer and the pages never disagree about what can be done.
+enum class CoopPage { Hub, Host, HostNew, HostLoad, HostHow, Join, Lobby };
+struct CoopPageOptions {
+  bool has_saves = false;     // Host > Load game
+  bool choice_ready = false;  // Host > How: a chapter or save was picked first
+};
+std::vector<SocialRow> CoopPageRows(const SocialModel& model, CoopPage page, CoopPageOptions options = {});
+// Which page to show next frame: a lobby (created or joined) always shows the lobby page; a lobby page whose
+// lobby has gone (and is not being created or joined) goes back to the first page.
+CoopPage CoopPageFor(const SocialModel& model, CoopPage current);
+// The command for a page row, revalidated against the latest model (Accept, Join friend, Ready, Start...).
+// Rows the launcher handles itself (page moves, editors, Direct IP host/join) return nothing.
+std::optional<SocialCommand> CoopRowCommand(const SocialRow& row, const SocialModel& model, CoopPage page);
+// The lobby's plain status line: an English text key and the name that fills its {0} (empty when none).
+struct CoopStatus { const char* key = ""; std::string name; };
+CoopStatus CoopLobbyStatus(const SocialModel& model, SocialId invited = 0);
+// The Steam startup lobby (+connect_lobby): Steam lists it as an invite without an inviter.
+SocialId StartupInvite(const SocialModel& model);
 }  // namespace kk::coop

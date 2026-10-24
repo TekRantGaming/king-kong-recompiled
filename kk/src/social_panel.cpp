@@ -64,6 +64,25 @@ void SocialPanel::Update(bool enabled, SocialPage page, Input& in, ISocialServic
   }
   if (was && !state_.blocking()) in.ConsumeAll();
 }
+void SocialPanel::PageActivate(const SocialRow& row, ISocialService& service, bool ip_path, int direct_mode) {
+  ip_path_=ip_path; direct_mode_=direct_mode;
+  Activate(row,service);
+}
+void SocialPanel::PrepareDirect(int mode) {
+  if (mode==2 && direct_mode_!=2) direct_code_.clear();
+  if (mode==1 && !ValidJoinCode(direct_code_)) direct_code_=NewJoinCode();
+  direct_mode_=mode; ip_path_=true;
+}
+std::string SocialPanel::notice() const { return notice_until_>ImGui::GetTime() ? notice_ : std::string(); }
+bool SocialPanel::OpenPage(const SocialRow& row) {
+  const auto kind=row.key.kind;
+  if (!open_page_ || !row.enabled ||
+      (kind!=SocialRowKind::Create && kind!=SocialRowKind::DirectChooseHost && kind!=SocialRowKind::DirectChooseJoin)) return false;
+  state_.Update(true,SocialPage::Page,false,true,0);
+  open_page_(kind==SocialRowKind::DirectChooseJoin);
+  Cue(Sound::kSelect);
+  return true;
+}
 void SocialPanel::Activate(const SocialRow& row, ISocialService& service) {
   const auto rows=SocialRows(service.Snapshot(),direct_mode_,ip_path_);
   const auto current=std::find_if(rows.begin(),rows.end(),[&](const auto& r) { return r.key==row.key; });
@@ -238,7 +257,7 @@ void SocialPanel::Draw(ImDrawList* dl, ImVec2 o, ImVec2 size, const Metrics& m, 
       item.subtitle = row.detail.empty() ? "Friend" : row.detail;
       item.literal_subtitle = !row.detail.empty();
     }
-    item.on_activate = [this, row, &service] { Activate(row, service); };
+    item.on_activate = [this, row, &service] { if (!OpenPage(row)) Activate(row, service); };
     items.push_back(std::move(item));
   }
   const bool interactive = active && state_.open() && !just_opened_ && !editing();
@@ -259,7 +278,7 @@ void SocialPanel::Draw(ImDrawList* dl, ImVec2 o, ImVec2 size, const Metrics& m, 
   // Two compact lines keep five-language prompts inside the narrow drawer.
   std::vector<Prompt> prompts = {{Action::kAccept, "Select"}, {Action::kBack, "Close"}};
   const Action clicked = DrawPrompts(dl, glyphs, set, prompts, x + width - 24 * s, end.y - 31 * s, m, interactive);
-  if (clicked == Action::kAccept && list_.focus >= 0) Activate(rows[size_t(list_.focus)], service);
+  if (clicked == Action::kAccept && list_.focus >= 0 && !OpenPage(rows[size_t(list_.focus)])) Activate(rows[size_t(list_.focus)], service);
   if (clicked == Action::kBack) state_.Update(true, SocialPage::Page, false, true, 0);
   if (focus_ && focus_->kind == SocialRowKind::Friend && rows[size_t(list_.focus)].enabled) {
     if (DrawPrompts(dl, glyphs, set, {{Action::kDefault, "Invite"}}, x + width - 24 * s,

@@ -296,6 +296,8 @@ struct SteamRuntime::Impl
       FriendGameInfo_t game{};
       if (f.state == FriendState::Online && api.SteamAPI_ISteamFriends_GetFriendGamePlayed(friends, f.id, &game)) f.state = FriendState::InGame;
       f.in_our_game = Text(api.SteamAPI_ISteamFriends_GetFriendRichPresence(friends, f.id, kPresenceKey)) == kProductValue;
+      // C81: a friend whose game offers a lobby can be joined from Join a game (the same check as an invite).
+      if (f.in_our_game && !ParseLobbyConnect(Text(api.SteamAPI_ISteamFriends_GetFriendRichPresence(friends, f.id, "connect")), f.lobby)) f.lobby = 0;
       auto old = std::find_if(model.friends.begin(), model.friends.end(), [&](const auto& p) { return p.id == f.id; });
       if (old == model.friends.end()) api.SteamAPI_ISteamFriends_RequestFriendRichPresence(friends, f.id);
       const int avatar = api.SteamAPI_ISteamFriends_GetSmallFriendAvatar(friends, f.id);
@@ -548,7 +550,8 @@ struct SteamRuntime::Impl
         else { Error("Could not request lobby creation"); if (self_test) stop = true; }
         return;
       case SocialAction::Accept:
-        if (model.lobby || std::none_of(model.pending_invites.begin(), model.pending_invites.end(), [&](auto i) { return i.lobby == c.id; })) return;
+        if (model.lobby || (std::none_of(model.pending_invites.begin(), model.pending_invites.end(), [&](auto i) { return i.lobby == c.id; }) &&
+                            std::none_of(model.friends.begin(), model.friends.end(), [&](const auto& f) { return f.lobby == c.id; }))) return;
         if (!CSteamID(c.id).IsLobby() || !CSteamID(c.id).IsValid()) { Error("Invalid lobby invite"); return; }
         validating = c.id; operation_deadline = Now() + 20; model.last_error.clear();
         if (!api.SteamAPI_ISteamMatchmaking_RequestLobbyData(matchmaking, validating)) { validating = 0; Error("Could not inspect invited lobby"); }

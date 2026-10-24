@@ -72,7 +72,11 @@ void Social() {
   const auto lobby = host.Snapshot().lobby;
   Check(lobby && host.Snapshot().owner == 1 && host.Snapshot().members.size() == 1, "host is owner");
   Check(!host.Act({SocialAction::Start,0,false,host.Snapshot().choice}), "one player cannot start");
-  Check(!guest.Act({SocialAction::Accept, lobby}), "cannot accept unknown invite");
+  Check(!guest.Act({SocialAction::Accept, lobby + 999}), "cannot accept unknown invite");
+  // C81: a friend's open lobby is offered to join (Steam connect presence), like an invite.
+  { const auto offered = guest.Snapshot().friends;
+    Check(std::any_of(offered.begin(), offered.end(), [&](const auto& f) { return f.id == 1 && f.in_our_game && f.lobby == lobby; }),
+          "a friend hosting an open lobby offers it"); }
   Check(host.Act({SocialAction::Invite, 2}) && host.Act({SocialAction::Invite, 2}), "invite deduplicated");
   Check(guest.Snapshot().pending_invites.size() == 1, "one pending invite");
   Check(guest.Act({SocialAction::Decline, lobby}) && guest.Snapshot().pending_invites.empty(), "decline locally");

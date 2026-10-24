@@ -17,6 +17,7 @@
 #include "coop_handover.h"
 #include "coop_runtime.h"
 #include "handoff.h"
+#include "launcher_text.h"
 #include "ui_paint.h"
 
 REXCVAR_DECLARE(std::string, kk_coop_resume);
@@ -161,7 +162,9 @@ class ResumeDialog final : public rex::ui::ImGuiDialog {
     const std::string& name = file_.partner_name;
     if (machine_.Phase() != handover::ResumePhase::Failed) {
       const int dots = int(now * 2) % 4;
-      std::string line = (machine_.Connected() ? "Starting the chapter with " : "Connecting to ") + name + std::string(size_t(dots), '.');
+      // C81: in the player's language, as the launcher.
+      std::string line = text::F(machine_.Connected() ? "Starting the chapter with {0}" : "Connecting to {0}", {name}) +
+                         std::string(size_t(dots), '.');
       centered(line, vp->Size.y * .46f, IM_COL32(235, 235, 230, 255), size);
       if (!machine_.Connected()) {
         char left[64]; std::snprintf(left, sizeof(left), "%d s", std::max(0, int(machine_.Remaining(now) + .99)));
@@ -169,8 +172,8 @@ class ResumeDialog final : public rex::ui::ImGuiDialog {
       }
       return;
     }
-    centered("Couldn't reach " + name + ".", vp->Size.y * .40f, IM_COL32(240, 240, 235, 255), size);
-    centered(handover::FailureText(machine_.Failure()), vp->Size.y * .40f + size * 1.6f, IM_COL32(170, 170, 165, 255), size * .75f);
+    centered(text::F("Couldn't reach {0}.", {name}), vp->Size.y * .40f, IM_COL32(240, 240, 235, 255), size);
+    centered(text::T(handover::FailureText(machine_.Failure())), vp->Size.y * .40f + size * 1.6f, IM_COL32(170, 170, 165, 255), size * .75f);
     // Buttons: mouse, keyboard (Enter / Escape) and pad (A / B).
     const ImVec2 button(220 * scale, 44 * scale);
     const float y = vp->Size.y * .40f + size * 4.f;
@@ -185,9 +188,9 @@ class ResumeDialog final : public rex::ui::ImGuiDialog {
     if (ImGui::Begin("##coop-resume", nullptr, ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_AlwaysAutoResize |
                      ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoFocusOnAppearing)) {
       ImGui::SetWindowFontScale(scale);
-      if (ImGui::Button("Try again (A)", button)) TryAgain();
+      if (ImGui::Button(text::T("Try again (A)"), button)) TryAgain();
       ImGui::SameLine(0, 24 * scale);
-      if (ImGui::Button("Back to menu (B)", button)) BackToMenu();
+      if (ImGui::Button(text::T("Back to menu (B)"), button)) BackToMenu();
     }
     ImGui::End();
     ImGui::PopStyleColor(5);

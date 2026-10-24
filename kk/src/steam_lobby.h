@@ -33,6 +33,7 @@ struct SocialFriend {
   std::string name;
   FriendState state = FriendState::Offline;
   bool in_our_game = false;
+  SocialId lobby = 0;  // C81: the lobby their game offers to join (Steam connect presence), 0 when none
   uint32_t avatar_width = 0, avatar_height = 0;
   std::vector<uint8_t> avatar_rgba;
 };
