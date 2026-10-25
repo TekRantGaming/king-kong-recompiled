@@ -1,4 +1,4 @@
-// C71: semantic native breakable/door state only. Pickup families deliberately
+// Native breakable, door, static fire and bounded raft state. Pickup families
 // remain independent. All memory and native calls stay on the AI thread.
 #include "coop_objects_game.h"
 #include "coop_objects.h"
@@ -31,10 +31,13 @@ REX_EXTERN(__imp__sub_8271A6F8);
 REX_EXTERN(__imp__sub_82543478);
 REX_EXTERN(__imp__sub_82574D80);
 REX_EXTERN(__imp__sub_826F9DC0);
+REX_EXTERN(__imp__sub_826F9E70);
 REX_EXTERN(__imp__sub_82634428);
 REX_EXTERN(__imp__sub_825FAF58);
 REX_EXTERN(__imp__sub_8260F858);
 REX_EXTERN(__imp__sub_8260C988);
+REX_EXTERN(__imp__sub_825EF890);
+REX_EXTERN(__imp__sub_825E7348);
 REX_EXTERN(__imp__sub_827117E0);
 REX_EXTERN(__imp__sub_82711328);
 #if defined(KK_DEV_TOOLS)
@@ -74,6 +77,7 @@ struct Binding : objects::Binding {
   bool raft_ready=false,raft_driven=false;
   double next_route=0;
 #if defined(KK_DEV_TOOLS)
+  uint64_t raft_tick=0;
   uint32_t init_calls=0,wait_calls=0,loop_calls=0,update_calls=0,hold_calls=0,context_misses=0;
 #endif
 };
@@ -101,6 +105,7 @@ struct State {
   std::set<uint64_t> debug_sources;
   unsigned scan_pass=0,scan_rows=0;
   bool observed_change=false;
+  uint64_t raft_fixture=0;
   double scan_next=0;
   std::set<uint32_t> scan_seen;
 #endif
@@ -947,7 +952,7 @@ bool RaftRoute(PPCContext& ctx,uint8_t* b,Binding& o) {
     node=target->actor;
     if (node==start) { loop=true; break; }
   }
-  if (nodes.empty()) return false;
+  if (nodes.empty() || loop) return false; // Linear routes only; a loop needs an absolute lap counter.
   o.route={std::move(nodes),key,enemies::Mix(signature,uint64_t(seen.size())*2+loop)};
   return o.route.signature!=0;
 }
@@ -975,7 +980,11 @@ bool ReadRaft(PPCContext& ctx,uint8_t* b,Binding& o) {
 }
 bool ApplyRaft(PPCContext& ctx,uint8_t* b,Binding& o,const ObjectState& s) {
   if (!RaftRoute(ctx,b,o) || s.raft.route!=o.route.signature || s.raft.current>=o.route.nodes.size() ||
-      (s.raft.next!=255 && s.raft.next>=o.route.nodes.size())) return false;
+      s.raft.next!=(s.raft.current+1<o.route.nodes.size() ? s.raft.current+1 : 255)) return false;
+  const auto it=std::find(o.route.nodes.begin(),o.route.nodes.end(),Load32(b,o.vars+240));
+  if (it==o.route.nodes.end()) return false;
+  const auto previous=size_t(it-o.route.nodes.begin());
+  if (previous>s.raft.current) return false; // Native node parameters cannot be rolled backwards safely.
   const auto sp=ctx.r1.u32;
   if ((sp&15) || sp<0x40014000 || sp>=0xA0000000) return false;
   uint8_t scratch[16384]; const auto start=sp-sizeof(scratch); const PPCContext saved=ctx;
@@ -984,6 +993,17 @@ bool ApplyRaft(PPCContext& ctx,uint8_t* b,Binding& o,const ObjectState& s) {
   uint32_t values[7]; for (unsigned n=0;n<7;++n) values[n]=Load32(b,globals[n]);
   ctx.r1.u64=start+12288; std::memset(b+start+12288,0,4096); Store32(b,start+12288,sp);
   Store32(b,globals[3],o.ai); Store32(b,globals[4],o.ai); Store32(b,globals[5],o.actor); Store32(b,globals[6],o.actor);
+  // Reproduce each missed LOCAL node's movement parameters. Decompiled825EF890
+  // calls824FE3C0/82507B00, which update speed/effect/link metadata, not arbitrary
+  // peer callbacks. Skipping nodes loses persistent nonzero design values.
+  for (size_t n=previous+1;n<=s.raft.current;++n) {
+    Store32(b,o.vars+240,o.route.nodes[n]);
+    __imp__sub_825EF890(ctx,b);
+  }
+#if defined(KK_DEV_TOOLS)
+  if (previous<s.raft.current && Trace())
+    REXLOG_INFO("KK dev object raft native nodes: id={:016X} from={} to={} steps={}",o.source,previous,s.raft.current,s.raft.current-previous);
+#endif
   const auto p=ctx.r1.u32+256;
   for (unsigned n=0;n<9;++n) StoreF(b,p+16*(n/3)+4*(n%3),s.raft.pose[n]);
   ctx.r3.u64=o.actor; ctx.r4.u64=p; __imp__sub_827117E0(ctx,b);
@@ -1016,9 +1036,26 @@ void UpdateRafts(PPCContext& ctx,uint8_t* b) {
 }
 void RaftFollow(PPCContext& ctx,uint8_t* b) {
   auto* o=state.ready && Shared() ? Current(b,ObjectKind::Raft) : nullptr;
-  if (o && !state.host && o->raft_driven) { ctx.r3.u64=0; return; }
+#if defined(KK_DEV_TOOLS)
+  if (o) o->raft_tick=state.ai_tick;
+#endif
+  if (o && !state.host && o->raft_driven) {
+    // Preserve the native one-frame entry and pause/end transitions without
+    // independently integrating movement or dereferencing an end-of-path target.
+    if (Load32(b,o->vars)!=0) __imp__sub_8260C988(ctx,b);
+    else if (Load32(b,o->vars+376)) {
+      ctx.r3.u64=Load32(b,0x82CC8BF0); __imp__sub_826F9E70(ctx,b); ctx.r3.u64=5;
+    } else ctx.r3.u64=0;
+    return;
+  }
   __imp__sub_8260C988(ctx,b);
 }
+#if defined(KK_DEV_TOOLS)
+void RaftWait(PPCContext& ctx,uint8_t* b) {
+  if (auto* o=state.ready && Shared() ? Current(b,ObjectKind::Raft) : nullptr) o->raft_tick=state.ai_tick;
+  __imp__sub_825E7348(ctx,b);
+}
+#endif
 void DoorUpdate(PPCContext& ctx,uint8_t* b) {
   auto* o=state.ready && Shared() ? Current(b,ObjectKind::Door) : nullptr;
 #if defined(KK_DEV_TOOLS)
@@ -1116,6 +1153,18 @@ void ScanInventory(const uint8_t* b,uint32_t w) {
       REXLOG_INFO("KK dev object fire contract: role={} actor={:08X} supported={} mode={} repeat={} completion={:08X} timer={} spread={} total={}",
           v.host ? "host" : "guest",actor,FireContract(b,vars),Load32(b,vars+364),Load32(b,vars+372),
           Load32(b,vars+188),LoadF(b,vars+388),LoadF(b,vars+416),LoadF(b,vars+424));
+    if (kind==3 && vars && bytes>=3376) {
+      unsigned parts=0; bool terminated=false;
+      for (unsigned i=0;i<=32;++i) {
+        const auto part=Load32(b,vars+20+4*i);
+        if (!part) { terminated=true; break; }
+        if (i==32 || !PoseAddress(part,32)) break;
+        ++parts;
+      }
+      REXLOG_INFO("KK dev object ode contract: role={} actor={:08X} mode={} game-flag={}/{} removal={} parts={} terminated={} bodies={:08X}/{:08X} watches={:08X}/{:08X}/{:08X}/{:08X}",
+          v.host ? "host" : "guest",actor,Load32(b,vars),Load32(b,vars+4),Load32(b,vars+8),Load32(b,vars+2496),parts,terminated,
+          Load32(b,vars+2500),Load32(b,vars+2504),Load32(b,vars+1704),Load32(b,vars+1888),Load32(b,vars+2072),Load32(b,vars+2256));
+    }
   }
   REXLOG_INFO("KK dev object inventory totals: role={} level={} pass={} iob={} door={} ode={} tree={} bamboo={} rack={} fire={} raft={} ammo={} javelin={} checkpoint={} unknown={} bounded-rows={}",
       v.host ? "host" : "guest",v.world.level,state.scan_pass,counts[1],counts[2],counts[3],counts[4],counts[5],counts[6],counts[7],counts[8],counts[9],counts[10],counts[11],counts[0],state.scan_rows);
@@ -1232,14 +1281,56 @@ void Probes(PPCContext& ctx,uint8_t* b) {
       if (o.kind!=ObjectKind::Raft || !Valid(b,o) || Match(o.source,o.kind)!=&o ||
           !o.raft_ready || o.raft.next==255) continue;
       const auto p=NativePoint(ctx,b,o.actor);
-      if (!p || !kk::DevTeleportJack(ctx,b,Load32(b,0x82CCBF7C),{p->x,p->y,p->z+2},1,0)) continue;
+      const auto setting=std::getenv("KK_DEV_OBJECT_RAFT_BOARD");
+      const bool board=!setting || std::strcmp(setting,"0")!=0;
+      if (!p || (board && !kk::DevTeleportJack(ctx,b,Load32(b,0x82CCBF7C),{p->x,p->y,p->z+2},1,0))) continue;
+      const bool endpoint=std::getenv("KK_DEV_OBJECT_RAFT_END")!=nullptr;
+      if (state.host && endpoint) {
+        if (o.route.nodes.size()<2) continue;
+        const auto end=NativePoint(ctx,b,o.route.nodes.back()); if (!end) continue;
+        auto s=Sample(b,o); s.value=0;
+        s.raft.current=uint8_t(o.route.nodes.size()-2); s.raft.next=uint8_t(o.route.nodes.size()-1);
+        s.raft.pose[0]=end->x; s.raft.pose[1]=end->y; s.raft.pose[2]=end->z;
+        s.raft.pose[9]=s.raft.pose[10]=s.raft.pose[11]=0;
+        if (!ApplyRaft(ctx,b,o,s)) continue;
+      }
       if (state.host) Store32(b,o.vars+376,0); // Native resume input; no chosen pose/outcome.
+      if (state.host && !board) state.raft_fixture=o.source;
       raft.done=true;
-      REXLOG_INFO("KK dev object raft fixture: role={} id={:016X} boarded=({:.3f},{:.3f},{:.3f}) native-resume={}",
-          state.host ? "host" : "guest",o.source,p->x,p->y,p->z+2,state.host);
+      REXLOG_INFO("KK dev object raft fixture: role={} id={:016X} board={} endpoint={} target=({:.3f},{:.3f},{:.3f}) native-resume={}",
+          state.host ? "host" : "guest",o.source,board,endpoint,p->x,p->y,p->z+2,state.host);
       break;
     }
     if (!raft.done && t>raft.due+20) { raft.done=true; REXLOG_WARN("KK dev object raft fixture: no eligible initialized route with a next node"); }
+  }
+}
+void TickRaftFixture(PPCContext& ctx,uint8_t* b) {
+  if (!state.host || !state.raft_fixture) return;
+  for (auto& [actor,o] : state.bindings) {
+    if (o.source!=state.raft_fixture || o.kind!=ObjectKind::Raft || !Valid(b,o) ||
+        Match(o.source,o.kind)!=&o || !o.raft_ready || o.raft.next==255 || o.raft_tick==state.ai_tick) continue;
+    // Explicit developer activation only, for a dormant authored boat. Tick its
+    // own native wait/follow slot once; never invent its movement or rider refs.
+    const auto first=Load16(b,o.ai+80),last=Load16(b,o.ai+82);
+    if (first>last || last>4096 || last-first>64 || !PoseAddress(o.ai,(last+7)*4)) continue;
+    for (uint32_t slot=first;slot<=last;++slot) {
+      const auto block=Ptr(b,o.ai,(slot+6)*4,24); if (!block) continue;
+      const auto fn=Load32(b,block+20); if (fn!=0x825E7348 && fn!=0x8260C988) continue;
+      const auto sp=ctx.r1.u32;
+      if ((sp&15) || sp<0x40014000 || sp>=0xA0000000) return;
+      uint8_t scratch[16384]; const auto start=sp-sizeof(scratch); const PPCContext saved=ctx;
+      std::memcpy(scratch,b+start,sizeof(scratch));
+      constexpr uint32_t globals[]{0x82CCBF58,0x82CCBF5C,0x82CCBF60,0x82CCBF64,0x82CCBF68,0x82CCBF6C,0x82CCBF70};
+      uint32_t values[7]; for (unsigned n=0;n<7;++n) values[n]=Load32(b,globals[n]);
+      ctx.r1.u64=start+12288; std::memset(b+start+12288,0,4096); Store32(b,start+12288,sp);
+      Store32(b,globals[0],slot); Store32(b,globals[3],o.ai); Store32(b,globals[4],o.ai);
+      Store32(b,globals[5],o.actor); Store32(b,globals[6],o.actor);
+      ctx.r3.u64=block; ctx.r4.u64=o.ai+(slot+1)*4; ctx.r5.u64=0;
+      __imp__sub_8271CCB8(ctx,b);
+      for (unsigned n=0;n<7;++n) Store32(b,globals[n],values[n]);
+      std::memcpy(b+start,scratch,sizeof(scratch)); ctx=saved;
+      return;
+    }
   }
 }
 void ReloadProbe(uint8_t* b) {
@@ -1385,6 +1476,9 @@ void ObjectsAfterAi(PPCContext& ctx,uint8_t* b,uint32_t w) {
   ReplayBreakables(ctx,b);
   IdleDoors(ctx,b);
   ReplayFires(ctx,b);
+#if defined(KK_DEV_TOOLS)
+  TickRaftFixture(ctx,b);
+#endif
   UpdateRafts(ctx,b);
   const auto now=Now();
 #if defined(KK_DEV_TOOLS)
@@ -1508,3 +1602,6 @@ REX_HOOK_RAW(sub_826F9DC0) { kk::coop::DoorStop(ctx,base); }
 REX_HOOK_RAW(sub_825FAF58) { kk::coop::FireInit(ctx,base); }
 REX_HOOK_RAW(sub_8260F858) { kk::coop::FireBurn(ctx,base); }
 REX_HOOK_RAW(sub_8260C988) { kk::coop::RaftFollow(ctx,base); }
+#if defined(KK_DEV_TOOLS)
+REX_HOOK_RAW(sub_825E7348) { kk::coop::RaftWait(ctx,base); }
+#endif

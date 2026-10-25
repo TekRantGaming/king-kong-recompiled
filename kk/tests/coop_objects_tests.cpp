@@ -77,6 +77,8 @@ void Policies() {
   path[0x45000008]=2; path[0x46000018]=0x47001000;
   target=objects::RaftPathTarget(path_read,path_read,0x42000000,123);
   Check(target && target->actor==0x47000000,"raft uses native first target without flags");
+  target=objects::RaftPathTarget(path_read,path_read,0x42000000,0);
+  Check(target && target->key==123 && target->actor==0x47000000,"unspecified raft key resolves the checked first local group");
   path[0x46000010]=1;
   target=objects::RaftPathTarget(path_read,path_read,0x42000000,123);
   Check(target && target->actor==0x47001000,"raft follows the unique native flagged target");

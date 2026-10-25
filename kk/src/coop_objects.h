@@ -33,7 +33,8 @@ template<class Read> std::optional<PathTarget> FirstPathTarget(Read read,uint32_
   return PathTarget{key,target};
 }
 template<class Read,class Half> std::optional<PathTarget> RaftPathTarget(Read read,Half half,uint32_t actor,uint32_t key) {
-  if (!FirstPathTarget(read,actor,key)) return {};
+  const auto first=FirstPathTarget(read,actor,key); if (!first) return {};
+  key=first->key;
   const auto ext=read(actor+24),table=read(ext+24),groups=read(table),count=read(table+4);
   if (!PoseAddress(ext,42)) return {};
   uint32_t group=0;
