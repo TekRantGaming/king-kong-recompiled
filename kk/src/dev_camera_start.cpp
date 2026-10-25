@@ -7,8 +7,9 @@
 // eye, useful for animation evidence on slopes. It never moves either player.
 // KK_DEV_FACE_ENEMY=<seconds>[:<repeat seconds>] takes precedence and aims at
 // the nearest matched live enemy on the guest, including pitch at camera commit.
-// KK_DEV_FACE_POINT=seconds:repeat,x,y,z aims this same native camera at a
-// fixed world point for object geometry proofs. It takes precedence over both.
+// KK_DEV_FACE_POINT=seconds:repeat,x,y,z[/seconds:repeat,x,y,z...] aims this
+// same native camera at successive world points for object geometry proofs.
+// At most16 ordered points. It takes precedence over both.
 //
 // KK_DEV_CAMERA_START=<s> with KK_DEV_SAMPLE_DIR writes, for the first <s> seconds on the dev script
 // clock (from when the chapter's level has loaded; dev_tools.cpp DevSecondsSinceMenu):
@@ -33,6 +34,8 @@
 #include <cstdio>
 #include <cstdlib>
 #include <string>
+#include <sstream>
+#include <vector>
 
 #include <rex/hook.h>
 #include <rex/logging.h>
@@ -55,17 +58,26 @@ struct FacePartner {
   using Clock = std::chrono::steady_clock;
   bool enabled = false, loaded = false, done = false, enemy = false, logged = false, point_set = false;
   coop::ShotVector point{};
+  struct Point { double at,repeat; coop::ShotVector position; };
+  std::vector<Point> points;
+  size_t point_index=0;
   double first = 0, repeat = 0, next = 0;
   Clock::time_point load_time{};
 
   FacePartner() {
     if (const char* value = std::getenv("KK_DEV_FACE_POINT"); value && *value) {
-      char trailing=0;
-      enabled=std::sscanf(value,"%lf:%lf,%f,%f,%f%c",&first,&repeat,&point.x,&point.y,&point.z,&trailing)==5 &&
-          std::isfinite(first) && first>=0 && first<=3600 &&
-          std::isfinite(repeat) && repeat>0 && repeat<=3600;
-      for (const auto coordinate : {point.x,point.y,point.z})
-        enabled=enabled && std::isfinite(coordinate) && std::abs(coordinate)<=100000;
+      std::stringstream sequence(value); enabled=true;
+      for (std::string entry; std::getline(sequence,entry,'/');) {
+        Point p{}; char trailing=0;
+        bool valid=std::sscanf(entry.c_str(),"%lf:%lf,%f,%f,%f%c",&p.at,&p.repeat,&p.position.x,&p.position.y,&p.position.z,&trailing)==5 &&
+            std::isfinite(p.at) && p.at>=0 && p.at<=3600 && std::isfinite(p.repeat) && p.repeat>0 && p.repeat<=3600;
+        for (const auto coordinate : {p.position.x,p.position.y,p.position.z})
+          valid=valid && std::isfinite(coordinate) && std::abs(coordinate)<=100000;
+        if (!valid || points.size()>=16 || (!points.empty() && p.at<=points.back().at)) { enabled=false; break; }
+        points.push_back(p);
+      }
+      enabled=enabled && !points.empty();
+      if (enabled) { first=points.front().at; repeat=points.front().repeat; point=points.front().position; }
       point_set=enabled;
       if (!enabled) REXLOG_WARN("KK dev: invalid KK_DEV_FACE_POINT (expected seconds:positive-repeat,x,y,z)");
       return;
@@ -96,6 +108,8 @@ void DevFacePartnerLevelLoaded() {
   f.loaded = true;
   f.done = false;
   f.logged = false;
+  f.point_index=0;
+  if (!f.points.empty()) { f.first=f.points.front().at; f.repeat=f.points.front().repeat; f.point=f.points.front().position; }
   f.next = f.first;
   f.load_time = FacePartner::Clock::now();
 }
@@ -108,6 +122,10 @@ void DevFacePartnerCamera(PPCContext& ctx, uint8_t* base) {
   auto& f = Face();
   if (!f.enabled || !f.loaded || f.done) return;
   const double elapsed = std::chrono::duration<double>(FacePartner::Clock::now() - f.load_time).count();
+  if (f.point_set && f.point_index+1<f.points.size() && elapsed>=f.points[f.point_index+1].at) {
+    while (f.point_index+1<f.points.size() && elapsed>=f.points[f.point_index+1].at) ++f.point_index;
+    const auto& p=f.points[f.point_index]; f.first=p.at; f.point=p.position; f.repeat=p.repeat; f.next=p.at; f.done=false; f.logged=false;
+  }
   if (elapsed < f.next || play::StartLevelLoading() || photo::Active() || freecam::Active()) return;
   const auto snapshot = coop::PartnerBodySnapshot();
   if (!snapshot.enabled || !snapshot.fresh || snapshot.state != coop::SessionState::Connected ||
