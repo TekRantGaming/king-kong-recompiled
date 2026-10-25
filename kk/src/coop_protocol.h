@@ -56,7 +56,7 @@ struct ObjectState {
   ObjectKind kind=ObjectKind::Breakable;
   uint32_t value=0;
   float position=0, seconds=0;
-  RaftState raft; // Raft states append58 bytes; requests for rafts are not supported.
+  RaftState raft; // Appends58 bytes. Raft value2 withdraws with zero scalars/default raft data. No raft requests.
   auto operator<=>(const ObjectState&) const = default;
 };
 bool ValidObjectState(const ObjectState& object);

@@ -134,6 +134,7 @@ bool ValidObjectState(const ObjectState& s) {
       !std::isfinite(s.position) || !std::isfinite(s.seconds)) return false;
   if (s.kind!=ObjectKind::Raft && s.raft!=RaftState{}) return false;
   if (s.kind==ObjectKind::Raft) {
+    if (s.value==2) return s.position==0 && s.seconds==0 && s.raft==RaftState{};
     if (s.value>1 || s.position<0 || s.position>1000 || s.seconds<0 || s.seconds>86400 ||
         !s.raft.route || s.raft.current>=128 || (s.raft.next>=128 && s.raft.next!=255)) return false;
     const auto& p=s.raft.pose;

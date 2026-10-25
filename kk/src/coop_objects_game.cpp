@@ -106,6 +106,7 @@ struct State {
   unsigned scan_pass=0,scan_rows=0;
   bool observed_change=false;
   uint64_t raft_fixture=0;
+  double raft_withdraw_until=0;
   double scan_next=0;
   std::set<uint32_t> scan_seen;
 #endif
@@ -208,6 +209,7 @@ bool Shared() {
       v.world.generation==state.generation && v.world.level==state.level &&
       link.epoch==state.epoch && link.SessionConnected();
 }
+void WithdrawRaft(const uint8_t* b,Binding& o);
 void Census(const uint8_t* b) {
   const auto w=Load32(b,0x828E8388);
   if (!PoseAddress(w,44)) return;
@@ -231,7 +233,7 @@ void Census(const uint8_t* b) {
 #endif
     const auto it=state.bindings.find(actor);
     if (it!=state.bindings.end()) {
-      if (!Valid(b,it->second)) { state.retired.insert(actor); state.bindings.erase(it); }
+      if (!Valid(b,it->second)) { WithdrawRaft(b,it->second); state.retired.insert(actor); state.bindings.erase(it); }
       continue; // Component reuse never acquires an old authored identity.
     }
     if (state.retired.contains(actor) || Now()>state.census_until || state.bindings.size()>=objects::kCensus) continue;
@@ -260,10 +262,10 @@ void Census(const uint8_t* b) {
   }
   // Keep terminal breakable bindings as tombstones while still registered.
   // Their final cumulative state is resent, including to a privately reloaded guest.
-  std::erase_if(state.bindings,[&](const auto& entry){
-    if (members.contains(entry.first)) return false;
-    state.retired.insert(entry.first); return true;
-  });
+  for (auto it=state.bindings.begin();it!=state.bindings.end();) {
+    if (members.contains(it->first)) { ++it; continue; }
+    WithdrawRaft(b,it->second); state.retired.insert(it->first); it=state.bindings.erase(it);
+  }
 #if defined(KK_DEV_TOOLS)
   std::erase_if(state.pickups,[&](const auto& entry){ return !members.contains(entry.first); });
 #endif
@@ -287,7 +289,8 @@ ObjectState Sample(const uint8_t* b,const Binding& o) {
     if (s.value==2) s.seconds=0;
   }
   else if (o.kind==ObjectKind::Raft) {
-    s.value=o.raft_ready ? Load32(b,o.vars+376) : UINT32_MAX;
+    if (!o.raft_ready) { s.value=o.sent ? 2 : UINT32_MAX; return s; }
+    s.value=Load32(b,o.vars+376);
     s.position=LoadF(b,o.vars+420); s.seconds=LoadF(b,o.vars+4); s.raft=o.raft;
   }
   else {
@@ -305,10 +308,16 @@ void Observe(const uint8_t* b,Binding& o) {
   if (!state.outcomes.contains(s.source) && state.outcomes.size()>=objects::kCensus) { ++state.rejected; return; }
   o.last=s; o.sent=true; s.number=++state.number;
   state.pending[s.source]=state.outcomes[s.source]=s;
+  if (s.kind==ObjectKind::Raft && s.value==2 && Trace())
+    REXLOG_INFO("KK dev object raft authority withdrawn: role=host id={:016X} generation={}",s.source,state.generation);
 #if defined(KK_DEV_TOOLS)
   if (state.debug_sources.size()<8 && (s.kind==ObjectKind::Breakable ? s.value>0 : s.position>0 || (s.value&255)))
     state.debug_sources.insert(s.source);
 #endif
+}
+void WithdrawRaft(const uint8_t* b,Binding& o) {
+  if (!state.host || o.kind!=ObjectKind::Raft || !o.sent) return;
+  o.raft_ready=false; Observe(b,o); // Sample emits canonical withdrawal without reading retired components.
 }
 void Flush() {
   for (unsigned n=0;n<16 && !state.outgoing.empty();++n) {
@@ -976,7 +985,8 @@ bool ReadRaft(PPCContext& ctx,uint8_t* b,Binding& o) {
   o.raft.pose={position->x,position->y,position->z,f.x,f.y,f.z,un.x/ul,un.y/ul,un.z/ul,
       LoadF(b,o.vars+1296),LoadF(b,o.vars+1300),LoadF(b,o.vars+1304)};
   o.raft_ready=true;
-  return ValidObjectState(Sample(b,o));
+  if (!ValidObjectState(Sample(b,o))) { o.raft_ready=false; return false; }
+  return true;
 }
 bool ApplyRaft(PPCContext& ctx,uint8_t* b,Binding& o,const ObjectState& s) {
   if (!RaftRoute(ctx,b,o) || s.raft.route!=o.route.signature || s.raft.current>=o.route.nodes.size() ||
@@ -985,6 +995,7 @@ bool ApplyRaft(PPCContext& ctx,uint8_t* b,Binding& o,const ObjectState& s) {
   if (it==o.route.nodes.end()) return false;
   const auto previous=size_t(it-o.route.nodes.begin());
   if (previous>s.raft.current) return false; // Native node parameters cannot be rolled backwards safely.
+  const bool was_driven=o.raft_driven;
   const auto sp=ctx.r1.u32;
   if ((sp&15) || sp<0x40014000 || sp>=0xA0000000) return false;
   uint8_t scratch[16384]; const auto start=sp-sizeof(scratch); const PPCContext saved=ctx;
@@ -1022,14 +1033,26 @@ bool ApplyRaft(PPCContext& ctx,uint8_t* b,Binding& o,const ObjectState& s) {
     state.observed_change=true;
 #endif
   o.raft=s.raft; o.raft_ready=o.raft_driven=true;
+  if (!was_driven && Trace())
+    REXLOG_INFO("KK dev object raft authority bound: role={} id={:016X} route={:016X} current={}/{}",state.host ? "host" : "guest",o.source,s.raft.route,s.raft.current,s.raft.next);
   return true;
 }
 void UpdateRafts(PPCContext& ctx,uint8_t* b) {
   for (auto& [actor,o] : state.bindings) {
     if (o.kind!=ObjectKind::Raft || !Valid(b,o) || Match(o.source,o.kind)!=&o) continue;
-    if (state.host) { o.raft_ready=false; ReadRaft(ctx,b,o); } // Regular10Hz sample publishes the pose.
+    if (state.host) {
+      o.raft_ready=false;
+#if defined(KK_DEV_TOOLS)
+      if (o.source==state.raft_fixture && Now()<state.raft_withdraw_until) continue;
+#endif
+      ReadRaft(ctx,b,o); // Regular10Hz sample publishes the pose.
+    }
     else {
       const auto* s=state.replica.Find(o.kind,o.source);
+      if (s && s->value==2) {
+        if (o.raft_driven && Trace()) REXLOG_INFO("KK dev object raft authority withdrawn: role=guest id={:016X} generation={}",o.source,state.generation);
+        o.raft_ready=o.raft_driven=false; continue;
+      }
       if (s && !ApplyRaft(ctx,b,o,*s)) o.raft_driven=false;
     }
   }
@@ -1047,6 +1070,20 @@ void RaftFollow(PPCContext& ctx,uint8_t* b) {
       ctx.r3.u64=Load32(b,0x82CC8BF0); __imp__sub_826F9E70(ctx,b); ctx.r3.u64=5;
     } else ctx.r3.u64=0;
     return;
+  }
+  if (o && !state.host && RaftRoute(ctx,b,*o)) {
+    const auto* s=state.replica.Find(o->kind,o->source);
+    if (!s || (s->value!=2 && s->raft.route==o->route.signature)) {
+      // Wait for the first exact pose, or let authority catch a local node that
+      // was already ahead. Never race native integration against its snapshot.
+      if (Load32(b,o->vars)!=0) __imp__sub_8260C988(ctx,b);
+      else ctx.r3.u64=0;
+      return;
+    }
+  }
+  if (!state.ready && REXCVAR_GET(kk_coop_enabled) && SessionInProcess()) {
+    const auto v=SessionFlowSnapshot();
+    if (v.active && !v.host && v.policy==ChapterPolicy::Together) { ctx.r3.u64=0; return; }
   }
   __imp__sub_8260C988(ctx,b);
 }
@@ -1294,7 +1331,7 @@ void Probes(PPCContext& ctx,uint8_t* b) {
         s.raft.pose[9]=s.raft.pose[10]=s.raft.pose[11]=0;
         if (!ApplyRaft(ctx,b,o,s)) continue;
       }
-      if (state.host) Store32(b,o.vars+376,0); // Native resume input; no chosen pose/outcome.
+      if (state.host) Store32(b,o.vars+376,0); // Original Follow owns arrival and stop.
       if (state.host && !board) state.raft_fixture=o.source;
       raft.done=true;
       REXLOG_INFO("KK dev object raft fixture: role={} id={:016X} board={} endpoint={} target=({:.3f},{:.3f},{:.3f}) native-resume={}",
@@ -1302,6 +1339,11 @@ void Probes(PPCContext& ctx,uint8_t* b) {
       break;
     }
     if (!raft.done && t>raft.due+20) { raft.done=true; REXLOG_WARN("KK dev object raft fixture: no eligible initialized route with a next node"); }
+  }
+  static Probe withdraw("KK_DEV_OBJECT_RAFT_WITHDRAW");
+  if (state.host && state.raft_fixture && !withdraw.done && withdraw.due>=0 && t>=withdraw.due) {
+    withdraw.done=true; state.raft_withdraw_until=Now()+3;
+    REXLOG_INFO("KK dev object raft withdrawal fixture: id={:016X} unsupported-for-seconds=3",state.raft_fixture);
   }
 }
 void TickRaftFixture(PPCContext& ctx,uint8_t* b) {

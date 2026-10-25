@@ -53,6 +53,11 @@ void Codec() {
   raft.raft.pose[8]=0; Check(!ValidObjectState(raft),"degenerate raft orientation refused"); raft.raft.pose[8]=1;
   raft.raft.pose[6]=1; Check(!ValidObjectState(raft),"nonorthogonal raft orientation refused"); raft.raft.pose[6]=0;
   raft.raft.pose[9]=1001; Check(!ValidObjectState(raft),"raft velocities bounded");
+  raft=Packet(MessageType::ObjectState,ObjectKind::Raft).object; raft.value=2;
+  Check(ValidObjectState(raft) && !ValidObjectRequest(raft),"host may withdraw a no longer supported route");
+  auto withdrawal=Packet(); withdrawal.object=raft; Message decoded;
+  Check(Encode(withdrawal,bytes) && Decode(bytes,decoded) && decoded.object==raft,"route withdrawal survives the complete object codec");
+  raft.raft.route=1; Check(!ValidObjectState(raft),"raft withdrawal cannot smuggle a stale pose");
 }
 void Policies() {
   Check(objects::StaticFireParameters(0,0,0,0,60),"dormant fire layout admits deferred local path setup");
@@ -244,6 +249,22 @@ void Network() {
   Check(gm.Submit(raw),"guest raw hit queued"); gm.Exchange(guest); guest.Tick(.23); host.Tick(.23); hm.Exchange(host);
   auto hits=hm.Take();
   Check(hits.size()==1 && hits[0].object==raw.object,"raw classification and magnitude survive real mailboxes and wire");
+  auto raft=Packet(MessageType::ObjectState,ObjectKind::Raft);
+  raft.object.raft.route=11; raft.object.raft.pose[3]=raft.object.raft.pose[8]=1;
+  const auto transfer=[&](const Message& state,double t) {
+    Check(hm.Submit(state),"raft authority control queued"); hm.Exchange(host);
+    host.Tick(t); guest.Tick(t); gm.Exchange(guest); const auto arrived=gm.Take();
+    Check(arrived.size()==1 && arrived[0].object==state.object,"raft pose or withdrawal reaches the real guest mailbox");
+    return arrived[0].object;
+  };
+  objects::Replica raft_replica;
+  Check(raft_replica.Observe(transfer(raft,.24)),"first raft pose retained for local binding");
+  auto withdrawal=raft; withdrawal.object.value=2; withdrawal.object.raft={}; ++withdrawal.object.number;
+  Check(raft_replica.Observe(transfer(withdrawal,.25)) && raft_replica.Find(ObjectKind::Raft,raft.object.source)->value==2,
+      "route withdrawal replaces a retained moving pose");
+  raft.object.number=3; raft.object.raft.route=12; raft.object.raft.pose[0]=37;
+  Check(raft_replica.Observe(transfer(raft,.26)) && raft_replica.Find(ObjectKind::Raft,raft.object.source)->raft.route==12,
+      "a new supported route replaces withdrawn authority");
   Check(!guest.QueueObjects(Packet()),"guest cannot author outcomes");
   Check(!host.QueueObjects(Packet(MessageType::ObjectRequest)),"host cannot impersonate guest intent");
   auto old=Packet(); old.epoch=18; Check(!host.QueueObjects(old),"stale epoch refused");
