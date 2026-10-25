@@ -134,6 +134,10 @@ bool ValidObjectState(const ObjectState& s) {
       !std::isfinite(s.position) || !std::isfinite(s.seconds)) return false;
   if (s.kind==ObjectKind::Breakable) return s.value<=100000 && s.position>=0 && s.position<=5 &&
       std::floor(s.position)==s.position && s.seconds==0;
+  if (s.kind==ObjectKind::Fire) return s.value<=2 && s.position>=0 && s.position<=140 &&
+      ((s.value==0 && s.position==0 && s.seconds==0) ||
+       (s.value==1 && (s.seconds==-1 || (s.seconds>0 && s.seconds<=3600))) ||
+       (s.value==2 && s.seconds==0));
   return s.kind==ObjectKind::Door && s.value<=511 && s.position>=0 && s.position<=1 &&
       s.seconds>=0 && s.seconds<=3600;
 }
@@ -142,6 +146,7 @@ bool ValidObjectRequest(const ObjectState& s) {
       !std::isfinite(s.position) || !std::isfinite(s.seconds)) return false;
   if (s.kind==ObjectKind::Breakable) return !(s.value&~kObjectHitFlags) && s.position>=0 &&
       s.position<=100000 && std::floor(s.position)==s.position && s.seconds>=0 && s.seconds<=2;
+  if (s.kind==ObjectKind::Fire) return s.value==1 && s.position==0 && s.seconds==0;
   return s.kind==ObjectKind::Door && s.value<8 && s.position==0 &&
       (s.seconds==0 || s.seconds==1 || s.seconds==2);
 }

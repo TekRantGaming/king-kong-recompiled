@@ -28,7 +28,7 @@ enum class MessageType : uint16_t {
   StartPlan = 33, StartPlanAck = 34, ObjectState = 35, ObjectRequest = 36
 };
 
-enum class ObjectKind : uint8_t { Breakable=1, Door=2 };
+enum class ObjectKind : uint8_t { Breakable=1, Door=2, Fire=3 };
 constexpr uint32_t kDoorScheduled=0x100;
 constexpr uint32_t kObjectHitFlags=0x00FFFFFF;
 constexpr size_t kObjectQueue=256,kObjectCensus=2048;
@@ -40,6 +40,9 @@ constexpr size_t kObjectQueue=256,kObjectCensus=2048;
 // Breakable state position=weak-hit counter (0..5). Breakable requests carry
 // raw native hit flags in value, integer magnitude in position, lifetime in seconds.
 // Door requests use value=slot; seconds=0 installs, 1 holds, 2 releases.
+// Static native fire: value=0 waiting, 1 burning, 2 extinguished;
+// position=absolute spread distance, seconds=remaining lifetime (-1 forever).
+// Its only guest request is value=1 with both floats zero, after native ignition.
 struct ObjectState {
   uint32_t generation=0, level=0, number=0;
   uint64_t source=0;

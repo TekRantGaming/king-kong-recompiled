@@ -32,6 +32,8 @@ REX_EXTERN(__imp__sub_82543478);
 REX_EXTERN(__imp__sub_82574D80);
 REX_EXTERN(__imp__sub_826F9DC0);
 REX_EXTERN(__imp__sub_82634428);
+REX_EXTERN(__imp__sub_825FAF58);
+REX_EXTERN(__imp__sub_8260F858);
 #if defined(KK_DEV_TOOLS)
 namespace kk {
 double DevSecondsSinceMenu();
@@ -60,6 +62,10 @@ struct Binding : objects::Binding {
   float driven_position=-1;
   ObjectState last;
   bool sent=false,lever_logged=false;
+  bool fire_request=false;
+  bool fire_path_refused=false;
+  double next_ignite=0;
+  uint64_t fire_tick=0;
 #if defined(KK_DEV_TOOLS)
   uint32_t init_calls=0,wait_calls=0,loop_calls=0,update_calls=0,hold_calls=0,context_misses=0;
 #endif
@@ -117,6 +123,20 @@ uint32_t Ptr(const uint8_t* b,uint32_t p,uint32_t offset,uint32_t bytes) {
   if (!PoseAddress(p,offset+4)) return 0;
   const auto q=Load32(b,p+offset); return PoseAddress(q,bytes) ? q : 0;
 }
+std::optional<ShotVector> NativePoint(PPCContext& ctx,uint8_t* b,uint32_t actor) {
+  const auto sp=ctx.r1.u32;
+  if (!PoseAddress(actor,32) || !Ptr(b,actor,12,64) || (sp&15) || sp<0x40014000 || sp>=0xA0000000) return {};
+  uint8_t scratch[16384]; const auto start=sp-sizeof(scratch); const PPCContext saved=ctx;
+  std::memcpy(scratch,b+start,sizeof(scratch));
+  ctx.r1.u64=start+12288; std::memset(b+start+12288,0,4096); Store32(b,start+12288,sp);
+  const auto out=ctx.r1.u32+256;
+  ctx.r3.u64=actor; ctx.r4.u64=out; __imp__sub_8270FCE0(ctx,b);
+  const ShotVector point{LoadF(b,out),LoadF(b,out+4),LoadF(b,out+8)};
+  std::memcpy(b+start,scratch,sizeof(scratch)); ctx=saved;
+  if (!std::isfinite(point.x) || !std::isfinite(point.y) || !std::isfinite(point.z) ||
+      std::abs(point.x)>100000 || std::abs(point.y)>100000 || std::abs(point.z)>100000) return {};
+  return point;
+}
 bool Track(const uint8_t* b,uint32_t ai,uint32_t fn) {
   if (!PoseAddress(ai,88)) return false;
   const auto first=Load16(b,ai+80),last=Load16(b,ai+82);
@@ -130,16 +150,24 @@ bool Track(const uint8_t* b,uint32_t ai,uint32_t fn) {
 ObjectKind Family(const uint8_t* b,uint32_t ai) {
   if (Track(b,ai,0x82507798) || Track(b,ai,0x82516128) || Track(b,ai,0x82515CF0)) return ObjectKind::Breakable;
   if (Track(b,ai,0x82551ED8) || Track(b,ai,0x82574D80) || Track(b,ai,0x8256C3F8) || Track(b,ai,0x82543478)) return ObjectKind::Door;
+  if (Track(b,ai,0x825FAF58) || Track(b,ai,0x8260F858)) return ObjectKind::Fire;
   return ObjectKind(0);
 }
 bool DoorScheduled(const uint8_t* b,uint32_t ai) {
   return Track(b,ai,0x8256C3F8) || Track(b,ai,0x82543478) || Track(b,ai,0x82574D80);
 }
 uint32_t Vars(const uint8_t* b,uint32_t ai,ObjectKind kind) {
-  const uint32_t needed=kind==ObjectKind::Breakable ? 580 : 1340;
+  const uint32_t needed=kind==ObjectKind::Breakable ? 580 : kind==ObjectKind::Fire ? 884 : 1340;
   const auto definition=Ptr(b,Ptr(b,ai,0,4),0,8);
   if (!definition || Load32(b,definition+4)<needed || Load32(b,definition+4)>1024*1024) return 0;
   return Ptr(b,ai,64,needed);
+}
+bool FireContract(const uint8_t* b,uint32_t vars) {
+  // Decompiled825FAF58/8260F858: static mode0 paths only. The authored
+  // completion callback is deliberately excluded, as are moving/restarted paths.
+  // The native effect table has100 entries, with one section per1.4 units.
+  const float total=LoadF(b,vars+424),timer=LoadF(b,vars+388);
+  return objects::StaticFireParameters(Load32(b,vars+364),Load32(b,vars+372),Load32(b,vars+188),total,timer);
 }
 bool Components(const uint8_t* b,const Binding& o) {
   return o.actor!=Load32(b,0x82CCBF7C) && Ptr(b,Ptr(b,o.actor,24,8),4,88)==o.ai &&
@@ -197,10 +225,12 @@ void Census(const uint8_t* b) {
     const auto kind=Family(b,ai);
     if (!matrix || uint8_t(kind)==0) continue;
     const auto vars=Vars(b,ai,kind); if (!vars) continue;
+    if (kind==ObjectKind::Fire && !FireContract(b,vars)) continue;
     Binding o; o.actor=actor; o.ai=ai; o.vars=vars; o.matrix=matrix; o.kind=kind;
     o.x=LoadF(b,matrix+48); o.y=LoadF(b,matrix+52); o.z=LoadF(b,matrix+56);
     const auto asset=state.file_keys.find(actor);
-    o.source=asset==state.file_keys.end() ? objects::Source(kind,o.x,o.y,o.z,uint8_t(kind)) : objects::AssetSource(kind,asset->second);
+    const uint64_t shape=uint8_t(kind);
+    o.source=asset==state.file_keys.end() ? objects::Source(kind,o.x,o.y,o.z,shape) : objects::AssetSource(kind,asset->second);
     if (o.source) {
       state.identities.Record(o);
       state.bindings.emplace(actor,o);
@@ -236,6 +266,12 @@ uint32_t Lever(const uint8_t* b,const Binding& o,unsigned slot) {
 ObjectState Sample(const uint8_t* b,const Binding& o) {
   ObjectState s{state.generation,state.level,1,o.source,o.kind};
   if (o.kind==ObjectKind::Breakable) { s.value=Load32(b,o.vars+552); s.position=float(Load32(b,o.vars+560)); }
+  else if (o.kind==ObjectKind::Fire) {
+    if (Track(b,o.ai,0x825FAF58)) return s;
+    s.position=LoadF(b,o.vars+416); s.seconds=LoadF(b,o.vars+388);
+    s.value=(s.seconds==0 || (Load32(b,o.actor+4)&0x200000)) ? 2 : 1;
+    if (s.value==2) s.seconds=0;
+  }
   else {
     for (unsigned i=0;i<8;++i) if (const auto ext=Lever(b,o,i)) {
       if (Load16(b,ext+40)&1) s.value|=1u<<i;
@@ -370,6 +406,10 @@ void Receive(const uint8_t* b) {
     if (r.kind==ObjectKind::Breakable) {
       if (o->pending_hits.size()>=16) { ++state.rejected; continue; }
       o->pending_hits.push_back({r,Now()+.5});
+    }
+    else if (r.kind==ObjectKind::Fire) {
+      if (!FireContract(b,o->vars) || Sample(b,*o).value!=0) { ++state.rejected; continue; }
+      o->fire_request=true;
     }
     else if (r.seconds!=0) {
       // Installed lever holds never tag a host marker or change host Jack.
@@ -739,6 +779,140 @@ void BreakableInit(PPCContext& ctx,uint8_t* b) {
     }
   }
 }
+bool GuestFireScope() {
+  if (!REXCVAR_GET(kk_coop_enabled) || !SessionInProcess()) return false;
+  const auto v=SessionFlowSnapshot();
+  return v.active && !v.host && v.policy==ChapterPolicy::Together;
+}
+bool PrepareFirePath(PPCContext& ctx,uint8_t* b,const Binding& o) {
+  //825FAF58 selects the first authored target group;825F88F8 follows that
+  // SAME key on each local node. Preflight the whole bounded chain because
+  //8240C5B8 otherwise reads group[count] when a key is absent.
+  const auto read=[&](uint32_t a){ return Load32(b,a); };
+  const auto first=objects::FirstPathTarget(read,o.actor);
+  if (!first) return false;
+  const auto key=first->key;
+  auto point=NativePoint(ctx,b,o.actor); if (!point) return false;
+  std::set<uint32_t> seen{o.actor}; uint32_t actor=o.actor; float total=0;
+  for (unsigned n=0;n<100;++n) {
+    const auto target_entry=objects::FirstPathTarget(read,actor,key);
+    if (!target_entry) return false;
+    const auto next=target_entry->actor;
+    if (!next) {
+      if (n==0) return false; // Init unconditionally reads its first target.
+      break;
+    }
+    const auto target=NativePoint(ctx,b,next); if (!target) return false;
+    const float distance=std::hypot(target->x-point->x,target->y-point->y,target->z-point->z);
+    if (!std::isfinite(distance) || total+distance>138.6f) return false;
+    total+=distance;
+    if (next==o.actor) break;
+    if (!seen.insert(next).second || n==99) return false;
+    actor=next; point=target;
+  }
+  const auto authored=LoadF(b,o.vars+424);
+  // Zero extent is a legitimate native point fire, observed in level301.
+  // Keep the authored extent even when it covers only part of the path.
+  return total+.1f>=authored;
+}
+void RequestIgnition(const uint8_t* b,Binding& o) {
+  if (state.host || Now()<o.next_ignite) return;
+  const auto m=Ptr(b,Load32(b,0x82CCBF7C),12,64);
+  const auto condition=LocalPlayerCondition(b);
+  if (!m || !condition || *condition==PlayerCondition::Dead || observer::InCutscene(b) ||
+      std::hypot(LoadF(b,m+48)-o.x,LoadF(b,m+52)-o.y,LoadF(b,m+56)-o.z)>6) return;
+  if (Request(o,1)) o.next_ignite=Now()+.5;
+}
+void FireInit(PPCContext& ctx,uint8_t* b) {
+  auto* o=state.ready && Shared() ? Current(b,ObjectKind::Fire) : nullptr;
+  const auto* s=o && !state.host ? state.replica.Find(o->kind,o->source) : nullptr;
+  const bool asked=o && FireContract(b,o->vars) && (state.host ? o->fire_request : s && s->value>0);
+  if (o) o->fire_tick=state.ai_tick;
+  // Native Init keeps its own path references, effect table and checkpoint bit.
+  // Only a host outcome or a bounded native guest ignition bypasses its LOCAL
+  // predicate. No predicate or completion callback address crosses the wire.
+  __imp__sub_825FAF58(ctx,b);
+  if (!o || !Components(b,*o)) return;
+  // Let a normal native initializer finish first, including legitimate point
+  // fires. Only a refused local predicate needs the stricter chain preflight.
+  if (ctx.r3.u32==4 && asked) {
+    if (PrepareFirePath(ctx,b,*o)) {
+      const auto authored=Load32(b,o->vars);
+      Store32(b,o->vars,0); __imp__sub_825FAF58(ctx,b); Store32(b,o->vars,authored);
+    } else {
+      o->fire_request=false;
+      if (!o->fire_path_refused) {
+        o->fire_path_refused=true; ++state.rejected;
+        if (Trace()) REXLOG_WARN("KK dev object fire path: refused incomplete local chain id={:016X}",o->source);
+      }
+    }
+  }
+  const auto value=Sample(b,*o);
+  if (state.host) { if (value.value) o->fire_request=false; Observe(b,*o); }
+  else if (value.value && (!s || s->value==0)) RequestIgnition(b,*o);
+}
+void FireBurn(PPCContext& ctx,uint8_t* b) {
+  auto* o=state.ready && Shared() ? Current(b,ObjectKind::Fire) : nullptr;
+  // A native guest loader may initialize a path before the load barrier and
+  // stable census exist. Keep effects frozen until an exact authority binds.
+  if (!o) {
+    const auto vars=Vars(b,Load32(b,0x82CCBF64),ObjectKind::Fire);
+    if (GuestFireScope() && vars && FireContract(b,vars)) { ctx.r3.u64=0; return; }
+    __imp__sub_8260F858(ctx,b); return;
+  }
+  o->fire_tick=state.ai_tick;
+  if (state.host) {
+    __imp__sub_8260F858(ctx,b);
+    if (Components(b,*o)) Observe(b,*o);
+    return;
+  }
+  const auto* s=state.replica.Find(o->kind,o->source);
+  if (!s || !s->value) { RequestIgnition(b,*o); ctx.r3.u64=0; return; }
+  if (!FireContract(b,o->vars) || s->position>LoadF(b,o->vars+424)+.001f) { ctx.r3.u64=0; return; }
+  const float speed=LoadF(b,o->vars+380),dt=LoadF(b,0x82C636E0);
+  if (!std::isfinite(dt) || dt<=0 || dt>.1f) { ctx.r3.u64=0; return; }
+  StoreF(b,o->vars+416,s->position);
+  StoreF(b,o->vars+388,s->seconds>0 ? s->seconds+dt : s->seconds);
+  StoreF(b,o->vars+380,0); // Native walker creates only the host's reached sections.
+  __imp__sub_8260F858(ctx,b); // Includes native effect/sound cleanup and destruction.
+  if (Components(b,*o)) {
+    StoreF(b,o->vars+380,speed);
+    StoreF(b,o->vars+416,s->position); StoreF(b,o->vars+388,s->seconds);
+#if defined(KK_DEV_TOOLS)
+    state.observed_change=true;
+#endif
+  }
+}
+void ReplayFires(PPCContext& ctx,uint8_t* b) {
+  for (auto& [actor,o] : state.bindings) {
+    if (o.kind!=ObjectKind::Fire || !Valid(b,o) || Match(o.source,o.kind)!=&o ||
+        !FireContract(b,o.vars) || o.fire_tick==state.ai_tick) continue;
+    const auto* s=state.host ? nullptr : state.replica.Find(o.kind,o.source);
+    if (state.host ? !o.fire_request : !s || !s->value) continue;
+    // Use this object's own native state word and dispatcher, as for obstacle
+    // replay. Refuse competing fire consumers instead of guessing a slot.
+    const auto first=Load16(b,o.ai+80),last=Load16(b,o.ai+82);
+    if (first>last || last>=5) continue;
+    uint32_t block=0,slot=0; unsigned count=0;
+    for (unsigned n=first;n<=last;++n) {
+      const auto p=Ptr(b,o.ai,(n+6)*4,24);
+      if (p && (Load32(b,p+20)==0x825FAF58 || Load32(b,p+20)==0x8260F858)) { block=p; slot=n; ++count; }
+    }
+    const auto sp=ctx.r1.u32;
+    if (count!=1 || (sp&15) || sp<0x40014000 || sp>=0xA0000000) continue;
+    uint8_t scratch[16384]; const auto start=sp-sizeof(scratch); const PPCContext saved=ctx;
+    std::memcpy(scratch,b+start,sizeof(scratch));
+    constexpr uint32_t globals[]{0x82CCBF58,0x82CCBF5C,0x82CCBF60,0x82CCBF64,0x82CCBF68,0x82CCBF6C,0x82CCBF70};
+    uint32_t values[7]; for (unsigned n=0;n<7;++n) values[n]=Load32(b,globals[n]);
+    ctx.r1.u64=start+12288; std::memset(b+start+12288,0,4096); Store32(b,start+12288,sp);
+    Store32(b,globals[0],slot); Store32(b,globals[3],o.ai); Store32(b,globals[4],o.ai);
+    Store32(b,globals[5],o.actor); Store32(b,globals[6],o.actor);
+    ctx.r3.u64=block; ctx.r4.u64=o.ai+(slot+1)*4; ctx.r5.u64=0;
+    __imp__sub_8271CCB8(ctx,b);
+    for (unsigned n=0;n<7;++n) Store32(b,globals[n],values[n]);
+    std::memcpy(b+start,scratch,sizeof(scratch)); ctx=saved;
+  }
+}
 void DoorUpdate(PPCContext& ctx,uint8_t* b) {
   auto* o=state.ready && Shared() ? Current(b,ObjectKind::Door) : nullptr;
 #if defined(KK_DEV_TOOLS)
@@ -832,6 +1006,10 @@ void ScanInventory(const uint8_t* b,uint32_t w) {
     REXLOG_INFO("KK dev object inventory: role={} level={} family={} fn={:08X} actor={:08X} vars={:08X} bytes={} pos=({:.3f},{:.3f},{:.3f}) word+{}={:08X} word+{}={:08X} word+{}={:08X} asset={:08X}",
         v.host ? "host" : "guest",v.world.level,names[kind],selected,actor,vars,bytes,
         LoadF(b,matrix+48),LoadF(b,matrix+52),LoadF(b,matrix+56),offsets[kind][0],word(0),offsets[kind][1],word(1),offsets[kind][2],word(2),key==state.file_keys.end() ? 0 : key->second);
+    if (kind==7 && vars && bytes>=884)
+      REXLOG_INFO("KK dev object fire contract: role={} actor={:08X} supported={} mode={} repeat={} completion={:08X} timer={} spread={} total={}",
+          v.host ? "host" : "guest",actor,FireContract(b,vars),Load32(b,vars+364),Load32(b,vars+372),
+          Load32(b,vars+188),LoadF(b,vars+388),LoadF(b,vars+416),LoadF(b,vars+424));
   }
   REXLOG_INFO("KK dev object inventory totals: role={} level={} pass={} iob={} door={} ode={} tree={} bamboo={} rack={} fire={} raft={} ammo={} javelin={} checkpoint={} unknown={} bounded-rows={}",
       v.host ? "host" : "guest",v.world.level,state.scan_pass,counts[1],counts[2],counts[3],counts[4],counts[5],counts[6],counts[7],counts[8],counts[9],counts[10],counts[11],counts[0],state.scan_rows);
@@ -916,6 +1094,32 @@ void DevProbe(PPCContext& ctx,uint8_t* b,Probe& probe,ObjectKind kind) {
 void Probes(PPCContext& ctx,uint8_t* b) {
   static Probe hit("KK_DEV_OBJECT_HIT"),lever("KK_DEV_OBJECT_LEVER");
   DevProbe(ctx,b,hit,ObjectKind::Breakable); DevProbe(ctx,b,lever,ObjectKind::Door);
+  static Probe fire("KK_DEV_OBJECT_FIRE"),off("KK_DEV_OBJECT_EXTINGUISH");
+  const auto t=kk::DevSecondsSinceMenu();
+  for (auto* probe : {&fire,&off}) {
+    if (probe->done || probe->due<0 || t<probe->due) continue;
+    for (auto& [actor,o] : state.bindings) {
+      if (o.kind!=ObjectKind::Fire || !Valid(b,o) || Match(o.source,o.kind)!=&o || !FireContract(b,o.vars)) continue;
+      const auto value=Sample(b,o);
+      if (probe==&off) {
+        if (!state.host || value.value!=1) continue;
+        StoreF(b,o.vars+388,0); // Dev input: native Burn owns cleanup and removal.
+      } else {
+        if (value.value!=0) continue;
+        if (state.host) o.fire_request=true;
+        else {
+          const auto m=Ptr(b,Load32(b,0x82CCBF7C),12,64);
+          if (!m || std::hypot(LoadF(b,m+48)-o.x,LoadF(b,m+52)-o.y,LoadF(b,m+56)-o.z)>5) continue;
+          if (!Request(o,1)) continue;
+        }
+      }
+      probe->done=true;
+      REXLOG_INFO("KK dev object fire fixture: role={} id={:016X} operation={} awaiting-native-result=true",
+          state.host ? "host" : "guest",o.source,probe==&off ? "expire" : "ignite");
+      break;
+    }
+    if (!probe->done && t>probe->due+20) { probe->done=true; REXLOG_WARN("KK dev object fire fixture: no eligible static fire"); }
+  }
 }
 void ReloadProbe(uint8_t* b) {
   static Probe probe("KK_DEV_OBJECT_RELOAD");
@@ -1059,6 +1263,7 @@ void ObjectsAfterAi(PPCContext& ctx,uint8_t* b,uint32_t w) {
   if (!state.ready || w!=state.world || !Shared()) return;
   ReplayBreakables(ctx,b);
   IdleDoors(ctx,b);
+  ReplayFires(ctx,b);
   const auto now=Now();
 #if defined(KK_DEV_TOOLS)
   if (Trace() && std::getenv("KK_DEV_OBJECT_PASSAGE")) {
@@ -1123,6 +1328,17 @@ void ObjectsAfterAi(PPCContext& ctx,uint8_t* b,uint32_t w) {
           state.host ? "host" : "guest",o.source,Load32(b,o.vars+560),Load32(b,o.vars+564),Load32(b,o.vars+364),
           LoadF(b,o.matrix+48),LoadF(b,o.matrix+52),LoadF(b,o.matrix+56),
           -LoadF(b,o.matrix+16),-LoadF(b,o.matrix+20),-LoadF(b,o.matrix+24));
+      if (o.kind==ObjectKind::Door) {
+        if (const auto p=NativePoint(ctx,b,o.actor))
+          REXLOG_INFO("KK dev object door world: role={} id={:016X} type={:08X} point=({:.3f},{:.3f},{:.3f})",
+              state.host ? "host" : "guest",o.source,Load32(b,o.actor),p->x,p->y,p->z);
+        for (unsigned i=0;i<4;++i) if (Lever(b,o,i)) {
+          const auto actor=Load32(b,o.vars+640+4*i);
+          if (const auto p=NativePoint(ctx,b,actor))
+            REXLOG_INFO("KK dev object marker world: role={} id={:016X} slot={} type={:08X} point=({:.3f},{:.3f},{:.3f})",
+                state.host ? "host" : "guest",o.source,i,Load32(b,actor),p->x,p->y,p->z);
+        }
+      }
       if (o.kind==ObjectKind::Breakable) REXLOG_INFO("KK dev object breakable consumer: role={} id={:016X} maximum={} init={} go={} consumed={}",
           state.host ? "host" : "guest",o.source,Load32(b,o.vars+556),Track(b,o.ai,0x82516128),Track(b,o.ai,0x82515CF0),o.damage_tick==state.ai_tick);
       if (o.kind==ObjectKind::Door && !o.lever_logged) {
@@ -1158,3 +1374,5 @@ REX_HOOK_RAW(sub_82516128) { kk::coop::BreakableInit(ctx,base); }
 REX_HOOK_RAW(sub_82543478) { kk::coop::DoorWait(ctx,base); }
 REX_HOOK_RAW(sub_82574D80) { kk::coop::DoorInit(ctx,base); }
 REX_HOOK_RAW(sub_826F9DC0) { kk::coop::DoorStop(ctx,base); }
+REX_HOOK_RAW(sub_825FAF58) { kk::coop::FireInit(ctx,base); }
+REX_HOOK_RAW(sub_8260F858) { kk::coop::FireBurn(ctx,base); }

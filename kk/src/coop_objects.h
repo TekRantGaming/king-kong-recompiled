@@ -8,6 +8,30 @@
 
 namespace kk::coop::objects {
 constexpr size_t kQueue=kObjectQueue, kCensus=kObjectCensus;
+inline bool StaticFireParameters(uint32_t mode,uint32_t repeat,uint32_t completion,float total,float timer) {
+  return mode==0 && repeat==0 && completion==0 && std::isfinite(total) && total>=0 && total<=138.6f &&
+      std::isfinite(timer) && (timer==-1 || (timer>=0 && timer<=3600));
+}
+struct PathTarget { uint32_t key=0,actor=0; };
+// Native8240C5B8's mode0 lookup, with bounds/ambiguity checks that the native
+// routine lacks. A zero target is a valid END only after the first segment.
+template<class Read> std::optional<PathTarget> FirstPathTarget(Read read,uint32_t actor,uint32_t key=0) {
+  if (!PoseAddress(actor,32)) return {};
+  const auto ext=read(actor+24); if (!PoseAddress(ext,28)) return {};
+  const auto table=read(ext+24); if (!PoseAddress(table,8)) return {};
+  const auto groups=read(table),count=read(table+4);
+  if (!count || count>kCensus || !PoseAddress(groups,count*12)) return {};
+  if (!key) key=read(groups);
+  if (!key) return {};
+  uint32_t group=0; unsigned matches=0;
+  for (unsigned i=0;i<count;++i) if (read(groups+i*12)==key) { group=groups+i*12; ++matches; }
+  if (matches!=1) return {};
+  const auto entries=read(group+4),length=read(group+8);
+  if (length>kCensus || (length && !PoseAddress(entries,length*16))) return {};
+  const auto target=length ? read(entries+8) : 0;
+  if (target && !PoseAddress(target,32)) return {};
+  return PathTarget{key,target};
+}
 struct BreakableTrack { uint32_t block=0,slot=0; bool init=false; };
 // Only these two recovered callbacks may be woken by a retained outcome.
 // The native dispatcher needs this AI's own state word and slot, not the outer AI's.
@@ -94,7 +118,7 @@ template<class Read> std::map<uint32_t,uint32_t> FileKeys(Read read) {
   return out;
 }
 inline uint64_t AssetSource(ObjectKind kind,uint32_t key) {
-  if (!key || (kind!=ObjectKind::Breakable && kind!=ObjectKind::Door)) return 0;
+  if (!key || (kind!=ObjectKind::Breakable && kind!=ObjectKind::Door && kind!=ObjectKind::Fire)) return 0;
   const auto hash=enemies::Mix(enemies::Mix(14695981039346656037ull,0x4f424a4b),uint64_t(kind)<<32|key);
   return hash ? hash : 1;
 }
@@ -173,7 +197,7 @@ class Requests {
     if (now-window_>=1) { window_=now; count_=0; }
     if (++count_>16) return false;
     return r.kind==ObjectKind::Breakable ? distance<=80 :
-        r.kind==ObjectKind::Door && r.value<8 && distance<=6;
+        (r.kind==ObjectKind::Door || r.kind==ObjectKind::Fire) && distance<=6;
   }
  private:
   uint32_t last_=0;

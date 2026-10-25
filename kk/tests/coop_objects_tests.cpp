@@ -11,10 +11,11 @@ Message Packet(MessageType type=MessageType::ObjectState,ObjectKind kind=ObjectK
   Message m; m.type=type; m.epoch=17; m.object={2,203,1,0x123456789abcdef0ull,kind,type==MessageType::ObjectRequest && kind==ObjectKind::Breakable ? 0u : 1u}; return m;
 }
 void Codec() {
-  for (auto type : {MessageType::ObjectState,MessageType::ObjectRequest}) for (auto kind : {ObjectKind::Breakable,ObjectKind::Door}) {
+  for (auto type : {MessageType::ObjectState,MessageType::ObjectRequest}) for (auto kind : {ObjectKind::Breakable,ObjectKind::Door,ObjectKind::Fire}) {
     auto m=Packet(type,kind);
     if (type==MessageType::ObjectRequest && kind==ObjectKind::Breakable) { m.object.value=0x800010; m.object.position=42; m.object.seconds=.125f; }
     if (type==MessageType::ObjectState && kind==ObjectKind::Door) { m.object.position=.375f; m.object.seconds=2.5f; m.object.value=511; }
+    if (type==MessageType::ObjectState && kind==ObjectKind::Fire) { m.object.position=37.5f; m.object.seconds=-1; }
     std::vector<uint8_t> bytes; Check(Encode(m,bytes),"object encodes");
     Check(bytes.size()==kHeaderBytes+33 && bytes[5]==kProtocolVersion,"bounded protocol 19 object wire");
     Message out; Check(Decode(bytes,out) && out.object==m.object,"object round trip");
@@ -32,8 +33,38 @@ void Codec() {
   m=Packet(MessageType::ObjectRequest,ObjectKind::Door); m.object.value=8;
   Check(!Encode(m,bytes),"lever slot bounded"); m.object.value=0; m.object.position=.1f;
   Check(!Encode(m,bytes),"request cannot choose door progress");
+  auto fire=Packet(MessageType::ObjectState,ObjectKind::Fire).object;
+  fire.seconds=-1; Check(ValidObjectState(fire),"indefinite native burn lifetime admitted");
+  fire.seconds=-.5f; Check(!ValidObjectState(fire),"negative fractional fire lifetime refused");
+  fire.value=2; fire.seconds=0; fire.position=40;
+  Check(ValidObjectState(fire),"retained extinguished fire preserves spread for late replay");
+  fire.seconds=1; Check(!ValidObjectState(fire),"extinguished fire cannot keep burning");
+  fire=Packet(MessageType::ObjectRequest,ObjectKind::Fire).object;
+  Check(ValidObjectRequest(fire),"guest ignition has a bounded semantic request");
+  fire.position=1; Check(!ValidObjectRequest(fire),"guest cannot choose fire extent");
+  fire.position=0; fire.seconds=1; Check(!ValidObjectRequest(fire),"guest cannot choose fire lifetime");
+  fire.seconds=0; fire.value=2; Check(!ValidObjectRequest(fire),"guest cannot extinguish an authoritative fire");
 }
 void Policies() {
+  Check(objects::StaticFireParameters(0,0,0,0,60),"dormant fire layout admits deferred local path setup");
+  Check(!objects::StaticFireParameters(1,0,0,1,60) && !objects::StaticFireParameters(0,1,0,1,60) &&
+      !objects::StaticFireParameters(0,0,0x82500000,1,60),"write, moving and arbitrary completion fire paths excluded");
+  Check(!objects::StaticFireParameters(0,0,0,140,60) && !objects::StaticFireParameters(0,0,0,1,-2),
+      "native fire effect table and lifetime bounds enforced");
+  std::map<uint32_t,uint32_t> path{{0x42000018,0x43000000},{0x43000018,0x44000000},
+      {0x44000000,0x45000000},{0x44000004,1},{0x45000000,123},{0x45000004,0x46000000},
+      {0x45000008,1},{0x46000008,0x47000000}};
+  const auto path_read=[&](uint32_t a){ const auto it=path.find(a); return it==path.end() ? 0u : it->second; };
+  auto target=objects::FirstPathTarget(path_read,0x42000000);
+  Check(target && target->key==123 && target->actor==0x47000000,"static fire binds its local authored first target");
+  Check(!objects::FirstPathTarget(path_read,0x42000000,456),"absent path key refuses native group[count] access");
+  path[0x44000004]=2; path[0x4500000c]=123;
+  Check(!objects::FirstPathTarget(path_read,0x42000000),"duplicate target groups refuse path replay");
+  path[0x44000004]=1; path[0x45000008]=0;
+  target=objects::FirstPathTarget(path_read,0x42000000);
+  Check(target && !target->actor,"empty later group represents the native path end");
+  path[0x45000008]=objects::kCensus+1;
+  Check(!objects::FirstPathTarget(path_read,0x42000000),"malformed local target counts refuse before native lookup");
   std::map<uint32_t,uint32_t> scheduler{{0x42000050,1},{0x42000052,3},
       {0x4200001c,0x43000000},{0x42000020,0x43000100},{0x42000024,0x43000200},
       {0x43000014,0x826718B8},{0x43000114,0x82543478},{0x43000214,0x82574D80}};
