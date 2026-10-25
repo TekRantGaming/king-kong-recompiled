@@ -103,13 +103,16 @@ void ScheduleGameThreadOnce() {
     return true;
   }();
   (void)scheduled;
+#if defined(_WIN32)
   // The guest may set its own thread priority later (KeSetBasePriorityThread): raise it again.
+  // (Windows only, like the rest of kk_cpu_priority in thread_scheduling.h.)
   thread_local uint32_t presents = 0;
   if (++presents % 600 == 0 && nr::CpuPriorityLevel().load(std::memory_order_relaxed) >= 1 &&
       GetThreadPriority(GetCurrentThread()) < THREAD_PRIORITY_ABOVE_NORMAL) {
     SetThreadPriority(GetCurrentThread(), THREAD_PRIORITY_ABOVE_NORMAL);
     REXLOG_INFO("rexgpu-native: game thread priority restored to above normal (kk_cpu_priority)");
   }
+#endif
 }
 
 nr::hooks::GuestArgs ArgsFrom(const PPCContext& ctx) {
