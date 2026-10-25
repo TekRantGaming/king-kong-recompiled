@@ -147,7 +147,7 @@ step "7. package checks"
 OUT="$REPO/dist/KingKong-$VERSION-linux-x86_64.AppImage"
 A="$WORKDIR/AppDir"
 fail=0
-for f in usr/bin/king_kong usr/bin/librexgpu-native.so usr/bin/librexruntime.so usr/bin/libdxcompiler.so \
+for f in usr/bin/king_kong usr/bin/librexgpu-native.so usr/bin/librexruntime.so usr/bin/libdxcompiler.so usr/bin/libpdfium.so \
          usr/bin/THIRD-PARTY-NOTICES.txt usr/share/licenses/ffmpeg usr/share/licenses/dxc usr/bin/glyphs \
          usr/bin/launcher/video/save-notice-loop.mp4 usr/bin/launcher/video/returning-loop.mp4 usr/bin/launcher/video/trg-startup.mp4 AppRun; do
   [ -e "$A/$f" ] || { echo "  MISSING $f"; fail=1; }

@@ -45,6 +45,11 @@ rsync -aL --delete --exclude out --exclude assets --exclude image.bin "$ROOT/kk/
 rsync -a --delete --exclude out --exclude build "$ROOT/native-renderer/" "$WORK/native-renderer/"
 mkdir -p "$WORK/tools/rexglue" "$WORK/kk/assets"
 cp "$ROOT/CHANGELOG.md" "$WORK/"  # the launcher's What's new and version history are built in
+cp "$ROOT/MODDING.md" "$WORK/"  # the modding guide ships beside the program (task 200)
+# The user manual's PDFium (task 333): tools/pdfium/linux-x64, or KK_PDFIUM_DIR as kk/CMakeLists.txt reads it.
+if [ -f "$ROOT/tools/pdfium/linux-x64/lib/libpdfium.so" ]; then
+  mkdir -p "$WORK/tools/pdfium" && rsync -aL --delete "$ROOT/tools/pdfium/linux-x64/" "$WORK/tools/pdfium/linux-x64/"
+fi
 # The build checks the translated code against your default.xex (from your own disc).
 cp "$ROOT/kk/assets/default.xex" "$WORK/kk/assets/"
 
@@ -80,7 +85,7 @@ echo "== Build"
 cd "$WORK/kk"
 # KK_DEV_TOOLS=ON builds the developer test aids in (for testing only, never a release).
 cmake --preset kk-linux-release -DKK_DEV_TOOLS="${KK_DEV_TOOLS:-OFF}" -DNR_DXC_DIR="${KK_DXC_DIR:-}" \
-  -DKK_FFMPEG_DIR="$FFMPEG_DIR"
+  -DKK_FFMPEG_DIR="$FFMPEG_DIR" -DKK_PDFIUM_DIR="${KK_PDFIUM_DIR:-$([ ! -d "$WORK/tools/pdfium/linux-x64" ] || echo "$WORK/tools/pdfium/linux-x64")}"
 cmake --build --preset kk-linux-release -- -k 0
 BIN="$WORK/kk/out/build/kk-linux-release"
 
