@@ -69,7 +69,10 @@ sudo apt install clang-20 lld-20 g++ cmake ninja-build nasm make rsync patch fil
 ```
 
 For the headless test also `xvfb mesa-vulkan-drivers pulseaudio` (all already in the build PC's Ubuntu-24.04;
-task 191 installed nothing). The AppImage needs at run time: glibc 2.38 or newer (it is built on Ubuntu 24.04:
+task 191 installed nothing). The unit tests (`KK_DEV_TOOLS=ON`, `-DNR_BUILD_TESTS=ON -DNR_LIGHTING_DXC=<dxc>`) also
+need `python3-numpy python3-pil` and must run one at a time (`ctest` without `-j`: nr_game_tests and its small and
+minimum table variants share their pipeline files in /tmp). The Ubuntu-24.04 install was made new on 25 Oct 2026
+(its disk had gone); everything above was installed again then. The AppImage needs at run time: glibc 2.38 or newer (it is built on Ubuntu 24.04:
 Ubuntu 24.04, Fedora 39+, Bazzite run it; Ubuntu 22.04 with 2.35 cannot; the C++ runtime, GLIBCXX_3.4.32, is
 bundled and AppRun uses it only when the system's is older), a Vulkan 1.3 driver
 (Mesa RADV/ANV, NVIDIA), `curl` for the content downloads and the Workshop page, `libdbus-1.so.3` for
