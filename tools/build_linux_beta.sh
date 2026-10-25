@@ -6,7 +6,7 @@
 #
 # Steps (each is skipped when its result is already there and up to date):
 #   1. toolchain check (lists missing Ubuntu packages; installs nothing)
-#   2. ReXGlue SDK source = REXGLUE_SDK_SRC (the Windows -042 source, -038 before 25 Oct: v0.10.0 + tools/rexglue-patches +
+#   2. ReXGlue SDK source = REXGLUE_SDK_SRC (tools/make_linux_sdk_base.sh, the same as the Windows -038 source: v0.10.0 + tools/rexglue-patches +
 #      sdk-patches 0001-0003, 0035, 0037, 0038) + sdk-patches 0039, 0040 (Linux waits) + 0041 (present
 #      observer) + 0043 (scRGB HDR) + 0044, 0045 (HDR curve, Beta 11), checked file by file against the Windows SDK's source (REXGLUE_SDK_CHECK)
 #   3. SDK build + install (clang 20, Release, Vulkan)
@@ -28,7 +28,7 @@ VERSION="${1:?usage: build_linux_beta.sh <version, e.g. v2.0.0-beta.6>}"
 REPO="$(cd "$(dirname "$0")/.." && pwd)"
 BASE="${KK_LINUX_ROOT:-$HOME/kk-linux-beta}"
 F=/mnt/f/KK-native-renderer
-SDK_FROM="${REXGLUE_SDK_SRC:-$F/sdk-src-upscalers-042}"  # -038 was removed 25 Oct; step 2 checks the result against -317
+SDK_FROM="${REXGLUE_SDK_SRC:-$BASE/sdk-base-038}"  # made by tools/make_linux_sdk_base.sh
 SDK_CHECK="${REXGLUE_SDK_CHECK:-$F/sdk-src-real-hdr-317}"
 DXC_FROM="${KK_DXC_FROM:-$F/downloads/dxc-linux-v1.9.2609/x}"
 JOBS="${KK_JOBS:-$(( $(nproc) > 2 ? $(nproc) - 2 : 1 ))}"
@@ -61,7 +61,7 @@ fi
 step "2. SDK source ($SDK_FROM + sdk-patches $PATCHES)"
 SRC="$BASE/sdk-src"
 STAMP="$(cd "$REPO/native-renderer/sdk-patches" && for n in $PATCHES; do sha256sum $n-*.patch; done | sha256sum | cut -c1-16)"
-STAMP="$STAMP $(git -C "$SDK_FROM" rev-parse --short HEAD 2>/dev/null || echo nogit)"
+STAMP="$STAMP $(git -C "$SDK_FROM" rev-parse --short HEAD 2>/dev/null || cat "$SDK_FROM/.kk-base-id" 2>/dev/null || echo nogit)"
 if [ "$(cat "$SRC/.kk-sdk-stamp" 2>/dev/null)" != "$STAMP" ]; then
   [ -d "$SDK_FROM/src" ] || { echo "error: no SDK source at $SDK_FROM (REXGLUE_SDK_SRC)" >&2; exit 1; }
   # out/ (the build) is kept. By content, not times: a changed file gets a new time, so the build compiles
