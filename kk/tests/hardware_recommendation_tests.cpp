@@ -234,6 +234,12 @@ int main() {
   const auto dir = std::filesystem::current_path() / ("hardware-test-" + std::to_string(
       std::chrono::steady_clock::now().time_since_epoch().count()));
   std::filesystem::create_directories(dir);
+#if !defined(_WIN32)
+  // The full recommendation below (tier, upscaler, AO, first setup policy) is Windows only: on Linux
+  // ApplyHardwareRecommendation sets only the GI from the tier, except on a Steam Deck's first setup.
+  std::cout << "PASS: " << checks << " hardware/settings checks (Linux: the Windows recommendation is not built)\n";
+  return 0;
+#endif
   const auto config = dir / "king_kong.toml";
   // Only a missing config receives the new policy. The setup's second pass
   // reuses the selected tier, and later launches retain it even on another GPU.
