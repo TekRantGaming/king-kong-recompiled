@@ -26,6 +26,11 @@ ap() {
 for n in 0015 0016 0017; do ap "$(ls "$R/tools/rexglue-patches/$n"-*.patch)"; done
 for n in 0001 0002 0003 0035 0037 0038; do ap "$(ls "$R/native-renderer/sdk-patches/$n"-*.patch)"; done
 rm -f "$D.patch"
+# The SDK takes its version from git (cmake/rex_version.cmake); without a tag the window title read
+# "rexglue-v0.10.0.0-dev.unknown". An empty commit tagged v0.10.0 gives "v0.10.0" (only the tag on HEAD
+# counts; the files stay untracked, the submodules' .git files would confuse git add).
+(cd "$D" && git init -q && git -c user.name=kk -c user.email=kk@localhost commit -q --allow-empty -m "SDK source for the Linux build" &&
+ git tag v0.10.0) || { echo "error: could not tag the SDK source" >&2; exit 1; }
 # A new id each time, so build_linux_beta.sh copies the source again (its step 2 stamp).
 date +%s.%N > "$D/.kk-base-id"
 echo "SDK source ready: $D"
