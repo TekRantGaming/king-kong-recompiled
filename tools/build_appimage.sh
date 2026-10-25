@@ -105,14 +105,16 @@ cp -a "$BIN/glyphs" "$APPDIR/usr/bin/"
 [ -d "$BIN/launcher" ] && cp -a "$BIN/launcher" "$APPDIR/usr/bin/"
 # The owner's Easter egg game (task 357; Linux: owner, 25 Oct): the official Electron runtime for Linux
 # (KK_EGG_ELECTRON_ZIP, the version the Windows build has) with the game's own app.asar (KK_EGG_ASAR, the
-# Windows package's), the same game. launcher/easter-egg/LegallyDistinctGorilla, started by easter_egg.cpp.
+# Windows package's) as resources/egg.asar, the same game, started by kk/egg-linux (resources/app), which lets
+# the launcher pause it (easter_egg.cpp). launcher/easter-egg/LegallyDistinctGorilla.
 if [ -n "${KK_EGG_ELECTRON_ZIP:-}" ] && [ -n "${KK_EGG_ASAR:-}" ]; then
   EGG="$APPDIR/usr/bin/launcher/easter-egg"
   rm -rf "$EGG" && mkdir -p "$EGG"
   unzip -q "$KK_EGG_ELECTRON_ZIP" -d "$EGG"
   mv "$EGG/electron" "$EGG/LegallyDistinctGorilla"
   rm -f "$EGG/chrome-sandbox" "$EGG/resources/default_app.asar"  # no setuid helper in an AppImage (--no-sandbox)
-  cp "$KK_EGG_ASAR" "$EGG/resources/app.asar"
+  cp "$KK_EGG_ASAR" "$EGG/resources/egg.asar"
+  cp -r "$ROOT/kk/egg-linux" "$EGG/resources/app"
 else
   echo "warning: KK_EGG_ELECTRON_ZIP / KK_EGG_ASAR not set: no Easter egg game in this AppImage" >&2
 fi

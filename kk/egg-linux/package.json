@@ -1,0 +1,6 @@
+{
+  "name": "legally-distinct-gorilla",
+  "productName": "Legally Distinct Gorilla",
+  "description": "King Kong Recompiled (Linux): starts the Easter egg game in egg.asar so the launcher can pause it",
+  "main": "main.js"
+}

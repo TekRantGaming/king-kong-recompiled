@@ -35,8 +35,9 @@ class Process {
   // Ends it and everything it started.
   void Terminate();
 
+  struct State;  // per platform (easter_egg.cpp; Linux's is also reached by ForceToFront and the key reads)
+
  private:
-  struct State;
   std::unique_ptr<State> s_;
 };
 

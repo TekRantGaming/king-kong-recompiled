@@ -16,6 +16,8 @@
 #include <chrono>
 #include <csignal>
 #include <cstring>
+#include <fcntl.h>
+#include <string>
 #include <spawn.h>
 #include <sys/wait.h>
 #include <unistd.h>
@@ -214,11 +216,12 @@ bool ForceToFront(void* handle) {
 
 #else
 
-// Linux (owner, 25 Oct: the egg ships in the AppImage too): the Electron game built for Linux, in its own
-// process group (the group is closed and ended as one, as the Windows job is). A Wayland program cannot put
-// another program's window in front, so the launcher swaps places with the game instead: Start raises the
-// launcher's own window (the pause panel), Resume minimises it so the game's window is the one in front again.
-// Enter and Esc reach the launcher only while its own window has the keyboard (no system wide key state here).
+// Linux (owner, 25 Oct: the egg ships in the AppImage too): the Electron game for Linux, started through
+// launcher/easter-egg/resources/app (kk/egg-linux/main.js), which loads the game unchanged from egg.asar and
+// talks to the launcher over two pipes. A Wayland program cannot put its own window in front of another
+// program's, so for the pause panel the game hides its window ("hide") and Resume shows it again ("show"); the
+// game tells its focus and its Enter and Esc presses (task 358/364: they pause it as on Windows). The game is in
+// its own process group, closed and ended as one (the Windows job), and quits when the launcher goes.
 
 namespace {
 
@@ -231,16 +234,41 @@ SDL_Window* LauncherWindow() {
   return w;
 }
 
-bool LauncherFocused() {
-  SDL_Window* w = LauncherWindow();
-  return w && (SDL_GetWindowFlags(w) & SDL_WINDOW_INPUT_FOCUS);
-}
+Process::State* g_running = nullptr;  // the game started last (ForceToFront hides its window)
 
 }  // namespace
 
 struct Process::State {
   pid_t pid = 0;
-  double started = 0;  // steady seconds
+  int to = -1, from = -1;  // its stdin (commands), its stdout (what it tells)
+  std::string pending;
+  bool shown = false, focused = false, enter = false, escape = false;
+
+  void Send(const char* command) {
+    if (to < 0) return;
+    const std::string line = std::string(command) + "\n";
+    if (write(to, line.data(), line.size()) < 0) REXLOG_INFO("KK: easter egg: '{}' not sent", command);
+  }
+  void Read() {
+    char buf[512];
+    for (ssize_t n; from >= 0 && (n = read(from, buf, sizeof(buf))) > 0;) pending.append(buf, size_t(n));
+    for (size_t at; (at = pending.find('\n')) != std::string::npos;) {
+      const std::string line = pending.substr(0, at);
+      pending.erase(0, at + 1);
+      if (line == "shown") shown = true;
+      else if (line == "focus 1" || line == "focus 0") focused = line == "focus 1";
+      else if (line == "down enter" || line == "up enter") enter = line == "down enter";
+      else if (line == "down escape" || line == "up escape") escape = line == "down escape";
+    }
+  }
+  void Close() {
+    if (to >= 0) close(to);
+    if (from >= 0) close(from);
+    to = from = -1;
+    pending.clear();
+    shown = focused = enter = escape = false;
+    if (g_running == this) g_running = nullptr;
+  }
 };
 
 Process::Process() : s_(std::make_unique<State>()) {}
@@ -248,8 +276,14 @@ Process::~Process() { Terminate(); }  // nothing of the game outlives the launch
 
 bool Process::Start(const std::filesystem::path& exe) {
   Terminate();
-  // Chromium's sandbox needs a setuid helper, which an AppImage cannot hold; the game loads only its own
-  // files. The AppImage's library path is not passed on (the game brings its own libraries).
+  int to[2], from[2];
+  if (pipe2(to, O_CLOEXEC) != 0) return false;
+  if (pipe2(from, O_CLOEXEC) != 0) {
+    close(to[0]), close(to[1]);
+    return false;
+  }
+  // Chromium's sandbox needs a setuid helper, which an AppImage cannot hold (the game loads only its own files).
+  // The AppImage's library path is not passed on: the game brings its own libraries.
   std::vector<std::string> env_strings;
   for (char** e = environ; *e; ++e)
     if (std::strncmp(*e, "LD_LIBRARY_PATH=", 16) != 0) env_strings.emplace_back(*e);
@@ -260,6 +294,8 @@ bool Process::Start(const std::filesystem::path& exe) {
   char* argv[] = {path.data(), sandbox.data(), nullptr};
   posix_spawn_file_actions_t actions;
   posix_spawn_file_actions_init(&actions);
+  posix_spawn_file_actions_adddup2(&actions, to[0], STDIN_FILENO);
+  posix_spawn_file_actions_adddup2(&actions, from[1], STDOUT_FILENO);
   posix_spawn_file_actions_addchdir_np(&actions, exe.parent_path().c_str());
   posix_spawnattr_t attr;
   posix_spawnattr_init(&attr);
@@ -269,50 +305,51 @@ bool Process::Start(const std::filesystem::path& exe) {
   const int rc = posix_spawn(&pid, path.c_str(), &actions, &attr, argv, env.data());
   posix_spawn_file_actions_destroy(&actions);
   posix_spawnattr_destroy(&attr);
+  close(to[0]);
+  close(from[1]);
   if (rc != 0) {
+    close(to[1]), close(from[0]);
     REXLOG_WARN("KK: easter egg: could not start it ({})", std::strerror(rc));
     return false;
   }
+  fcntl(from[0], F_SETFL, fcntl(from[0], F_GETFL) | O_NONBLOCK);
   s_->pid = pid;
-  s_->started = std::chrono::duration<double>(std::chrono::steady_clock::now().time_since_epoch()).count();
+  s_->to = to[1];
+  s_->from = from[0];
+  g_running = s_.get();
   REXLOG_INFO("KK: easter egg started (process {})", pid);
   return true;
 }
 
 bool Process::Running() {
   if (!s_->pid) return false;
+  s_->Read();
   int status = 0;
   const pid_t r = waitpid(s_->pid, &status, WNOHANG);
   if (r == 0) return true;
   REXLOG_INFO("KK: easter egg ended (exit code {})", r == s_->pid && WIFEXITED(status) ? WEXITSTATUS(status) : -1);
   kill(-s_->pid, SIGKILL);  // anything it left behind
   s_->pid = 0;
+  s_->Close();
   return false;
 }
 
-// No way to see another program's windows here: the game's window counts as up a moment after it started, or
-// as soon as the launcher has lost the keyboard to it.
-bool Process::WindowShown() {
-  if (!Running()) return false;
-  const double now = std::chrono::duration<double>(std::chrono::steady_clock::now().time_since_epoch()).count();
-  return !LauncherFocused() || now - s_->started > 3.0;
-}
+bool Process::WindowShown() { return Running() && s_->shown; }
+bool Process::InFront() { return Running() && s_->focused; }
 
-bool Process::InFront() { return Running() && !LauncherFocused(); }
-
-bool EnterKeyDown() { return false; }
-bool EscapeKeyDown() { return false; }
+bool EnterKeyDown() { return g_running && (g_running->Read(), g_running->enter); }
+bool EscapeKeyDown() { return g_running && (g_running->Read(), g_running->escape); }
 
 void Process::ToFront() {
   if (!Running()) return;
-  SDL_Window* w = LauncherWindow();
-  if (w) SDL_MinimizeWindow(w);
-  REXLOG_INFO("KK: easter egg back in front (the launcher minimised{})", w ? "" : ": no launcher window");
+  s_->Send("show");
+  if (SDL_Window* w = LauncherWindow()) SDL_MinimizeWindow(w);  // out of the way too, whatever the desktop allows
+  REXLOG_INFO("KK: easter egg back in front (asked to show its window)");
 }
 
 void Process::RequestClose() {
   if (!Running()) return;
-  kill(-s_->pid, SIGTERM);  // Electron closes its windows and quits
+  s_->Send("close");
   REXLOG_INFO("KK: easter egg asked to close");
 }
 
@@ -322,14 +359,16 @@ void Process::Terminate() {
   waitpid(s_->pid, nullptr, 0);
   REXLOG_INFO("KK: easter egg ended by the launcher");
   s_->pid = 0;
+  s_->Close();
 }
 
 bool ForceToFront(void*) {
+  if (g_running) g_running->Send("hide");  // the game's window steps aside (a Wayland raise is only a request)
   SDL_Window* w = LauncherWindow();
   if (!w) return false;
   SDL_RestoreWindow(w);
-  SDL_RaiseWindow(w);  // the compositor decides (Wayland: an activation request)
-  return LauncherFocused();
+  SDL_RaiseWindow(w);
+  return true;
 }
 
 #endif
