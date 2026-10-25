@@ -62,8 +62,6 @@ struct Binding : objects::Binding {
   bool sent=false,lever_logged=false;
 #if defined(KK_DEV_TOOLS)
   uint32_t init_calls=0,wait_calls=0,loop_calls=0,update_calls=0,hold_calls=0,context_misses=0;
-  float plane_x=0,plane_y=0,plane_z=0;
-  double next_passage=0;
 #endif
 };
 struct State {
@@ -83,6 +81,8 @@ struct State {
   objects::Requests requests;
   objects::Identities identities;
 #if defined(KK_DEV_TOOLS)
+  struct Plane { float x,y,z,nx,ny,nz; double next=0; };
+  std::map<uint64_t,Plane> planes; // Immutable values survive native door retirement.
   struct Pickup { uint32_t actor=0,ai=0,vars=0,matrix=0; uint64_t source=0; bool rack=false; };
   std::map<uint32_t,Pickup> pickups;
   std::set<uint64_t> debug_sources;
@@ -199,14 +199,15 @@ void Census(const uint8_t* b) {
     const auto vars=Vars(b,ai,kind); if (!vars) continue;
     Binding o; o.actor=actor; o.ai=ai; o.vars=vars; o.matrix=matrix; o.kind=kind;
     o.x=LoadF(b,matrix+48); o.y=LoadF(b,matrix+52); o.z=LoadF(b,matrix+56);
-#if defined(KK_DEV_TOOLS)
-    o.plane_x=-LoadF(b,matrix+16); o.plane_y=-LoadF(b,matrix+20); o.plane_z=-LoadF(b,matrix+24);
-#endif
     const auto asset=state.file_keys.find(actor);
     o.source=asset==state.file_keys.end() ? objects::Source(kind,o.x,o.y,o.z,uint8_t(kind)) : objects::AssetSource(kind,asset->second);
     if (o.source) {
       state.identities.Record(o);
       state.bindings.emplace(actor,o);
+#if defined(KK_DEV_TOOLS)
+      if (kind==ObjectKind::Door && state.planes.size()<objects::kCensus)
+        state.planes.try_emplace(o.source,State::Plane{o.x,o.y,o.z,-LoadF(b,matrix+16),-LoadF(b,matrix+20),-LoadF(b,matrix+24)});
+#endif
       if (Trace()) REXLOG_INFO("KK dev object: role={} kind={} id={:016X} actor={:08X} vars={:08X} pos=({:.3f},{:.3f},{:.3f}) damage={} maximum={} levers={} type={} asset={:08X}",
           state.host ? "host" : "guest",uint8_t(kind),o.source,actor,vars,o.x,o.y,o.z,
           kind==ObjectKind::Breakable ? Load32(b,vars+552) : 0,kind==ObjectKind::Breakable ? Load32(b,vars+556) : 0,
@@ -722,8 +723,21 @@ void ReplayBreakables(PPCContext& ctx,uint8_t* b) {
   }
 }
 void BreakableInit(PPCContext& ctx,uint8_t* b) {
-  if (auto* o=state.ready && Shared() ? Current(b,ObjectKind::Breakable) : nullptr) o->damage_tick=state.ai_tick;
+  auto* o=state.ready && Shared() ? Current(b,ObjectKind::Breakable) : nullptr;
+  if (o) o->damage_tick=state.ai_tick;
   __imp__sub_82516128(ctx,b);
+  // The ordinary scheduler can reach checkpoint cleanup before the isolated
+  // replay pass. Preserve the same semantic endpoint in that path too. Parts
+  // and collision must already have been removed by the native initializer.
+  if (o && !state.host && ctx.r3.u32==1 && Components(b,*o) &&
+      objects::BreakableCheckpointGone([&](uint32_t a){ return Load32(b,a); },o->actor,o->vars)) {
+    if (const auto* s=state.replica.Find(o->kind,o->source)) {
+      Store32(b,o->vars+552,s->value); Store32(b,o->vars+560,uint32_t(s->position));
+#if defined(KK_DEV_TOOLS)
+      if (s->value) state.observed_change=true;
+#endif
+    }
+  }
 }
 void DoorUpdate(PPCContext& ctx,uint8_t* b) {
   auto* o=state.ready && Shared() ? Current(b,ObjectKind::Door) : nullptr;
@@ -905,7 +919,13 @@ void Probes(PPCContext& ctx,uint8_t* b) {
 }
 void ReloadProbe(uint8_t* b) {
   static Probe probe("KK_DEV_OBJECT_RELOAD");
-  if (probe.done || probe.due<0 || state.host || kk::DevSecondsSinceMenu()<probe.due || !state.observed_change) return;
+  const auto t=kk::DevSecondsSinceMenu();
+  if (probe.done || probe.due<0 || state.host || t<probe.due) return;
+  if (t>=probe.act) {
+    probe.act=t+2;
+    REXLOG_INFO("KK dev object reload probe: generation={} observed-native-change={}",state.generation,state.observed_change);
+  }
+  if (!state.observed_change) return;
   if (SessionDevObjectReload(b)) probe.done=true;
 }
 void PickupProbe(PPCContext& ctx,uint8_t* b) {
@@ -1043,14 +1063,16 @@ void ObjectsAfterAi(PPCContext& ctx,uint8_t* b,uint32_t w) {
 #if defined(KK_DEV_TOOLS)
   if (Trace() && std::getenv("KK_DEV_OBJECT_PASSAGE")) {
     const auto matrix=Ptr(b,Load32(b,0x82CCBF7C),12,64);
-    if (matrix) for (auto& [actor,o] : state.bindings) {
-      if (o.kind!=ObjectKind::Door || !Valid(b,o) || now<o.next_passage) continue;
+    if (matrix) for (auto& [source,p] : state.planes) {
+      if (!state.identities.Allows(ObjectKind::Door,source) || now<p.next) continue;
       const float x=LoadF(b,matrix+48),y=LoadF(b,matrix+52),z=LoadF(b,matrix+56);
-      if (std::hypot(x-o.x,y-o.y,z-o.z)>20) continue;
-      o.next_passage=now+.1;
-      REXLOG_INFO("KK dev object passage: role={} id={:016X} pos=({:.3f},{:.3f},{:.3f}) plane=({:.3f},{:.3f},{:.3f}) normal=({:.3f},{:.3f},{:.3f}) signed={:.3f} fraction={} endpoint={} condition={}",
-          state.host ? "host" : "guest",o.source,x,y,z,o.x,o.y,o.z,o.plane_x,o.plane_y,o.plane_z,
-          (x-o.x)*o.plane_x+(y-o.y)*o.plane_y+(z-o.z)*o.plane_z,LoadF(b,o.vars+1084),Load32(b,o.vars+1096),int(LocalPlayerCondition(b).value_or(PlayerCondition::Dead)));
+      if (std::hypot(x-p.x,y-p.y,z-p.z)>20) continue;
+      p.next=now+.1;
+      const auto it=state.outcomes.find(source);
+      const auto* s=state.host ? (it==state.outcomes.end() ? nullptr : &it->second) : state.replica.Find(ObjectKind::Door,source);
+      REXLOG_INFO("KK dev object passage: role={} id={:016X} pos=({:.3f},{:.3f},{:.3f}) plane=({:.3f},{:.3f},{:.3f}) normal=({:.3f},{:.3f},{:.3f}) signed={:.3f} authority-fraction={} condition={}",
+          state.host ? "host" : "guest",source,x,y,z,p.x,p.y,p.z,p.nx,p.ny,p.nz,
+          (x-p.x)*p.nx+(y-p.y)*p.ny+(z-p.z)*p.nz,s ? s->position : -1,int(LocalPlayerCondition(b).value_or(PlayerCondition::Dead)));
     }
   }
 #endif

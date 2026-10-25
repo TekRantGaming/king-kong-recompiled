@@ -750,6 +750,13 @@ bool SessionDevFollowPad(uint32_t user,uint8_t* state) {
 bool SessionDevObjectReload(uint8_t* base) {
   const auto v=SessionFlowSnapshot(); const auto now=Now(); const auto link=EnemyLinkSnapshot();
   const auto condition=LocalPlayerCondition(base);
+  static double object_reload_log=0;
+  if (now>=object_reload_log) {
+    object_reload_log=now+2;
+    REXLOG_INFO("KK dev object reload guards: launched={} active={} host={} playing={} down={} private={}/{} catchup={} condition={} partner={} safe={}",
+        launched,v.active,v.host,v.phase==FlowPhase::Playing,recovery.Downed(),private_load,private_request,
+        int(catchup_phase),int(condition.value_or(PlayerCondition::Dead)),PartnerAliveHere(v,link,now),CatchupSafe(base,now));
+  }
   if (!launched || !v.active || v.host || v.policy!=ChapterPolicy::Together ||
       v.phase!=FlowPhase::Playing || recovery.Downed() || private_load || private_request ||
       catchup_phase!=CatchupPhase::None || !condition || *condition==PlayerCondition::Dead ||
