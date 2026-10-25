@@ -199,7 +199,11 @@ void RetireTests(const fs::path& dir) {
   const Manifest retired = MakeList({{"rexgpu-xenos.dll", "xenos 1.9.11"},
                                      {"rexgpu-xenos.dll", "xenos 1.9.12"},
                                      {"mods-builtin/ultrawide/mod.toml", "ultrawide"},
+#if defined(_WIN32)  // Windows paths ignore case (Linux updates replace the AppImage and never retire files)
                                      {"Mods-Builtin/Ultrawide/readme.txt", "ultrawide readme"},
+#else
+                                     {"mods-builtin/ultrawide/readme.txt", "ultrawide readme"},
+#endif
                                      {"launcher/video/old.mp4", "original"},
                                      {"launcher/video/kept.mp4", "still shipped"},
                                      {"game/old.bin", "game"},

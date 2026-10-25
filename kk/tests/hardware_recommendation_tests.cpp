@@ -71,9 +71,19 @@ int main() {
   rex::cvar::SetFlagByName("native_backend", "classic");
   Check(NormalizeRendererSettings(), "legacy API migrated");
   Equals("native_backend", "auto");
+#if defined(__linux__)
+  // Linux has no DirectX 12: a settings file from Windows goes back to Auto (Vulkan).
+  rex::cvar::SetFlagByName("native_backend", "d3d12");
+  Check(NormalizeRendererSettings(), "d3d12 migrated on Linux");
+  Equals("native_backend", "auto");
+  rex::cvar::SetFlagByName("native_backend", "vulkan");
+  Check(!NormalizeRendererSettings(), "native API preserved");
+  Equals("native_backend", "vulkan");
+#else
   rex::cvar::SetFlagByName("native_backend", "d3d12");
   Check(!NormalizeRendererSettings(), "native API preserved");
   Equals("native_backend", "d3d12");
+#endif
   rex::cvar::SetFlagByName("native_backend", "auto");
   constexpr uint64_t GiB = uint64_t(1) << 30;
   struct Case { GpuVendor vendor; const char* model; unsigned vram, cores, ram; bool deck; size_t tier; };

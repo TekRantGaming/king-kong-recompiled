@@ -11,7 +11,13 @@ int main(int argc, char** argv) {
   if (argc != 2) return 2;
   using kk::startup::RecoveryState;
   const std::filesystem::path root(argv[1]);
+  std::filesystem::remove_all(root);  // a fresh start every run (an earlier run leaves its state behind)
+#if defined(__linux__)
+  // Linux has one graphics API: recovery goes from Vulkan straight to "failed" (startup_recovery_state.h).
+  for (const std::string preferred : {"vulkan"}) {
+#else
   for (const std::string preferred : {"vulkan", "d3d12"}) {
+#endif
     const auto dir = root / preferred;
     std::filesystem::create_directories(dir / "saves");
     { std::ofstream save(dir / "saves" / "sentinel"); save << "save must survive"; }
@@ -28,8 +34,12 @@ int main(int argc, char** argv) {
     Check(second.selected != preferred && second.selected != "classic" && second.crashes == 0,
           "switch to other native API");
     Check(!second.RecoverCrash(), "failure consumed only once");
+#if defined(__linux__)
+    Check(second.selected == "failed", "the only native API terminates the chain");
+#else
     Check(second.Advance("lost its graphics device"), "known device loss advances immediately");
     Check(second.selected == "failed", "both native APIs terminate chain");
+#endif
     Check(!second.Advance("failed") && !second.RecoverCrash(), "exhausted chain cannot loop");
     RecoveryState remembered(dir);
     Check(remembered.Load() && remembered.selected == "failed" && remembered.preferred == preferred,
@@ -40,7 +50,11 @@ int main(int argc, char** argv) {
     Check(remembered.Marker(preferred) && remembered.Marker() && !remembered.RecoverCrash(),
           "chapter or clean close clears marker");
     Check(remembered.Advance("failed initialisation"), "known init failure advances immediately");
+#if defined(__linux__)
+    Check(remembered.selected == "failed", "init failure ends the one API chain");
+#else
     Check(remembered.selected == (preferred == "vulkan" ? "d3d12" : "vulkan"), "symmetric init chain");
+#endif
     Check(!remembered.notice_shown, "new fallback needs a notice");
     remembered.notice_shown = true;
     Check(remembered.Save(), "notice shown saved");

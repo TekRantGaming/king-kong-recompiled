@@ -43,6 +43,9 @@ REXCVAR_DEFINE_BOOL(native_validation, true, "Native renderer", "NVRHI validatio
 REXCVAR_DEFINE_BOOL(native_vk_pipeline_cache, false, "Native renderer", "Keep the driver's pipeline cache");
 // And this: the graphics pipeline library (task 183).
 REXCVAR_DEFINE_BOOL(native_vk_pipeline_library, true, "Native renderer", "Vulkan graphics pipeline library");
+// And the descriptor table sizes (hardware testing aids).
+REXCVAR_DEFINE_BOOL(native_vk_small_tables, false, "Native renderer", "Reduced Vulkan descriptor tables");
+REXCVAR_DEFINE_BOOL(native_vk_minimum_tables, false, "Native renderer", "Minimum Vulkan descriptor tables");
 // The SDK's app defines it (rex_app.cpp, not in the runtime library this test links); the plugin
 // reads it by name (the launcher's prewarm runs only for the native plugin).
 REXCVAR_DEFINE_STRING(gpu_plugin, "", "GPU", "GPU plugin");
