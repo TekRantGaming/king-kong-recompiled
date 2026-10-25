@@ -11,13 +11,15 @@ Message Packet(MessageType type=MessageType::ObjectState,ObjectKind kind=ObjectK
   Message m; m.type=type; m.epoch=17; m.object={2,203,1,0x123456789abcdef0ull,kind,type==MessageType::ObjectRequest && kind==ObjectKind::Breakable ? 0u : 1u}; return m;
 }
 void Codec() {
-  for (auto type : {MessageType::ObjectState,MessageType::ObjectRequest}) for (auto kind : {ObjectKind::Breakable,ObjectKind::Door,ObjectKind::Fire}) {
+  for (auto type : {MessageType::ObjectState,MessageType::ObjectRequest}) for (auto kind : {ObjectKind::Breakable,ObjectKind::Door,ObjectKind::Fire,ObjectKind::Raft}) {
+    if (type==MessageType::ObjectRequest && kind==ObjectKind::Raft) continue;
     auto m=Packet(type,kind);
     if (type==MessageType::ObjectRequest && kind==ObjectKind::Breakable) { m.object.value=0x800010; m.object.position=42; m.object.seconds=.125f; }
     if (type==MessageType::ObjectState && kind==ObjectKind::Door) { m.object.position=.375f; m.object.seconds=2.5f; m.object.value=511; }
     if (type==MessageType::ObjectState && kind==ObjectKind::Fire) { m.object.position=37.5f; m.object.seconds=-1; }
+    if (kind==ObjectKind::Raft) { m.object.raft.route=123; m.object.raft.pose[3]=m.object.raft.pose[8]=1; }
     std::vector<uint8_t> bytes; Check(Encode(m,bytes),"object encodes");
-    Check(bytes.size()==kHeaderBytes+33 && bytes[5]==kProtocolVersion,"bounded protocol 19 object wire");
+    Check(bytes.size()==kHeaderBytes+(kind==ObjectKind::Raft ? 91 : 33) && bytes[5]==kProtocolVersion,"bounded protocol 19 object wire");
     Message out; Check(Decode(bytes,out) && out.object==m.object,"object round trip");
     for (size_t i=0;i<bytes.size();++i) {
       Message sentinel; sentinel.sequence=123;
@@ -44,6 +46,13 @@ void Codec() {
   fire.position=1; Check(!ValidObjectRequest(fire),"guest cannot choose fire extent");
   fire.position=0; fire.seconds=1; Check(!ValidObjectRequest(fire),"guest cannot choose fire lifetime");
   fire.seconds=0; fire.value=2; Check(!ValidObjectRequest(fire),"guest cannot extinguish an authoritative fire");
+  auto raft=Packet(MessageType::ObjectState,ObjectKind::Raft).object;
+  raft.raft.route=1; raft.raft.pose[3]=raft.raft.pose[8]=1;
+  Check(ValidObjectState(raft) && !ValidObjectRequest(raft),"only host raft poses and typed path ordinals admitted");
+  raft.raft.current=128; Check(!ValidObjectState(raft),"raft path ordinals bounded"); raft.raft.current=0;
+  raft.raft.pose[8]=0; Check(!ValidObjectState(raft),"degenerate raft orientation refused"); raft.raft.pose[8]=1;
+  raft.raft.pose[6]=1; Check(!ValidObjectState(raft),"nonorthogonal raft orientation refused"); raft.raft.pose[6]=0;
+  raft.raft.pose[9]=1001; Check(!ValidObjectState(raft),"raft velocities bounded");
 }
 void Policies() {
   Check(objects::StaticFireParameters(0,0,0,0,60),"dormant fire layout admits deferred local path setup");
@@ -65,6 +74,16 @@ void Policies() {
   Check(target && !target->actor,"empty later group represents the native path end");
   path[0x45000008]=objects::kCensus+1;
   Check(!objects::FirstPathTarget(path_read,0x42000000),"malformed local target counts refuse before native lookup");
+  path[0x45000008]=2; path[0x46000018]=0x47001000;
+  target=objects::RaftPathTarget(path_read,path_read,0x42000000,123);
+  Check(target && target->actor==0x47000000,"raft uses native first target without flags");
+  path[0x46000010]=1;
+  target=objects::RaftPathTarget(path_read,path_read,0x42000000,123);
+  Check(target && target->actor==0x47001000,"raft follows the unique native flagged target");
+  path[0x46000000]=1;
+  Check(!objects::RaftPathTarget(path_read,path_read,0x42000000,123),"random flagged raft branches remain unsupported");
+  path[0x45000008]=61;
+  Check(!objects::RaftPathTarget(path_read,path_read,0x42000000,123),"raft path protects the native sixty entry scratch bound");
   std::map<uint32_t,uint32_t> scheduler{{0x42000050,1},{0x42000052,3},
       {0x4200001c,0x43000000},{0x42000020,0x43000100},{0x42000024,0x43000200},
       {0x43000014,0x826718B8},{0x43000114,0x82543478},{0x43000214,0x82574D80}};

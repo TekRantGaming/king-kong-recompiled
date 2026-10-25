@@ -1,4 +1,5 @@
 #pragma once
+#include <array>
 
 #include <cstdint>
 #include <compare>
@@ -28,7 +29,7 @@ enum class MessageType : uint16_t {
   StartPlan = 33, StartPlanAck = 34, ObjectState = 35, ObjectRequest = 36
 };
 
-enum class ObjectKind : uint8_t { Breakable=1, Door=2, Fire=3 };
+enum class ObjectKind : uint8_t { Breakable=1, Door=2, Fire=3, Raft=4 };
 constexpr uint32_t kDoorScheduled=0x100;
 constexpr uint32_t kObjectHitFlags=0x00FFFFFF;
 constexpr size_t kObjectQueue=256,kObjectCensus=2048;
@@ -43,12 +44,19 @@ constexpr size_t kObjectQueue=256,kObjectCensus=2048;
 // Static native fire: value=0 waiting, 1 burning, 2 extinguished;
 // position=absolute spread distance, seconds=remaining lifetime (-1 forever).
 // Its only guest request is value=1 with both floats zero, after native ignition.
+struct RaftState {
+  uint64_t route=0; // Ordered authored path signature, never a native key/pointer.
+  uint8_t current=0,next=255; // Local route ordinals;255 is the end of the route.
+  std::array<float,12> pose{}; // World XYZ, forward, up, velocity. Values only.
+  auto operator<=>(const RaftState&) const = default;
+};
 struct ObjectState {
   uint32_t generation=0, level=0, number=0;
   uint64_t source=0;
   ObjectKind kind=ObjectKind::Breakable;
   uint32_t value=0;
   float position=0, seconds=0;
+  RaftState raft; // Raft states append58 bytes; requests for rafts are not supported.
   auto operator<=>(const ObjectState&) const = default;
 };
 bool ValidObjectState(const ObjectState& object);

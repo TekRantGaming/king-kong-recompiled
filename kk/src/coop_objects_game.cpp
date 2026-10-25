@@ -34,6 +34,9 @@ REX_EXTERN(__imp__sub_826F9DC0);
 REX_EXTERN(__imp__sub_82634428);
 REX_EXTERN(__imp__sub_825FAF58);
 REX_EXTERN(__imp__sub_8260F858);
+REX_EXTERN(__imp__sub_8260C988);
+REX_EXTERN(__imp__sub_827117E0);
+REX_EXTERN(__imp__sub_82711328);
 #if defined(KK_DEV_TOOLS)
 namespace kk {
 double DevSecondsSinceMenu();
@@ -66,6 +69,10 @@ struct Binding : objects::Binding {
   bool fire_path_refused=false;
   double next_ignite=0;
   uint64_t fire_tick=0;
+  struct RaftRoute { std::vector<uint32_t> nodes; uint32_t key=0; uint64_t signature=0; } route;
+  RaftState raft;
+  bool raft_ready=false,raft_driven=false;
+  double next_route=0;
 #if defined(KK_DEV_TOOLS)
   uint32_t init_calls=0,wait_calls=0,loop_calls=0,update_calls=0,hold_calls=0,context_misses=0;
 #endif
@@ -123,14 +130,15 @@ uint32_t Ptr(const uint8_t* b,uint32_t p,uint32_t offset,uint32_t bytes) {
   if (!PoseAddress(p,offset+4)) return 0;
   const auto q=Load32(b,p+offset); return PoseAddress(q,bytes) ? q : 0;
 }
-std::optional<ShotVector> NativePoint(PPCContext& ctx,uint8_t* b,uint32_t actor) {
+std::optional<ShotVector> NativePoint(PPCContext& ctx,uint8_t* b,uint32_t actor,
+    void (*get)(PPCContext&,uint8_t*)=__imp__sub_8270FCE0) {
   const auto sp=ctx.r1.u32;
   if (!PoseAddress(actor,32) || !Ptr(b,actor,12,64) || (sp&15) || sp<0x40014000 || sp>=0xA0000000) return {};
   uint8_t scratch[16384]; const auto start=sp-sizeof(scratch); const PPCContext saved=ctx;
   std::memcpy(scratch,b+start,sizeof(scratch));
   ctx.r1.u64=start+12288; std::memset(b+start+12288,0,4096); Store32(b,start+12288,sp);
   const auto out=ctx.r1.u32+256;
-  ctx.r3.u64=actor; ctx.r4.u64=out; __imp__sub_8270FCE0(ctx,b);
+  ctx.r3.u64=actor; ctx.r4.u64=out; get(ctx,b);
   const ShotVector point{LoadF(b,out),LoadF(b,out+4),LoadF(b,out+8)};
   std::memcpy(b+start,scratch,sizeof(scratch)); ctx=saved;
   if (!std::isfinite(point.x) || !std::isfinite(point.y) || !std::isfinite(point.z) ||
@@ -151,13 +159,14 @@ ObjectKind Family(const uint8_t* b,uint32_t ai) {
   if (Track(b,ai,0x82507798) || Track(b,ai,0x82516128) || Track(b,ai,0x82515CF0)) return ObjectKind::Breakable;
   if (Track(b,ai,0x82551ED8) || Track(b,ai,0x82574D80) || Track(b,ai,0x8256C3F8) || Track(b,ai,0x82543478)) return ObjectKind::Door;
   if (Track(b,ai,0x825FAF58) || Track(b,ai,0x8260F858)) return ObjectKind::Fire;
+  if (Track(b,ai,0x825FD388) || Track(b,ai,0x825E7348) || Track(b,ai,0x8260C988) || Track(b,ai,0x82604E68)) return ObjectKind::Raft;
   return ObjectKind(0);
 }
 bool DoorScheduled(const uint8_t* b,uint32_t ai) {
   return Track(b,ai,0x8256C3F8) || Track(b,ai,0x82543478) || Track(b,ai,0x82574D80);
 }
 uint32_t Vars(const uint8_t* b,uint32_t ai,ObjectKind kind) {
-  const uint32_t needed=kind==ObjectKind::Breakable ? 580 : kind==ObjectKind::Fire ? 884 : 1340;
+  const uint32_t needed=kind==ObjectKind::Breakable ? 580 : kind==ObjectKind::Fire ? 884 : kind==ObjectKind::Raft ? 1312 : 1340;
   const auto definition=Ptr(b,Ptr(b,ai,0,4),0,8);
   if (!definition || Load32(b,definition+4)<needed || Load32(b,definition+4)>1024*1024) return 0;
   return Ptr(b,ai,64,needed);
@@ -271,6 +280,10 @@ ObjectState Sample(const uint8_t* b,const Binding& o) {
     s.position=LoadF(b,o.vars+416); s.seconds=LoadF(b,o.vars+388);
     s.value=(s.seconds==0 || (Load32(b,o.actor+4)&0x200000)) ? 2 : 1;
     if (s.value==2) s.seconds=0;
+  }
+  else if (o.kind==ObjectKind::Raft) {
+    s.value=o.raft_ready ? Load32(b,o.vars+376) : UINT32_MAX;
+    s.position=LoadF(b,o.vars+420); s.seconds=LoadF(b,o.vars+4); s.raft=o.raft;
   }
   else {
     for (unsigned i=0;i<8;++i) if (const auto ext=Lever(b,o,i)) {
@@ -913,6 +926,99 @@ void ReplayFires(PPCContext& ctx,uint8_t* b) {
     std::memcpy(b+start,scratch,sizeof(scratch)); ctx=saved;
   }
 }
+bool RaftRoute(PPCContext& ctx,uint8_t* b,Binding& o) {
+  const auto start=Load32(b,o.vars+204),key=Load32(b,o.vars+224);
+  if (!start || !key || Track(b,o.ai,0x825FD388)) return false;
+  if (!o.route.nodes.empty() && o.route.nodes.front()==start && o.route.key==key) return true;
+  o.route={}; o.raft_ready=o.raft_driven=false;
+  if (Now()<o.next_route) return false;
+  o.next_route=Now()+1;
+  std::vector<uint32_t> nodes; std::set<uint32_t> seen;
+  uint32_t node=start; uint64_t signature=14695981039346656037ull; bool loop=false;
+  const auto read=[&](uint32_t a){ return Load32(b,a); };
+  const auto half=[&](uint32_t a){ return Load16(b,a); };
+  while (node) {
+    if (nodes.size()>=128 || !seen.insert(node).second || !PoseAddress(node,32) ||
+        (Load32(b,node)&0x10000001)) return false; // Static, unparented authored nodes only.
+    const auto p=NativePoint(ctx,b,node); if (!p) return false;
+    const auto id=enemies::AuthoredKey(0x5246544e,p->x,p->y,p->z); if (!id) return false;
+    signature=enemies::Mix(signature,id); nodes.push_back(node);
+    const auto target=objects::RaftPathTarget(read,half,node,key); if (!target) return false;
+    node=target->actor;
+    if (node==start) { loop=true; break; }
+  }
+  if (nodes.empty()) return false;
+  o.route={std::move(nodes),key,enemies::Mix(signature,uint64_t(seen.size())*2+loop)};
+  return o.route.signature!=0;
+}
+bool ReadRaft(PPCContext& ctx,uint8_t* b,Binding& o) {
+  if (!RaftRoute(ctx,b,o)) return false;
+  const auto find=[&](uint32_t actor)->uint8_t {
+    const auto it=std::find(o.route.nodes.begin(),o.route.nodes.end(),actor);
+    return it==o.route.nodes.end() ? 255 : uint8_t(it-o.route.nodes.begin());
+  };
+  const auto current=find(Load32(b,o.vars+240)),next=find(Load32(b,o.vars+244));
+  if (current==255 || (Load32(b,o.vars+244) && next==255)) return false;
+  const auto position=NativePoint(ctx,b,o.actor),forward=NativePoint(ctx,b,o.actor,__imp__sub_8270FA58),up=NativePoint(ctx,b,o.actor,__imp__sub_8270F918);
+  if (!position || !forward || !up) return false;
+  const float fl=std::hypot(forward->x,forward->y,forward->z);
+  if (fl<.001f) return false;
+  const ShotVector f{forward->x/fl,forward->y/fl,forward->z/fl};
+  const float dot=f.x*up->x+f.y*up->y+f.z*up->z;
+  const ShotVector un{up->x-dot*f.x,up->y-dot*f.y,up->z-dot*f.z};
+  const float ul=std::hypot(un.x,un.y,un.z); if (ul<.001f) return false;
+  o.raft.route=o.route.signature; o.raft.current=current; o.raft.next=next;
+  o.raft.pose={position->x,position->y,position->z,f.x,f.y,f.z,un.x/ul,un.y/ul,un.z/ul,
+      LoadF(b,o.vars+1296),LoadF(b,o.vars+1300),LoadF(b,o.vars+1304)};
+  o.raft_ready=true;
+  return ValidObjectState(Sample(b,o));
+}
+bool ApplyRaft(PPCContext& ctx,uint8_t* b,Binding& o,const ObjectState& s) {
+  if (!RaftRoute(ctx,b,o) || s.raft.route!=o.route.signature || s.raft.current>=o.route.nodes.size() ||
+      (s.raft.next!=255 && s.raft.next>=o.route.nodes.size())) return false;
+  const auto sp=ctx.r1.u32;
+  if ((sp&15) || sp<0x40014000 || sp>=0xA0000000) return false;
+  uint8_t scratch[16384]; const auto start=sp-sizeof(scratch); const PPCContext saved=ctx;
+  std::memcpy(scratch,b+start,sizeof(scratch));
+  constexpr uint32_t globals[]{0x82CCBF58,0x82CCBF5C,0x82CCBF60,0x82CCBF64,0x82CCBF68,0x82CCBF6C,0x82CCBF70};
+  uint32_t values[7]; for (unsigned n=0;n<7;++n) values[n]=Load32(b,globals[n]);
+  ctx.r1.u64=start+12288; std::memset(b+start+12288,0,4096); Store32(b,start+12288,sp);
+  Store32(b,globals[3],o.ai); Store32(b,globals[4],o.ai); Store32(b,globals[5],o.actor); Store32(b,globals[6],o.actor);
+  const auto p=ctx.r1.u32+256;
+  for (unsigned n=0;n<9;++n) StoreF(b,p+16*(n/3)+4*(n%3),s.raft.pose[n]);
+  ctx.r3.u64=o.actor; ctx.r4.u64=p; __imp__sub_827117E0(ctx,b);
+  ctx.r3.u64=o.actor; ctx.r4.u64=p+16; ctx.r5.u64=p+32; __imp__sub_82711328(ctx,b);
+  // Rebind route ordinals to LOCAL references. FollowNetwork is withheld only
+  // after this exact route/pose has been applied; local rider reflex still runs.
+  Store32(b,o.vars+240,o.route.nodes[s.raft.current]);
+  Store32(b,o.vars+244,s.raft.next==255 ? 0 : o.route.nodes[s.raft.next]);
+  Store32(b,o.vars+376,s.value); StoreF(b,o.vars+416,s.position); StoreF(b,o.vars+420,s.position); StoreF(b,o.vars+4,s.seconds);
+  if (!o.raft_driven) for (unsigned n=0;n<3;++n) StoreF(b,o.vars+1284+4*n,s.raft.pose[n]);
+  for (unsigned n=0;n<3;++n) StoreF(b,o.vars+1296+4*n,s.raft.pose[9+n]);
+  for (unsigned n=0;n<7;++n) Store32(b,globals[n],values[n]);
+  std::memcpy(b+start,scratch,sizeof(scratch)); ctx=saved;
+#if defined(KK_DEV_TOOLS)
+  if (o.raft_driven && std::hypot(o.raft.pose[0]-s.raft.pose[0],o.raft.pose[1]-s.raft.pose[1],o.raft.pose[2]-s.raft.pose[2])>.1f)
+    state.observed_change=true;
+#endif
+  o.raft=s.raft; o.raft_ready=o.raft_driven=true;
+  return true;
+}
+void UpdateRafts(PPCContext& ctx,uint8_t* b) {
+  for (auto& [actor,o] : state.bindings) {
+    if (o.kind!=ObjectKind::Raft || !Valid(b,o) || Match(o.source,o.kind)!=&o) continue;
+    if (state.host) { o.raft_ready=false; ReadRaft(ctx,b,o); } // Regular10Hz sample publishes the pose.
+    else {
+      const auto* s=state.replica.Find(o.kind,o.source);
+      if (s && !ApplyRaft(ctx,b,o,*s)) o.raft_driven=false;
+    }
+  }
+}
+void RaftFollow(PPCContext& ctx,uint8_t* b) {
+  auto* o=state.ready && Shared() ? Current(b,ObjectKind::Raft) : nullptr;
+  if (o && !state.host && o->raft_driven) { ctx.r3.u64=0; return; }
+  __imp__sub_8260C988(ctx,b);
+}
 void DoorUpdate(PPCContext& ctx,uint8_t* b) {
   auto* o=state.ready && Shared() ? Current(b,ObjectKind::Door) : nullptr;
 #if defined(KK_DEV_TOOLS)
@@ -1120,6 +1226,21 @@ void Probes(PPCContext& ctx,uint8_t* b) {
     }
     if (!probe->done && t>probe->due+20) { probe->done=true; REXLOG_WARN("KK dev object fire fixture: no eligible static fire"); }
   }
+  static Probe raft("KK_DEV_OBJECT_RAFT");
+  if (!raft.done && raft.due>=0 && t>=raft.due) {
+    for (auto& [actor,o] : state.bindings) {
+      if (o.kind!=ObjectKind::Raft || !Valid(b,o) || Match(o.source,o.kind)!=&o ||
+          !o.raft_ready || o.raft.next==255) continue;
+      const auto p=NativePoint(ctx,b,o.actor);
+      if (!p || !kk::DevTeleportJack(ctx,b,Load32(b,0x82CCBF7C),{p->x,p->y,p->z+2},1,0)) continue;
+      if (state.host) Store32(b,o.vars+376,0); // Native resume input; no chosen pose/outcome.
+      raft.done=true;
+      REXLOG_INFO("KK dev object raft fixture: role={} id={:016X} boarded=({:.3f},{:.3f},{:.3f}) native-resume={}",
+          state.host ? "host" : "guest",o.source,p->x,p->y,p->z+2,state.host);
+      break;
+    }
+    if (!raft.done && t>raft.due+20) { raft.done=true; REXLOG_WARN("KK dev object raft fixture: no eligible initialized route with a next node"); }
+  }
 }
 void ReloadProbe(uint8_t* b) {
   static Probe probe("KK_DEV_OBJECT_RELOAD");
@@ -1264,6 +1385,7 @@ void ObjectsAfterAi(PPCContext& ctx,uint8_t* b,uint32_t w) {
   ReplayBreakables(ctx,b);
   IdleDoors(ctx,b);
   ReplayFires(ctx,b);
+  UpdateRafts(ctx,b);
   const auto now=Now();
 #if defined(KK_DEV_TOOLS)
   if (Trace() && std::getenv("KK_DEV_OBJECT_PASSAGE")) {
@@ -1341,6 +1463,15 @@ void ObjectsAfterAi(PPCContext& ctx,uint8_t* b,uint32_t w) {
       }
       if (o.kind==ObjectKind::Breakable) REXLOG_INFO("KK dev object breakable consumer: role={} id={:016X} maximum={} init={} go={} consumed={}",
           state.host ? "host" : "guest",o.source,Load32(b,o.vars+556),Track(b,o.ai,0x82516128),Track(b,o.ai,0x82515CF0),o.damage_tick==state.ai_tick);
+      if (o.kind==ObjectKind::Raft) {
+        const auto p=NativePoint(ctx,b,o.actor);
+        REXLOG_INFO("KK dev object raft state: role={} id={:016X} ready={} driven={} nodes={} route={:016X} current={}/{} native-source={:08X} native-key={:08X} native-current={:08X}/{:08X} pos=({:.3f},{:.3f},{:.3f}) host=({:.3f},{:.3f},{:.3f}) speed={} time={} stop={}",
+            state.host ? "host" : "guest",o.source,o.raft_ready,o.raft_driven,o.route.nodes.size(),o.raft.route,o.raft.current,o.raft.next,
+            Load32(b,o.vars+204),Load32(b,o.vars+224),Load32(b,o.vars+240),Load32(b,o.vars+244),
+            p ? p->x : 0,p ? p->y : 0,p ? p->z : 0,
+            authority ? authority->raft.pose[0] : o.raft.pose[0],authority ? authority->raft.pose[1] : o.raft.pose[1],authority ? authority->raft.pose[2] : o.raft.pose[2],
+            LoadF(b,o.vars+420),LoadF(b,o.vars+4),Load32(b,o.vars+376));
+      }
       if (o.kind==ObjectKind::Door && !o.lever_logged) {
         bool logged=false;
         for (unsigned i=0;i<8;++i) if (const auto ext=Lever(b,o,i)) {
@@ -1376,3 +1507,4 @@ REX_HOOK_RAW(sub_82574D80) { kk::coop::DoorInit(ctx,base); }
 REX_HOOK_RAW(sub_826F9DC0) { kk::coop::DoorStop(ctx,base); }
 REX_HOOK_RAW(sub_825FAF58) { kk::coop::FireInit(ctx,base); }
 REX_HOOK_RAW(sub_8260F858) { kk::coop::FireBurn(ctx,base); }
+REX_HOOK_RAW(sub_8260C988) { kk::coop::RaftFollow(ctx,base); }

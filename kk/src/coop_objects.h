@@ -32,6 +32,20 @@ template<class Read> std::optional<PathTarget> FirstPathTarget(Read read,uint32_
   if (target && !PoseAddress(target,32)) return {};
   return PathTarget{key,target};
 }
+template<class Read,class Half> std::optional<PathTarget> RaftPathTarget(Read read,Half half,uint32_t actor,uint32_t key) {
+  if (!FirstPathTarget(read,actor,key)) return {};
+  const auto ext=read(actor+24),table=read(ext+24),groups=read(table),count=read(table+4);
+  if (!PoseAddress(ext,42)) return {};
+  uint32_t group=0;
+  for (unsigned i=0;i<count;++i) if (read(groups+12*i)==key) group=groups+12*i;
+  const auto entries=read(group+4),length=read(group+8);
+  if (length>60) return {}; // Native824FE598 has only60 scratch slots.
+  uint32_t target=length ? read(entries+8) : 0; unsigned flagged=0;
+  for (unsigned i=0;i<length;++i) if (half(entries+16*i)&1) { target=read(entries+16*i+8); ++flagged; }
+  if (flagged>1 || (target && !PoseAddress(target,32))) return {}; // No random branch replay.
+  if (!target && (read(actor)&64) && (half(ext+40)&2)) return {}; // Alternate-key redirect unsupported.
+  return PathTarget{key,target};
+}
 struct BreakableTrack { uint32_t block=0,slot=0; bool init=false; };
 // Only these two recovered callbacks may be woken by a retained outcome.
 // The native dispatcher needs this AI's own state word and slot, not the outer AI's.
@@ -118,7 +132,7 @@ template<class Read> std::map<uint32_t,uint32_t> FileKeys(Read read) {
   return out;
 }
 inline uint64_t AssetSource(ObjectKind kind,uint32_t key) {
-  if (!key || (kind!=ObjectKind::Breakable && kind!=ObjectKind::Door && kind!=ObjectKind::Fire)) return 0;
+  if (!key || (kind!=ObjectKind::Breakable && kind!=ObjectKind::Door && kind!=ObjectKind::Fire && kind!=ObjectKind::Raft)) return 0;
   const auto hash=enemies::Mix(enemies::Mix(14695981039346656037ull,0x4f424a4b),uint64_t(kind)<<32|key);
   return hash ? hash : 1;
 }

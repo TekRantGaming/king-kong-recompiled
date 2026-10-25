@@ -132,6 +132,16 @@ bool IsFlowMessage(MessageType t) { return (t >= MessageType::SessionStart && t 
 bool ValidObjectState(const ObjectState& s) {
   if (!s.generation || !s.level || s.level>100000 || !s.number || !s.source ||
       !std::isfinite(s.position) || !std::isfinite(s.seconds)) return false;
+  if (s.kind!=ObjectKind::Raft && s.raft!=RaftState{}) return false;
+  if (s.kind==ObjectKind::Raft) {
+    if (s.value>1 || s.position<0 || s.position>1000 || s.seconds<0 || s.seconds>86400 ||
+        !s.raft.route || s.raft.current>=128 || (s.raft.next>=128 && s.raft.next!=255)) return false;
+    const auto& p=s.raft.pose;
+    for (unsigned i=0;i<p.size();++i)
+      if (!std::isfinite(p[i]) || std::abs(p[i])>(i<3 ? 100000 : i>=9 ? 1000 : 1.01f)) return false;
+    const float f=std::hypot(p[3],p[4],p[5]),u=std::hypot(p[6],p[7],p[8]);
+    return std::abs(f-1)<.01f && std::abs(u-1)<.01f && std::abs(p[3]*p[6]+p[4]*p[7]+p[5]*p[8])<.02f;
+  }
   if (s.kind==ObjectKind::Breakable) return s.value<=100000 && s.position>=0 && s.position<=5 &&
       std::floor(s.position)==s.position && s.seconds==0;
   if (s.kind==ObjectKind::Fire) return s.value<=2 && s.position>=0 && s.position<=140 &&
@@ -144,6 +154,7 @@ bool ValidObjectState(const ObjectState& s) {
 bool ValidObjectRequest(const ObjectState& s) {
   if (!s.generation || !s.level || s.level>100000 || !s.number || !s.source ||
       !std::isfinite(s.position) || !std::isfinite(s.seconds)) return false;
+  if (s.raft!=RaftState{}) return false;
   if (s.kind==ObjectKind::Breakable) return !(s.value&~kObjectHitFlags) && s.position>=0 &&
       s.position<=100000 && std::floor(s.position)==s.position && s.seconds>=0 && s.seconds<=2;
   if (s.kind==ObjectKind::Fire) return s.value==1 && s.position==0 && s.seconds==0;
@@ -269,7 +280,12 @@ bool Encode(const Message& m, std::vector<uint8_t>& out) {
       if (!(m.type==MessageType::ObjectRequest ? ValidObjectRequest(m.object) : ValidObjectState(m.object))) return false;
       payload.U(m.object.generation,4); payload.U(m.object.level,4); payload.U(m.object.number,4);
       payload.U(m.object.source,8); payload.U(uint8_t(m.object.kind),1); payload.U(m.object.value,4);
-      payload.U(std::bit_cast<uint32_t>(m.object.position),4); payload.U(std::bit_cast<uint32_t>(m.object.seconds),4); break;
+      payload.U(std::bit_cast<uint32_t>(m.object.position),4); payload.U(std::bit_cast<uint32_t>(m.object.seconds),4);
+      if (m.object.kind==ObjectKind::Raft) {
+        payload.U(m.object.raft.route,8); payload.U(m.object.raft.current,1); payload.U(m.object.raft.next,1);
+        for (float v:m.object.raft.pose) payload.U(std::bit_cast<uint32_t>(v),4);
+      }
+      break;
     case MessageType::WorldDigest: {
       const auto& p=m.digest; if (!ValidWorldDigest(p)) return false;
       for (uint32_t v:{p.generation,p.level,p.start,p.checkpoint,p.sweep}) payload.U(v,4);
@@ -456,6 +472,10 @@ bool Decode(std::span<const uint8_t> bytes, Message& out) {
       m.object.generation=uint32_t(r.U(4)); m.object.level=uint32_t(r.U(4)); m.object.number=uint32_t(r.U(4));
       m.object.source=r.U(8); m.object.kind=ObjectKind(r.U(1)); m.object.value=uint32_t(r.U(4));
       m.object.position=std::bit_cast<float>(uint32_t(r.U(4))); m.object.seconds=std::bit_cast<float>(uint32_t(r.U(4)));
+      if (m.object.kind==ObjectKind::Raft) {
+        m.object.raft.route=r.U(8); m.object.raft.current=uint8_t(r.U(1)); m.object.raft.next=uint8_t(r.U(1));
+        for (float& v:m.object.raft.pose) v=std::bit_cast<float>(uint32_t(r.U(4)));
+      }
       if (!(m.type==MessageType::ObjectRequest ? ValidObjectRequest(m.object) : ValidObjectState(m.object))) return false;
       break;
     case MessageType::WorldDigest: {
