@@ -6,6 +6,7 @@
 #include <atomic>
 #include <cstdint>
 #include <filesystem>
+#include <memory>
 #include <thread>
 #include <vector>
 
@@ -26,13 +27,13 @@ class LauncherMusic {
  private:
   void Load(std::filesystem::path game_dir);
   void Feed();
+  struct Device;
 
   std::thread worker_;
   std::atomic<bool> ready_{false};
   std::vector<int16_t> pcm_;  // interleaved
   int channels_ = 2, rate_ = 24000;
-  SDL_AudioStream* stream_ = nullptr;
-  bool audio_ready_ = false;
+  std::shared_ptr<Device> device_;
   size_t next_ = 0;  // next sample to queue (loops)
   float gain_ = 0;
   bool paused_ = false;  // faded out: the device is paused

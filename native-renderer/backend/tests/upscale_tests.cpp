@@ -1,7 +1,10 @@
 // The temporal upscalers' GPU-free parts (docs/upscalers.md): the settings, the jitter sequence and its
 // clip-space offset, the motion vectors' matrix math, draw matching and camera vote, and where in a frame
 // the upscaler runs.
+#include <algorithm>
+#include <array>
 #include <cmath>
+#include <limits>
 #include <cstdio>
 #include <cstring>
 #include <random>
@@ -424,6 +427,70 @@ TEST(Motion_CameraVoteFindsTheCameraAmongMovingObjects) {
   // A new frame starts empty.
   vote.BeginFrame(2);
   CHECK(!vote.Result(r));
+}
+
+namespace {
+// The vote before task 351 (no reuse of the last offer): the oracle for the same sums and counts.
+struct OldVote {
+  struct C { Mat4 m, sum; uint32_t votes; };
+  std::vector<C> cands;
+  uint32_t offers = 0;
+  static bool Close(const Mat4& a, const Mat4& b) {
+    double scale = 0;
+    for (int i = 0; i < 16; ++i) scale = std::max({scale, std::fabs(a[i]), std::fabs(b[i])});
+    if (scale == 0) return true;
+    for (int i = 0; i < 16; ++i)
+      if (std::fabs(a[i] - b[i]) > CameraReprojectionVote::kTolerance * scale) return false;
+    return true;
+  }
+  void Offer(const float cur[16], const float prev[16]) {
+    Mat4 inv;
+    if (!Mat4Invert(Mat4FromRows(cur), inv)) return;
+    Mat4 r = Mat4Multiply(Mat4FromRows(prev), inv);
+    if (std::fabs(r[15]) > 1e-9) { const double k = 1.0 / r[15]; for (double& v : r) v *= k; }
+    ++offers;
+    for (C& c : cands)
+      if (Close(c.m, r)) { ++c.votes; for (int i = 0; i < 16; ++i) c.sum[i] += r[i]; return; }
+    if (cands.size() < 16) cands.push_back({r, r, 1});
+  }
+};
+}  // namespace
+
+TEST(Motion_CameraVoteRepeatedOffersMatchTheOldVote) {
+  // Task 351: runs of the same offer (a field of plants under one camera) reuse the last result.
+  std::mt19937 rng(351);
+  for (int pass = 0; pass < 300; ++pass) {
+    CameraReprojectionVote vote;
+    OldVote old;
+    vote.BeginFrame(uint64_t(pass));
+    std::vector<std::array<float, 32>> kinds(1 + rng() % 24);  // current rows, previous rows
+    for (auto& k : kinds) {
+      for (int i = 0; i < 32; ++i) k[i] = float(int(rng() % 2001) - 1000) / 250.0f;
+      if (rng() % 7 == 0) for (int i = 0; i < 16; ++i) k[i] = 0.0f;               // not invertible
+      if (rng() % 9 == 0) k[16 + rng() % 16] = std::numeric_limits<float>::quiet_NaN();
+      if (rng() % 5 == 0) for (int i = 0; i < 16; ++i) k[16 + i] = k[i];          // static: identity
+    }
+    const int offers = 1 + int(rng() % 400);
+    size_t at = 0;
+    for (int o = 0; o < offers; ++o) {
+      if (rng() % 4 == 0) at = rng() % kinds.size();  // mostly runs of the same offer
+      vote.Offer(kinds[at].data(), kinds[at].data() + 16);
+      old.Offer(kinds[at].data(), kinds[at].data() + 16);
+    }
+    Mat4 r{};
+    uint32_t votes = 0, offered = 0;
+    const bool any = vote.Result(r, &votes, &offered);
+    CHECK_EQ(offered, old.offers);
+    CHECK_EQ(any, !old.cands.empty());
+    if (any) {
+      const OldVote::C* best = &old.cands[0];
+      for (const auto& c : old.cands) if (c.votes > best->votes) best = &c;
+      CHECK_EQ(votes, best->votes);
+      Mat4 want;
+      for (int i = 0; i < 16; ++i) want[i] = best->sum[i] / double(best->votes);
+      CHECK(std::memcmp(r.data(), want.data(), sizeof(Mat4)) == 0);
+    }
+  }
 }
 
 TEST(Motion_CameraMotionMatchesTheProjectedPoints) {

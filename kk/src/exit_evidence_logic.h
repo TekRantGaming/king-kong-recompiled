@@ -228,7 +228,7 @@ inline std::string DescribeEndEvent(std::string_view xml, uint32_t pid, std::str
     const std::string offset = names ? named("FaultingOffset") : at(7);
     std::string s = "Windows recorded a crash: exception 0x" + code + " in " + module + " at offset 0x" + offset;
     const std::string c = Lower(code);
-    if (c == "c0000409") s += " (fail-fast: stack buffer overrun, abort() or an invalid argument)";
+    if (c == "c0000409") s += " (fail fast: stack buffer overrun, abort() or an invalid argument)";
     else if (c == "c0000374") s += " (heap corruption)";
     else if (c == "c00000fd") s += " (stack overflow)";
     else if (c == "c0000005") s += " (access violation)";

@@ -78,6 +78,14 @@ std::unique_ptr<Upscaler> CreateUpscaler(nvrhi::IDevice* device, const UpscaleCo
 // The PCI vendor of the device's GPU (0 unknown).
 uint32_t UpscalerDeviceVendor(nvrhi::IDevice* device);
 
+// Task 353: whether this process may load an upscaler's SDK. The game's process sets a gate (the plugin's
+// upscaler check, which asks the SDKs in a separate short-lived process): an SDK that check did not confirm
+// (it crashed or hung there, or said no) is never loaded here. Every Create*Upscaler and the Vulkan requests
+// ask it first. No gate (tests, the check's own process): every SDK may load. `why` says why not.
+using UpscalerGate = bool (*)(UpscalerKind kind, std::string* why);
+void SetUpscalerGate(UpscalerGate gate);
+bool UpscalerGateAllows(UpscalerKind kind, std::string* why);
+
 // The SDKs wait for the GPU before they make or destroy a context. The game's device has other threads
 // submitting (the submission and present threads), and a Vulkan queue must not be used by two threads at
 // once, so the host gives its own locked wait for its device (Backend::Initialize); any other device

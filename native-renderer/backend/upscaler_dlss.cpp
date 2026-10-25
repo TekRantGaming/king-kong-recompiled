@@ -11,6 +11,7 @@
 // renderer's open command list: the inputs are put in shader-read state and the output in
 // unordered-access state through NVRHI, and NVRHI's cached state is cleared afterwards.
 
+#include "backend/startup_steps.h"
 #include "backend/upscaler.h"
 #if NR_HAS_VULKAN
 #include "backend/upscaler_vulkan.h"
@@ -171,6 +172,7 @@ NVSDK_NGX_Parameter* AcquireNgx(nvrhi::IDevice* device, std::string* why) {
     return g_ngx.caps;
   }
   NVSDK_NGX_Result r = NVSDK_NGX_Result_Fail;
+  steps::Note("upscaler: starting NVIDIA NGX (DLSS)");  // task 353: the start-up step log
   if (vulkan) {
 #if NR_HAS_VULKAN
     auto instance = static_cast<VkInstance>(device->getNativeObject(nvrhi::ObjectTypes::VK_Instance).pointer);
@@ -183,6 +185,7 @@ NVSDK_NGX_Parameter* AcquireNgx(nvrhi::IDevice* device, std::string* why) {
     r = NVSDK_NGX_D3D12_Init_with_ProjectID(kProjectId, NVSDK_NGX_ENGINE_TYPE_CUSTOM, kEngineVersion, DataPath(),
                                             static_cast<ID3D12Device*>(native), CommonInfo(), NVSDK_NGX_Version_API);
   }
+  steps::Note("upscaler: NVIDIA NGX %s", NVSDK_NGX_FAILED(r) ? "did not start" : "started");
   if (NVSDK_NGX_FAILED(r)) {
     if (why) *why = "NGX did not start (" + ResultText(r) + ")";
     return nullptr;
@@ -481,6 +484,7 @@ class DlssUpscaler final : public Upscaler {
 }  // namespace
 
 std::unique_ptr<Upscaler> CreateDlssUpscaler(nvrhi::IDevice* device, const UpscaleConfig& config, std::string* why) {
+  if (!UpscalerGateAllows(UpscalerKind::kDlss, why)) return nullptr;  // task 353: confirmed by the upscaler check
   if (UpscalerDeviceVendor(device) != 0x10DE) {
     if (why) *why = "not an NVIDIA GPU";
     return nullptr;

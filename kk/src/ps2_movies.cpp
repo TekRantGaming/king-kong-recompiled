@@ -3,6 +3,9 @@
 #include <rex/filesystem.h>
 #include "ps2_movie_decoder.h"
 #include "ps2_movies_logic.h"
+#if defined(KK_DEV_TOOLS)
+#include "dev_chapter_prepare.h"
+#endif
 
 // The restored PS2 cutscenes' player, the same on Windows and Linux: the decoder is Media Foundation on
 // Windows and the bundled LGPL FFmpeg on Linux (ps2_movie_decoder.h).
@@ -20,6 +23,7 @@
 #pragma comment(lib, "shell32.lib")
 #else
 #include <cstdio>
+#include <dlfcn.h>
 #endif
 
 #include <SDL3/SDL.h>
@@ -52,15 +56,11 @@
 #include "settings.h"
 #include "ui_paint.h"
 
-// Task 293 (REPORT-269's idea): at a story chapter boundary, load the next level while the PS2 cutscene plays
-// instead of after it (removes the game's LOADING screen after the clip). Off: the loader waits for the clip
-// first, as before. On by default (owner, 19 Oct; REPORT-294: all game checks passed).
-REXCVAR_DEFINE_BOOL(kk_ps2_cutscene_load_during, true, "KK/Gameplay",
-                    "Load the next chapter while its PS2 cutscene plays (task 293; off: after the cutscene, as before). "
-                    "The game's own sound is held silent until the cutscene ends");
-// The SDK's live mute (its audio callback reads it every buffer): the game's sound while the level loads under
-// the cutscene. Never saved while held (SetAudioMuteHeld, settings.cpp).
-REXCVAR_DECLARE(bool, audio_mute);
+// Task 359 (owner 23 Oct, DECISIONS): a PS2 cutscene plays on its own and the next level loads only after it
+// has ended. Nothing is loaded or prepared in the background while it plays. This removes task 293's
+// kk_ps2_cutscene_load_during (the level loaded under the clip, the game's sound held, and the renderer's
+// chapter texture preparation through nr_clip_texture_loading). An old settings file that still names that
+// setting is fine: the SDK skips unknown names.
 
 namespace kk::movies {
 namespace {
@@ -422,28 +422,6 @@ uint32_t LoaderWaitsEnded() { return loader_waits_ended.load(); }
 bool LoaderWaiting() { return loader_waiting.load(); }
 
 namespace {
-// Task 293: the clip the level is loading under (kk_ps2_cutscene_load_during): started by BeforeLoad, waited
-// for by AfterLoad. Both run on the universe thread (the uni_go hook), so no lock.
-struct PendingClip {
-  std::shared_ptr<Job> job;
-  std::thread worker;
-  std::chrono::steady_clock::time_point started;
-};
-PendingClip pending;
-std::atomic<bool> holding_audio{false};
-
-void HoldGameAudio(bool hold) {
-  if (hold) {
-    if (REXCVAR_GET(audio_mute)) return;  // the player's own mute: left as it is
-    holding_audio = true;
-    SetAudioMuteHeld(true);  // settings.h: never saved while held
-    REXCVAR_SET(audio_mute, true);
-  } else if (holding_audio.exchange(false)) {
-    REXCVAR_SET(audio_mute, false);
-    SetAudioMuteHeld(false);
-  }
-}
-
 // The loader's wait for the clip's end (75 s watchdog from the clip's start), then lets the decoder go.
 void WaitForClip(const std::shared_ptr<Job>& job, std::thread& worker, std::chrono::steady_clock::time_point started) {
   std::unique_lock lock(job->mutex);
@@ -460,6 +438,9 @@ void WaitForClip(const std::shared_ptr<Job>& job, std::thread& worker, std::chro
 
 
 bool BeforeLoad(const uint8_t* base, uint32_t g, bool starting, bool leaving) {
+#if defined(KK_DEV_TOOLS)
+  DevStartPreparationTrace();
+#endif
   std::vector<std::filesystem::path> overrides;
   {
     std::lock_guard lock(override_mutex);
@@ -500,38 +481,18 @@ bool BeforeLoad(const uint8_t* base, uint32_t g, bool starting, bool leaving) {
   // Only the level loader waits. The presenter continues painting on its UI
   // thread. No game time/AI dt is changed, and the original request is retained.
   loader_waiting = true;
-  // Task 293: story play only; a chapter-select run's end (the Score pages, task 256) and everything else
-  // keep waiting before the load.
-  if (REXCVAR_GET(kk_ps2_cutscene_load_during) && Word(base, g + 0x5668) == 0) {
-    HoldGameAudio(true);
-    // Task 294: let the decoder go now (it keeps its own Job, as WaitForClip does). A joinable std::thread
-    // parked in this static would call std::terminate if the program ended while the level loads.
-    worker.detach();
-    pending = PendingClip{job, std::thread{}, started};
-    REXLOG_INFO("PS2 movie: the level loads during the clip (kk_ps2_cutscene_load_during){}",
-                holding_audio ? "; the game's sound is held until it ends" : "");
-    return true;
-  }
+  // Task 359: every clip (story play, a chapter-select run's end, a cutscene mod's clip) is waited for here,
+  // before the level loader starts.
   WaitForClip(job, worker, started);
+  REXLOG_INFO("PS2 movie: clip over after {:.2f} s; the level load starts now",
+              std::chrono::duration<double>(std::chrono::steady_clock::now() - started).count());
   return true;
 }
 
-void AfterLoad() {
-  if (!pending.job) return;
-  PendingClip clip = std::move(pending);
-  pending = PendingClip{};
-  const auto loaded = std::chrono::steady_clock::now();
-  const bool clip_over = clip.job->done.load();
-  WaitForClip(clip.job, clip.worker, clip.started);
-  HoldGameAudio(false);
-  const auto now = std::chrono::steady_clock::now();
-  REXLOG_INFO("PS2 movie: level loaded {:.2f} s into the clip; {}", std::chrono::duration<double>(loaded - clip.started).count(),
-              clip_over ? "the clip had already ended (the loading screen showed after it)"
-                        : fmt::format("the game went on {:.2f} s later, when the clip ended",
-                                      std::chrono::duration<double>(now - loaded).count()));
-}
-
 void Shutdown() {
+#if defined(KK_DEV_TOOLS)
+  DevStopPreparationTrace();
+#endif
   shutting_down = true;
   std::shared_ptr<Job> job;
   { std::lock_guard lock(job_mutex); job = current_job; }

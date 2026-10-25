@@ -60,6 +60,7 @@
 #include "backend/pipeline_cache.h"
 #include "backend/pipeline_demand.h"
 #include "backend/resource_preload.h"
+#include "backend/chapter_texture_prepare.h"
 #include "backend/resource_preload_bundle.h"
 #include "kknr/texture_pack.h"
 #include "backend/guest_device.h"
@@ -87,6 +88,7 @@ inline bool TessellationBenchRequested() {
 class GameRenderer {
   friend struct MemoryMigrationTestAccess;
   friend struct TexturePackTestAccess;
+  friend struct VertexViewTestAccess;
  public:
   struct Options {
     bool tessellation_supported = false;
@@ -402,6 +404,9 @@ class GameRenderer {
   // Render-thread loading-screen service. Also callable with an explicit state
   // by offline fixtures; the normal path reads the title's loading variables.
   void PreloadResources(nvrhi::ICommandList* cl, bool loading, uint32_t level, uint32_t start);
+  // Render-thread idle service. Does no work unless the same loading request is
+  // still active; completed CPU work is polled, never joined by a game frame.
+  void IdleTexturePreload();
   // Versioned chapter hints shipped beside the executable. Read before the first
   // draw; independent of the writable pipeline/local-learning cache.
   bool LoadResourceList(const std::string& path);
@@ -674,6 +679,21 @@ class GameRenderer {
   nvrhi::TextureHandle fxaa_source_;  // Options::fxaa: the frame before spatial anti-aliasing
   nvrhi::TextureHandle cas_source_;
   std::unique_ptr<AoGpuTimer> cas_timer_;
+  // Dev aid (KK_DEV_POST_SPLIT=1, game_upscale.cpp): the GPU time of the frame's work in pieces: before
+  // the upscale point by target (pitch, format, size), the upscale point, after it by target, kind (draw,
+  // clear, resolve) and pixel shader, then Present; and a log line for each new target. Logged every 600
+  // frames; nothing without the variable.
+  struct PostSplitBucket {
+    std::string what;
+    std::unique_ptr<AoGpuTimer> timer;
+  };
+  std::map<uint64_t, PostSplitBucket> post_split_;
+  AoGpuTimer* post_split_open_ = nullptr;
+  int post_split_on_ = -1;
+  bool PostSplitOn();
+  void PostSplitMark(nvrhi::ICommandList* cl, uint64_t bucket, const char* what);
+  void PostSplitTarget(nvrhi::ICommandList* cl, const HostTarget* target, char kind, uint64_t shader = 0);
+  void PostSplitFrameEnd(nvrhi::ICommandList* cl);
   std::unique_ptr<Smaa> smaa_;
   std::deque<std::pair<uint64_t, nvrhi::ResourceHandle>> retired_resources_;  // (frame, resource)
   // Destroys the retired resources past their GPU lifetime within a per-frame time budget (task 174:
@@ -729,6 +749,19 @@ class GameRenderer {
   void SaveResourcePreload();
   std::string resource_cache_base_, resource_cache_path_;
   std::vector<ResourcePreloadRecord> preload_records_, learned_resources_;
+  void PrepareChapterTextures();
+  static void ZeroUnwrittenSubresources(nvrhi::ICommandList* list, nvrhi::ITexture* texture,
+                                        const kknr::HostTextureData& data);
+  std::unique_ptr<ChapterTexturePrepare> chapter_textures_;
+  std::vector<uint32_t> chapter_candidates_;
+  size_t chapter_candidate_cursor_ = 0;
+  uint64_t chapter_texture_generation_ = 0, chapter_texture_uploads_ = 0;
+  uint64_t chapter_texture_attempts_ = 0, chapter_texture_matches_ = 0, chapter_texture_stale_ = 0;
+  uint64_t chapter_texture_idle_ = 0;
+  uint32_t chapter_texture_screen_ = 0, chapter_texture_state_ = 0;
+  nvrhi::CommandListHandle chapter_texture_list_;
+  nvrhi::EventQueryHandle chapter_texture_query_;
+  bool chapter_texture_submitted_ = false;
   std::vector<ResourcePreloadChapter> shipped_resources_;  // protected by cache_mutex_
   std::unordered_set<const kknr::ResidentEntry*> resource_seen_;
   size_t preload_cursor_ = 0;
@@ -1065,11 +1098,14 @@ class GameRenderer {
   // The shadow maps' scale (host texels per guest texel).
   float LightingShadowScale() const;
   // The soft shadows: the pitch of the target the game's screen-space shadow (psshadowquad) draws into
-  // (640 wide, 640x480 used, for a 1280x720 frame) gets kLightingMaskScale times the render scale.
+  // (640 wide, 640x480 used, for a 1280x720 frame) gets kLightingMaskScale times the render scale
+  // (with an upscaler, its input scale). 1.5 (Beta 14, task 348a; 2 before): the mask is as tall as the
+  // scene and three quarters of its width, after the game's blur no visible change, 0.4 ms less GPU time
+  // at 4K DLSS Quality (mask 0.68 -> 0.40 ms, blur and composite 0.30 -> 0.18 ms).
   void LightingNoteShadowMask(const GameShader& ps, uint32_t pitch);
   // The texture a resolve made that fetch constant `slot` reads (null for anything else).
   nvrhi::ITexture* LightingResolvedTexture(const dev::DeviceView& d, uint32_t slot);
-  static constexpr float kLightingMaskScale = 2.0f;
+  static constexpr float kLightingMaskScale = 1.5f;
   std::unordered_set<uint32_t> lighting_mask_pitches_;
   nvrhi::BufferHandle lighting_constants_;  // b5 (kkshaders/lighting.h)
   struct LightingState {
@@ -1198,6 +1234,7 @@ class GameRenderer {
   void FlushSamplers();
   void PublishEffectTimes();
   uint64_t effects_frame_ = UINT64_MAX;
+  std::string effects_heavy_;  // task 354: the effects whose switch makes or frees GPU resources (UpdateEffects)
   std::future<std::unique_ptr<SceneGi>> gi_build_;
   std::future<std::unique_ptr<SceneLighting>> lighting_build_;
   std::future<PreparedUpscaler> upscale_build_;
@@ -1379,6 +1416,9 @@ class GameRenderer {
   // they changed (and once per command list).
   std::array<float, 1024> last_vs_ = {}, last_ps_ = {};
   std::array<uint8_t, 4096> last_vs_raw_ = {}, last_ps_raw_ = {};  // the guest bytes of those
+  // Counts the changes of last_vs_raw_ (task 351: the motion recording's camera register search is done
+  // again only when the vertex constants changed since the draw it was last done for).
+  uint64_t vs_constants_generation_ = 0;
   kkshaders::DrawConstants last_draw_ = {};
   bool constants_valid_ = false;
   nvrhi::ICommandList* constants_list_ = nullptr;
@@ -1403,6 +1443,18 @@ class GameRenderer {
   bool frame_trace_checked_ = false;
   std::chrono::steady_clock::time_point frame_trace_last_{};
   double frame_motion_ms_ = 0, frame_sdk_ms_ = 0, frame_target_ms_last_ = 0;
+  // Task 351 (KK_DEV_DLSS_LOG only): the render thread's time in the game's draws, the motion
+  // recording, the camera vote (with last frame's constants looked up) and draw counts.
+  double frame_draw_ms_ = 0, frame_motion_record_ms_ = 0, frame_motion_vote_ms_ = 0;
+  double frame_motion_find_ms_ = 0, frame_motion_submit_ms_ = 0, frame_draw_motion_ms_ = 0;
+  uint32_t frame_draw_calls_ = 0;
+  bool trace_draw_motion_ = false;  // this draw was recorded for the motion pass
+  struct TraceTimer {
+    double* sink;
+    std::chrono::steady_clock::time_point start;
+    explicit TraceTimer(double* s) : sink(s), start(s ? std::chrono::steady_clock::now() : std::chrono::steady_clock::time_point{}) {}
+    ~TraceTimer() { if (sink) *sink += std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - start).count(); }
+  };
   uint64_t frame_resource_creations_ = 0;
   uint64_t frame_skips_ = 0;
   mutable std::mutex stutter_mutex_;

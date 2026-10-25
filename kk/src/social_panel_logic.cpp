@@ -198,4 +198,174 @@ std::optional<SocialCommand> SocialRowCommand(const SocialRow& r, const SocialMo
     default: return {};
   }
 }
+namespace {
+bool Busy(const SocialModel& m) {
+  return m.status==SocialStatus::Creating || m.status==SocialStatus::Joining ||
+      m.status==SocialStatus::Starting || m.status==SocialStatus::Connected;
+}
+bool SteamDormant(const SocialModel& m) {
+  return !m.direct && m.status==SocialStatus::Dormant && m.status_text!="Connecting to Steam";
+}
+bool SteamShown(const SocialModel& m) {
+  return !m.direct && m.status!=SocialStatus::Unavailable && m.status!=SocialStatus::Disabled && m.status!=SocialStatus::Dormant;
+}
+const char* SteamLine(const SocialModel& m) {
+  if (m.status==SocialStatus::Unavailable || m.status==SocialStatus::Disabled) return "Steam is unavailable. You can connect by IP.";
+  if (m.status==SocialStatus::Dormant) return "Connecting to Steam";
+  return "Steam connected";
+}
+}  // namespace
+std::vector<SocialRow> CoopPageRows(const SocialModel& m, CoopPage page, CoopPageOptions o) {
+  std::vector<SocialRow> rows;
+  auto add=[&](SocialRowKind kind, SocialId id, std::string label, std::string detail="", bool enabled=false) {
+    rows.push_back({{kind,id},std::move(label),std::move(detail),enabled});
+  };
+  const bool available=!Busy(m) && !m.lobby;
+  const bool free=(m.status==SocialStatus::Idle || m.status==SocialStatus::Ended) && !m.lobby;
+  auto steam_row=[&](SocialId section) {
+    if (SteamDormant(m)) add(SocialRowKind::ConnectSteam,0,"Connect to Steam","",true);
+    else add(SocialRowKind::Text,section,SteamLine(m));
+  };
+  // The drawer's own rows, so both views offer exactly the same lobby actions.
+  const auto drawer=SocialRows(m,0,m.lobby ? m.direct : false);
+  auto copy=[&](SocialRowKind kind, std::optional<SocialId> id={}) {
+    for (const auto& r : drawer) if (r.key.kind==kind && (!id || r.key.id==*id)) rows.push_back(r);
+  };
+  switch (page) {
+    case CoopPage::Hub:
+      add(SocialRowKind::Section,30,"Host or join");
+      add(SocialRowKind::CoopHost,0,"Host a game","",available);
+      add(SocialRowKind::CoopJoin,0,"Join a game","",available);
+      add(SocialRowKind::Section,31,"Steam");
+      steam_row(31);
+      add(SocialRowKind::AddSteam,0,"Add to Steam","",!m.direct);
+      break;
+    case CoopPage::Host:
+      add(SocialRowKind::Section,32,"What to play");
+    {
+      // Also the lobby's Change: the host picks another chapter or save before Start.
+      const bool can=available || (m.lobby && m.owner==m.self && !m.start_requested);
+      add(SocialRowKind::HostNewGame,0,"New game","",can);
+      add(SocialRowKind::HostLoadGame,0,"Load game","",can && o.has_saves);
+    }
+      break;
+    case CoopPage::HostNew: case CoopPage::HostLoad: break;  // the launcher's chapter and save lists
+    case CoopPage::HostHow:
+      add(SocialRowKind::Section,33,"Steam friends");
+      steam_row(33);
+      add(SocialRowKind::Create,0,"Host with Steam friends","",free && SteamShown(m) && o.choice_ready);
+      add(SocialRowKind::Section,34,"By IP");
+      add(SocialRowKind::DirectPort,0,"UDP port","",available);
+      add(SocialRowKind::DirectCode,0,"Join code","",available);
+      add(SocialRowKind::DirectHost,0,"Host by IP","",available && o.choice_ready);
+      break;
+    case CoopPage::Join: {
+      add(SocialRowKind::Section,35,"Steam invites");
+      if (SteamDormant(m)) add(SocialRowKind::ConnectSteam,0,"Connect to Steam","",true);
+      size_t invites=0;
+      for (const auto& r : drawer) if (r.key.kind==SocialRowKind::Accept || r.key.kind==SocialRowKind::Decline) {
+        rows.push_back(r); ++invites;
+      }
+      if (!invites) add(SocialRowKind::Text,36,"No invites");
+      if (SteamShown(m)) {
+        add(SocialRowKind::Section,37,"Friends playing now");
+        size_t playing=0;
+        for (const auto& f : m.friends) if (f.id!=m.self && f.in_our_game && f.lobby && f.state!=FriendState::Offline) {
+          add(SocialRowKind::JoinFriend,f.id,f.name,"Playing King Kong",free); ++playing;
+        }
+        if (!playing) add(SocialRowKind::Text,38,"No friends are playing now");
+      }
+      add(SocialRowKind::Section,39,"By IP");
+      add(SocialRowKind::DirectAddress,0,"IP address","",available);
+      add(SocialRowKind::DirectPort,0,"UDP port","",available);
+      add(SocialRowKind::DirectCode,0,"Join code","",available);
+      add(SocialRowKind::DirectJoin,0,"Join","",available);
+      break;
+    }
+    case CoopPage::Lobby:
+      if (!m.lobby) { add(SocialRowKind::Leave,0,"Leave lobby","",Busy(m)); break; }
+      add(SocialRowKind::Section,41,"Players");
+      copy(SocialRowKind::Member);
+      add(SocialRowKind::Section,42,"Chapter or save");
+      for (const auto& r : drawer) if (r.key.kind==SocialRowKind::ChapterSelect)
+        add(SocialRowKind::ChangeChoice,0,"Chapter or save","",r.enabled);
+      copy(SocialRowKind::Text,13);
+      if (m.direct && m.owner==m.self) {  // the host's own details; the guest already has them
+        add(SocialRowKind::Section,43,"Share these details");
+        copy(SocialRowKind::Text,10); copy(SocialRowKind::Text,11); copy(SocialRowKind::Text,12);
+      } else if (SteamShown(m)) {
+        add(SocialRowKind::Section,43,"Invite a friend");
+        copy(SocialRowKind::OverlayInvite); copy(SocialRowKind::Text,23);
+        copy(SocialRowKind::Friend); copy(SocialRowKind::Text,5);
+      }
+      add(SocialRowKind::Section,44,"Ready");
+      copy(SocialRowKind::Ready); copy(SocialRowKind::Start); copy(SocialRowKind::Leave);
+      break;
+  }
+  return rows;
+}
+CoopPage CoopPageFor(const SocialModel& m, CoopPage current) {
+  const bool waiting=m.status==SocialStatus::Creating || m.status==SocialStatus::Joining;
+  // The lobby page also stays while Steam starts for an accepted invite (it then checks the lobby).
+  const bool connecting=m.status==SocialStatus::Dormant && m.status_text=="Connecting to Steam";
+  if ((m.lobby || waiting) && (current==CoopPage::Hub || current==CoopPage::HostHow || current==CoopPage::Join))
+    return CoopPage::Lobby;
+  if (current==CoopPage::Lobby && !m.lobby && !waiting && !connecting) return CoopPage::Hub;
+  // In a lobby, Host, New game and Load game are the host's Change (before Start) only.
+  const bool host_pages=current==CoopPage::Host || current==CoopPage::HostNew || current==CoopPage::HostLoad;
+  if (host_pages && (waiting || (m.lobby && (m.owner!=m.self || m.start_requested)))) return CoopPage::Lobby;
+  return current;
+}
+std::optional<SocialCommand> CoopRowCommand(const SocialRow& r, const SocialModel& m, CoopPage page) {
+  const auto rows=CoopPageRows(m,page,{true,true});
+  auto found=std::find_if(rows.begin(),rows.end(),[&](const auto& row) { return row.key==r.key; });
+  if (found==rows.end() || !found->enabled) return {};
+  switch (r.key.kind) {
+    case SocialRowKind::JoinFriend: {
+      auto f=std::find_if(m.friends.begin(),m.friends.end(),[&](const auto& f) { return f.id==r.key.id; });
+      if (f==m.friends.end() || !f->lobby) return {};
+      return SocialCommand{SocialAction::Accept,f->lobby};
+    }
+    case SocialRowKind::Create: return SocialCommand{SocialAction::CreateLobby};
+    case SocialRowKind::ConnectSteam: return SocialCommand{SocialAction::Open};
+    case SocialRowKind::Accept: case SocialRowKind::Decline: case SocialRowKind::Ready: case SocialRowKind::Start:
+    case SocialRowKind::OverlayInvite: case SocialRowKind::Leave: case SocialRowKind::Friend:
+      return SocialRowCommand(r,m);
+    default: return {};
+  }
+}
+CoopStatus CoopLobbyStatus(const SocialModel& m, SocialId invited) {
+  if (!m.lobby) {
+    if (m.status==SocialStatus::Creating) return {"Creating lobby"};
+    if (m.status==SocialStatus::Joining) return {"Joining the lobby"};
+    return {SocialStatusKey(m)};
+  }
+  if (!m.last_error.empty()) return {SocialStatusKey(m)};
+  const SocialMember* self=nullptr; const SocialMember* partner=nullptr;
+  for (const auto& p : m.members) (p.id==m.self ? self : partner)=&p;
+  const bool host=m.owner==m.self;
+  if (!partner) {
+    if (!host) return {"Connecting to the host"};
+    if (m.direct) return {"Waiting for your partner to join"};
+    auto f=std::find_if(m.friends.begin(),m.friends.end(),[&](const auto& f) { return f.id==invited; });
+    if (invited && f!=m.friends.end()) return {"Waiting for {0} to join",f->name};
+    return {"Lobby open. Invite a friend."};
+  }
+  const std::string name=partner->name;
+  if (m.start_requested || m.status==SocialStatus::Starting) return {"Starting co-op..."};
+  if (!m.choice.valid()) return host ? CoopStatus{"Choose a chapter or save"} : CoopStatus{"Waiting for {0} to choose a chapter",name};
+  const bool me=self && self->ready;
+  if (host) {
+    if (me && partner->ready) return {"Both ready. Select Start"};
+    if (partner->ready) return {"{0} is ready",name};
+    return {"Waiting for {0} to choose Ready",name};
+  }
+  if (!me) return partner->ready ? CoopStatus{"{0} is ready",name} : CoopStatus{"Choose Ready when you are set"};
+  return {"Waiting for {0} to start",name};
+}
+SocialId StartupInvite(const SocialModel& m) {
+  for (const auto& i : m.pending_invites) if (!i.inviter && i.lobby) return i.lobby;
+  return 0;
+}
 }  // namespace kk::coop
+

@@ -72,7 +72,11 @@ void Social() {
   const auto lobby = host.Snapshot().lobby;
   Check(lobby && host.Snapshot().owner == 1 && host.Snapshot().members.size() == 1, "host is owner");
   Check(!host.Act({SocialAction::Start,0,false,host.Snapshot().choice}), "one player cannot start");
-  Check(!guest.Act({SocialAction::Accept, lobby}), "cannot accept unknown invite");
+  Check(!guest.Act({SocialAction::Accept, lobby + 999}), "cannot accept unknown invite");
+  // C81: a friend's open lobby is offered to join (Steam connect presence), like an invite.
+  { const auto offered = guest.Snapshot().friends;
+    Check(std::any_of(offered.begin(), offered.end(), [&](const auto& f) { return f.id == 1 && f.in_our_game && f.lobby == lobby; }),
+          "a friend hosting an open lobby offers it"); }
   Check(host.Act({SocialAction::Invite, 2}) && host.Act({SocialAction::Invite, 2}), "invite deduplicated");
   Check(guest.Snapshot().pending_invites.size() == 1, "one pending invite");
   Check(guest.Act({SocialAction::Decline, lobby}) && guest.Snapshot().pending_invites.empty(), "decline locally");
@@ -202,14 +206,15 @@ void EveryProtocolMessage() {
     MessageType::FlowAbort, MessageType::DamageEvent, MessageType::PlayerStatus, MessageType::OwnershipChange,
     MessageType::PlayerDowned, MessageType::PlayerRevived, MessageType::CameraCut,
     MessageType::StoryEvent, MessageType::TriggerRequest, MessageType::WorldDigest, MessageType::ShotReceipt,
+    MessageType::StartPlan, MessageType::StartPlanAck,
     MessageType::ObjectState, MessageType::ObjectRequest
   };
   const MessageType unreliable[] = {MessageType::Ping, MessageType::Pong, MessageType::PlayerPose,
       MessageType::EnemySnapshot, MessageType::CameraPose};
-  static_assert(kProtocolVersion == 18 && std::size(reliable)+std::size(unreliable) == 34);
+  static_assert(kProtocolVersion == 19 && std::size(reliable)+std::size(unreliable) == 36);
   Backend a,b; a.self=1; b.self=2; a.remote=&b; b.remote=&a;
   SteamMessagesTransport at(a,2),bt(b,1);
-  unsigned seen[33]{};
+  unsigned seen[35]{};
   for (bool r : {true,false}) {
     const auto types = r ? std::span<const MessageType>(reliable) : std::span<const MessageType>(unreliable);
     for (auto type : types) {
@@ -233,7 +238,7 @@ void EveryProtocolMessage() {
       if (type==MessageType::ShotIntent) Check(packet.size()==554,"maximum shotgun hits fit packet cap");
     }
   }
-  for (unsigned i=1;i<=32;++i) Check(seen[i]==1,"all 32 distinct protocol IDs covered");
+  for (unsigned i=1;i<=34;++i) Check(seen[i]==1,"all 34 distinct protocol IDs covered");
 }
 void StoryOverMessages() {
   Backend a,b; a.self=1; b.self=2; a.remote=&b; b.remote=&a;
@@ -241,7 +246,7 @@ void StoryOverMessages() {
   CoopSession host({true,Role::Host,12345,Compatible()},at),guest({true,Role::Guest,0,Compatible()},bt);
   for (unsigned i=0;i<20;++i) { host.Tick(i*.01); guest.Tick(i*.01); }
   Check(host.State()==SessionState::Connected && guest.State()==SessionState::Connected,
-      "protocol 18 story session handshakes over Steam adapter");
+      "protocol 19 story session handshakes over Steam adapter");
   StoryMailbox h,g;
   uint32_t number=0;
   double now=.2;

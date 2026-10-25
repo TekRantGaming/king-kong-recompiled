@@ -29,6 +29,7 @@ set(KINGKONG_SOURCES
     src/coop_objects_game.cpp
     src/coop_desync_game.cpp
     src/coop_runtime.cpp
+    src/coop_resume.cpp
     src/coop_partner_body.cpp
     src/coop_nametag.cpp
     src/coop_observer.cpp
@@ -47,6 +48,7 @@ set(KINGKONG_SOURCES
     src/launcher_text.cpp
     src/launcher_music.cpp
     src/launcher_sounds.cpp
+    src/easter_egg.cpp
     src/launcher_benchmark.cpp
     src/game_sound.cpp
     src/steam_shortcut.cpp
@@ -117,6 +119,8 @@ set(KINGKONG_SOURCES
     src/workshop_net.cpp
     src/system_notify.cpp
     src/update.cpp
+    src/countdown.cpp
+    src/update_files.cpp
     src/play_session.cpp
     src/ps2_movies.cpp
     src/profile_options.cpp
@@ -165,11 +169,12 @@ option(KK_COOP_DEFAULT_ON "Enable co-op by default unless settings or command li
 # Developer-only test aids (never in release builds): -DKK_DEV_TOOLS=ON.
 option(KK_DEV_TOOLS "Build developer test aids such as KK_DEV_AUTOSKIP" OFF)
 if(KK_DEV_TOOLS)
+    list(APPEND KINGKONG_SOURCES src/dev_chapter_prepare.cpp)
     list(APPEND KINGKONG_SOURCES src/dev_lod.cpp src/dev_aa.cpp)
     list(APPEND KINGKONG_SOURCES src/coop_transport_udp.cpp)
     list(APPEND KINGKONG_SOURCES src/dev_puppet_mesh.cpp)
     list(APPEND KINGKONG_SOURCES src/dev_puppet_variant.cpp)
-    list(APPEND KINGKONG_SOURCES src/dev_tools.cpp src/dev_watch.cpp src/dev_ae.cpp src/dev_sound_trace.cpp src/dev_load_trace.cpp src/dev_frame_log.cpp src/dev_sample.cpp src/dev_venture.cpp src/dev_chapter_jump.cpp src/dev_pause.cpp src/dev_fish.cpp src/dev_clock_trace.cpp src/dev_camera_start.cpp src/dev_game_watch.cpp src/dev_teleport.cpp src/dev_trig_trace.cpp)
+    list(APPEND KINGKONG_SOURCES src/dev_tools.cpp src/dev_watch.cpp src/dev_ae.cpp src/dev_sound_trace.cpp src/dev_load_trace.cpp src/dev_frame_log.cpp src/dev_sample.cpp src/dev_venture.cpp src/dev_chapter_jump.cpp src/dev_pause.cpp src/dev_fish.cpp src/dev_clock_trace.cpp src/dev_camera_start.cpp src/dev_game_watch.cpp src/dev_teleport.cpp src/dev_trig_trace.cpp src/dev_bug_trace.cpp)
     list(APPEND KINGKONG_SOURCES src/dev_kong_lift.cpp)
 endif()
 
@@ -302,9 +307,29 @@ endif()
 # The port's version: shown in the launcher and compared with GitHub releases by the updater.
 # (-DKK_VERSION=x.y.z overrides it, to test the updater with an "older" build.)
 if(NOT DEFINED KK_VERSION)
-    set(KK_VERSION "2.0.0-beta.13")
+    set(KK_VERSION "2.0.0-beta.17")
 endif()
-target_compile_definitions(king_kong PRIVATE KK_VERSION="${KK_VERSION}" KK_VERSION_W=L"${KK_VERSION}")
+# The update channel the build follows (update_channel.h): "stable" (only the stable repo, never the
+# beta channel) or "beta". Empty: from KK_VERSION ("-beta" in it: beta). The kk-stable preset sets
+# stable together with the stable version number; a stable build with a beta version is refused.
+set(KK_RELEASE_CHANNEL "" CACHE STRING "Update channel of this build: stable, beta, or empty (from KK_VERSION)")
+if(KK_RELEASE_CHANNEL STREQUAL "")
+    if(KK_VERSION MATCHES "-beta")
+        set(KK_BUILD_CHANNEL "beta")
+    else()
+        set(KK_BUILD_CHANNEL "stable")
+    endif()
+elseif(KK_RELEASE_CHANNEL STREQUAL "stable" OR KK_RELEASE_CHANNEL STREQUAL "beta")
+    set(KK_BUILD_CHANNEL "${KK_RELEASE_CHANNEL}")
+else()
+    message(FATAL_ERROR "KK_RELEASE_CHANNEL must be stable, beta or empty (got '${KK_RELEASE_CHANNEL}')")
+endif()
+if(KK_BUILD_CHANNEL STREQUAL "stable" AND KK_VERSION MATCHES "-beta")
+    message(FATAL_ERROR "A stable build needs a stable version (KK_VERSION is ${KK_VERSION})")
+endif()
+message(STATUS "King Kong ${KK_VERSION}, update channel ${KK_BUILD_CHANNEL}")
+target_compile_definitions(king_kong PRIVATE KK_VERSION="${KK_VERSION}" KK_VERSION_W=L"${KK_VERSION}"
+    KK_BUILD_CHANNEL="${KK_BUILD_CHANNEL}")
 execute_process(COMMAND git describe --always --dirty --abbrev=12 WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}"
     OUTPUT_VARIABLE KK_BENCH_BUILD OUTPUT_STRIP_TRAILING_WHITESPACE)
 target_compile_definitions(king_kong PRIVATE KK_BENCH_BUILD="${KK_BENCH_BUILD}-task115")
@@ -326,6 +351,10 @@ string(SHA256 KK_COOP_BUILD "${KK_COOP_SOURCE_ID}")
 target_compile_definitions(king_kong PRIVATE KK_COOP_BUILD="${KK_COOP_BUILD}")
 
 if(KK_DEV_TOOLS)
+    add_executable(kk-chapter-texture-prepare-tests tests/chapter_texture_prepare_tests.cpp)
+    target_include_directories(kk-chapter-texture-prepare-tests PRIVATE ../native-renderer)
+    target_link_libraries(kk-chapter-texture-prepare-tests PRIVATE kknr_resources)
+    add_test(NAME chapter-texture-prepare COMMAND kk-chapter-texture-prepare-tests)
     add_executable(kk-freecam-tests tests/freecam_tests.cpp)
     enable_testing()
     add_executable(kk-coop-tests tests/coop_tests.cpp src/coop_protocol.cpp src/coop_session.cpp)
@@ -349,6 +378,9 @@ if(KK_DEV_TOOLS)
     add_executable(kk-objects-tests tests/coop_objects_tests.cpp src/coop_protocol.cpp src/coop_session.cpp)
     target_include_directories(kk-objects-tests PRIVATE src)
     add_test(NAME coop-world-objects COMMAND kk-objects-tests)
+    add_executable(kk-handover-tests tests/coop_handover_tests.cpp src/coop_protocol.cpp src/coop_session.cpp)
+    target_include_directories(kk-handover-tests PRIVATE src)
+    add_test(NAME coop-handover COMMAND kk-handover-tests)
     add_executable(kk-story-tests tests/coop_story_tests.cpp src/coop_protocol.cpp src/coop_session.cpp)
     target_include_directories(kk-story-tests PRIVATE src)
     add_test(NAME coop-story-sync COMMAND kk-story-tests)
@@ -423,7 +455,7 @@ if(KK_DEV_TOOLS)
     set_tests_properties(ps2-movie-decode PROPERTIES SKIP_RETURN_CODE 77)
     add_executable(kk-hardware-tests tests/hardware_recommendation_tests.cpp src/settings.cpp)
     target_include_directories(kk-hardware-tests PRIVATE src)
-    target_compile_definitions(kk-hardware-tests PRIVATE KK_VERSION="${KK_VERSION}")
+    target_compile_definitions(kk-hardware-tests PRIVATE KK_VERSION="${KK_VERSION}" KK_BUILD_CHANNEL="${KK_BUILD_CHANNEL}")
     target_link_libraries(kk-hardware-tests PRIVATE rex::runtime)
     rexglue_apply_target_settings(kk-hardware-tests)
     enable_testing()
@@ -438,11 +470,19 @@ if(KK_DEV_TOOLS)
     target_include_directories(kk-content-tests PRIVATE src)
     rexglue_apply_target_settings(kk-content-tests)
     add_test(NAME content-downloads COMMAND kk-content-tests "${CMAKE_CURRENT_BINARY_DIR}/content-test")
+    # Task 370: the updater's file work (kk-files.txt, staged install with undo, retired files, the first start
+    # check) on real files in a temp folder; also the packaging simulation's helper (codex\simulate-update.ps1).
+    add_executable(kk-update-tests tests/update_files_tests.cpp src/update_files.cpp)
+    target_include_directories(kk-update-tests PRIVATE src)
+    rexglue_apply_target_settings(kk-update-tests)
+    add_test(NAME update-files COMMAND kk-update-tests "${CMAKE_CURRENT_BINARY_DIR}/update-test")
     add_executable(kk-menu-sound-tests tests/launcher_sounds_tests.cpp src/launcher_sounds.cpp)
     target_include_directories(kk-menu-sound-tests PRIVATE src)
     target_link_libraries(kk-menu-sound-tests PRIVATE rex::runtime)
+    target_compile_definitions(kk-menu-sound-tests PRIVATE KK_DEV_TOOLS=1)
     rexglue_apply_target_settings(kk-menu-sound-tests)
     add_test(NAME menu-sound-volume COMMAND kk-menu-sound-tests)
+    set_tests_properties(menu-sound-volume PROPERTIES TIMEOUT 10)
     # Job J3: when a download end dings and sends a system notification; the toast's XML.
     add_executable(kk-notify-tests tests/notify_tests.cpp)
     target_include_directories(kk-notify-tests PRIVATE src)
@@ -521,11 +561,30 @@ if(KK_DEV_TOOLS)
     target_include_directories(kk-log-tail-tests PRIVATE src)
     rexglue_apply_target_settings(kk-log-tail-tests)
     add_test(NAME log-tail COMMAND kk-log-tail-tests)
+    # Task 368: the overlays a crash report names (overlay_modules.h).
+    add_executable(kk-overlay-modules-tests tests/overlay_modules_tests.cpp)
+    target_include_directories(kk-overlay-modules-tests PRIVATE src)
+    rexglue_apply_target_settings(kk-overlay-modules-tests)
+    add_test(NAME overlay-modules COMMAND kk-overlay-modules-tests)
+    add_executable(kk-background-log-tests tests/background_log_tests.cpp)
+    target_include_directories(kk-background-log-tests PRIVATE src)
+    target_link_libraries(kk-background-log-tests PRIVATE rex::runtime)
+    rexglue_apply_target_settings(kk-background-log-tests)
+    add_test(NAME background-log-output COMMAND kk-background-log-tests)
+    set_tests_properties(background-log-output PROPERTIES TIMEOUT 20)
     # Task 297: the startup limits leave out shader compile time; the renderer's compile clock.
     add_executable(kk-startup-clock-tests tests/startup_clock_tests.cpp)
     target_include_directories(kk-startup-clock-tests PRIVATE src ../native-renderer)
     rexglue_apply_target_settings(kk-startup-clock-tests)
     add_test(NAME startup-clock COMMAND kk-startup-clock-tests)
+    # Task 342: device open cannot hold the game thread; cancelled opens never
+    # retain the SDK client semaphore, and current PCM takes over without replay.
+    add_executable(kk-deferred-audio-tests tests/deferred_audio_tests.cpp)
+    target_include_directories(kk-deferred-audio-tests PRIVATE src)
+    target_link_libraries(kk-deferred-audio-tests PRIVATE rex::runtime)
+    rexglue_apply_target_settings(kk-deferred-audio-tests)
+    add_test(NAME deferred-audio COMMAND kk-deferred-audio-tests)
+    set_tests_properties(deferred-audio PROPERTIES TIMEOUT 20)
     # Task 206: brightness and gamma (the renderer's picture curve), the Performance metrics overlay's logic.
     add_executable(kk-perf-overlay-tests tests/perf_overlay_tests.cpp)
     target_include_directories(kk-perf-overlay-tests PRIVATE src ../native-renderer)
@@ -562,6 +621,33 @@ if(KK_DEV_TOOLS)
 endif()
 if(KK_DEV_TOOLS OR NR_BUILD_TESTS)
     enable_testing()
+    add_executable(nr_ao_hotspot_tests ../native-renderer/backend/tests/ao_hotspot_tests.cpp)
+    target_link_libraries(nr_ao_hotspot_tests PRIVATE nr_draw)
+    add_test(NAME render-hotspot-ao COMMAND nr_ao_hotspot_tests)
+    add_executable(nr_motion_hotspot_tests ../native-renderer/backend/tests/motion_hotspot_tests.cpp)
+    target_link_libraries(nr_motion_hotspot_tests PRIVATE nr_draw)
+    add_test(NAME render-hotspot-motion COMMAND nr_motion_hotspot_tests)
+    add_executable(nr_capture_hotspot_tests ../native-renderer/backend/tests/capture_hotspot_tests.cpp)
+    target_link_libraries(nr_capture_hotspot_tests PRIVATE nr_draw)
+    add_test(NAME render-hotspot-capture COMMAND nr_capture_hotspot_tests)
+    add_executable(nr_constants_hotspot_tests ../native-renderer/backend/tests/constants_hotspot_tests.cpp)
+    target_link_libraries(nr_constants_hotspot_tests PRIVATE nr_draw)
+    add_test(NAME render-hotspot-constants COMMAND nr_constants_hotspot_tests)
+    add_executable(nr_copy_hotspot_tests ../native-renderer/backend/tests/copy_hotspot_tests.cpp)
+    target_link_libraries(nr_copy_hotspot_tests PRIVATE nr_draw)
+    add_test(NAME render-hotspot-copy COMMAND nr_copy_hotspot_tests)
+    add_executable(nr_vertex_view_tests ../native-renderer/backend/tests/vertex_view_tests.cpp)
+    target_link_libraries(nr_vertex_view_tests PRIVATE nr_renderer)
+    add_test(NAME render-vertex-view COMMAND nr_vertex_view_tests)
+    # Existing CPU regressions also exercise the production thread queue and motion/AO callers.
+    foreach(_regression IN ITEMS draw upscale ao_rules)
+        if(NOT TARGET nr_${_regression}_tests)
+            add_executable(nr_${_regression}_tests ../native-renderer/backend/tests/${_regression}_tests.cpp)
+            target_link_libraries(nr_${_regression}_tests PRIVATE nr_draw nr_hooks)
+            target_compile_definitions(nr_${_regression}_tests PRIVATE NR_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/../native-renderer")
+            add_test(NAME render-regression-${_regression} COMMAND nr_${_regression}_tests)
+        endif()
+    endforeach()
     add_subdirectory(tests/pacing-bench)
 endif()
 

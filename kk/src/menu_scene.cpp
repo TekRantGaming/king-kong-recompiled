@@ -4,6 +4,8 @@
 
 #include <algorithm>
 #include <atomic>
+#include <chrono>
+#include <string_view>
 #include <cmath>
 #include <cstdlib>
 #include <bit>
@@ -36,7 +38,10 @@
 
 REXCVAR_DEFINE_BOOL(kk_menu_scene_off, false, "KK",
                     "Internal: no live menu scene in this launcher (passed on the command line by a launcher that "
-                    "restarts itself for a shader rebuild). Never saved.");
+                    "restarts itself for a shader rebuild; the scene starts once the rebuild is done). Never saved.");
+REXCVAR_DEFINE_BOOL(kk_menu_scene_retry, false, "KK",
+                    "Internal: this launcher is the live menu scene's second attempt (passed on the command line by a "
+                    "launcher whose scene did not come up in time). Never saved.");
 
 namespace kk::menu_scene {
 namespace {
@@ -48,6 +53,23 @@ std::atomic<bool> g_ready{false};
 std::atomic<bool> g_shown_once{false};
 std::mutex g_mutex;
 std::filesystem::path g_marker;
+int g_failed_starts = 0;               // failed starts in a row before this launcher's (the marker)
+std::atomic<bool> g_attempt_failed{false};  // this launcher's attempt ran out of time (NoteAttemptFailed)
+#if defined(KK_DEV_TOOLS)
+std::chrono::steady_clock::time_point g_begun;
+// Task 349c test aids: KK_DEV_SCENE_DELAY=<seconds> holds the scene's Ready that long after its start (a slow
+// start); KK_DEV_SCENE_FAIL=first never lets the first attempt's scene be ready, =both neither attempt's.
+bool DevHoldsReady() {
+  if (const char* d = std::getenv("KK_DEV_SCENE_DELAY"); d && *d &&
+      std::chrono::steady_clock::now() - g_begun < std::chrono::duration<double>(std::atof(d)))
+    return true;
+  if (const char* f = std::getenv("KK_DEV_SCENE_FAIL")) {
+    if (std::string_view(f) == "both") return true;
+    if (std::string_view(f) == "first" && !SecondAttempt()) return true;
+  }
+  return false;
+}
+#endif
 Tracker g_tracker;  // game thread only
 
 uint32_t Load32(const uint8_t* base, uint32_t addr) {
@@ -107,22 +129,46 @@ void SetRendererLight(bool on) {
 
 }  // namespace
 
+bool SecondAttempt() {
+  static const bool second = [] {
+    const bool on = REXCVAR_GET(kk_menu_scene_retry);
+    rex::cvar::ResetToDefault("kk_menu_scene_retry");  // never saved
+    return on;
+  }();
+  return second;
+}
+
 Reason DecideAtLauncherStart(StartFacts facts, const std::filesystem::path& user_dir) {
+  // Task 349c: a launcher restarted for a Rebuild leaves the scene off only while the rebuild runs.
+  if (REXCVAR_GET(kk_menu_scene_off) && !facts.shader_job) {
+    rex::cvar::ResetToDefault("kk_menu_scene_off");
+    REXLOG_INFO("KK menu scene: the shader rebuild is done: the scene may start in this launcher");
+  }
   facts.off_this_session = facts.off_this_session || REXCVAR_GET(kk_menu_scene_off);
   const auto marker = MarkerPath(user_dir);
   std::error_code ec;
-  if (!user_dir.empty() && std::filesystem::exists(marker, ec)) {
+  if (!Active() && !user_dir.empty() && std::filesystem::exists(marker, ec)) {
     std::ifstream in(marker, std::ios::binary);
     std::stringstream text;
     text << in.rdbuf();
-    if (ReadMarker(text.str(), KK_VERSION) == MarkerState::kFailedThisVersion) {
+    in.close();
+    // Task 349c: one failed start no longer means pictures for the rest of the version: the next start tries
+    // again; only kMaxFailedStarts in a row (each with its second attempt) give up for this version.
+    const MarkerRead read = ReadMarker(text.str(), KK_VERSION, SecondAttempt());
+    g_failed_starts = read.failed_starts;
+    if (read.gave_up) {
       facts.failed_this_version = true;
       if (text.str().rfind("starting ", 0) == 0) {
-        REXLOG_WARN("KK menu scene: the last launcher did not get the scene up (it closed or failed while it "
-                    "started): pictures for the rest of v{}", KK_VERSION);
+        REXLOG_WARN("KK menu scene: {} starts in a row did not get the scene up: pictures for the rest of v{}",
+                    read.failed_starts, KK_VERSION);
         WriteMarker(marker, std::string("failed ") + KK_VERSION);
       }
-    } else {
+    } else if (read.failed_starts > 0) {
+      REXLOG_WARN("KK menu scene: {} (failed starts in a row: {} of {}): trying again",
+                  SecondAttempt() ? "this launcher is the second attempt of the same start"
+                                  : "the last launcher did not get the scene up",
+                  read.failed_starts, kMaxFailedStarts);
+    } else if (!SecondAttempt() || text.str().rfind("starting ", 0) != 0) {
       WriteMarker(marker, "");  // another version's
     }
   }
@@ -135,10 +181,13 @@ void Begin(const std::filesystem::path& user_dir) {
   {
     std::lock_guard lock(g_mutex);
     g_marker = user_dir.empty() ? std::filesystem::path() : MarkerPath(user_dir);
-    WriteMarker(g_marker, std::string("starting ") + KK_VERSION);
+    WriteMarker(g_marker, StartingMarker(KK_VERSION, g_failed_starts));
   }
+#if defined(KK_DEV_TOOLS)
+  g_begun = std::chrono::steady_clock::now();
+#endif
   g_active = true;
-  REXLOG_INFO("KK menu scene: starting the game behind the launcher");
+  REXLOG_INFO("KK menu scene: starting the game behind the launcher ({} attempt)", SecondAttempt() ? "second" : "first");
   bool light = true;
 #if defined(KK_DEV_TOOLS)
   if (const char* full = std::getenv("KK_DEV_SCENE_FULL"); full && *full == '1') light = false;  // measurements
@@ -182,8 +231,15 @@ int FrameCap(int player_cap) {
   return Active() ? SceneFrameCap(player_cap, g_throttled.load(std::memory_order_relaxed)) : player_cap;
 }
 
+void NoteAttemptFailed() {
+  if (!Active() || g_shown_once || g_attempt_failed.exchange(true)) return;
+  REXLOG_WARN("KK menu scene: the scene did not come up in time ({} attempt); the marker keeps this failed start",
+              SecondAttempt() ? "second" : "first");
+}
+
 void NoteClosing() {
-  if (!Active() || g_shown_once) return;
+  // A failed attempt keeps the marker: the next launcher counts this start as failed (task 349c).
+  if (!Active() || g_shown_once || g_attempt_failed) return;
   // Closed before the scene came up (a quick Play or Quit): not a failure.
   std::lock_guard lock(g_mutex);
   WriteMarker(g_marker, "");
@@ -201,8 +257,12 @@ uint32_t GuestPad(uint32_t user, uint8_t* base, uint8_t* state) {
     v.current_level = Load32(base, g + 0x18);
     v.request = Load32(base, g + 4) != 0;
     v.requested = Load32(base, g + 8);
-    const bool was_ready = g_tracker.Ready();
+    const bool was_ready = g_ready.load(std::memory_order_relaxed);
     g_tracker.Step(v);
+    bool now_ready = g_tracker.Ready();
+#if defined(KK_DEV_TOOLS)
+    if (now_ready && DevHoldsReady()) now_ready = false;
+#endif
 #if defined(KK_DEV_TOOLS)
     static int reads = 0;
     if (std::getenv("KK_DEV_SCENE_TRACE") && ++reads % 30 == 1)
@@ -220,8 +280,8 @@ uint32_t GuestPad(uint32_t user, uint8_t* base, uint8_t* state) {
       movie = now;
     }
 #endif
-    if (g_tracker.Ready() != was_ready) {
-      g_ready = g_tracker.Ready();
+    if (now_ready != was_ready) {
+      g_ready = now_ready;
       if (g_ready) NoteShown();
       else REXLOG_WARN("KK menu scene: the game left the start menu (level {}): the stills again", v.current_level);
       kk::RequestUiPaint();

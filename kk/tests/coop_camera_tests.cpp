@@ -44,7 +44,7 @@ void Codec() {
     m.camera.qx=.5f; m.camera.qy=-.5f; m.camera.qz=.5f; m.camera.qw=.5f;
     m.camera.cut=19; m.camera.skip=7; m.camera.scripted=true; m.camera.paused=true; m.camera.fov=2.2f;
     auto bytes=Packet(m); Message decoded;
-    Check(bytes.size()==kHeaderBytes+57 && bytes[5]==kProtocolVersion && bytes[7]==uint16_t(type),"bounded v18 camera payload");
+    Check(bytes.size()==kHeaderBytes+57 && bytes[5]==kProtocolVersion && bytes[7]==uint16_t(type),"bounded v19 camera payload");
     Check(Decode(bytes,decoded) && Packet(decoded)==bytes,"exact camera fields round trip");
     for (size_t size=0;size<bytes.size();++size) {
       Message out; out.sequence=19;

@@ -96,15 +96,24 @@ GameRenderer::Scale GameRenderer::ScaleFor(bool depth, uint32_t pitch, uint32_t 
   if (!depth && format == 14 && pitch != options_.guest_frame_width) shadow_pitches_.insert(pitch);
   if (options_.shadow_scale > 0.0f && shadow_pitches_.count(pitch)) return {options_.shadow_scale, options_.shadow_scale};
   // The soft shadows (docs/lighting.md): the screen-space shadow mask's targets, finer than the frame.
-  if (!lighting_mask_pitches_.empty() && lighting_mask_pitches_.count(pitch))
+  // With an upscaler they follow the scene's input size (as without one, where the input is the
+  // frame): the scene reads them at its own size, so finer than that only costs GPU time.
+  if (!lighting_mask_pitches_.empty() && lighting_mask_pitches_.count(pitch)) {
+    if (upscale_ && !output_gen) return {upscale_->in_x * kLightingMaskScale, upscale_->in_y * kLightingMaskScale};
     return {options_.render_scale_x * kLightingMaskScale, options_.render_scale_y * kLightingMaskScale};
+  }
   // --native_debug bit 32: only the frame-wide targets scale (to find a pass that breaks).
   if ((options_.debug & 32) && pitch != options_.guest_frame_width) return {1.0f, 1.0f};
   // The census identifies these pitches as the game's 320x180 and 640x360/480 effect
   // surfaces, including their matching depth attachments. Shadow maps were handled above.
   // Use one scale on both axes so a non-16:9 output cannot change an effect's aspect.
+  // With an upscaler, before the upscale point they follow the scene's input size (as without one,
+  // where the input is the frame): the scene they are made from is no finer than that.
   if ((pitch == 320 || pitch == 640) && !shadow_pitches_.count(pitch) && (depth || format != 14)) {
-    const float scale = options_.effect_buffers ? std::min(options_.render_scale_x, options_.render_scale_y) : 1.0f;
+    const bool input = upscale_ && !output_gen;
+    const float sx = input ? upscale_->in_x : options_.render_scale_x;
+    const float sy = input ? upscale_->in_y : options_.render_scale_y;
+    const float scale = options_.effect_buffers ? std::min(sx, sy) : 1.0f;
     return {scale, scale};
   }
   // Upscalers: the scene's targets are the input size before the upscale point; shadow maps keep the
@@ -180,6 +189,9 @@ GameRenderer::HostTarget* GameRenderer::GetTarget(bool depth, uint32_t edram_bas
     }
   }
   if (!slot) ++stats_.edram_targets;
+  if (PostSplitOn())  // dev aid (KK_DEV_POST_SPLIT)
+    Logf(LogLevel::kInfo, "rexgpu-native: frame split: new target pitch %u format %u %s %ux%u (%s generation)", pitch,
+         format, depth ? "depth" : "colour", t->host_width, t->host_height, out ? "output" : "input");
   slot = std::move(t);
   slot->used_frame = frame_;
   if (upscale_) {
@@ -240,10 +252,9 @@ nvrhi::IFramebuffer* GameRenderer::GetFramebuffer(const std::array<HostTarget*, 
 
 // ---------------------------------------------------------------- textures
 
-namespace {
 // Task 304 (placed_textures.h): with texture memory that is not zeroed, the subresources a conversion
 // leaves unwritten get zeros, as a committed texture's would have. Nothing happens otherwise.
-void ZeroUnwrittenSubresources(nvrhi::ICommandList* list, nvrhi::ITexture* texture, const kknr::HostTextureData& data) {
+void GameRenderer::ZeroUnwrittenSubresources(nvrhi::ICommandList* list, nvrhi::ITexture* texture, const kknr::HostTextureData& data) {
   if (!g_texture_memory_not_zeroed.load(std::memory_order_relaxed)) return;
   const nvrhi::TextureDesc& d = texture->getDesc();
   const bool volume = d.dimension == nvrhi::TextureDimension::Texture3D;
@@ -270,8 +281,6 @@ void ZeroUnwrittenSubresources(nvrhi::ICommandList* list, nvrhi::ITexture* textu
          "(placed texture memory is not zeroed)", d.width, d.height, d.mipLevels, layers, missing.size());
   }
 }
-}  // namespace
-
 GameRenderer::HostTexture* GameRenderer::CreateHostTexture(const kknr::HostTexturePlan& plan,
                                                            bool render_target, float scale_x, float scale_y,
                                                            kknr::ResourceWork* profile) {
@@ -739,7 +748,7 @@ bool GameRenderer::MakeHostBuffer(HostBuffer* host, const nvrhi::BufferDesc& des
 }
 
 nvrhi::BindingSetItem GameRenderer::VertexView(const HostBuffer* host) const {
-  if (!host->range.valid()) return VertexView(host);
+  if (!host->range.valid()) return nvrhi::BindingSetItem::RawBuffer_SRV(host->slot, host->buffer);
   return nvrhi::BindingSetItem::RawBuffer_SRV(host->slot, host->buffer,
                                               nvrhi::BufferRange(host->range.allocation.offset, host->view_bytes));
 }

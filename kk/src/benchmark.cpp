@@ -52,7 +52,7 @@
 #include <windows.h>
 #endif
 
-REXCVAR_DEFINE_BOOL(kk_benchmark, false, "KK", "Run the built-in benchmark once (not saved)");
+REXCVAR_DEFINE_BOOL(kk_benchmark, false, "KK", "Run the built in benchmark once (not saved)");
 REXCVAR_DEFINE_BOOL(kk_benchmark_record, false, "KK", "Record a controller benchmark route (not saved)");
 REXCVAR_DEFINE_STRING(kk_benchmark_route, "", "KK", "Override benchmark-route.kkbr beside the game (not saved)");
 REXCVAR_DEFINE_STRING(kk_benchmark_record_route, "", "KK",
@@ -248,7 +248,7 @@ std::string Settings() {
   std::string out = "Version: " KK_VERSION "\nRoute: recorded-controller-v1\n";
   out += DiagnosticsHardware();
   out += "\nSettings (requested; renderer fallbacks are recorded in diagnostics):\n";
-  for (const char* key : {"native_backend", "kk_frame_rate", "fullscreen", "kk_fullscreen_mode",
+  for (const char* key : {"native_backend", "kk_frame_rate", "fullscreen", "kk_fullscreen_mode", "kk_picture_size",
       "window_width", "window_height", "video_mode_width", "video_mode_height", "monitor",
       "d3d12_allow_variable_refresh_rate_and_tearing", "vulkan_allow_present_mode_immediate",
       "vulkan_allow_present_mode_mailbox", "vulkan_allow_present_mode_fifo_relaxed", "ui_paint_on_demand",
@@ -385,7 +385,7 @@ void Finish() {
       text += settings;
       text += "Recording build: " + recording.build + "\nRecording ID (FNV-1a): " + route_id + '\n';
       text += "No confirmed game RNG seed API is exposed. AI, particles, collisions and load timing can vary.\n";
-      text += "Replay holds the latest pad at each pre-step game time, without changing simulation dt.\n";
+      text += "Replay holds the latest pad at each pre step game time, without changing simulation dt.\n";
       text += "Jack position checkpoints: 1 unit tolerance, first second excluded. Kong position unavailable.\n";
       text += "Spread = (highest - lowest) / median of the passes' average FPS. Confidence: High up to 3%, "
               "Medium up to 6%, Low above. One pass has no confidence figure.\n";

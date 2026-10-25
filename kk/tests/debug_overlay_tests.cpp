@@ -70,7 +70,7 @@ void CapabilityChecks() {
       }
     }
   }
-  Check(OfferedUpscalers(2, 0x1002, yes, false) == std::vector<int>{0}, "non-Windows offers no temporal upscaler");
+  Check(OfferedUpscalers(2, 0x1002, yes, false) == std::vector<int>{0}, "non Windows offers no temporal upscaler");
   Check(OfferedUpscalers(1, 0x10DE, {}) == std::vector<int>({0, 1, 3, 4}), "unknown SDK retains existing Vulkan defaults");
   Check(OfferedUpscalers(2, 0x1002, {true}) == std::vector<int>{0}, "known unsupported capabilities offer off only");
   Check(NextChoice(-1, 3, 1) == 0 && NextChoice(-1, 3, -1) == 2, "unavailable current value enters supported choices");

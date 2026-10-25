@@ -137,14 +137,13 @@
           rows.back().facts.insert(rows.back().facts.begin(), "The game is drawn at up to this size.");
         TakeRow(display, "Refresh rate", "How many times a second your screen refreshes while the game runs.", rows);
       } else if (GetBool("fullscreen")) {  // Borderless: the desktop's own mode
+        // Task 363: the desktop's size or an ultrawide picture size (BorderlessResolutionItem).
         const auto desktop = ParseDisplayMode(DesktopModeValue());
-        Item res;
-        res.type = ItemType::kInfo;
-        res.label = "Resolution";
-        res.description = "Borderless uses your desktop's resolution. Choose Fullscreen to pick another one.";
-        res.value_text = desktop ? Size(desktop->width, desktop->height) : T(std::string("Desktop"));
-        res.facts.push_back("The game is drawn at up to this size.");
-        rows.push_back(std::move(res));
+        if (TakeRow(display, "Resolution",
+                    "The size of the game's picture: your desktop's, or a wider one shown with black bars above and "
+                    "below.",
+                    rows))
+          rows.back().facts.insert(rows.back().facts.begin(), "The game is drawn at up to this size.");
         Item hz;
         hz.type = ItemType::kInfo;
         hz.label = "Refresh rate";
@@ -166,7 +165,7 @@
                   rows) && !temporal.empty()) {
         // The sizes it draws at and rebuilds to, for each mode ("1280 x 720 to 1920 x 1080").
         const auto [out_w, out_h] = cb_.output_size ? cb_.output_size() : std::pair<int, int>{1280, 720};
-        const auto [ow, oh] = UpscalerOutputFor(out_w, out_h);
+        const auto [ow, oh] = UpscalerOutputFor(out_w, out_h, PictureAspect(out_w, out_h));  // ultrawide's shape too
         Item& it = rows.back();
         it.facts.clear();
         for (size_t m = 0; m < std::size(kTemporalModes) && m < it.options.size(); ++m) {
@@ -194,17 +193,14 @@
                               def == "5");
         rows.push_back(std::move(Disable(it, original, kSetByOriginal)));
       }
-      if (ScreenHdrOn()) {
-        std::vector<Item> display = DisplayItems();
-        TakeRow(display, "HDR", "Brighter highlights and deeper colour on your HDR screen.", rows);
-      }
+      // (No HDR row since Beta 14, owner 21 Oct: HDR is experimental, in the F8 graphics panel only.)
     } else if (page == 2) {
       std::vector<Item> graphics = GraphicsItems();
       TakeRow(graphics, "Global illumination", "Sunlight bounces off surfaces and softly lights the shade beside them.",
               rows);
       TakeRow(graphics, "Ambient occlusion", "Soft shading where surfaces meet, in corners and under rocks and grass.",
               rows);
-      TakeRow(graphics, "Shadows", "Sharper, softer-edged shadows than the game's own.", rows);
+      TakeRow(graphics, "Shadows", "Sharper, softer edged shadows than the game's own.", rows);
       TakeRow(graphics, "Water reflections", "The water reflects the rocks, trees and the ship around it.", rows);
       TakeRow(graphics, "Light shafts", "Sunlight shines through the mist and fog in visible shafts.", rows);
     } else {
@@ -310,10 +306,35 @@
     if (page == 0) {
       if (!NativeRendererAvailable() || !UsingNativeRenderer() || !FindFlag("native_backend")) return cards;
       const std::string backend = Get("native_backend");
+#if !defined(__linux__)
+      // Task 350a (owner, 21 Oct): DirectX 12 is the recommended API on Windows, Vulkan the other choice and the
+      // fallback when DirectX 12 cannot start.
+      // Task 368: on Intel integrated graphics Vulkan is the recommended one (and the default).
+      const bool intel = IntelIntegratedGraphics();
+      GfxCard dx;
+      dx.label = "DirectX 12";
+      dx.caption = intel ? "Also available" : "Recommended";
+      dx.text = intel ? "Also available. On this graphics card Vulkan is recommended."
+                      : "The recommended graphics API on Windows. If it cannot start, the game uses Vulkan.";
+      dx.selected = backend == "d3d12";
+      dx.pick = [] {
+        if (Get("native_backend") == "d3d12") return;
+        startup::ManualChoice();
+        Set("native_backend", "d3d12");
+        ApplyUpscalerDefaults();
+      };
+      cards.push_back(std::move(dx));
+#endif
       GfxCard vk;
       vk.label = "Vulkan";
+#if defined(__linux__)
       vk.caption = "Recommended";
       vk.text = "The recommended graphics API. It works on every graphics card the game supports.";
+#else
+      vk.caption = intel ? "Recommended" : "If DirectX 12 has problems";
+      vk.text = intel ? "The recommended graphics API. It works on every graphics card the game supports."
+                      : "Works on every graphics card the game supports. Try it if DirectX 12 gives you problems.";
+#endif
       vk.selected = backend == "auto" || backend == "vulkan";
       vk.pick = [] {
         if (Get("native_backend") != "d3d12") return;  // Auto is Vulkan
@@ -322,19 +343,6 @@
         ApplyUpscalerDefaults();
       };
       cards.push_back(std::move(vk));
-#if !defined(__linux__)
-      GfxCard dx;
-      dx.label = "DirectX 12";
-      dx.caption = "Needed for AMD FSR 4";
-      dx.text = "Also works well, and AMD FSR 4 needs it.";
-      dx.selected = backend == "d3d12";
-      dx.pick = [] {
-        startup::ManualChoice();
-        Set("native_backend", "d3d12");
-        ApplyUpscalerDefaults();
-      };
-      cards.push_back(std::move(dx));
-#endif
       return cards;
     }
     if (page != 1 || !HasTemporalSetting() || !UsingNativeRenderer() || GetBool("kk_original_look")) return cards;

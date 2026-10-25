@@ -11,7 +11,7 @@
 
 namespace kk::coop {
 constexpr uint32_t kMagic = 0x4B4B4331;  // KKC1, network byte order throughout
-constexpr uint16_t kProtocolVersion = 18; // World objects, digests, shot receipts and animated poses.
+constexpr uint16_t kProtocolVersion = 19; // Objects and Play restart handover, with distinct message IDs.
 constexpr size_t kMaxDisplayNameBytes = 32;
 // Valid UTF-8, no controls or invisible direction/line formatting, bounded at a codepoint.
 // Empty or wholly invalid input becomes "Partner". Never log the input or result.
@@ -25,7 +25,7 @@ enum class MessageType : uint16_t {
   DamageEvent = 22, PlayerStatus = 23, OwnershipChange = 24,
   PlayerDowned = 25, PlayerRevived = 26, CameraPose = 27, CameraCut = 28,
   StoryEvent = 29, TriggerRequest = 30, WorldDigest = 31, ShotReceipt = 32,
-  ObjectState = 33, ObjectRequest = 34
+  StartPlan = 33, StartPlanAck = 34, ObjectState = 35, ObjectRequest = 36
 };
 
 enum class ObjectKind : uint8_t { Breakable=1, Door=2 };
@@ -114,6 +114,19 @@ inline bool IsLifeMessage(MessageType t) {
   return t == MessageType::PlayerDowned || t == MessageType::PlayerRevived;
 }
 struct SaveChunk { uint32_t offset = 0; std::vector<uint8_t> bytes; };
+// C80: the host's start plan before both processes restart (coop_handover.h). Identities only: Steam IDs
+// for Steam, the listen port for Direct IP (the guest already has the address and join code). The token is
+// the resumed session's epoch and is checked in both Hellos. StartPlanAck carries the token alone.
+enum class StartTransport : uint8_t { Direct = 1, Steam = 2 };
+struct StartPlan {
+  uint64_t token = 0;
+  StartTransport transport = StartTransport::Direct;
+  uint8_t chapter = 0, continue_game = 0;
+  uint64_t host_id = 0, guest_id = 0;
+  uint16_t port = 0;
+};
+bool ValidStartPlan(const StartPlan& plan);
+inline bool IsPlanMessage(MessageType t) { return t == MessageType::StartPlan || t == MessageType::StartPlanAck; }
 bool ValidSessionStart(const SessionStart& start);
 bool ValidFlowEvent(const FlowEvent& event);
 uint64_t SessionSaveHash(std::span<const uint8_t> bytes);
@@ -301,6 +314,9 @@ struct Message {
   std::string display_name = "Partner";  // Hello only, separate from compatibility/lobby metadata.
   // Optional Direct IP Hello extension. Empty keeps the base Steam Hello payload unchanged.
   std::string join_code;
+  // Optional Hello extension (C80): the resumed session's token, zero for a normal session.
+  uint64_t resume_token = 0;
+  StartPlan plan;
   RejectReason reason = RejectReason::None;
   uint64_t clock_ms = 0;
   PlayerPose pose;

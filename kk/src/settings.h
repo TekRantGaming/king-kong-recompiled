@@ -9,6 +9,7 @@
 #include <array>
 #include <filesystem>
 #include <cstdint>
+#include <optional>
 #include <string>
 #include <vector>
 #include <utility>
@@ -61,7 +62,6 @@ REXCVAR_DECLARE(bool, kk_skip_intros);
 REXCVAR_DECLARE(bool, kk_ps2_cutscenes);
 REXCVAR_DECLARE(std::string, kk_ps2_movie_folder);
 REXCVAR_DECLARE(int32_t, kk_fov);
-REXCVAR_DECLARE(std::string, kk_aspect);
 REXCVAR_DECLARE(bool, kk_motion_blur);
 REXCVAR_DECLARE(bool, kk_fog);
 REXCVAR_DECLARE(bool, kk_big_blur);
@@ -69,6 +69,7 @@ REXCVAR_DECLARE(bool, kk_original_look);
 REXCVAR_DECLARE(std::string, kk_modern_settings);
 REXCVAR_DECLARE(std::string, kk_renderer);
 REXCVAR_DECLARE(std::string, kk_fullscreen_mode);
+REXCVAR_DECLARE(std::string, kk_picture_size);
 REXCVAR_DECLARE(bool, kk_cheats);
 REXCVAR_DECLARE(int32_t, kk_hitch_report_ms);
 
@@ -120,7 +121,7 @@ int RenderScaleFor(std::string_view preset, int output_height);
 // (screen_w x screen_h: the fullscreen mode, the desktop's, or the window's size) as the largest 16:9
 // picture inside it (the game's shape: the presenter letterboxes or stretches it as before). Never above
 // the chosen resolution. cap_w/cap_h above 0 (a Custom render scale): at most that size too. aspect: the
-// Ultrawide mod's shape (kk_aspect, ultrawide_logic.h) instead of 16:9.
+// picture's shape (PictureAspectFor, ultrawide_logic.h) instead of 16:9.
 std::pair<int, int> UpscalerOutputSize(int screen_w, int screen_h, int cap_w = 0, int cap_h = 0,
                                        double aspect = 16.0 / 9.0);
 // The same with the current settings: a Custom render quality's draw resolution scale is the cap.
@@ -129,22 +130,27 @@ std::pair<int, int> UpscalerOutputFor(int screen_w, int screen_h, double aspect 
 // scale's size (draw_w x draw_h, 1280x720 times the scale), never above the chosen resolution's 16:9
 // picture (UpscalerOutputSize). Each axis is the smaller of the two, so a 1080p screen draws 1920x1080
 // where its Native scale (2) would draw 2560x1440. Below the chosen size it stays as it is (900p: 720p).
-// With the Ultrawide mod (aspect wider than 16:9) the draw size is widened to that shape first.
+// Ultrawide (aspect wider than 16:9): the draw size is widened to that shape first.
 std::pair<int, int> NoUpscalerFrameSize(int screen_w, int screen_h, int draw_w, int draw_h,
                                         double aspect = 16.0 / 9.0);
 // Applies kk_render_quality for the given output size (call before the GPU starts). With a temporal
 // upscaler it also sets native_upscaler_output (not saved) to UpscalerOutputFor(the output size); without
 // one, native_frame_size (not saved) to NoUpscalerFrameSize(the output size, the draw resolution scale's).
-// With the Ultrawide mod (kk_aspect not 16:9) also native_display_aspect and UltrawideFactor.
+// A screen or window wider than 16:9 (PictureAspectFor) also sets native_display_aspect and UltrawideFactor.
 void ApplyRenderPreset(int output_width, int output_height);
-// How many times wider the game's 3D views are (the Ultrawide mod; 1 = unchanged), set by ApplyRenderPreset.
+// How many times wider the game's 3D views are (ultrawide; 1 = unchanged), set by ApplyRenderPreset.
 float UltrawideFactor();
+// Task 360 (Beta 17): ultrawide is built in and always on. KK_ULTRAWIDE=0 (developers only) switches it off.
+bool UltrawideSwitchedOff();
+// The picture's shape for the chosen resolution: its own shape clamped to 16:9..32:9 (16:9 when switched off).
+double PictureAspectFor(int output_width, int output_height);
+// Task 363: the ultrawide picture size chosen in a resolution list (kk_picture_size, ultrawide_logic.h
+// ParsePictureSize), drawn whatever the window or screen and fitted into it (presenter: native_display_aspect).
+// nullopt: none chosen (the window's or screen's own size, as before) or ultrawide switched off.
+std::optional<std::pair<int, int>> ChosenPictureSize();
 
 // Writes the current settings (skipping command-line/env overrides) to `path`.
 bool SaveSettings(const std::filesystem::path& path, bool include_temporary = false);
-// Task 293: audio_mute is held on by a PS2 cutscene the next level loads under (ps2_movies.cpp): SaveSettings
-// leaves it out meanwhile (it is never the player's choice then). Any thread.
-void SetAudioMuteHeld(bool held);
 // Temporary overlay trials are excluded from every ordinary settings save.
 void SetTemporarySettingBaseline(const std::string& name, const std::string& value);
 void SetTemporarySettingTrialValue(const std::string& name, const std::string& value);
@@ -162,7 +168,22 @@ void ApplyPortDefaults();
 // First launch selects and persists a hardware tier. Existing installs are left alone.
 void InitializeHardwareRecommendation(const std::filesystem::path& config_path, int width, int height);
 // Recommended refreshes defaults only; explicit player settings always win.
-void ApplyHardwareRecommendation(bool detect, int width, int height);
+// first_setup selects the task 338 policy only while assigning a new install's tier.
+void ApplyHardwareRecommendation(bool detect, int width, int height, bool first_setup = false);
+// Task 350a: the recommendation a new install gets (its tier detected with the first-setup policy), for an existing
+// install going through the first-time setup again (setup_again.h) after its settings went back to the defaults.
+void ApplyFirstSetupHardwareRecommendation(int width, int height);
+// Task 350a (owner, 21 Oct): DirectX 12 is the default graphics API on Windows, for existing installs too. Once, for
+// a settings file from before Beta 14 (kk_settings_version under 4), native_backend becomes d3d12; the player's
+// later choices stay. Call after the settings file is read and before the renderer starts (it reads native_backend
+// only then), before startup recovery applies a fallback. Nothing on Linux (Vulkan). True if it changed the API.
+bool MigrateGraphicsApi();
+// Task 368: the game's graphics card is Intel integrated graphics, not Arc (hardware_recommendation.h
+// IntelIntegratedNotArc): Vulkan is the default and recommended API there. Always false off Windows.
+bool IntelIntegratedGraphics();
+// Task 368: FSR 4 is offered and kept only on AMD graphics cards (true when the card is not known: the
+// renderer then checks the device's vendor itself).
+bool Fsr4AllowedOnThisGpu();
 
 // The default upscaler (Beta 3, docs/upscalers.md "The default"): with the native renderer, the best
 // temporal upscaler this PC runs (native_upscaler): DLSS on an NVIDIA card that supports it, FSR 4 on
@@ -182,12 +203,14 @@ void ApplyUpscalerDefaults();
 // The launcher's answer: "none" or the upscalers offered ("dlss,fsr3,xess"). Applies the defaults.
 void SetOfferedUpscalers(const std::string& offered);
 // Once the settings file is read: brings one from an older version up to date
-// (preserving explicit choices; version 3 enables GI for old presets) and saves
-// it; a new install just gets the current defaults.
+// (preserving explicit choices; version 3 enables GI for old presets; version 4 is
+// DirectX 12 on Windows, MigrateGraphicsApi, done before the renderer starts; version 5
+// turns HDR off once, as it is experimental, F8 panel only) and saves it; a new install
+// just gets the current defaults.
 void MigrateSettings(const std::filesystem::path& config_path);
 // Beta 9: an old Show FPS (kk_show_fps = true) becomes Performance metrics "fps" (run after the settings load).
 void MigrateFrameCounter();
-// Beta 10: HDR follows Windows; an older file's HDR On stays On, moved Peak/Paper white sliders stay Manual.
+// Beta 10: HDR follows Windows; an older file's moved Peak/Paper white sliders stay Manual.
 void MigrateHdrSettings();
 // Settings the player can't change (shader preparing is always Balanced).
 void ApplyFixedSettings();

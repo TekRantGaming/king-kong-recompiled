@@ -70,6 +70,12 @@ class SteamRuntime final : public ISocialService {
   bool BeginFlow(SessionStart start, std::vector<uint8_t> save);
   bool SubmitFlow(Message message);
   FlowView FlowSnapshot() const;
+  // C80 hand over: the start plan over the live lobby session, and the resumed process's direct
+  // reconnect to the partner's SteamID (no lobby needed); a resumed host then opens a fresh
+  // friends-only lobby with connect presence, so invites and Join game keep working.
+  bool BeginPlan(const StartPlan& plan);
+  handover::PlanPhase PlanState(StartPlan* plan, const char** failure) const;
+  bool Resume(bool host, uint64_t partner, uint64_t token);
   void Shutdown();
 #if defined(KK_DEV_TOOLS)
   // Blocks caller, but all Steam calls still belong to the worker. Never signs in or starts Steam.

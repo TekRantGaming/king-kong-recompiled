@@ -810,4 +810,29 @@ TEST(RenderThreadHitchReportingAndTicketsSurviveDiagnosticsSwitch) {
   SetDiagnosticsEnabled(previous);
 }
 
+TEST(RenderThreadIdleServiceDoesNotLoseCommandsOrKeepRunningAtShutdown) {
+  FakeGuestMemory memory(1 << 20);
+  RecordingSink inner;
+  std::mutex mutex;
+  std::condition_variable cv;
+  unsigned polls = 0;
+  {
+    ThreadedSink sink(inner, memory, [&] {
+      { std::lock_guard lock(mutex); ++polls; }
+      cv.notify_one();
+    });
+    {
+      std::unique_lock lock(mutex);
+      CHECK(cv.wait_for(lock, std::chrono::seconds(2), [&] { return polls >= 2; }));
+    }
+    sink.OnPresent(17, 0, 0);
+    sink.WaitDone(sink.Ticket());
+    CHECK_EQ(inner.presents.size(), 1u);
+    CHECK_EQ(sink.Ticket(), 1u);
+  }
+  const unsigned stopped_at = polls;
+  std::this_thread::sleep_for(std::chrono::milliseconds(30));
+  CHECK_EQ(polls, stopped_at);
+}
+
 NR_TEST_MAIN()

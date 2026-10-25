@@ -1225,10 +1225,10 @@ TEST(GameGi_DistanceFadeAndLiveChanges) {
     for (int i=0;i<400 && !a.game->scene_gi();++i) full = a.Render(frame,"distance_warm");
     full = a.Render(frame,"distance_full");
     settings->gi.distance = GiDistance::kNear;
-    const Pixels near = a.Render(frame,"distance_near");
+    const Pixels near_px = a.Render(frame,"distance_near");
     const float plain = Colour(base,b.cam,receiver).r;
     const float addition = Colour(full,a.cam,receiver).r - plain;
-    const float faded = Colour(near,a.cam,receiver).r - plain;
+    const float faded = Colour(near_px,a.cam,receiver).r - plain;
     const V3 delta = receiver - a.cam.eye;
     const float distance = std::sqrt(Dot(delta,delta));
     std::printf("  camera distance %.2f m: full red +%.5f, Near +%.5f\n", distance,addition,faded);
@@ -1241,7 +1241,7 @@ TEST(GameGi_DistanceFadeAndLiveChanges) {
     CHECK(MaxDifference(full,restored) < 1e-5f);
     settings->gi.distance = GiDistance::kMedium;
     const Pixels medium = a.Render(frame,"distance_medium");
-    CHECK(Colour(medium,a.cam,receiver).r >= Colour(near,a.cam,receiver).r - 0.008f);
+    CHECK(Colour(medium,a.cam,receiver).r >= Colour(near_px,a.cam,receiver).r - 0.008f);
     for (size_t p=3;p<medium.rgba.size();p+=4) CHECK_EQ(medium.rgba[p],base.rgba[p]);
     CHECK(a.gpu->errors() == a.errors_before);
   }

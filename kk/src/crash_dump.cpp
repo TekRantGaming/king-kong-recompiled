@@ -10,8 +10,10 @@
 #include "crash_dump.h"
 #include "diagnostics.h"
 #include "exit_evidence.h"
+#include "overlay_modules.h"
 #include "startup_clock.h"
 #include "hooks/kk_native_ui.h"
+#include "backend/startup_steps.h"
 
 #if defined(_WIN32)
 
@@ -24,12 +26,18 @@
 #include <windows.h>
 #include <dbghelp.h>
 #include <tlhelp32.h>
+#include <shellapi.h>
+#include <psapi.h>
 #pragma comment(lib, "dbghelp.lib")
 
+#include <algorithm>
 #include <atomic>
+#include <cctype>
 #include <cstdio>
+#include <cstdlib>
 #include <cwchar>
 #include <filesystem>
+#include <string>
 #include <thread>
 #include <vector>
 
@@ -48,6 +56,16 @@ LPTOP_LEVEL_EXCEPTION_FILTER g_previous = nullptr;
 LPTOP_LEVEL_EXCEPTION_FILTER g_original_previous = nullptr;
 volatile LONG g_crashing = 0;
 std::atomic<int> g_api{0};  // task 270: SetCrashReportApi
+// Task 368 (owner, 23 Oct; crash reports G5, G8): quitting has started (NoteQuitStarted). A crash or abort from
+// then on ends the process quietly, with no report (accepted: real crashes during quit go unreported).
+std::atomic<bool> g_quitting{false};
+constexpr DWORD kQuitLimitMs = 10000;
+
+[[noreturn]] void EndQuietly(const char* what) {
+  nr::steps::Note("%s while quitting: the program ends without a crash report", what);
+  TerminateProcess(GetCurrentProcess(), 0);
+  for (;;) Sleep(INFINITE);  // (TerminateProcess on this process does not return)
+}
 
 const char* ApiName() {
   const int api = g_api.load(std::memory_order_relaxed);
@@ -115,6 +133,32 @@ void WriteCrashStack(FILE* f, EXCEPTION_POINTERS* info) {
 #endif
 }
 
+// Task 368: "Overlays loaded: RivaTuner Statistics Server (rtsshooks64.dll), ..." (file names only, no folders).
+void WriteOverlayModules(FILE* f) {
+  HMODULE modules[1024];
+  DWORD needed = 0;
+  if (!K32EnumProcessModules(GetCurrentProcess(), modules, sizeof(modules), &needed)) return;
+  wchar_t exe[MAX_PATH] = L"";
+  GetModuleFileNameW(nullptr, exe, MAX_PATH);
+  const wchar_t* exe_slash = wcsrchr(exe, L'\\');
+  const size_t exe_dir = exe_slash ? size_t(exe_slash - exe) : 0;
+  std::string found;
+  const DWORD count = std::min<DWORD>(needed / sizeof(HMODULE), DWORD(std::size(modules)));
+  for (DWORD i = 0; i < count; ++i) {
+    wchar_t path[MAX_PATH];
+    if (!GetModuleFileNameW(modules[i], path, MAX_PATH)) continue;
+    const wchar_t* slash = wcsrchr(path, L'\\');
+    const wchar_t* file = slash ? slash + 1 : path;
+    const size_t dir = slash ? size_t(slash - path) : 0;
+    const bool beside = exe_dir && dir == exe_dir && _wcsnicmp(path, exe, dir) == 0;
+    std::string name;
+    for (const wchar_t* c = file; *c; ++c) name += *c < 128 ? char(std::tolower(int(*c))) : '?';
+    const std::string what = OverlayModule(name, beside);
+    if (!what.empty()) found += (found.empty() ? "" : ", ") + what + " (" + name + ")";
+  }
+  std::fprintf(f, "Overlays loaded: %s\n", found.empty() ? "none found" : found.c_str());
+}
+
 // crash-<time>.dmp and .txt. `thread`: the thread that crashed (this one, or the one the writer thread
 // works for). `reason`: why the program ends when no exception was raised (abort(), std::terminate).
 void WriteCrashFiles(EXCEPTION_POINTERS* info, DWORD thread, const char* reason) {
@@ -134,6 +178,7 @@ void WriteCrashFiles(EXCEPTION_POINTERS* info, DWORD thread, const char* reason)
     // tables: the server groups identical crashes by the code and the first three of these.
     WriteCrashStack(f, info);
     std::fputs("\n", f);
+    WriteOverlayModules(f);  // task 368
     WriteCrashDiagnostics(f);
     // What the game was doing: the last 200 log lines (fixed memory, redacted when they were logged).
     std::fputs("\n", f);
@@ -158,24 +203,85 @@ DWORD WINAPI CrashWriterThread(void*) {
 // Nested calls on one thread (another filter we call calls ours again) go straight on.
 thread_local int t_in_filter = 0;
 
+// Task 353: one line in the start-up step log for an exception (no allocation).
+void NoteException(EXCEPTION_POINTERS* info, const char* what) {
+  wchar_t where[MAX_PATH + 64];
+  DescribeAddress(info->ExceptionRecord->ExceptionAddress, where, std::size(where));
+  nr::steps::Note("%s: exception 0x%08lX at %ls", what, static_cast<unsigned long>(info->ExceptionRecord->ExceptionCode),
+                  where);
+}
+
+// The crash report, once a process (crash-<time>.dmp and .txt). False when one was written already.
+bool WriteCrashReportOnce(EXCEPTION_POINTERS* info, const char* reason) {
+  if (InterlockedExchange(&g_crashing, 1) != 0 || !g_crash_dir[0]) return false;
+  if (info->ExceptionRecord->ExceptionCode == EXCEPTION_STACK_OVERFLOW && g_writer_wake && g_writer_done) {
+    g_writer_info = info;
+    g_writer_thread = GetCurrentThreadId();
+    SetEvent(g_writer_wake);
+    WaitForSingleObject(g_writer_done, 20000);
+  } else {
+    WriteCrashFiles(info, GetCurrentThreadId(), reason);
+  }
+  nr::steps::Note("crash report written in the crashes folder");
+  exit_evidence::NoteCrashReport();
+  return true;
+}
+
 LONG WINAPI OnCrash(EXCEPTION_POINTERS* info) {
   // Called again from a filter that replaced ours and keeps ours as its previous: on to the one before us.
   if (t_in_filter) return g_original_previous ? g_original_previous(info) : EXCEPTION_CONTINUE_SEARCH;
+  if (g_quitting.load(std::memory_order_relaxed)) EndQuietly("a crash");  // task 368
   ++t_in_filter;
-  if (InterlockedExchange(&g_crashing, 1) == 0 && g_crash_dir[0]) {
-    if (info->ExceptionRecord->ExceptionCode == EXCEPTION_STACK_OVERFLOW && g_writer_wake && g_writer_done) {
-      g_writer_info = info;
-      g_writer_thread = GetCurrentThreadId();
-      SetEvent(g_writer_wake);
-      WaitForSingleObject(g_writer_done, 20000);
-    } else {
-      WriteCrashFiles(info, GetCurrentThreadId(), nullptr);
-    }
-    exit_evidence::NoteCrashReport();
-  }
+  if (!g_crashing) NoteException(info, "crash (unhandled)");
+  WriteCrashReportOnce(info, nullptr);
   const LONG result = g_previous && g_previous != OnCrash ? g_previous(info) : EXCEPTION_CONTINUE_SEARCH;
   --t_in_filter;
   return result;
+}
+
+// Task 353: codes that always end the process (nothing handles them). A filter another library put in front of
+// ours, or a C runtime that ends the program itself, would leave no report: these are written from the
+// vectored handler, which runs before any of them.
+bool AlwaysFatal(DWORD code) {
+  return code == 0xC0000374 /* heap corruption */ || code == 0xC0000409 /* stack buffer overrun, fail-fast */ ||
+         code == 0xC0000420 /* assertion failure */ || code == 0xC0000602 /* fail-fast exception */;
+}
+
+// Exceptions worth a step-log line while the program starts (they may still be handled: only noted).
+bool Serious(DWORD code) {
+  switch (code) {
+    case EXCEPTION_ACCESS_VIOLATION:
+    case EXCEPTION_ILLEGAL_INSTRUCTION:
+    case EXCEPTION_PRIV_INSTRUCTION:
+    case EXCEPTION_INT_DIVIDE_BY_ZERO:
+    case EXCEPTION_IN_PAGE_ERROR:
+    case EXCEPTION_STACK_OVERFLOW:
+    case EXCEPTION_DATATYPE_MISALIGNMENT:
+      return true;
+    default:
+      return AlwaysFatal(code);
+  }
+}
+
+std::atomic<ULONGLONG> g_last_frame_seen{0};  // a copy of g_last_frame for the vectored handler (declared later)
+volatile LONG g_noted_exceptions = 0;
+thread_local int t_in_vectored = 0;
+
+// Registered last (after the runtime's own vectored handlers, which take the guest's expected memory faults).
+LONG CALLBACK OnVectored(EXCEPTION_POINTERS* info) {
+  const DWORD code = info->ExceptionRecord->ExceptionCode;
+  if (t_in_vectored || !Serious(code)) return EXCEPTION_CONTINUE_SEARCH;
+  ++t_in_vectored;
+  if (AlwaysFatal(code)) {
+    if (g_quitting.load(std::memory_order_relaxed)) EndQuietly("a fatal exception");  // task 368
+    NoteException(info, "crash (fatal)");
+    WriteCrashReportOnce(info, "a fatal exception (written from the vectored handler)");
+  } else if (!g_last_frame_seen.load(std::memory_order_relaxed) && InterlockedIncrement(&g_noted_exceptions) <= 16) {
+    // Before the first game frame only, and a few: once the game draws, the hang and crash reports cover it.
+    NoteException(info, "first-chance");
+  }
+  --t_in_vectored;
+  return EXCEPTION_CONTINUE_SEARCH;
 }
 
 // Task 229: a library loaded after us (an overlay's DLL in the Vulkan layer chain, a driver) may install its
@@ -218,20 +324,28 @@ void WriteThreadList(FILE* f, bool stacks = false) {
   struct Seen {
     DWORD id;
     DWORD64 rip;
+    DWORD64 start;  // task 335: where the thread began (which module made it), as Windows records it
     wchar_t name[64];
     std::vector<uint64_t> stack;
   };
   std::vector<Seen> threads;
   std::vector<uint64_t> copy(kStackBytes / 8);
+  using QueryThread = LONG(WINAPI*)(HANDLE, int, PVOID, ULONG, PULONG);
+  static const auto query_thread = reinterpret_cast<QueryThread>(
+      GetProcAddress(GetModuleHandleW(L"ntdll.dll"), "NtQueryInformationThread"));
   HANDLE snap = CreateToolhelp32Snapshot(TH32CS_SNAPTHREAD, 0);
   if (snap == INVALID_HANDLE_VALUE) return;
   THREADENTRY32 te{sizeof(te)};
   for (BOOL ok = Thread32First(snap, &te); ok; ok = Thread32Next(snap, &te)) {
     if (te.th32OwnerProcessID != GetCurrentProcessId() || te.th32ThreadID == GetCurrentThreadId()) continue;
-    HANDLE h = OpenThread(THREAD_SUSPEND_RESUME | THREAD_GET_CONTEXT | THREAD_QUERY_LIMITED_INFORMATION, FALSE,
-                          te.th32ThreadID);
+    HANDLE h = OpenThread(THREAD_SUSPEND_RESUME | THREAD_GET_CONTEXT | THREAD_QUERY_INFORMATION |
+                              THREAD_QUERY_LIMITED_INFORMATION, FALSE, te.th32ThreadID);
     if (!h) continue;
-    Seen s{te.th32ThreadID, 0, L"", {}};
+    Seen s{te.th32ThreadID, 0, 0, L"", {}};
+    if (query_thread) {
+      PVOID start = nullptr;  // ThreadQuerySetWin32StartAddress
+      if (query_thread(h, 9, &start, sizeof(start), nullptr) >= 0) s.start = reinterpret_cast<DWORD64>(start);
+    }
     size_t copied = 0;
     if (SuspendThread(h) != DWORD(-1)) {
       CONTEXT ctx{};
@@ -260,7 +374,12 @@ void WriteThreadList(FILE* f, bool stacks = false) {
   for (const Seen& s : threads) {
     wchar_t where[MAX_PATH + 64];
     DescribeAddress(reinterpret_cast<const void*>(s.rip), where, std::size(where));
-    std::fwprintf(f, L"  thread %5lu %-32ls %ls\n", s.id, s.name[0] ? s.name : L"", where);
+    wchar_t began[MAX_PATH + 64] = L"";
+    if (s.start) DescribeAddress(reinterpret_cast<const void*>(s.start), began, std::size(began));
+    if (began[0])
+      std::fwprintf(f, L"  thread %5lu %-32ls %ls (started at %ls)\n", s.id, s.name[0] ? s.name : L"", where, began);
+    else
+      std::fwprintf(f, L"  thread %5lu %-32ls %ls\n", s.id, s.name[0] ? s.name : L"", where);
     int shown = 0;
     for (uint64_t v : s.stack) {
       if (shown >= 12) break;
@@ -307,7 +426,8 @@ void WriteHangReport(ULONGLONG stalled_ms, bool startup = false) {
                      L"Please attach this file, the .dmp file next to it and logs\\king_kong.log to a bug report.\n\n"
                      L"Threads:\n");
     if (const char* api = ApiName()) std::fwprintf(f, L"Graphics API: %hs\n", api);
-    WriteThreadList(f, startup);
+    // Task 335: likely callers in every hang report (a Beta 13 freeze report had only each thread's wait call).
+    WriteThreadList(f, true);
     std::fputs("\n", f);
     WriteLogTail(f);
     std::fclose(f);
@@ -347,6 +467,26 @@ void WatchForHangs() {
       KeepFilterInFront();
       filter_tick = now;
     }
+    if (g_quitting.load(std::memory_order_relaxed)) continue;  // task 368: no hang report while quitting
+#if defined(KK_DEV_TOOLS)
+    // Task 372 test aid: KK_DEV_HANG_NOW=<file>: a hang report (where every thread is) each time a test
+    // creates or rewrites that file, e.g. while the window is Not responding but guest frames still come.
+    static const char* hang_now = std::getenv("KK_DEV_HANG_NOW");
+    static ULONGLONG hang_now_stamp = 0;
+    if (hang_now && *hang_now && now - hang_now_stamp >= 500) {
+      WIN32_FILE_ATTRIBUTE_DATA a{};
+      static ULONGLONG written = 0;
+      if (GetFileAttributesExA(hang_now, GetFileExInfoStandard, &a)) {
+        const ULONGLONG t = (ULONGLONG(a.ftLastWriteTime.dwHighDateTime) << 32) | a.ftLastWriteTime.dwLowDateTime;
+        if (t != written) {
+          written = t;
+          REXLOG_WARN("KK dev: hang report asked for by the test ({})", hang_now);
+          WriteHangReport(0);
+        }
+      }
+      hang_now_stamp = now;
+    }
+#endif
     const ULONGLONG last = g_last_frame.load(std::memory_order_relaxed);
     if (now - previous_tick > 5000) {
       // This thread did not run for a while: the PC slept or the process was
@@ -415,11 +555,29 @@ void NoteGameStarting() {
 }
 
 void NoteGuestFrame() {
-  g_last_frame.store(GetTickCount64(), std::memory_order_relaxed);
+  const ULONGLONG now = GetTickCount64();
+  if (!g_last_frame_seen.exchange(now, std::memory_order_relaxed)) nr::steps::Note("first game frame (guest swap)");
+  g_last_frame.store(now, std::memory_order_relaxed);
   exit_evidence::NoteFrame();
 }
 
+void NoteQuitStarted(const char* why) {
+  if (g_quitting.exchange(true)) return;
+  nr::steps::Note("quitting (%s): no crash reports from now on; the program is ended if it still runs in 10 s", why);
+  REXLOG_INFO("KK: quitting ({}): the program is ended if it still runs {} s from now", why, kQuitLimitMs / 1000);
+  std::thread([] {
+    Sleep(kQuitLimitMs);
+    REXLOG_WARN("KK: the program still ran {} s after quitting started: ended now", kQuitLimitMs / 1000);
+    nr::steps::Note("still running 10 s after quitting started: the program is ended");
+    rex::FlushLogging();
+    TerminateProcess(GetCurrentProcess(), 0);
+  }).detach();
+}
+
+bool QuitStarted() { return g_quitting.load(std::memory_order_relaxed); }
+
 void WriteCrashReportNow(const char* reason) {
+  if (g_quitting.load(std::memory_order_relaxed)) EndQuietly(reason ? reason : "an abort");  // task 368
   if (InterlockedExchange(&g_crashing, 1) != 0 || !g_crash_dir[0]) return;
   // No exception was raised (abort(), std::terminate, an invalid C runtime argument): a made-up record
   // (STATUS_FATAL_APP_EXIT, as abort() reports) and this thread's registers, so the stack shows the caller.
@@ -432,32 +590,113 @@ void WriteCrashReportNow(const char* reason) {
   WriteCrashFiles(&info, GetCurrentThreadId(), reason);
 }
 
-void InstallCrashDumps(const std::filesystem::path& logs_dir, const std::filesystem::path& user_root) {
+namespace {
+// The folders (again when a later call names others: a benchmark's own user folder) and, once, the handlers.
+void InstallHandlers(const std::filesystem::path& logs_dir, const std::filesystem::path& user_root) {
   static bool installed = false;
+  std::error_code ec;
+  std::filesystem::create_directories(logs_dir, ec);
+  if (logs_dir.wstring().size() < MAX_PATH) wcsncpy_s(g_dir, logs_dir.wstring().c_str(), _TRUNCATE);
+  const auto crash_dir = user_root / "crashes";
+  ec.clear();
+  std::filesystem::create_directories(crash_dir, ec);
+  if (!ec && crash_dir.wstring().size() < MAX_PATH) {
+    wcsncpy_s(g_crash_dir, crash_dir.wstring().c_str(), _TRUNCATE);
+    SetEnvironmentVariableW(L"KK_CRASH_DIR", g_crash_dir);  // task 353: the upscaler check's dumps go here too
+  } else {
+    REXLOG_WARN("KK: could not prepare local crash folder (error {})", ec.value());
+  }
   if (installed) {
-    // Runtime setup may have installed a newer handler since path finalization.
+    // Runtime setup may have installed a newer handler since the first call.
     auto previous = SetUnhandledExceptionFilter(OnCrash);
-    if (previous != OnCrash) g_previous = previous;
+    if (previous != OnCrash && previous) g_previous = previous;
     return;
   }
   installed = true;
   SetErrorMode(GetErrorMode() | SEM_NOGPFAULTERRORBOX);
-  std::error_code ec;
-  std::filesystem::create_directories(logs_dir, ec);
-  wcsncpy_s(g_dir, logs_dir.wstring().c_str(), _TRUNCATE);
-  const auto crash_dir = user_root / "crashes";
-  std::filesystem::create_directories(crash_dir, ec);
-  if (!ec && crash_dir.wstring().size() < MAX_PATH)
-    wcsncpy_s(g_crash_dir, crash_dir.wstring().c_str(), _TRUNCATE);
-  else REXLOG_WARN("KK: could not prepare local crash folder (error {})", ec.value());
   g_previous = SetUnhandledExceptionFilter(OnCrash);
   g_original_previous = g_previous;
+  AddVectoredExceptionHandler(0, OnVectored);  // task 353
   g_writer_wake = CreateEventW(nullptr, TRUE, FALSE, nullptr);
   g_writer_done = CreateEventW(nullptr, TRUE, FALSE, nullptr);
   if (g_writer_wake && g_writer_done) {
     // Its own 1 MB stack, so the report can be written for a thread whose stack ran out.
     if (HANDLE t = CreateThread(nullptr, 1 << 20, CrashWriterThread, nullptr, 0, nullptr)) CloseHandle(t);
   }
+}
+
+// Task 353: logs\startup-steps.txt for this process and its children (KK_STEP_LOG). Kept under 1 MB: the
+// older lines move to startup-steps-old.txt. The startup monitor (startup_recovery.cpp) learns the path
+// through KK_MONITOR_NOTE, so it can add how this process ended.
+void OpenStepLog(const std::filesystem::path& logs_dir) {
+  static bool opened = false;
+  if (opened) return;
+  opened = true;
+  const std::filesystem::path path = logs_dir / "startup-steps.txt";
+  if (path.wstring().size() >= MAX_PATH) return;
+  std::error_code ec;
+  if (std::filesystem::file_size(path, ec) > (1u << 20) && !ec)
+    MoveFileExW(path.c_str(), (logs_dir / "startup-steps-old.txt").c_str(), MOVEFILE_REPLACE_EXISTING);
+  SetEnvironmentVariableW(L"KK_STEP_LOG", path.c_str());
+  wchar_t note[MAX_PATH];
+  const DWORD n = GetEnvironmentVariableW(L"KK_MONITOR_NOTE", note, MAX_PATH);
+  if (n && n < MAX_PATH) {
+    HANDLE f = CreateFileW(note, GENERIC_WRITE, FILE_SHARE_READ, nullptr, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
+    if (f != INVALID_HANDLE_VALUE) {
+      const std::wstring text = path.wstring();
+      DWORD written = 0;
+      WriteFile(f, text.data(), DWORD(text.size() * sizeof(wchar_t)), &written, nullptr);
+      CloseHandle(f);
+    }
+    SetEnvironmentVariableW(L"KK_MONITOR_NOTE", nullptr);  // this process's own children have their own monitor
+  }
+  // The switches given (names only, never a value: values can hold folder names).
+  std::string flags;
+  int argc = 0;
+  if (wchar_t** argv = CommandLineToArgvW(GetCommandLineW(), &argc)) {
+    for (int i = 1; i < argc; ++i) {
+      std::wstring a = argv[i];
+      a = a.substr(0, a.find(L'='));
+      if (a.rfind(L"--", 0) == 0 && flags.size() < 400) flags += " " + std::string(a.begin() + 2, a.end());
+    }
+    LocalFree(argv);
+  }
+  wchar_t diagnostics[8] = L"", skip[8] = L"";
+  GetEnvironmentVariableW(L"KK_DIAGNOSTICS", diagnostics, 8);
+  GetEnvironmentVariableW(L"KK_SKIP_UPSCALER_CHECK", skip, 8);
+  nr::steps::Note("---- king_kong %s started (diagnostics %s, upscaler check %s); switches:%s", KK_VERSION,
+                  diagnostics[0] == L'1' ? "on" : "off", skip[0] == L'1' ? "skipped" : "on",
+                  flags.empty() ? " none" : flags.c_str());
+}
+}  // namespace
+
+void InstallEarlyCrashHandlers(const std::filesystem::path& logs_dir, const std::filesystem::path& user_root) {
+  InstallHandlers(logs_dir, user_root);
+  OpenStepLog(logs_dir);
+#if defined(KK_DEV_TOOLS)
+  // Developer test (task 353): KK_DEV_FAULT=av|fastfail|heap|abort ends this process that way on a background
+  // thread half a second from now, while the window and graphics device are being made (as the Intel UHD
+  // reports did), to check what the handlers and the step log leave behind.
+  if (const char* fault = std::getenv("KK_DEV_FAULT"); fault && *fault) {
+    const std::string kind = fault;
+    std::thread([kind] {
+      Sleep(500);
+      nr::steps::Note("dev: injected fault %s", kind.c_str());
+      if (kind == "av") *static_cast<volatile int*>(nullptr) = 1;
+      else if (kind == "fastfail") __fastfail(7);
+      else if (kind == "heap") RaiseException(0xC0000374, EXCEPTION_NONCONTINUABLE, 0, nullptr);
+      else if (kind == "abort") std::abort();
+    }).detach();
+  }
+#endif
+}
+
+void InstallCrashDumps(const std::filesystem::path& logs_dir, const std::filesystem::path& user_root) {
+  InstallHandlers(logs_dir, user_root);
+  OpenStepLog(logs_dir);
+  static bool watching = false;
+  if (watching) return;
+  watching = true;
   std::thread(WatchForHangs).detach();
 }
 
@@ -470,7 +709,10 @@ void NoteGuestFrame() {}
 void NoteGameStarting() {}
 void SetCrashReportApi(int) {}
 void WriteCrashReportNow(const char*) {}
+void NoteQuitStarted(const char*) {}
+bool QuitStarted() { return false; }
 void InstallCrashDumps(const std::filesystem::path&, const std::filesystem::path&) {}
+void InstallEarlyCrashHandlers(const std::filesystem::path&, const std::filesystem::path&) {}
 }  // namespace kk
 
 #endif

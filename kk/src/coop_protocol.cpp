@@ -8,6 +8,7 @@
 
 namespace kk::coop {
 namespace {
+constexpr uint8_t kResumeTag = 0xA5;  // C80 Hello extension marker (a join code starts with its length, 6)
 struct Writer {
   std::vector<uint8_t> bytes;
   void U(uint64_t v, size_t n) { for (size_t i = n; i; --i) bytes.push_back(uint8_t(v >> ((i - 1) * 8))); }
@@ -127,7 +128,7 @@ uint64_t SessionSaveHash(std::span<const uint8_t> bytes) {
   for (uint8_t b : bytes) { hash ^= b; hash *= 1099511628211ull; }
   return hash;
 }
-bool IsFlowMessage(MessageType t) { return (t >= MessageType::SessionStart && t <= MessageType::FlowAbort) || IsLifeMessage(t); }
+bool IsFlowMessage(MessageType t) { return (t >= MessageType::SessionStart && t <= MessageType::FlowAbort) || IsLifeMessage(t) || IsPlanMessage(t); }
 bool ValidObjectState(const ObjectState& s) {
   if (!s.generation || !s.level || s.level>100000 || !s.number || !s.source ||
       !std::isfinite(s.position) || !std::isfinite(s.seconds)) return false;
@@ -143,6 +144,12 @@ bool ValidObjectRequest(const ObjectState& s) {
       s.position<=100000 && std::floor(s.position)==s.position && s.seconds>=0 && s.seconds<=2;
   return s.kind==ObjectKind::Door && s.value<8 && s.position==0 &&
       (s.seconds==0 || s.seconds==1 || s.seconds==2);
+}
+bool ValidStartPlan(const StartPlan& p) {
+  if (!p.token || p.chapter >= 42 || p.continue_game > 1) return false;
+  if (p.transport == StartTransport::Direct) return p.port != 0 && !p.host_id && !p.guest_id;
+  if (p.transport == StartTransport::Steam) return p.host_id && p.guest_id && p.host_id != p.guest_id && !p.port;
+  return false;
 }
 bool ValidStoryEvent(const StoryEvent& e) {
   if (e.phase>=StoryPhase::SnapshotRequest && e.phase<=StoryPhase::SnapshotEnd) {
@@ -329,6 +336,16 @@ bool Encode(const Message& m, std::vector<uint8_t>& out) {
       payload.U(m.start.chapter_select, 1); payload.U(m.start.cheats, 2); payload.U(m.start.difficulty, 1);
       payload.U(m.start.save_bytes, 4); payload.U(m.start.save_hash, 8);
       break;
+    case MessageType::StartPlan:
+      if (!ValidStartPlan(m.plan)) return false;
+      payload.U(m.plan.token, 8); payload.U(uint8_t(m.plan.transport), 1); payload.U(m.plan.chapter, 1);
+      payload.U(m.plan.continue_game, 1); payload.U(m.plan.host_id, 8); payload.U(m.plan.guest_id, 8);
+      payload.U(m.plan.port, 2);
+      break;
+    case MessageType::StartPlanAck:
+      if (!m.plan.token) return false;
+      payload.U(m.plan.token, 8);
+      break;
     case MessageType::SaveChunk:
       if (m.save_chunk.bytes.empty() || m.save_chunk.bytes.size() > kSaveChunkBytes ||
           m.save_chunk.offset > kSessionSaveBytes || m.save_chunk.bytes.size() > kSessionSaveBytes - m.save_chunk.offset) return false;
@@ -355,6 +372,7 @@ bool Encode(const Message& m, std::vector<uint8_t>& out) {
         payload.U(m.join_code.size(), 1);
         payload.bytes.insert(payload.bytes.end(), m.join_code.begin(), m.join_code.end());
       }
+      if (m.resume_token) { payload.U(kResumeTag, 1); payload.U(m.resume_token, 8); }
       break;
     case MessageType::Reject:
       if (!ReasonValid(m.reason)) return false;
@@ -516,6 +534,16 @@ bool Decode(std::span<const uint8_t> bytes, Message& out) {
       if (!ValidSessionStart(m.start)) return false;
       break;
     }
+    case MessageType::StartPlan:
+      m.plan.token = r.U(8); m.plan.transport = StartTransport(r.U(1)); m.plan.chapter = uint8_t(r.U(1));
+      m.plan.continue_game = uint8_t(r.U(1)); m.plan.host_id = r.U(8); m.plan.guest_id = r.U(8);
+      m.plan.port = uint16_t(r.U(2));
+      if (!r.ok || !ValidStartPlan(m.plan)) return false;
+      break;
+    case MessageType::StartPlanAck:
+      m.plan.token = r.U(8);
+      if (!r.ok || !m.plan.token) return false;
+      break;
     case MessageType::SaveChunk: {
       m.save_chunk.offset = uint32_t(r.U(4)); const size_t count = size_t(r.U(2));
       if (!r.ok || !count || count > kSaveChunkBytes || count != bytes.size() - r.at ||
@@ -537,12 +565,17 @@ bool Decode(std::span<const uint8_t> bytes, Message& out) {
       m.display_name.assign(reinterpret_cast<const char*>(bytes.data()+r.at), n);
       r.at += n;
       if (SanitizeDisplayName(m.display_name) != m.display_name) return false;
-      if (r.at < bytes.size()) {
+      if (r.at < bytes.size() && bytes[r.at] != kResumeTag) {
         const size_t code_size = size_t(r.U(1));
         if (!r.ok || code_size != 6 || code_size > bytes.size()-r.at) return false;
         m.join_code.assign(reinterpret_cast<const char*>(bytes.data()+r.at), code_size);
         r.at += code_size;
         for (unsigned char c : m.join_code) if (!((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9'))) return false;
+      }
+      if (r.at < bytes.size()) {
+        if (r.U(1) != kResumeTag) return false;
+        m.resume_token = r.U(8);
+        if (!r.ok || !m.resume_token) return false;
       }
       break;
     }

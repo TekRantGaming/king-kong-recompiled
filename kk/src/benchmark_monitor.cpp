@@ -8,6 +8,7 @@
 #include <cstdlib>
 #include <string>
 #include <unordered_map>
+#include <utility>
 #if defined(_WIN32)
 #define WIN32_LEAN_AND_MEAN
 #define NOMINMAX
@@ -69,7 +70,11 @@ struct Counters {
     std::vector<unsigned char> buffer(bytes);
     auto* items = reinterpret_cast<PDH_FMT_COUNTERVALUE_ITEM_W*>(buffer.data());
     if (PdhGetFormattedCounterArrayW(gpu, PDH_FMT_DOUBLE, &bytes, &count, items) != ERROR_SUCCESS) return -1;
-    last = buffer; last_count = count;
+    // The items' names point into this storage: moved, never copied (task 351: a copy left every name
+    // pointing into the freed buffer, and the other-GPU-use count read them later: benchmark crashes).
+    last = std::move(buffer);
+    items = reinterpret_cast<PDH_FMT_COUNTERVALUE_ITEM_W*>(last.data());
+    last_count = count;
     const auto prefix = L"pid_" + std::to_wstring(GetCurrentProcessId()) + L"_";
     double busiest = -1;
     for (DWORD i = 0; i < count; ++i)

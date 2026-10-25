@@ -12,10 +12,11 @@
 // draws over the game's frame without its stills once the scene has been up for a moment (Ready). Play always starts the game as a new process (the
 // launcher's restart_and_play), so the game's own path is unchanged.
 //
-// The launcher always looks this way (owner, 20 Oct: no setting). The stills stay only where the scene cannot or
-// should not run (Decide, menu_scene_logic.h): the setup and update screens, shaders not prepared, a shader job,
-// the low-end tier (Steam Deck), and a launcher whose scene did not come up last time in this version (the
-// marker file).
+// The launcher always looks this way (owner, 20 Oct: no setting). Task 349c (owner, 21 Oct): every PC runs it (the
+// low tier and the Steam Deck too); the setup, an update's screen and a shader preparation or Rebuild keep their own
+// screens and the scene starts after them, under the loading loop. The pictures show only after a start whose two
+// attempts both failed (loading_loop_logic.h Step), or for the rest of a version after 3 such starts in a row (the
+// marker file, menu_scene_logic.h).
 #pragma once
 
 #include <cstdint>
@@ -33,8 +34,13 @@ void Begin(const std::filesystem::path& user_dir);
 bool Active();
 // The scene is up and may be shown (the start menu's level has run for a moment).
 bool Ready();
-// The launcher process closes normally: the marker is cleared if the scene never got that far.
+// The launcher process closes normally: the marker is cleared if the scene never got that far (unless this
+// launcher's attempt failed: NoteAttemptFailed).
 void NoteClosing();
+// Task 349c: this launcher's attempt did not get the scene up in time (the marker keeps the failed start).
+void NoteAttemptFailed();
+// Task 349c: this launcher is the scene's second attempt (--kk_menu_scene_retry, read once).
+bool SecondAttempt();
 
 // Game thread, the universe's uni_go (play_session.cpp): where its variables are (the running AI instance's
 // +0x40 is the universe's only while its own script runs).

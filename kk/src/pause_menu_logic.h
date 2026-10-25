@@ -122,8 +122,8 @@ inline const char* What(Entry e) {
     case Entry::kResume: return "Go back to the game where you left off.";
     case Entry::kPhotoMode: return "Freeze the game and take pictures with a free camera.";
     case Entry::kSettings: return "Display, graphics and audio settings.";
-    case Entry::kDisplay: return "Brightness, gamma, the frame rate cap, HDR, field of view and camera shake.";
-    case Entry::kGraphics: return "Upscaling, anti-aliasing, lighting, effects and the texture pack.";
+    case Entry::kDisplay: return "Brightness, gamma, the frame rate cap, field of view and camera shake.";
+    case Entry::kGraphics: return "Upscaling, antialiasing, lighting, effects and the texture pack.";
     case Entry::kAudio: return "The game's volumes and the menu sounds.";
     case Entry::kControls: return "Camera, controller, mouse and button mapping.";
     case Entry::kGameplay: return "Subtitles, language, HUD and Performance metrics.";

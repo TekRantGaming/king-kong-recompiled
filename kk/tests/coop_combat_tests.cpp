@@ -53,11 +53,11 @@ void StimulusDiagnostics() {
   Check(!ReadPool(u32, 1).valid, "record span overflow refused");
 }
 void Codecs() {
-  static_assert(kProtocolVersion == 18);
+  static_assert(kProtocolVersion == 19);
   for (const auto& m : {Damage(), Status()}) {
     const auto bytes = Packet(m); Message out;
     Check(bytes.size() == (m.type == MessageType::DamageEvent ? 90u : 53u), "fixed bounded wire length");
-    Check(bytes[4] == 0 && bytes[5] == kProtocolVersion && bytes[7] == uint16_t(m.type), "protocol 18 byte order");
+    Check(bytes[4] == 0 && bytes[5] == kProtocolVersion && bytes[7] == uint16_t(m.type), "protocol 19 byte order");
     Check(Decode(bytes, out) && Packet(out) == bytes, "canonical combat round trip");
     for (size_t n = 0; n < bytes.size(); ++n) {
       out.type = MessageType::Bye;

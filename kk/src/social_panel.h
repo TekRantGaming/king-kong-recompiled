@@ -23,6 +23,21 @@ class SocialPanel {
   bool chapters_open() const { return chapter_screen_; }
   std::string editor_text() const { return editor_text_; }
 #endif
+  // C81: the Play Online Co-op pages use the drawer's actions, Direct IP fields and text editor (one copy of
+  // the logic). ip_path and direct_mode say which of the drawer's rows the page shows (SocialRows).
+  void PageActivate(const coop::SocialRow& row, coop::ISocialService& service, bool ip_path, int direct_mode);
+  void PrepareDirect(int direct_mode);  // 1 host (keeps or makes a code), 2 join (asks for the host's code)
+  const std::string& direct_address() const { return direct_address_; }
+  const std::string& direct_port() const { return direct_port_; }
+  const std::string& direct_code() const { return direct_code_; }
+  coop::SocialId invited() const { return invited_friend_; }
+  std::string notice() const;  // the latest action's notice while it shows, else empty
+  void DrawPageEditor(ImDrawList* dl, ImVec2 origin, ImVec2 size, const Metrics& metrics, Input& input,
+                      Glyphs& glyphs, const std::string& prompt_set, coop::ISocialService& service) {
+    DrawEditor(dl, origin, size, metrics, input, glyphs, prompt_set, service);
+  }
+  // The drawer's Host and Join buttons open the pages (join: the Join a game page).
+  void SetOpenPage(std::function<void(bool join)> open) { open_page_ = std::move(open); }
   void Update(bool enabled, coop::SocialPage page, Input& input, coop::ISocialService& service);
   void Draw(ImDrawList* dl, ImVec2 origin, ImVec2 size, const Metrics& metrics, Input& input,
             Glyphs& glyphs, const std::string& prompt_set, rex::ui::ImmediateDrawer* drawer,
@@ -53,6 +68,8 @@ class SocialPanel {
   void DrawChapters(ImDrawList* dl, ImVec2 origin, ImVec2 size, const Metrics& metrics, Input& in,
                     Glyphs& glyphs, const std::string& set, coop::ISocialService& service, bool active);
   std::function<void()> add_steam_;
+  std::function<void(bool)> open_page_;
+  bool OpenPage(const coop::SocialRow& row);
   void DrawEditor(ImDrawList* dl, ImVec2 origin, ImVec2 size, const Metrics& metrics, Input& in,
                   Glyphs& glyphs, const std::string& prompt_set, coop::ISocialService& service);
   void Activate(const coop::SocialRow& row, coop::ISocialService& service);

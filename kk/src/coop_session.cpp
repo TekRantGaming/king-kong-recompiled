@@ -96,7 +96,7 @@ void CoopSession::Transition(SessionState s) {
   if (changed_) changed_(s);
 }
 bool CoopSession::Send(Message m, bool reliable) {
-  if (m.type == MessageType::Hello) { m.display_name = config_.display_name; m.join_code = config_.join_code; }
+  if (m.type == MessageType::Hello) { m.display_name = config_.display_name; m.join_code = config_.join_code; m.resume_token = config_.resume_token; }
   m.protocol = config_.compatibility.protocol;
   m.sequence = ++sequence_;
   m.epoch = epoch_;
@@ -119,6 +119,11 @@ void CoopSession::Receive(const Message& m, double now) {
     const bool epoch_ok = config_.role == Role::Host ? m.epoch == 0 : m.epoch != 0;
     if (!epoch_ok) return;
     if (config_.role == Role::Guest) epoch_ = m.epoch;
+    // A resumed session only continues with the same partner's same session (C80), and a normal one never
+    // takes a resumed partner. The host's epoch is the token.
+    if (rejection_ == RejectReason::None && (m.resume_token != config_.resume_token ||
+        (config_.resume_token && config_.role == Role::Guest && m.epoch != config_.resume_token)))
+      rejection_ = RejectReason::Handshake;
     if (rejection_ != RejectReason::None) {
       Message reject; reject.type = MessageType::Reject; reject.reason = rejection_;
       Send(reject, true); Transition(SessionState::Ended); return;

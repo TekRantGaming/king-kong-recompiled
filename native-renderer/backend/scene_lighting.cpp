@@ -76,6 +76,14 @@ int TimedFamily(LightFamily family) {
   return -1;
 }
 
+// KK_DEV_LIGHT_SPLIT: the shadow run split into its pieces (maps, mask, blur and composite).
+int SplitFamily(LightFamily family) {
+  if (family == LightFamily::kShadow) return 0;
+  if (family == LightFamily::kShadowQuad) return 1;
+  if (family == LightFamily::kCompositeShadow || family == LightFamily::kBlurShadow) return 2;
+  return -1;
+}
+
 }  // namespace
 
 SceneLighting::SceneLighting(nvrhi::IDevice* device, const LightingConfig& config) : device_(device), config_(config) {}
@@ -106,6 +114,11 @@ bool SceneLighting::Initialize() {
     timers_[0] = std::make_unique<AoGpuTimer>(device_, "the shadow maps and mask", "Lighting GPU time");
     timers_[1] = std::make_unique<AoGpuTimer>(device_, "the water and its reflections", "Lighting GPU time");
     timers_[2] = std::make_unique<AoGpuTimer>(device_, "the volumetric light", "Lighting GPU time");
+    if (const char* e = std::getenv("KK_DEV_LIGHT_SPLIT"); e && *e == '1') {
+      split_[0] = std::make_unique<AoGpuTimer>(device_, "split: the shadow maps", "Lighting GPU time");
+      split_[1] = std::make_unique<AoGpuTimer>(device_, "split: the shadow mask", "Lighting GPU time");
+      split_[2] = std::make_unique<AoGpuTimer>(device_, "split: the shadow blur and composite", "Lighting GPU time");
+    }
   }
   if (config_.water_on()) {
     const bool spirv = device_->getGraphicsAPI() == nvrhi::GraphicsAPI::VULKAN;
@@ -531,6 +544,15 @@ void SceneLighting::OnDraw(nvrhi::ICommandList* cl, const Draw& d) {
     timers_[run]->Begin(cl);
     timing_ = run;
   }
+  const int split = SplitFamily(d.family);
+  if (split_timing_ >= 0 && split_timing_ != split) {
+    split_[split_timing_]->End(cl);
+    split_timing_ = -1;
+  }
+  if (split >= 0 && split_timing_ < 0 && split_[split]) {
+    split_[split]->Begin(cl);
+    split_timing_ = split;
+  }
 
   // The water's reflections: the scene, once, before its first water draw.
   // Only when the frame before drew a water shader with the reflection hook: the game's water masks
@@ -550,7 +572,7 @@ void SceneLighting::OnDraw(nvrhi::ICommandList* cl, const Draw& d) {
 
 void SceneLighting::BeforeDraw(nvrhi::ICommandList* cl, uint64_t frame, LightFamily family) {
   const int run = TimedFamily(family);
-  if (frame != frame_ || run != timing_) EndTimedDraws(cl);
+  if (frame != frame_ || run != timing_ || (split_[0] && SplitFamily(family) != split_timing_)) EndTimedDraws(cl);
 }
 
 void SceneLighting::OnDepthClear(uint64_t frame, uint64_t depth_key) {
@@ -563,6 +585,10 @@ void SceneLighting::EndTimedDraws(nvrhi::ICommandList* cl) {
     timers_[timing_]->End(cl);
     timing_ = -1;
   }
+  if (split_timing_ >= 0) {
+    split_[split_timing_]->End(cl);
+    split_timing_ = -1;
+  }
 }
 
 void SceneLighting::OnPresent(nvrhi::ICommandList* cl) {
@@ -573,6 +599,8 @@ void SceneLighting::OnPresent(nvrhi::ICommandList* cl) {
     RunVolumetric(cl);
   }
   for (auto& t : timers_)
+    if (t) t->FrameEnd();
+  for (auto& t : split_)
     if (t) t->FrameEnd();
 }
 

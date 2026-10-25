@@ -9,6 +9,9 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstdio>
+#include <optional>
+#include <string>
 #include <string_view>
 #include <utility>
 
@@ -35,6 +38,42 @@ inline double WidthFactor(double aspect) {
 inline std::pair<int, int> LargestInside(int w, int h, double aspect) {
   if (double(w) >= double(h) * aspect) return {std::min(w, int(std::lround(double(h) * aspect))), h};
   return {w, std::min(h, int(std::lround(double(w) / aspect)))};
+}
+
+// Task 363 (Beta 17): ultrawide sizes in the resolution lists, so a wider picture can be chosen on any screen
+// (kk_picture_size). Real 21:9 and 32:9 monitors' sizes, smallest first. 7680x2160 is the largest: no listed size
+// goes past it, so the frame never grows past twice a 4K screen's pixels (the renderer's own limit is 10240x5760).
+struct WideSize {
+  int w, h;
+  const char* shape;  // "21:9" or "32:9" (the name monitors are sold by)
+};
+inline constexpr WideSize kWideSizes[] = {{2560, 1080, "21:9"}, {3440, 1440, "21:9"}, {3840, 1080, "32:9"},
+                                          {3840, 1600, "21:9"}, {5120, 1440, "32:9"}, {5120, 2160, "21:9"},
+                                          {7680, 2160, "32:9"}};
+constexpr int kMaxPictureWidth = 7680, kMaxPictureHeight = 2160;
+
+// A size is offered on a screen at least as tall: a taller picture is only scaled down to fit it, so 5120x2160 and
+// 7680x2160 need a 4K screen (and the GPU that drives one).
+inline bool WideSizeOffered(int h, int screen_h) { return h <= screen_h; }
+
+// "WxH" as a kk_picture_size: only a size wider than 16:9 and no larger than 7680x2160 counts ("" or anything
+// else: the picture follows the window or screen, as before task 363).
+inline std::optional<std::pair<int, int>> ParsePictureSize(std::string_view value) {
+  int w = 0, h = 0;
+  char tail = 0;
+  if (std::sscanf(std::string(value).c_str(), "%dx%d%c", &w, &h, &tail) != 2) return std::nullopt;
+  if (w < 640 || h < 270 || w > kMaxPictureWidth || h > kMaxPictureHeight) return std::nullopt;
+  if (WidthFactor(double(w) / double(h)) == 1.0) return std::nullopt;
+  return std::pair<int, int>{w, h};
+}
+
+// The window for a picture size in windowed mode: the picture's own size when it fits in 90% of the screen (room for
+// the frame and the taskbar), else the largest of its shape that does. Even sizes.
+inline std::pair<int, int> FitWindow(int pw, int ph, int screen_w, int screen_h) {
+  const int room_w = screen_w * 9 / 10, room_h = screen_h * 9 / 10;
+  if (pw <= room_w && ph <= room_h) return {pw, ph};
+  auto [w, h] = LargestInside(room_w, room_h, double(pw) / double(ph));
+  return {std::max(2, w & ~1), std::max(2, h & ~1)};
 }
 
 // Hor+ on one projection matrix (16 floats, Direct3D row-vector layout as the game pushes it): x is divided by

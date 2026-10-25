@@ -260,5 +260,91 @@ void ChapterChoice() {
   const auto policy=Find(SocialRows(m),SocialRowKind::Text,13);
   Check(policy.detail=="Watch","per-chapter policy visible in lobby");
 }
+// C81: the Play Online Co-op pages use the drawer's model and rows.
+bool Has(const std::vector<SocialRow>& rows, SocialRowKind kind) {
+  return std::any_of(rows.begin(), rows.end(), [&](const auto& r) { return r.key.kind == kind; });
 }
-int main() { InputPolicy(); FocusAndActions(); PreviewScenes(); DirectRows(); ChapterChoice(); std::printf("Social panel: %u checks passed\n", checks); }
+void CoopPages() {
+  SocialModel m;  // Steam not started yet
+  auto rows = CoopPageRows(m, CoopPage::Hub);
+  Check(Find(rows, SocialRowKind::CoopHost).enabled && Find(rows, SocialRowKind::CoopJoin).enabled, "hub offers Host and Join");
+  Check(Find(rows, SocialRowKind::ConnectSteam).enabled, "Connect to Steam is one clear button, never automatic");
+  rows = CoopPageRows(m, CoopPage::Host, {false, false});
+  Check(Find(rows, SocialRowKind::HostNewGame).enabled && !Find(rows, SocialRowKind::HostLoadGame).enabled,
+        "Load game needs a save");
+  rows = CoopPageRows(m, CoopPage::HostHow, {true, true});
+  Check(!Find(rows, SocialRowKind::Create).enabled && Find(rows, SocialRowKind::ConnectSteam).enabled,
+        "Steam hosting waits for Connect to Steam");
+  Check(Find(rows, SocialRowKind::DirectHost).enabled, "by IP hosting works without Steam");
+  Check(!Find(CoopPageRows(m, CoopPage::HostHow, {true, false}), SocialRowKind::DirectHost).enabled,
+        "no lobby before a chapter or save is chosen");
+  m.status = SocialStatus::Idle;
+  Check(Find(CoopPageRows(m, CoopPage::HostHow, {true, true}), SocialRowKind::Create).enabled, "Steam host after connecting");
+  Check(CoopPageFor(m, CoopPage::Lobby) == CoopPage::Hub, "a lobby page without a lobby goes back");
+  m.status = SocialStatus::Dormant; m.status_text = "Connecting to Steam";
+  Check(CoopPageFor(m, CoopPage::Lobby) == CoopPage::Lobby && CoopPageFor(m, CoopPage::Join) == CoopPage::Join,
+        "a Steam invite start keeps the lobby page while Steam starts; Connect to Steam stays put");
+  m.status_text.clear();
+  m.status = SocialStatus::Creating;
+  Check(CoopPageFor(m, CoopPage::HostHow) == CoopPage::Lobby, "creating a lobby shows the lobby page");
+
+  auto world = MakeFakeSocialWorld();
+  const Compatibility c{kProtocolVersion, "test", "test", "test"};
+  FakeSocialService host(world, 1, "Sam", c), guest(world, 2, "Alex", c);
+  Check(host.Act({SocialAction::Open}) && guest.Act({SocialAction::Open}), "both connect");
+  Check(host.Act({SocialAction::CreateLobby}), "host lobby");
+  auto hm = host.Snapshot();
+  Check(CoopPageFor(hm, CoopPage::HostHow) == CoopPage::Lobby && CoopPageFor(hm, CoopPage::HostNew) == CoopPage::HostNew,
+        "host goes to the lobby, and may still change the chapter");
+  Check(std::string_view(CoopLobbyStatus(hm).key) == "Lobby open. Invite a friend.", "host alone status");
+  const auto st = CoopLobbyStatus(hm, 2);
+  Check(std::string_view(st.key) == "Waiting for {0} to join" && st.name == "Alex", "invited friend named");
+  auto gm = guest.Snapshot();
+  rows = CoopPageRows(gm, CoopPage::Join);
+  const auto& join = Find(rows, SocialRowKind::JoinFriend, 1);
+  Check(join.enabled && join.label == "Sam", "friends playing now lists the host with Join");
+  const auto command = CoopRowCommand(join, gm, CoopPage::Join);
+  Check(command && command->action == SocialAction::Accept && command->id == hm.lobby, "Join uses the friend's lobby");
+  Check(guest.Act(*command) && guest.Snapshot().lobby == hm.lobby, "guest joined from friends playing now");
+  gm = guest.Snapshot(); hm = host.Snapshot();
+  Check(CoopPageFor(gm, CoopPage::Join) == CoopPage::Lobby && CoopPageFor(gm, CoopPage::HostNew) == CoopPage::Lobby,
+        "guest shows the lobby and cannot change the chapter");
+  Check(std::string_view(CoopLobbyStatus(gm).key) == "Waiting for {0} to choose a chapter" && CoopLobbyStatus(gm).name == "Sam",
+        "guest waits for the host's choice");
+  Check(std::string_view(CoopLobbyStatus(hm).key) == "Choose a chapter or save", "host asked to choose");
+  rows = CoopPageRows(hm, CoopPage::Lobby);
+  Check(Find(rows, SocialRowKind::ChangeChoice).enabled && Has(rows, SocialRowKind::Start) && Has(rows, SocialRowKind::Leave),
+        "host lobby: Change, Start and Leave");
+  Check(!Find(CoopPageRows(gm, CoopPage::Lobby), SocialRowKind::ChangeChoice).enabled &&
+        !Has(CoopPageRows(gm, CoopPage::Lobby), SocialRowKind::Start), "guest has no Change or Start");
+  Check(Find(CoopPageRows(hm, CoopPage::Host, {true, false}), SocialRowKind::HostNewGame).enabled, "host may change in the lobby");
+  Check(host.Act({SocialAction::SelectChapter, 0, false, {0, 2, false}}), "host picks chapter 3");
+  const auto choice = host.Snapshot().choice;
+  Check(guest.Act({SocialAction::SetReady, 0, true, choice}), "guest ready");
+  hm = host.Snapshot();
+  Check(std::string_view(CoopLobbyStatus(hm).key) == "{0} is ready" && CoopLobbyStatus(hm).name == "Alex", "host sees Alex is ready");
+  Check(std::string_view(CoopLobbyStatus(guest.Snapshot()).key) == "Waiting for {0} to start", "guest waits for Start");
+  Check(host.Act({SocialAction::SetReady, 0, true, choice}), "host ready");
+  hm = host.Snapshot();
+  Check(std::string_view(CoopLobbyStatus(hm).key) == "Both ready. Select Start", "both ready");
+  Check(CoopRowCommand(Find(CoopPageRows(hm, CoopPage::Lobby), SocialRowKind::Start), hm, CoopPage::Lobby).has_value(),
+        "Start through the shared command");
+  Check(!CoopRowCommand({{SocialRowKind::JoinFriend, 1}, "Sam", "", true}, gm, CoopPage::Join), "stale Join is refused in a lobby");
+
+  SocialModel d; d.direct = true; d.lobby = 7; d.self = d.owner = 1; d.status = SocialStatus::Joining; d.members = {{1, "Host", false}}; d.direct_code = "ABC123";
+  Check(std::string_view(CoopLobbyStatus(d).key) == "Waiting for your partner to join", "IP host waits");
+  rows = CoopPageRows(d, CoopPage::Lobby);
+  Check(Has(rows, SocialRowKind::Text) && Find(rows, SocialRowKind::Text, 11).focusable(), "IP lobby shares the code");
+  d.self = 2; d.members = {{2, "Guest", false}};
+  Check(std::string_view(CoopLobbyStatus(d).key) == "Connecting to the host", "IP guest connecting");
+  rows = CoopPageRows(d, CoopPage::Lobby);
+  Check(std::none_of(rows.begin(), rows.end(), [](const auto& r) { return r.key == SocialRowKey{SocialRowKind::Text, 11}; }),
+        "the IP guest is not asked to share the host's details");
+
+  SocialModel s; s.pending_invites = {{55, 9}, {77, 0}};
+  Check(StartupInvite(s) == 77, "the Steam start lobby is the invite without an inviter");
+  s.pending_invites = {{55, 9}};
+  Check(!StartupInvite(s), "ordinary invites are not a Steam start");
+}
+}
+int main() { InputPolicy(); FocusAndActions(); PreviewScenes(); DirectRows(); ChapterChoice(); CoopPages(); std::printf("Social panel: %u checks passed\n", checks); }

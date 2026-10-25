@@ -33,6 +33,7 @@ struct SocialFriend {
   std::string name;
   FriendState state = FriendState::Offline;
   bool in_our_game = false;
+  SocialId lobby = 0;  // C81: the lobby their game offers to join (Steam connect presence), 0 when none
   uint32_t avatar_width = 0, avatar_height = 0;
   std::vector<uint8_t> avatar_rgba;
 };
@@ -61,7 +62,7 @@ struct SocialModel {
   LobbyChoice choice;
 };
 bool CanStartLobby(const SocialModel& model);
-enum class SocialAction { Open, CreateLobby, Invite, OverlayInvite, Accept, Decline, SetReady, Start, Leave, SelectChapter };
+enum class SocialAction { Open, CreateLobby, Invite, OverlayInvite, Accept, Decline, SetReady, Start, Leave, SelectChapter, Resume };
 struct SocialCommand { SocialAction action = SocialAction::Open; SocialId id = 0; bool ready = false; LobbyChoice choice; };
 // Actions enqueue work, snapshots are value copies. Open explicitly connects to
 // Steam; merely displaying the Social drawer or choosing Direct IP must not call it.

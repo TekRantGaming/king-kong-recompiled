@@ -59,7 +59,7 @@ kk_no_healing = true
   Check(hc.name == "Hardcore (no HUD, no healing)" && hc.author == "TekRantGaming" && hc.version == "1.0", "fields");
   Check(hc.type == Type::kSettings && hc.settings.size() == 2, "two settings");
   Check(hc.settings[0].name == "kk_hide_hud" && hc.settings[0].value == "true", "bool value as text");
-  Check(hc.id == "builtin:hardcore", "built-in id");
+  Check(hc.id == "builtin:hardcore", "built in id");
 
   const Mod numbers = Parse("name='N'\ntype='settings'\n[settings]\nkk_fov = 90\nnative_cel_outline = 2.5\n");
   Check(numbers.Usable() && numbers.settings.size() == 2, "numbers");

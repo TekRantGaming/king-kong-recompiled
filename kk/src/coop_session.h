@@ -37,6 +37,9 @@ struct SessionConfig {
   std::string display_name = "Partner";
   std::string join_code;
   bool wait_for_peer = false;  // Direct IP host may wait in its lobby until a guest arrives.
+  // C80 resumed session (coop_handover.h): both Hellos must carry this token, and the host's epoch is it.
+  // Zero for a normal session, which in turn rejects a Hello that carries one.
+  uint64_t resume_token = 0;
 };
 struct PoseCounters {
   uint64_t sent = 0, received = 0;

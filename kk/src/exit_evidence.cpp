@@ -25,6 +25,7 @@
 
 #include <rex/logging.h>
 
+#include "backend/startup_steps.h"
 #include "crash_dump.h"
 #include "exit_evidence_logic.h"
 
@@ -134,6 +135,7 @@ void LookUpWindowsRecord(uint32_t pid, int64_t since) {
 
 void LastWords(const char* why) {
   if (g_last_words.exchange(true)) return;
+  nr::steps::Note("the program is ending: %s", why);  // task 353
   REXLOG_ERROR("KK: the program is ending: {}", why);
   rex::FlushLogging();
   kk::WriteCrashReportNow(why);
@@ -237,11 +239,18 @@ void Install(const std::filesystem::path& logs_dir, const char* role) {
     WriteMarkerLocked();
   }
 
+  InstallHandlers();
+  std::thread(AliveThread).detach();
+}
+
+void InstallHandlers() {
+  static bool installed = false;
+  if (installed) return;
+  installed = true;
   std::signal(SIGABRT, OnAbortSignal);
   g_previous_terminate = std::set_terminate(OnTerminate);
   g_previous_invalid = _set_invalid_parameter_handler(OnInvalidParameter);
   g_previous_purecall = _set_purecall_handler(OnPureCall);
-  std::thread(AliveThread).detach();
 }
 
 void SetRole(const char* role) {
@@ -269,6 +278,7 @@ void NoteCrashReport() { SetStateNoWait("crash report written"); }
 
 namespace kk::exit_evidence {
 void Install(const std::filesystem::path&, const char*) {}
+void InstallHandlers() {}
 void SetRole(const char*) {}
 void NoteFrame() {}
 void NoteCleanExit(const char*) {}

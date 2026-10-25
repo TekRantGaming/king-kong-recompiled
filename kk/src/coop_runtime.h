@@ -106,6 +106,29 @@ bool SocialFakeScenario(std::string_view scenario);
 bool SteamSelfTestRequested();
 int RunSteamSelfTest();
 #endif
+// C80 hand over through the Play restart (coop_handover.h; coop_resume.cpp is the resumed process).
+struct LinkIdentity {
+  bool direct = false;
+  Role role = Role::Host;
+  SessionState state = SessionState::Idle;
+  RejectReason rejection = RejectReason::None;
+  uint16_t port = 0;
+  std::string address, code, partner_name;
+  uint64_t self = 0, partner = 0;  // Steam IDs; never logged
+};
+LinkIdentity CurrentLink();
+bool BeginStartPlan(const StartPlan& plan);
+handover::PlanPhase StartPlanState(StartPlan* plan = nullptr, const char** failure = nullptr);
+void ReleaseLinkForHandover();
+bool ResumeLink(const handover::File& file);
+void StopResumeLink();
+// Old process (launcher): the plan both agreed on is written to the hand over file; true once, then the
+// launcher plays (restart_and_play adds HandoverArg and calls ReleaseLinkForHandover).
+bool TakeHandover();
+bool HandoverPending();
+std::wstring HandoverArg();
+// Resumed host: the existing SessionStart for the plan's chapter or save, without the lobby.
+bool BeginResumedStart(const play::StartRequest& request);
 void Shutdown();
 // Only caller: the existing per-frame game-thread hook in hfr_frame_time.cpp.
 void GameFrame(uint8_t* base);

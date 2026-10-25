@@ -81,7 +81,7 @@ struct Pair {
   }
 };
 void Protocol() {
-  static_assert(kProtocolVersion == 18);
+  static_assert(kProtocolVersion == 19);
   constexpr std::array types{MessageType::Hello, MessageType::HelloAck, MessageType::Reject,
       MessageType::Ping, MessageType::Pong, MessageType::PlayerPose, MessageType::Bye,
       MessageType::EnemySnapshot, MessageType::EnemyEvent, MessageType::ShotIntent,
@@ -92,11 +92,11 @@ void Protocol() {
       MessageType::OwnershipChange,
       MessageType::PlayerDowned, MessageType::PlayerRevived,
       MessageType::CameraPose, MessageType::CameraCut, MessageType::StoryEvent, MessageType::TriggerRequest,
-      MessageType::WorldDigest, MessageType::ShotReceipt, MessageType::ObjectState, MessageType::ObjectRequest};
+      MessageType::WorldDigest, MessageType::ShotReceipt, MessageType::StartPlan, MessageType::StartPlanAck, MessageType::ObjectState, MessageType::ObjectRequest};
   for (size_t i = 0; i < types.size(); ++i) {
     const auto type = types[i];
-    Check(uint16_t(type) == i+1, "protocol 18 message IDs have no collisions or gaps");
-    Check(IsFlowMessage(type) == ((i >= 12 && i <= 20) || i == 24 || i == 25), "flow includes life events and excludes combat and cameras");
+    Check(uint16_t(type) == i+1, "protocol 19 message IDs have no collisions or gaps");
+    Check(IsFlowMessage(type) == ((i >= 12 && i <= 20) || i == 24 || i == 25 || i == 32 || i == 33), "flow includes life events and excludes combat and cameras");
     Message input;
     input.type = type; input.sequence = 0x12345678; input.epoch = 0x0123456789ABCDEFull;
     input.hello = Compatible(); input.reason = RejectReason::GameplayMods;
@@ -122,10 +122,11 @@ void Protocol() {
     input.shot_receipt={{101,1,1},1,ShotReject::Origin,false};
     input.digest.generation=9; input.digest.level=101; input.digest.sweep=1;
     input.digest.enemy_world={101,0,1};
+    input.plan={0xC80C80C80ull,StartTransport::Direct,3,0,0,0,27179};
     const auto bytes = Packet(input);
     Check(bytes[0] == 'K' && bytes[1] == 'K' && bytes[2] == 'C' && bytes[3] == '1', "wire magic");
     Check(bytes[4] == 0 && bytes[5] == kProtocolVersion && bytes[6] == 0 && bytes[7] == i+1,
-        "protocol 18 and message ID in wire header");
+        "protocol 19 and message ID in wire header");
     Check(bytes[8] == 0x12 && bytes[11] == 0x78 && bytes[12] == 1 && bytes[19] == 0xEF,
         "header byte order independent of host endianness");
     Message output;
@@ -177,7 +178,7 @@ void Protocol() {
 void IntegratedMessageRouting() {
   Pair pair; pair.Pump(0,.2);
   Check(pair.host.State()==SessionState::Connected && pair.guest.State()==SessionState::Connected,
-      "protocol 18 integration handshake");
+      "protocol 19 integration handshake");
   const EnemyState enemy{{123,0,EnemyFamily::Raptor},1,2,3,0,50};
   Message ownership; ownership.type=MessageType::OwnershipChange; ownership.epoch=pair.host.Epoch();
   ownership.ownership={{101,1,1},OwnershipPhase::Prepare,1,EnemyOwner::Guest,enemy};

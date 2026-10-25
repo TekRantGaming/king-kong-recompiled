@@ -582,7 +582,7 @@ Result AddShortcut(const Location& where, const std::vector<ArtPiece>& art) {
     std::vector<Node> root;
     if (!existed) root.push_back(Node{kMap, "shortcuts"});
     else if (!ParseVdf(old, root)) {
-      r.error = "Steam's list of non-Steam games couldn't be read, so it was left as it is.";
+      r.error = "Steam's list of non Steam games couldn't be read, so it was left as it is.";
       return r;
     }
     Node* list = Field(root, "shortcuts");
@@ -640,7 +640,7 @@ Result AddShortcut(const Location& where, const std::vector<ArtPiece>& art) {
     std::vector<uint8_t> out;
     WriteMap(root, out);
     if (!WriteAtomically(vdf, out)) {
-      r.error = "Steam's list of non-Steam games couldn't be saved.";
+      r.error = "Steam's list of non Steam games couldn't be saved.";
       return r;
     }
     // The port reads controllers itself, so Steam Input stays off for it.

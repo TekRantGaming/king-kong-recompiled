@@ -10,6 +10,7 @@
 // first, FSR leaves them as it found them, and NVRHI's cached state is cleared afterwards (FSR binds
 // its own pipelines, descriptor sets and, on D3D12, descriptor heaps).
 
+#include "backend/startup_steps.h"
 #include "backend/upscaler.h"
 
 #if NR_HAS_FFX
@@ -274,11 +275,14 @@ class Fsr3Upscaler final : public Upscaler {
 }  // namespace
 
 std::unique_ptr<Upscaler> CreateFsr3Upscaler(nvrhi::IDevice* device, const UpscaleConfig& config, std::string* why) {
+  if (!UpscalerGateAllows(UpscalerKind::kFsr3, why)) return nullptr;  // task 353: confirmed by the upscaler check
   const bool vulkan = device->getGraphicsAPI() == nvrhi::GraphicsAPI::VULKAN;
   const wchar_t* name = vulkan ? L"amd_fidelityfx_vk.dll" : L"amd_fidelityfx_dx12.dll";
   const char* name8 = vulkan ? "amd_fidelityfx_vk.dll" : "amd_fidelityfx_dx12.dll";
   const std::wstring path = UpscalerDllFolder() + name;
+  steps::Note("upscaler: loading %s", name8);  // task 353: the start-up step log
   HMODULE dll = LoadLibraryExW(path.c_str(), nullptr, LOAD_WITH_ALTERED_SEARCH_PATH);
+  steps::Note("upscaler: %s %s", name8, dll ? "loaded" : "not loaded");
   if (!dll) {
     if (why) *why = std::string(name8) + " is not beside the game";
     return nullptr;

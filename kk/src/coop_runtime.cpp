@@ -54,6 +54,9 @@ REXCVAR_DEFINE_BOOL(kk_social_fake, false, "KK/Debug", "Use an offline Social pa
 REXCVAR_DEFINE_BOOL(kk_direct_loopback, false, "KK/Debug", "Direct IP UI tests: loopback host and no Steam initialization")
     .debug_only().lifecycle(rex::cvar::Lifecycle::kInitOnly);
 #endif
+REXCVAR_DEFINE_STRING(kk_coop_resume, "", "KK",
+                      "Internal: the co-op hand over file (a name in the user folder) after the Play restart; never saved")
+    .lifecycle(rex::cvar::Lifecycle::kInitOnly);
 REXCVAR_DECLARE(bool, kk_hide_hud);
 REXCVAR_DECLARE(bool, present_letterbox);
 
@@ -326,6 +329,12 @@ class Service {
   }
   bool SubmitFlow(Message m) { return flow_.Submit(std::move(m)); }
   FlowView FlowSnapshot() const { return flow_.Snapshot(); }
+  bool BeginPlan(const StartPlan& plan) {
+    if (!flow_.BeginPlan(plan)) return false;
+    std::lock_guard lock(mutex_); starting_=true; return true;
+  }
+  handover::PlanPhase PlanState(StartPlan* plan, const char** failure) const { return flow_.PlanState(plan,failure); }
+  DirectUdpOptions Options() { std::lock_guard lock(mutex_); return options_; }
  private:
   std::atomic<bool> running_{false}, stop_{false};
   std::thread worker_;
@@ -651,7 +660,7 @@ ISocialService& Social() {
   return steam ? static_cast<ISocialService&>(*steam) : static_cast<ISocialService&>(disabled);
 }
 namespace {
-bool OpenDirect(DirectUdpOptions options) {
+bool OpenDirect(DirectUdpOptions options, uint64_t resume_token = 0) {
   if (!REXCVAR_GET(kk_coop_enabled) || SessionInProcess() || !ValidJoinCode(options.join_code)) return false;
   if (steam && steam->Snapshot().lobby) return false;
 #if defined(KK_DEV_TOOLS)
@@ -674,7 +683,10 @@ bool OpenDirect(DirectUdpOptions options) {
     std::random_device random; config.epoch=(uint64_t(random())<<32)^random();
     if (!config.epoch) config.epoch=1;
   }
-  REXLOG_INFO("KK co-op: Direct IP {} selected",options.host ? "host" : "join");
+  // C80: a resumed session continues the old one: its token is the host's epoch, checked in both Hellos.
+  config.resume_token=resume_token;
+  if (resume_token && options.host) config.epoch=resume_token;
+  REXLOG_INFO("KK co-op: Direct IP {} selected{}",options.host ? "host" : "join",resume_token ? " (resumed session)" : "");
   service.Start(std::move(config),std::move(options),true);
   return true;
 }
@@ -682,6 +694,50 @@ bool OpenDirect(DirectUdpOptions options) {
 bool HostDirect(uint16_t port,std::string code) { return OpenDirect({true,"::",port,std::move(code)}); }
 bool JoinDirect(std::string address,uint16_t port,std::string code) {
   return OpenDirect({false,std::move(address),port,std::move(code)});
+}
+LinkIdentity CurrentLink() {
+  LinkIdentity l;
+  const auto v=CurrentView();
+  l.role=v.role; l.state=v.state; l.rejection=v.rejection; l.partner_name=v.partner_name;
+  if (service.Running()) {
+    const auto o=service.Options();
+    l.direct=service.Direct(); l.port=o.port; l.address=o.address; l.code=o.join_code;
+    return l;
+  }
+  if (steam) {
+    const auto m=steam->Snapshot();
+    l.self=m.self;
+    for (const auto& member : m.members) if (member.id!=m.self) { l.partner=member.id; if (l.partner_name.empty()) l.partner_name=member.name; }
+    l.rejection=steam->SessionSnapshot().rejection;
+  }
+  return l;
+}
+bool BeginStartPlan(const StartPlan& plan) {
+  if (service.Running()) return service.Direct() && service.BeginPlan(plan);
+  return steam && steam->BeginPlan(plan);
+}
+handover::PlanPhase StartPlanState(StartPlan* plan, const char** failure) {
+  if (service.Running()) return service.PlanState(plan,failure);
+  return steam ? steam->PlanState(plan,failure) : handover::PlanPhase::Idle;
+}
+void ReleaseLinkForHandover() {
+  // The new process binds the same Direct port and is the same Steam user: this one lets go first.
+  REXLOG_INFO("KK co-op hand over: this process releases its link before the restart");
+  service.Stop();
+  if (steam) steam->Shutdown();
+}
+bool ResumeLink(const handover::File& f) {
+  if (f.plan.transport==StartTransport::Direct) {
+    DirectUdpOptions o{f.host,f.host ? std::string("::") : f.address,f.plan.port,f.code};
+    return OpenDirect(std::move(o),f.plan.token);
+  }
+  if (!steam) return false;
+  const uint64_t partner=f.host ? f.plan.guest_id : f.plan.host_id;
+  return steam->Resume(f.host,partner,f.plan.token);
+}
+void StopResumeLink() {
+  service.Stop();
+  if (steam) steam->Act({SocialAction::Leave});
 }
 FlowView SessionFlowSnapshot() {
   if (service.Running()) return service.FlowSnapshot();

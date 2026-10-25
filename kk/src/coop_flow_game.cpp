@@ -11,6 +11,9 @@
 #include "settings.h"
 #include "mods.h"
 #include "ui_paint.h"
+#include "menu_scene.h"
+#include "coop_handover.h"
+#include <random>
 #include <rex/cvar.h>
 #include <rex/hook.h>
 #include <rex/logging.h>
@@ -227,19 +230,17 @@ bool SelectSessionStart(const play::StartRequest& r) {
   REXLOG_INFO("KK co-op lobby: host selected {} chapter {}",r.kind==play::StartKind::kContinue ? "Continue" : "chapter",chapter);
   return true;
 }
-bool RequestSessionStart() {
-  if (!REXCVAR_GET(kk_coop_enabled) || requested) return false;
-  auto& social=Social(); const auto model=social.Snapshot();
-  if (!CanStartLobby(model)) return false;
-  if (!model.choice.valid()) return false;
+namespace {
+// The SessionStart (and the host's save) for a chapter or Continue request. Shared by the launcher's Start
+// and the resumed host after the Play restart (C80).
+bool BuildSessionStart(play::StartRequest& r, SessionStart& s, std::vector<uint8_t>& save) {
   const auto root=play::UserDir();
   const auto slots=play::ListSaves(root);
-  auto r=selected;
   if (r.kind!=play::StartKind::kChapter && r.kind!=play::StartKind::kContinue) return false;
   if (r.slot<0) r.slot=play::MostRecentSave(slots);
   if (r.slot>=play::kSlotCount) return false;
-  SessionStart s; s.chapter_select=r.kind==play::StartKind::kChapter;
-  auto save=play::ExportSessionSave(root,r.slot);
+  s=SessionStart{}; s.chapter_select=r.kind==play::StartKind::kChapter;
+  save=play::ExportSessionSave(root,r.slot);
   if (s.chapter_select) {
     if (r.chapter<0 || r.chapter>=42) return false;
     s.chapter=uint16_t(r.chapter); s.level=kChapterRules[size_t(r.chapter)].level;
@@ -269,13 +270,96 @@ bool RequestSessionStart() {
   for (size_t i=0;i<std::size(cheats);++i) if (EffectiveFlag(cheats[i],plan)) s.cheats|=uint16_t(1u<<i);
   s.difficulty=EffectiveFlag("kk_no_healing",plan) ? 1 : 0;
   s.save_bytes=uint32_t(save.size()); s.save_hash=SessionSaveHash(save);
-  if (!ValidSessionStart(s)) return false;
+  return ValidSessionStart(s);
+}
+// C80 hand over state of the old (launcher) process.
+std::string handover_name;
+bool handover_taken=false, handover_failed_logged=false;
+long long UnixMs() {
+  return std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::system_clock::now().time_since_epoch()).count();
+}
+}  // namespace
+bool RequestSessionStart() {
+  if (!REXCVAR_GET(kk_coop_enabled) || requested) return false;
+  auto& social=Social(); const auto model=social.Snapshot();
+  if (!CanStartLobby(model)) return false;
+  if (!model.choice.valid()) return false;
+  auto r=selected;
+  SessionStart s; std::vector<uint8_t> save;
+  if (!BuildSessionStart(r,s,save)) return false;
   if (model.choice.chapter!=s.chapter || model.choice.continue_game==s.chapter_select) return false;
   REXLOG_INFO("KK co-op lobby: Start uses shown choice revision {} chapter {} level {}",model.choice.revision,s.chapter,s.level);
   // Steam starts the handshake here; dev link is already connected in the launcher.
   if (!social.Act({SocialAction::Start,0,false,model.choice})) return false;
+  {
+    // C80: the live menu scene is the game running in this process, so Play restarts. Agree on a plan with
+    // the guest; both restart and reconnect, and the resumed host sends this SessionStart then.
+    // C81: always, also when this host has the scene off. The guest may have it on, and a launcher with the
+    // scene cannot start a chapter in its own process; with the plan both restart and every mix works.
+    StartPlan plan;
+    std::random_device random;
+    plan.token=(uint64_t(random())<<32)^random(); if (!plan.token) plan.token=1;
+    plan.chapter=uint8_t(s.chapter); plan.continue_game=s.chapter_select ? 0 : 1;
+    const auto link=CurrentLink();
+    if (link.direct) { plan.transport=StartTransport::Direct; plan.port=link.port; }
+    else {
+      plan.transport=StartTransport::Steam; plan.host_id=model.self;
+      for (const auto& m : model.members) if (m.id!=model.self) plan.guest_id=m.id;
+    }
+    if (!BeginStartPlan(plan)) {
+      // The local dev link has no hand over; without the scene it still starts in this process.
+      if (!menu_scene::Active() && BeginSessionFlow(s,std::move(save))) {
+        selected=r; requested=true; requested_lobby=model.lobby; return true;
+      }
+      REXLOG_WARN("KK co-op hand over: the start plan could not be queued"); return false;
+    }
+    REXLOG_INFO("KK co-op hand over: host start plan queued ({}, chapter {}, {}); waiting for the guest's answer",
+        plan.transport==StartTransport::Steam ? "Steam" : "Direct IP",plan.chapter,plan.continue_game ? "Continue" : "chapter select");
+    selected=r; requested=true; requested_lobby=model.lobby; return true;
+  }
+}
+bool HandoverPending() { return handover_taken; }
+std::wstring HandoverArg() {
+  return handover_taken ? L"--kk_coop_resume=" + std::wstring(handover_name.begin(),handover_name.end()) : std::wstring();
+}
+bool TakeHandover() {
+  if (handover_taken || !REXCVAR_GET(kk_coop_enabled)) return false;
+  StartPlan plan; const char* failure="";
+  const auto phase=StartPlanState(&plan,&failure);
+  if (phase==handover::PlanPhase::Failed) {
+    if (!handover_failed_logged) { handover_failed_logged=true; REXLOG_WARN("KK co-op hand over: start plan failed: {}",failure); }
+    requested=false;
+    return false;
+  }
+  handover_failed_logged=false;
+  if (phase!=handover::PlanPhase::Ready) return false;
+  const auto link=CurrentLink();
+  handover::File f;
+  f.host=link.role==Role::Host;
+  f.plan=plan;
+  f.slot=f.host ? selected.slot : -1;
+  f.partner_name=SanitizeDisplayName(link.partner_name.empty() ? (f.host ? "Guest" : "Host") : link.partner_name);
+  f.address=link.address; f.code=link.code;
+  f.version=KK_VERSION; f.written_ms=UnixMs();
+  handover_name=handover::FileName(f);
+  const auto path=play::UserDir()/handover_name;
+  {
+    std::ofstream out(path,std::ios::binary|std::ios::trunc);
+    out<<handover::Format(f);
+    if (!out) { REXLOG_ERROR("KK co-op hand over: could not write the hand over file"); requested=false; return false; }
+  }
+  handover_taken=true;
+  REXLOG_INFO("KK co-op hand over: {} wrote {}; restarting into the game to reconnect",f.host ? "host" : "guest",handover_name);
+  return true;
+}
+bool BeginResumedStart(const play::StartRequest& request) {
+  auto r=request;
+  SessionStart s; std::vector<uint8_t> save;
+  if (!BuildSessionStart(r,s,save)) { REXLOG_WARN("KK co-op hand over: the resumed start could not be built"); return false; }
   if (!BeginSessionFlow(s,std::move(save))) return false;
-  selected=r; requested=true; requested_lobby=model.lobby; return true;
+  selected=r; requested=true; requested_lobby=Social().Snapshot().lobby;
+  REXLOG_INFO("KK co-op hand over: resumed host sent SessionStart chapter {} level {} start {}",s.chapter,s.level,s.start);
+  return true;
 }
 bool TakeSessionLaunch(play::StartRequest& r) {
   if (launched || !REXCVAR_GET(kk_coop_enabled)) return false;
@@ -284,6 +368,13 @@ bool TakeSessionLaunch(play::StartRequest& r) {
   // Let the launcher select/start again after that lobby has ended.
   if (requested && Social().Snapshot().lobby!=requested_lobby) requested=false;
   if (!v.start_ready || v.phase==FlowPhase::Failed) return false;
+  if (menu_scene::Active()) {
+    // The live menu scene holds this process's game: an in-process start (a host without the scene) cannot
+    // run here. C80 keeps that case out: the session stops with a message instead of a broken start.
+    Send(MessageType::FlowAbort,v.world);
+    REXLOG_WARN("KK co-op flow: SessionStart in a process with the live menu scene; the host must start with the hand over");
+    return false;
+  }
   personal=play::UserDir(); progress_slot=play::MostRecentSave(play::ListSaves(personal));
   if (!v.host) {
     // The runtime mounts this root before SetupEnvironment. Every native profile

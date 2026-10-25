@@ -92,7 +92,14 @@ FakeSocialService::~FakeSocialService() { Act({SocialAction::Leave}); world_->us
 SocialModel FakeSocialService::Snapshot() const {
   auto m = world_->users.at(self_).model;
   m.friends.clear();
-  for (const auto& [id, u] : world_->users) if (id != self_) m.friends.push_back(u.model.friends.front());
+  for (const auto& [id, u] : world_->users) if (id != self_) {
+    m.friends.push_back(u.model.friends.front());
+    // C81: a friend hosting an open lobby offers it to join, like Steam's connect presence.
+    auto l = world_->lobbies.find(u.model.lobby);
+    if (l != world_->lobbies.end() && l->second.owner == id && !l->second.started && l->second.members.size() == 1) {
+      m.friends.back().in_our_game = true; m.friends.back().lobby = l->first;
+    }
+  }
   if (m.lobby && world_->lobbies.contains(m.lobby)) {
     const auto& l = world_->lobbies.at(m.lobby); m.owner = l.owner; m.members.clear();
     m.choice=l.choice;
@@ -141,7 +148,9 @@ bool FakeSocialService::Act(SocialCommand c) {
           invites.push_back({m.lobby, self_}); }
       return true;
     case SocialAction::Accept: {
-      if (m.lobby || std::none_of(m.pending_invites.begin(), m.pending_invites.end(), [&](auto i) { return i.lobby == c.id; })) return false;
+      const auto offered = Snapshot().friends;
+      if (m.lobby || (std::none_of(m.pending_invites.begin(), m.pending_invites.end(), [&](auto i) { return i.lobby == c.id; }) &&
+                      std::none_of(offered.begin(), offered.end(), [&](const auto& f) { return f.lobby == c.id; }))) return false;
       auto it = world_->lobbies.find(c.id);
       if (it == world_->lobbies.end() || it->second.started || it->second.members.size() != 1 ||
           !CompatibleLobby(it->second.keys, user.compatibility)) { m.last_error = "Lobby unavailable or incompatible"; return false; }
@@ -166,6 +175,7 @@ bool FakeSocialService::Act(SocialCommand c) {
       world_->lobbies.at(m.lobby).started = true; return true;
     case SocialAction::Leave: leave(); return true;
     case SocialAction::OverlayInvite: return false;
+    case SocialAction::Resume: return false;  // C80: real Steam only
   }
   return false;
 }

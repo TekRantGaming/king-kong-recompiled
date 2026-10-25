@@ -60,6 +60,7 @@ void InstallFpeGuard();  // fpe_guard.cpp
 #include "menu_scene.h"
 #include "mods.h"
 #include "coop_runtime.h"
+#include "coop_resume.h"
 #include "overlay.h"
 #include "ui_paint.h"
 #include "platform.h"
@@ -73,6 +74,7 @@ void InstallFpeGuard();  // fpe_guard.cpp
 #include "startup_recovery.h"
 #include "telemetry.h"
 #include "hooks/kk_native_ui.h"  // the native renderer's launcher prewarm
+#include "backend/startup_steps.h"  // task 353
 
 class KingKongApp : public rex::ReXApp {
  public:
@@ -89,8 +91,12 @@ class KingKongApp : public rex::ReXApp {
 
  protected:
   bool OnWindowCloseRequested() override {
-    kk::coop::Shutdown();
     // The SDK's accepted window close hard-exits without running our destructor.
+    // Task 349c: the window closed (X, Alt+F4) while the menu scene started is not a failed start.
+    // Task 368: from here at most 10 s, and no crash report (crash_dump.h NoteQuitStarted).
+    kk::NoteQuitStarted("the window closes");
+    kk::coop::Shutdown();
+    kk::menu_scene::NoteClosing();
     kk::benchmark::Shutdown();
     kk::play::FlushRendererFiles();
     kk::startup::CleanExit();
@@ -101,6 +107,7 @@ class KingKongApp : public rex::ReXApp {
   }
 
   void OnShutdown() override {
+    kk::NoteQuitStarted("shutdown");  // task 368
     kk::coop::Shutdown();
     kk::benchmark::Shutdown();
     kk::play::FlushRendererFiles();
@@ -164,6 +171,7 @@ class KingKongApp : public rex::ReXApp {
       defaults.user_data_root = kk::benchmark::Prepare(input_paths.user_data_root);
     user_data_root_ = defaults.user_data_root;
     config_path_ = defaults.config_path;
+    nr::steps::Note("window and graphics device made (presentation set up)");
     // Services belong to the app, including the launcher before the guest runtime exists.
     kk::coop::Configure(user_data_root_);
 #if defined(KK_DEV_TOOLS)
@@ -221,6 +229,53 @@ class KingKongApp : public rex::ReXApp {
                                  show ? "launcher" : "game");
     }
     rex::cvar::ResetToDefault("kk_skip_launcher");  // never persist it
+    // C80: the co-op hand over after Play's restart. No launcher: a small connecting screen while both games
+    // reconnect, then the game starts here as the launcher's Play does (coop_resume.h).
+    if (!show && kk::coop::ResumeRequested() && REXCVAR_GET(kk_coop_enabled) && !kk::benchmark::Active()) {
+      kk::coop::ResumeCallbacks rc;
+      rc.play = [this, resume, defaults](const kk::play::StartRequest& request) {
+        app_context().CallInUIThreadDeferred([this, resume, defaults, request] {
+          kk::play::SetStartRequest(request);
+          kk::mods::ApplyAtGameStart(defaults.user_data_root);  // Kong mods, for this run only
+          kk::coop::ApplySessionSettings();
+          kk::NoteGameStarting();
+          kk::EnforceOriginalLook();
+          kk::ApplyFullscreenMode(window());
+          kk::ApplyRendererChoice();
+          { const auto out = OutputSize(); kk::ApplyRenderPreset(out.first, out.second); }
+          kk::ApplyVideoMode();
+          kk::online::SetPlaying(true);
+          kk::telemetry::SetGameRunning();
+          kk::online::Start();
+          kk::discord::SetPlaying(true);
+          kk::discord::Start();
+          auto session_paths = defaults;
+          session_paths.user_data_root = kk::coop::SessionUserDir(defaults.user_data_root);
+          kk::play::SetUserDir(session_paths.user_data_root);
+          resume(session_paths);
+        });
+      };
+      rc.back_to_menu = [this] {
+        app_context().CallInUIThreadDeferred([this] {
+#if defined(KK_DEV_TOOLS)
+          // A scripted launcher test is for the first launcher only, never the one this opens.
+#if defined(_WIN32)
+          _putenv_s("KK_DEV_LAUNCHER_INPUT", "");
+#else
+          unsetenv("KK_DEV_LAUNCHER_INPUT");
+#endif
+#endif
+          kk::coop::Shutdown();
+          kk::startup::CleanExit();
+          if (kk::play::RelaunchWith(L"--kk_launcher_open=play"))
+            kk::handoff::QuitWhenChildShown([this] { app_context().CallInUIThreadDeferred([this] { app_context().QuitFromUIThread(); }); });
+          else app_context().QuitFromUIThread();
+        });
+      };
+      kk::coop::BeginResume(imgui_drawer(), defaults.user_data_root, std::move(rc));
+      nr::steps::Note("co-op hand over: reconnecting before the game starts");
+      return std::nullopt;
+    }
     if (!show) {
       std::error_code recommendation_ec;
       if (!std::filesystem::exists(defaults.config_path, recommendation_ec) && !recommendation_ec &&
@@ -277,8 +332,13 @@ class KingKongApp : public rex::ReXApp {
       kk::menu_scene::SetThrottled(true, "handing over to the game");  // its GPU time to the new process
       // The start request chosen on the Play menu goes with it (kk::play::SetStartRequest).
       const std::wstring start = kk::play::StartRequestArg();
+      // C80: a co-op start plan both games agreed on: the new process reconnects (its start comes from the
+      // session, never from --kk_start); this one lets go of the port and Steam first.
+      const std::wstring resume = kk::coop::HandoverArg();
+      if (!resume.empty()) kk::coop::ReleaseLinkForHandover();
       kk::startup::CleanExit();
-      kk::play::RelaunchWith(L"--kk_skip_launcher=true" + (start.empty() ? std::wstring() : L" " + start));
+      kk::play::RelaunchWith(L"--kk_skip_launcher=true" +
+                             (!resume.empty() ? L" " + resume : start.empty() ? std::wstring() : L" " + start));
       // The launcher's window stays until the game's has drawn (handoff.h): no desktop between them.
       kk::handoff::QuitWhenChildShown([this] { CloseLauncherProcess(); });
     };
@@ -352,12 +412,14 @@ class KingKongApp : public rex::ReXApp {
     cb.restore = [this] {
       if (window()) kk::RestoreNativeWindow(window()->GetNativeWindowHandle());
     };
+    cb.native_window = [this]() -> void* { return window() ? window()->GetNativeWindowHandle() : nullptr; };
     kk::hdr::SetWindowProvider([this]() -> void* { return window() ? window()->GetNativeWindowHandle() : nullptr; });
     // The Display page's Resolution list, made on a worker while the launcher opens (display_modes.h).
     kk::PrefetchDisplayModes(std::atoi(rex::cvar::GetFlagByName("monitor").c_str()), window());
     kk::ShowLauncher(imgui_drawer(), immediate_drawer(),
                       {defaults.game_data_root, defaults.user_data_root, defaults.config_path},
                       std::move(cb));
+    nr::steps::Note("launcher made; its first frame next");
     // The native renderer makes the game's pipelines while the player is in the launcher, when
     // --native_launcher_prewarm is on (the plugin decides; nothing happens otherwise). After the
     // launcher is made: it applies the Original look, which the settings the prewarm reads follow.
@@ -368,6 +430,7 @@ class KingKongApp : public rex::ReXApp {
   // The launcher's process ends (Quit, or Play restarting the program for restart-only settings).
   void CloseLauncherProcess() {
     REXLOG_INFO("KK: the launcher closes");
+    kk::NoteQuitStarted("the launcher closes");  // task 368 (after the game's window has shown, on Play)
     kk::exit_evidence::NoteCleanExit("launcher closed");
     kk::menu_scene::NoteClosing();
     // Task 330: a launcher with the live menu scene has the game running: closed as the game's window is
@@ -399,6 +462,19 @@ class KingKongApp : public rex::ReXApp {
   void OnPreSetup(rex::RuntimeConfig& config) override {
     // SetupPresentation precedes OnFinalizePaths in the SDK. Arm before either provider or game GPU setup.
     user_data_root_ = user_data_root();
+    {
+      // Task 353: crash reports and the start-up step log before the upscaler check, the graphics device, the
+      // swapchain and the window (SetupPresentation), not only from OnFinalizePaths on.
+      const std::filesystem::path log = REXCVAR_GET(log_file);
+      kk::InstallEarlyCrashHandlers(log.has_parent_path() ? log.parent_path()
+                                                          : rex::filesystem::GetExecutableFolder() / "logs",
+                                    user_data_root_);
+      kk::exit_evidence::InstallHandlers();
+      nr::steps::Note("settings read; renderer and graphics API next");
+    }
+    // Task 350a: DirectX 12 on Windows for a settings file from before Beta 14, once: before the renderer reads
+    // native_backend, and before startup recovery puts a fallback (Vulkan when DirectX 12 cannot start) over it.
+    kk::MigrateGraphicsApi();
     kk::startup::Configure(user_data_root_);
     kk::ApplyVSyncSettings();
     {  // before the runtime reads the shader cache: drop records a finished-early write damaged
@@ -415,6 +491,13 @@ class KingKongApp : public rex::ReXApp {
       kk::startup::Begin(config.gpu_plugin, !*show_launcher_);
     }
     REXLOG_INFO("KK: renderer {} (kk_renderer {})", config.gpu_plugin, rex::cvar::GetFlagByName("kk_renderer"));
+    // Task 335: the launcher's upscaler question (a Direct3D 12 device) before SetupPresentation makes this
+    // process's device, swapchain and window; NVIDIA's driver crashed when both were made at once.
+    if (!config.graphics && show_launcher_ && *show_launcher_ && config.gpu_plugin == "native")
+      kk::AskUpscalersBeforeWindow();
+    nr::steps::Note("renderer %s, graphics API %s, %s; the window and graphics device next", config.gpu_plugin.c_str(),
+                    rex::cvar::GetFlagByName("native_backend").c_str(),
+                    show_launcher_ && *show_launcher_ ? "launcher" : "game");
     // Task 286: always ours. The SDK's SetupPresentation sets its plain SDLAudioSystem before OnPreSetup, so
     // the old "if (!config.audio_factory)" never chose this one (no audio thread scheduling since e360f6f,
     // and none of task 285's slow audio-open lines).
@@ -422,6 +505,7 @@ class KingKongApp : public rex::ReXApp {
   }
 
   void OnPostSetup() override {
+    nr::steps::Note("game runtime set up (guest graphics ready)");
     kk::input_diag::Launcher(false, 0, false, false);
     kk::coop::Start(user_data_root_);
     kk::g_guest_base = runtime()->virtual_membase();
@@ -434,6 +518,9 @@ class KingKongApp : public rex::ReXApp {
     }
     kk::ApplyRuntimeOverrides();
     kk::benchmark::InstallPresentObserver();
+#if defined(KK_DEV_TOOLS)
+    StartDevFocusCycle();  // task 372
+#endif
     UseOneControllerSlot();
     if (!kk::menu_scene::Active()) kk::mouse_look::Install(window());  // task 330: the launcher keeps the mouse
     // HDR follows Windows for the screen the game's window is on (hdr_display.h).
@@ -530,6 +617,41 @@ class KingKongApp : public rex::ReXApp {
   // Reconnects the presenter to the window's surface (what a resize does), when the window can be drawn
   // (not minimised or hidden, some pixels). UI thread. `why`: logged (null: the launcher's heartbeat, which
   // counts its own).
+#if defined(KK_DEV_TOOLS)
+  // Task 372 test aid: KK_DEV_FOCUS_CYCLE="<start s>,<away s>,<back s>,<count>" makes the window lose and regain
+  // the focus <count> times, through the SDK's own focus path (every listener sees what an Alt+Tab gives it),
+  // without taking the owner's foreground. Seconds from this point (the game runtime set up).
+  struct DevFocusPoke : rex::ui::Window {
+    static void Set(rex::ui::Window* w, bool focus) {
+      WindowDestructionReceiver receiver(w);
+      (w->*(&DevFocusPoke::OnFocusUpdate))(focus, receiver);
+    }
+  };
+  void StartDevFocusCycle() {
+    const char* spec = std::getenv("KK_DEV_FOCUS_CYCLE");
+    if (!spec || !*spec) return;
+    double start = 30, away = 1.5, back = 2.5;
+    int count = 20;
+    std::sscanf(spec, "%lf,%lf,%lf,%d", &start, &away, &back, &count);
+    REXLOG_INFO("KK dev: focus cycle in {:.1f} s: {} times, {:.1f} s away, {:.1f} s back", start, count, away, back);
+    std::thread([this, start, away, back, count] {
+      auto sleep = [](double s) { std::this_thread::sleep_for(std::chrono::milliseconds(int64_t(s * 1000))); };
+      sleep(start);
+      for (int i = 1; i <= count; ++i) {
+        for (const bool focus : {false, true}) {
+          app_context().CallInUIThreadDeferred([this, focus, i] {
+            if (!window()) return;
+            REXLOG_INFO("KK dev: focus cycle {}: {}", i, focus ? "focus back" : "focus lost");
+            DevFocusPoke::Set(window(), focus);
+          });
+          sleep(focus ? back : away);
+        }
+      }
+      REXLOG_INFO("KK dev: focus cycle done");
+    }).detach();
+  }
+#endif
+
   void RecoverPresentation(const char* why) {
 #if defined(KK_DEV_TOOLS)
     static const bool off = std::getenv("KK_DEV_NO_HEARTBEAT") != nullptr;  // the behaviour before task 173
@@ -549,9 +671,11 @@ class KingKongApp : public rex::ReXApp {
     w->RequestPaint();
   }
 
-  // Size the game is shown at: in fullscreen the Resolution picked on the Display page, or the
+  // Size the game is shown at: an ultrawide size picked in a resolution list (task 363: drawn at that size and
+  // fitted into the window or screen); in fullscreen the Resolution picked on the Display page, or the
   // monitor's; else the window.
   std::pair<int, int> OutputSize() const {
+    if (const auto picture = kk::ChosenPictureSize()) return *picture;
     if (REXCVAR_QUERY(bool, fullscreen)) {
       if (const auto mode = kk::FullscreenModeSize(); mode && mode->first > 0 && mode->second > 0) return *mode;
       if (!kk::ParseDisplayMode(REXCVAR_GET(kk_fullscreen_mode))) {

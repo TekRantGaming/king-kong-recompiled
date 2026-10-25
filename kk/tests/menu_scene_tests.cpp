@@ -22,27 +22,40 @@ int main() {
   StartFacts f;
   CHECK(Decide(f) == Reason::kLive);
   { StartFacts g = f; g.files_ok = false; CHECK(Decide(g) == Reason::kNoFiles); }
-  { StartFacts g = f; g.native_renderer = false; CHECK(Decide(g) == Reason::kNotNative); }
+  // Task 349c (owner, 21 Oct): another renderer runs the scene too (its shaders are not prepared by the launcher).
+  { StartFacts g = f; g.native_renderer = false; CHECK(Decide(g) == Reason::kLive); }
+  { StartFacts g = f; g.native_renderer = false; g.shaders_prepared = false; CHECK(Decide(g) == Reason::kLive); }
   { StartFacts g = f; g.shaders_prepared = false; CHECK(Decide(g) == Reason::kShadersNotPrepared); }
   { StartFacts g = f; g.shader_job = true; CHECK(Decide(g) == Reason::kShaderJob); }
   { StartFacts g = f; g.setup = true; CHECK(Decide(g) == Reason::kSetup); }
-  { StartFacts g = f; g.low_end = true; CHECK(Decide(g) == Reason::kLowEnd); }
   { StartFacts g = f; g.off_this_session = true; CHECK(Decide(g) == Reason::kOffThisSession); }
   { StartFacts g = f; g.failed_this_version = true; CHECK(Decide(g) == Reason::kFailedBefore); }
   { StartFacts g = f; g.files_ok = false; g.shaders_prepared = false; CHECK(Decide(g) == Reason::kNoFiles); }
-  // A fresh install or an update: the scene may start later in the same launcher; the rest keep the stills.
+  // A fresh install, an update or a Rebuild: the scene starts later in the same launcher; only giving up does not.
   CHECK(MayStartLater(Reason::kNoFiles) && MayStartLater(Reason::kShadersNotPrepared) &&
-        MayStartLater(Reason::kShaderJob) && MayStartLater(Reason::kSetup));
-  CHECK(!MayStartLater(Reason::kLive) && !MayStartLater(Reason::kNotNative) && !MayStartLater(Reason::kLowEnd) &&
-        !MayStartLater(Reason::kOffThisSession) && !MayStartLater(Reason::kFailedBefore));
+        MayStartLater(Reason::kShaderJob) && MayStartLater(Reason::kSetup) && MayStartLater(Reason::kOffThisSession));
+  CHECK(!MayStartLater(Reason::kLive) && !MayStartLater(Reason::kFailedBefore));
   for (int r = 0; r <= int(Reason::kFailedBefore); ++r) CHECK(ReasonText(Reason(r))[0] != '?');
 
-  // The failure marker: only this version's "starting" or "failed" keeps the stills.
-  CHECK(ReadMarker("starting 2.0.0-beta.12\n", "2.0.0-beta.12") == MarkerState::kFailedThisVersion);
-  CHECK(ReadMarker("failed 2.0.0-beta.12\r\n", "2.0.0-beta.12") == MarkerState::kFailedThisVersion);
-  CHECK(ReadMarker("starting 2.0.0-beta.11\n", "2.0.0-beta.12") == MarkerState::kNone);
-  CHECK(ReadMarker("", "2.0.0-beta.12") == MarkerState::kNone);
-  CHECK(ReadMarker("garbage", "2.0.0-beta.12") == MarkerState::kNone);
+  // The failure marker (task 349c): one failed start is counted, not given up on; 3 in a row give up for the
+  // version; the second attempt of the same start does not count again; another version's is nothing.
+  {
+    const char* v = "2.0.0-beta.12";
+    auto is = [](MarkerRead r, int n, bool gave_up) { return r.failed_starts == n && r.gave_up == gave_up; };
+    CHECK(is(ReadMarker("starting 2.0.0-beta.12\n", v), 1, false));  // Beta 13 style, no count
+    CHECK(is(ReadMarker("starting 2.0.0-beta.12 0\r\n", v), 1, false));
+    CHECK(is(ReadMarker("starting 2.0.0-beta.12 1", v), 2, false));
+    CHECK(is(ReadMarker("starting 2.0.0-beta.12 2", v), 3, true));
+    CHECK(is(ReadMarker("starting 2.0.0-beta.12 0", v, true), 0, false));
+    CHECK(is(ReadMarker("starting 2.0.0-beta.12 2", v, true), 2, false));
+    CHECK(is(ReadMarker("failed 2.0.0-beta.12\r\n", v), 0, true));
+    CHECK(is(ReadMarker("starting 2.0.0-beta.11 2\n", v), 0, false));
+    CHECK(is(ReadMarker("failed 2.0.0-beta.11", v), 0, false));
+    CHECK(is(ReadMarker("starting 2.0.0-beta.12 x", v), 0, false));
+    CHECK(is(ReadMarker("", v), 0, false) && is(ReadMarker("garbage", v), 0, false));
+    CHECK(StartingMarker(v, 2) == "starting 2.0.0-beta.12 2");
+    CHECK(is(ReadMarker(StartingMarker(v, 0), v), 1, false));
+  }
 
   // Start on the title: from the 10th read, 3 reads down in every 20.
   CHECK(!PressStartOnTitle(0) && !PressStartOnTitle(9));
@@ -95,10 +108,14 @@ int main() {
     CHECK(KindForStart("play") == Kind::kReturning && KindForStart("chapters") == Kind::kReturning);
     CHECK(KindForStart("extras") == Kind::kReturning && KindForStart("benchmark") == Kind::kReturning);
     CHECK(KindForStart("rebuild") == Kind::kNone);
-    // At least 3 s; then the scene (when one was started) or, without one, at once; a scene not up in 20 s: go on.
-    CHECK(!MayEnd(2.9f, false, false) && MayEnd(3.0f, false, false));
-    CHECK(!MayEnd(2.9f, true, true) && MayEnd(3.1f, true, true));
-    CHECK(!MayEnd(10.0f, true, false) && MayEnd(20.0f, true, false));
+    // At least 3 s; then the scene (when one was started) or, without one, at once. Task 349c: a scene not up 30 s
+    // after its start: a second attempt; the pictures only when that one is not up in 30 s either.
+    CHECK(Step(2.9f, false, false, 0, false) == SceneStep::kWait && Step(3.0f, false, false, 0, false) == SceneStep::kEnd);
+    CHECK(Step(2.9f, true, true, 5, false) == SceneStep::kWait && Step(3.1f, true, true, 5, false) == SceneStep::kEnd);
+    CHECK(Step(20.0f, true, false, 20, false) == SceneStep::kWait && Step(29.0f, true, false, 29.9f, true) == SceneStep::kWait);
+    CHECK(Step(28.0f, true, false, 30, false) == SceneStep::kRetry && Step(28.0f, true, false, 30, true) == SceneStep::kPictures);
+    CHECK(Step(1.0f, true, false, 90, false) == SceneStep::kWait);  // after the startup movies: 3 s of the loop first
+    CHECK(Step(40.0f, true, true, 40, true) == SceneStep::kEnd);
     CHECK(Cover(-1.0f) == 1.0f && Cover(0.0f) == 1.0f && Cover(0.25f) > 0.4f && Cover(0.25f) < 0.6f && Cover(0.5f) == 0.0f);
     // The tips go round: 0 first, the one after the last, back to 0 after the last one; junk starts again.
     CHECK(NextTip("", 12) == 0 && NextTip("0", 12) == 1 && NextTip("11", 12) == 0 && NextTip("5", 12) == 6);

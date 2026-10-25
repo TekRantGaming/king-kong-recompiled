@@ -39,7 +39,7 @@ inline Plan Decide(const Situation& s) {
     p.system = true;
     p.why = "the launcher is not the active window";
   } else {
-    p.why = "the launcher is in front (its pop-up is enough)";
+    p.why = "the launcher is in front (its popup is enough)";
   }
   return p;
 }
