@@ -8,7 +8,7 @@
 #   1. toolchain check (lists missing Ubuntu packages; installs nothing)
 #   2. ReXGlue SDK source = REXGLUE_SDK_SRC (the Windows -038 source: v0.10.0 + tools/rexglue-patches +
 #      sdk-patches 0001-0003, 0035, 0037, 0038) + sdk-patches 0039, 0040 (Linux waits) + 0041 (present
-#      observer) + 0043 (scRGB HDR), checked file by file against the Windows SDK's source (REXGLUE_SDK_CHECK)
+#      observer) + 0043 (scRGB HDR) + 0044, 0045 (HDR curve, Beta 11), checked file by file against the Windows SDK's source (REXGLUE_SDK_CHECK)
 #   3. SDK build + install (clang 20, Release, Vulkan)
 #   4. DXC: the official Microsoft Linux release (same version as Windows' dxcompiler.dll)
 #   5. FFmpeg: tools/build_ffmpeg_linux.sh from the SDK's own thirdparty/FFmpeg (LGPL, PS2 cutscenes)
@@ -29,12 +29,12 @@ REPO="$(cd "$(dirname "$0")/.." && pwd)"
 BASE="${KK_LINUX_ROOT:-$HOME/kk-linux-beta}"
 F=/mnt/f/KK-native-renderer
 SDK_FROM="${REXGLUE_SDK_SRC:-$F/sdk-src-upscalers-038}"
-SDK_CHECK="${REXGLUE_SDK_CHECK:-$F/sdk-src-upscalers-043}"
+SDK_CHECK="${REXGLUE_SDK_CHECK:-$F/sdk-src-real-hdr-317}"
 DXC_FROM="${KK_DXC_FROM:-$F/downloads/dxc-linux-v1.9.2609/x}"
 JOBS="${KK_JOBS:-$(( $(nproc) > 2 ? $(nproc) - 2 : 1 ))}"
 # The game build (a developer build, KK_DEV_TOOLS=ON, gets its own, so the two never rebuild each other).
 WORKDIR="${KK_BUILD_DIR:-$BASE/work$([ "${KK_DEV_TOOLS:-OFF}" != ON ] || echo -dev)}"
-PATCHES="0039 0040 0041 0043"
+PATCHES="0039 0040 0041 0043 0044 0045"
 mkdir -p "$BASE"
 T0=$(date +%s)
 step() { echo "== [$(( $(date +%s) - T0 )) s] $*"; }
