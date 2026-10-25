@@ -11,6 +11,15 @@
 #define WIN32_LEAN_AND_MEAN
 #define NOMINMAX
 #include <windows.h>
+#else
+#include <SDL3/SDL.h>
+#include <chrono>
+#include <csignal>
+#include <cstring>
+#include <spawn.h>
+#include <sys/wait.h>
+#include <unistd.h>
+extern char** environ;
 #endif
 
 namespace kk::egg {
@@ -19,7 +28,7 @@ std::filesystem::path AppPath() {
 #if defined(_WIN32)
   return rex::filesystem::GetExecutableFolder() / "launcher" / "easter-egg" / "LegallyDistinctGorilla.exe";
 #else
-  return {};
+  return rex::filesystem::GetExecutableFolder() / "launcher" / "easter-egg" / "LegallyDistinctGorilla";
 #endif
 }
 
@@ -205,19 +214,123 @@ bool ForceToFront(void* handle) {
 
 #else
 
-struct Process::State {};
+// Linux (owner, 25 Oct: the egg ships in the AppImage too): the Electron game built for Linux, in its own
+// process group (the group is closed and ended as one, as the Windows job is). A Wayland program cannot put
+// another program's window in front, so the launcher swaps places with the game instead: Start raises the
+// launcher's own window (the pause panel), Resume minimises it so the game's window is the one in front again.
+// Enter and Esc reach the launcher only while its own window has the keyboard (no system wide key state here).
+
+namespace {
+
+// The launcher's window: the only SDL window of this process.
+SDL_Window* LauncherWindow() {
+  int count = 0;
+  SDL_Window** windows = SDL_GetWindows(&count);
+  SDL_Window* w = windows && count > 0 ? windows[0] : nullptr;
+  SDL_free(windows);
+  return w;
+}
+
+bool LauncherFocused() {
+  SDL_Window* w = LauncherWindow();
+  return w && (SDL_GetWindowFlags(w) & SDL_WINDOW_INPUT_FOCUS);
+}
+
+}  // namespace
+
+struct Process::State {
+  pid_t pid = 0;
+  double started = 0;  // steady seconds
+};
+
 Process::Process() : s_(std::make_unique<State>()) {}
-Process::~Process() = default;
-bool Process::Start(const std::filesystem::path&) { return false; }
-bool Process::Running() { return false; }
-bool Process::WindowShown() { return false; }
-bool Process::InFront() { return false; }
+Process::~Process() { Terminate(); }  // nothing of the game outlives the launcher
+
+bool Process::Start(const std::filesystem::path& exe) {
+  Terminate();
+  // Chromium's sandbox needs a setuid helper, which an AppImage cannot hold; the game loads only its own
+  // files. The AppImage's library path is not passed on (the game brings its own libraries).
+  std::vector<std::string> env_strings;
+  for (char** e = environ; *e; ++e)
+    if (std::strncmp(*e, "LD_LIBRARY_PATH=", 16) != 0) env_strings.emplace_back(*e);
+  std::vector<char*> env;
+  for (auto& s : env_strings) env.push_back(s.data());
+  env.push_back(nullptr);
+  std::string path = exe.string(), sandbox = "--no-sandbox";
+  char* argv[] = {path.data(), sandbox.data(), nullptr};
+  posix_spawn_file_actions_t actions;
+  posix_spawn_file_actions_init(&actions);
+  posix_spawn_file_actions_addchdir_np(&actions, exe.parent_path().c_str());
+  posix_spawnattr_t attr;
+  posix_spawnattr_init(&attr);
+  posix_spawnattr_setflags(&attr, POSIX_SPAWN_SETPGROUP);
+  posix_spawnattr_setpgroup(&attr, 0);  // its own group: the pid is the group id
+  pid_t pid = 0;
+  const int rc = posix_spawn(&pid, path.c_str(), &actions, &attr, argv, env.data());
+  posix_spawn_file_actions_destroy(&actions);
+  posix_spawnattr_destroy(&attr);
+  if (rc != 0) {
+    REXLOG_WARN("KK: easter egg: could not start it ({})", std::strerror(rc));
+    return false;
+  }
+  s_->pid = pid;
+  s_->started = std::chrono::duration<double>(std::chrono::steady_clock::now().time_since_epoch()).count();
+  REXLOG_INFO("KK: easter egg started (process {})", pid);
+  return true;
+}
+
+bool Process::Running() {
+  if (!s_->pid) return false;
+  int status = 0;
+  const pid_t r = waitpid(s_->pid, &status, WNOHANG);
+  if (r == 0) return true;
+  REXLOG_INFO("KK: easter egg ended (exit code {})", r == s_->pid && WIFEXITED(status) ? WEXITSTATUS(status) : -1);
+  kill(-s_->pid, SIGKILL);  // anything it left behind
+  s_->pid = 0;
+  return false;
+}
+
+// No way to see another program's windows here: the game's window counts as up a moment after it started, or
+// as soon as the launcher has lost the keyboard to it.
+bool Process::WindowShown() {
+  if (!Running()) return false;
+  const double now = std::chrono::duration<double>(std::chrono::steady_clock::now().time_since_epoch()).count();
+  return !LauncherFocused() || now - s_->started > 3.0;
+}
+
+bool Process::InFront() { return Running() && !LauncherFocused(); }
+
 bool EnterKeyDown() { return false; }
 bool EscapeKeyDown() { return false; }
-void Process::ToFront() {}
-void Process::RequestClose() {}
-void Process::Terminate() {}
-bool ForceToFront(void*) { return false; }
+
+void Process::ToFront() {
+  if (!Running()) return;
+  SDL_Window* w = LauncherWindow();
+  if (w) SDL_MinimizeWindow(w);
+  REXLOG_INFO("KK: easter egg back in front (the launcher minimised{})", w ? "" : ": no launcher window");
+}
+
+void Process::RequestClose() {
+  if (!Running()) return;
+  kill(-s_->pid, SIGTERM);  // Electron closes its windows and quits
+  REXLOG_INFO("KK: easter egg asked to close");
+}
+
+void Process::Terminate() {
+  if (!s_->pid) return;
+  kill(-s_->pid, SIGKILL);
+  waitpid(s_->pid, nullptr, 0);
+  REXLOG_INFO("KK: easter egg ended by the launcher");
+  s_->pid = 0;
+}
+
+bool ForceToFront(void*) {
+  SDL_Window* w = LauncherWindow();
+  if (!w) return false;
+  SDL_RestoreWindow(w);
+  SDL_RaiseWindow(w);  // the compositor decides (Wayland: an activation request)
+  return LauncherFocused();
+}
 
 #endif
 

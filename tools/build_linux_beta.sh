@@ -129,6 +129,8 @@ if [ -z "${KK_EXTRA_FILES:-}" ]; then
   KK_EXTRA_FILES="$(pick benchmark-route.kkbr) $(pick FREECAM.txt)"
 fi
 export KK_EXTRA_FILES
+export KK_EGG_ASAR="${KK_EGG_ASAR:-$(pick launcher/easter-egg/resources/app.asar)}"
+export KK_EGG_ELECTRON_ZIP="${KK_EGG_ELECTRON_ZIP:-$F/downloads/electron-v45.0.0-linux-x64/electron-v45.0.0-linux-x64.zip}"
 export KK_SKIP_PACKAGES=ON KK_WORK="$WORKDIR" REXGLUE_SDK_DIR="$BASE/sdk" KK_DXC_DIR="$BASE/dxc" \
        KK_FFMPEG_DIR="$BASE/ffmpeg" CMAKE_BUILD_PARALLEL_LEVEL="$JOBS" KK_DEV_TOOLS="${KK_DEV_TOOLS:-OFF}"
 [ -z "${KK_APPIMAGETOOL:-}" ] || export KK_APPIMAGETOOL
@@ -149,6 +151,7 @@ A="$WORKDIR/AppDir"
 fail=0
 for f in usr/bin/king_kong usr/bin/librexgpu-native.so usr/bin/librexruntime.so usr/bin/libdxcompiler.so usr/bin/libpdfium.so \
          usr/bin/THIRD-PARTY-NOTICES.txt usr/share/licenses/ffmpeg usr/share/licenses/dxc usr/bin/glyphs \
+         usr/bin/launcher/easter-egg/LegallyDistinctGorilla usr/bin/launcher/easter-egg/resources/app.asar \
          usr/bin/launcher/video/save-notice-loop.mp4 usr/bin/launcher/video/returning-loop.mp4 usr/bin/launcher/video/trg-startup.mp4 AppRun; do
   [ -e "$A/$f" ] || { echo "  MISSING $f"; fail=1; }
 done
