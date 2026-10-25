@@ -23,6 +23,14 @@
 #include "ultrawide_logic.h"
 #include "update_channel.h"
 
+#if !defined(_WIN32)
+// The VSync setting (launcher, setup, pause menu, F8 panel) is the SDK's D3D12 presenter cvar, which only
+// the Windows SDK builds. Without it the VSync row had no value on Linux and the Vulkan present modes
+// (ApplyVSyncSettings) were all off: VSync always on. Same name and default as the SDK's.
+REXCVAR_DEFINE_BOOL(d3d12_allow_variable_refresh_rate_and_tearing, true, "UI/D3D12",
+                    "VSync off: allow tearing (Linux: the Vulkan presenter's immediate and mailbox modes)");
+#endif
+
 REXCVAR_DEFINE_BOOL(kk_launcher, true, "KK",
                     "Show the launcher before starting the game (hold Shift at start to force it)");
 REXCVAR_DEFINE_BOOL(kk_skip_launcher, false, "KK",
