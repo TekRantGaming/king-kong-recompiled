@@ -1078,9 +1078,10 @@ void ObjectsAfterAi(PPCContext& ctx,uint8_t* b,uint32_t w) {
       if (o.kind==ObjectKind::Door) REXLOG_INFO("KK dev object door callbacks: role={} id={:016X} init={} wait={} loop={} update={} holds={} context-misses={} dt={} duration={} fraction={} endpoint={}",
           state.host ? "host" : "guest",o.source,o.init_calls,o.wait_calls,o.loop_calls,o.update_calls,
           o.hold_calls,o.context_misses,LoadF(b,0x82C636E0),LoadF(b,o.vars+1088),LoadF(b,o.vars+1084),Load32(b,o.vars+1096));
-      if (o.kind==ObjectKind::Door) REXLOG_INFO("KK dev object door geometry: role={} id={:016X} translate={} rotate={} target={:08X} pos=({:.3f},{:.3f},{:.3f})",
+      if (o.kind==ObjectKind::Door) REXLOG_INFO("KK dev object door geometry: role={} id={:016X} translate={} rotate={} target={:08X} pos=({:.3f},{:.3f},{:.3f}) normal=({:.3f},{:.3f},{:.3f})",
           state.host ? "host" : "guest",o.source,Load32(b,o.vars+560),Load32(b,o.vars+564),Load32(b,o.vars+364),
-          LoadF(b,o.matrix+48),LoadF(b,o.matrix+52),LoadF(b,o.matrix+56));
+          LoadF(b,o.matrix+48),LoadF(b,o.matrix+52),LoadF(b,o.matrix+56),
+          -LoadF(b,o.matrix+16),-LoadF(b,o.matrix+20),-LoadF(b,o.matrix+24));
       if (o.kind==ObjectKind::Breakable) REXLOG_INFO("KK dev object breakable consumer: role={} id={:016X} maximum={} init={} go={} consumed={}",
           state.host ? "host" : "guest",o.source,Load32(b,o.vars+556),Track(b,o.ai,0x82516128),Track(b,o.ai,0x82515CF0),o.damage_tick==state.ai_tick);
       if (o.kind==ObjectKind::Door && !o.lever_logged) {
