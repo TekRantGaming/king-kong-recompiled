@@ -45,14 +45,14 @@ for c in clang-20:clang-20 clang++-20:clang-20 lld-20:lld-20 cmake:cmake ninja:n
          rsync:rsync patch:patch file:file pkg-config:pkg-config g++:g++; do
   command -v "${c%%:*}" >/dev/null || missing="$missing ${c#*:}"
 done
-for h in X11/Xlib.h wayland-client.h xkbcommon/xkbcommon.h vulkan/vulkan.h alsa/asoundlib.h pulse/pulseaudio.h \
+for h in X11/Xlib.h X11/Xlib-xcb.h wayland-client.h xkbcommon/xkbcommon.h vulkan/vulkan.h alsa/asoundlib.h pulse/pulseaudio.h \
          dbus/dbus.h libudev.h gtk/gtk.h; do
   [ -e "/usr/include/$h" ] || [ -n "$(find /usr/include -path "*/$h" -print -quit 2>/dev/null)" ] || missing="$missing (header $h)"
 done
 if [ -n "$missing" ]; then
   echo "missing:$missing" >&2
   echo "Ubuntu 24.04: sudo apt install clang-20 lld-20 g++ cmake ninja-build nasm make rsync patch file pkg-config \\" >&2
-  echo "  libx11-dev libxext-dev libxrandr-dev libxcursor-dev libxi-dev libxinerama-dev libxss-dev libxkbcommon-dev \\" >&2
+  echo "  libx11-dev libx11-xcb-dev libxext-dev libxrandr-dev libxcursor-dev libxi-dev libxinerama-dev libxss-dev libxkbcommon-dev \\" >&2
   echo "  libwayland-dev libdecor-0-dev libegl-dev libgl-dev libvulkan-dev libasound2-dev libpulse-dev \\" >&2
   echo "  libpipewire-0.3-dev libdbus-1-dev libudev-dev libgtk-3-dev" >&2
   exit 1

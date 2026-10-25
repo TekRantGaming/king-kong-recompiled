@@ -34,7 +34,7 @@ if ! command -v clang++-20 >/dev/null && ! sudo apt-get install -y clang-20 lld-
   sudo apt-get install -y clang-20 lld-20
 fi
 sudo apt-get install -y g++ cmake ninja-build pkg-config file unzip rsync desktop-file-utils \
-  libx11-dev libxext-dev libxrandr-dev libxcursor-dev libxi-dev libxinerama-dev libxss-dev \
+  libx11-dev libx11-xcb-dev libxext-dev libxrandr-dev libxcursor-dev libxi-dev libxinerama-dev libxss-dev \
   libxkbcommon-dev libwayland-dev libdecor-0-dev libegl-dev libgl-dev libvulkan-dev \
   libasound2-dev libpulse-dev libpipewire-0.3-dev libdbus-1-dev libudev-dev libgtk-3-dev nasm
 fi

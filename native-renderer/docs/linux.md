@@ -63,7 +63,7 @@ are already on disk: `KK_APPIMAGETOOL` (the copy in `/root/kk-beta4-081/work/`) 
 
 ```
 sudo apt install clang-20 lld-20 g++ cmake ninja-build nasm make rsync patch file pkg-config \
-  libx11-dev libxext-dev libxrandr-dev libxcursor-dev libxi-dev libxinerama-dev libxss-dev libxkbcommon-dev \
+  libx11-dev libx11-xcb-dev libxext-dev libxrandr-dev libxcursor-dev libxi-dev libxinerama-dev libxss-dev libxkbcommon-dev \
   libwayland-dev libdecor-0-dev libegl-dev libgl-dev libvulkan-dev libasound2-dev libpulse-dev \
   libpipewire-0.3-dev libdbus-1-dev libudev-dev libgtk-3-dev
 ```
