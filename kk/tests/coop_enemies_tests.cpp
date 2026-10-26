@@ -80,6 +80,22 @@ void IdentityAndMatching() {
       LifeOffset(EnemyFamily::Scorpion) == 5444 && SecondaryLifeOffset(EnemyFamily::Scorpion) == 5792 &&
       LifeBytes(EnemyFamily::Scorpion) == 5796 && LifeOffset(EnemyFamily::None) == 0, "per-family health layout");
 }
+void SpiderCopyMatching() {
+  const auto parent=AuthoredKey(uint32_t(EnemyFamily::Spider),101.081f,93.007f,14.676f);
+  const auto id=SpiderCopyId(parent,1,10);
+  Check(id.source && id.sequence==2 && id.family==EnemyFamily::Spider,"native spider loop has bounded immutable identity");
+  auto enemy=Enemy(); enemy.id=id; enemy.spawn_x=101.02f; enemy.spawn_y=92.94f; enemy.spawn_z=14.58f;
+  const Binding child{id,100,200,300,400};
+  std::vector<MatchCandidate> candidates{{child,101.17f,92.74f,14.60f,true}};
+  Check(MatchAuthored(enemy,candidates,false)==&candidates[0].binding,"different random offsets still bind the same native spider copy");
+  candidates[0].binding.id=SpiderCopyId(parent,2,10);
+  Check(!MatchAuthored(enemy,candidates,true),"adjacent native copies never use nearest-position fallback");
+  candidates[0].binding.id=SpiderCopyId(parent+1,1,10);
+  Check(!MatchAuthored(enemy,candidates,true),"another parent cannot claim the copy");
+  Check(!SpiderCopyId(0,0,10).source && !SpiderCopyId(parent,10,10).source &&
+      !SpiderCopyId(parent,0,0).source && !SpiderCopyId(parent,0,kMaxEnemies+1).source,
+      "missing parent, invalid native ordinal and unbounded copy count refuse");
+}
 void ExpandedFamilies() {
   for (uint16_t raw=uint16_t(EnemyFamily::Bat); raw<=uint16_t(EnemyFamily::Prey); ++raw) {
     auto e=Enemy(); e.id.family=EnemyFamily(raw);
@@ -777,6 +793,7 @@ void OwnershipSessions() {
 } // namespace
 int main() {
   ScorpionDamagePools();
+  SpiderCopyMatching();
   IdentityAndMatching(); ExpandedFamilies(); Wire(); LifecycleAndInterpolation(); SessionAuthority();
   MatchingRetryAndTolerance(); GuestInventory(); ShotWireAndBounds(); ShotValidation(); ShotSessions(); MissThenHit();
   WanShooterHistory();

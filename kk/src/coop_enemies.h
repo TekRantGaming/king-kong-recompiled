@@ -136,6 +136,12 @@ inline EnemyId SpawnId(uint64_t spawner, uint64_t source, uint32_t sequence, Ene
   const uint64_t h = Mix(Mix(14695981039346656037ull, spawner), source);
   return {h ? h : 1, sequence, family};
 }
+// PNJ_Spider_Init makes a fixed native loop of copies at random offsets.
+// Their immutable provenance is the authored parent and native loop ordinal.
+inline EnemyId SpiderCopyId(uint64_t parent,uint32_t ordinal,uint32_t count) {
+  if (!parent || !count || count>kMaxEnemies || ordinal>=count) return {};
+  return SpawnId(parent,0x535049444552434full,ordinal+1,EnemyFamily::Spider);
+}
 // Resolve the live template at creation time, after native initialization.
 // Only its authored numeric slot contributes to identity, never its pointer.
 inline uint32_t SpawnerPreviousWaveIndex(std::span<const uint32_t> templates, uint32_t next, uint32_t source) {

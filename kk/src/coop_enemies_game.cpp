@@ -1934,6 +1934,28 @@ void Spawned(const uint8_t* b, uint32_t spawner, uint32_t source, uint32_t actor
   // once that exact AI/matrix is observed there, after its normal init.
   s.pending[actor] = {id, ai, matrix, LoadF(b, matrix+48), LoadF(b, matrix+52), LoadF(b, matrix+56)};
 }
+void SpiderCopied(const uint8_t* b,uint32_t parent,uint32_t ordinal,uint32_t actor) {
+  auto& s=Get();
+  if (!Environment(b,s.world) || !PoseAddress(actor,32) || actor==parent) return;
+  const auto source=s.authored.find(parent);
+  if (source==s.authored.end() || source->second.ambiguous || source->second.family!=EnemyFamily::Spider) return;
+  const auto& authored=source->second;
+  const auto parent_ai=Ptr(b,Ptr(b,parent,24,8),4,88);
+  if (parent_ai!=authored.ai || Ptr(b,parent,12,64)!=authored.matrix || Load32(b,0x82CCBF6C)!=parent) return;
+  const auto vars=Ptr(b,parent_ai,64,1836);
+  if (!vars || (Load32(b,parent)&0x20000)) return;
+  const auto id=SpiderCopyId(authored.key,ordinal,Load32(b,vars+4));
+  const auto ai=Ptr(b,Ptr(b,actor,24,8),4,88),matrix=Ptr(b,actor,12,64);
+  if (!id.source || !ai || !matrix || s.records.size()+s.pending.size()>=kMaxEnemies || s.records.contains(id)) return;
+  if (auto old=s.bindings.find(actor);old!=s.bindings.end()) {
+    if (auto record=s.records.find(old->second.id);record!=s.records.end()) record->second.kind=EnemyEventKind::Removed;
+    s.bindings.erase(old);
+  }
+  s.pending[actor]={id,ai,matrix,LoadF(b,matrix+48),LoadF(b,matrix+52),LoadF(b,matrix+56)};
+#if defined(KK_DEV_TOOLS)
+  REXLOG_INFO("ENEMIES spider copy parent={:016X} ordinal={} count={} id={:016X}/{}/12",authored.key,ordinal,Load32(b,vars+4),id.source,id.sequence);
+#endif
+}
 } // namespace
 #if defined(KK_DEV_TOOLS)
 void EnemyDevGameFrame(PPCContext& ctx, uint8_t* base) {
@@ -2445,6 +2467,9 @@ REX_HOOK_RAW(sub_8271CCB8) {
 }
 REX_HOOK_RAW(sub_82715AC8) {
   const bool observe = uint32_t(ctx.lr) == 0x826F9240 && REXCVAR_GET(kk_coop_enabled);
+  // Verified 82617130: r27 is the zero-based loop index, r3 is the parent.
+  const bool spider_copy = uint32_t(ctx.lr)==0x82617434 && REXCVAR_GET(kk_coop_enabled);
+  const auto spider_ordinal=ctx.r27.u32;
   const auto source = ctx.r3.u32;
   const auto spawner = observe ? kk::hfr::Load32(base, 0x82CCBF6C) : 0;
 #if defined(KK_DEV_TOOLS)
@@ -2454,6 +2479,7 @@ REX_HOOK_RAW(sub_82715AC8) {
       kk::coop::Ptr(base, kk::coop::Ptr(base, source, 24, 8), 4, 88), state, is_spawner) == kk::coop::EnemyFamily::Crab;
 #endif
   __imp__sub_82715AC8(ctx, base);
+  if (spider_copy && ctx.r3.u32) kk::coop::SpiderCopied(base,source,spider_ordinal,ctx.r3.u32);
 #if defined(KK_DEV_TOOLS)
   static unsigned crab_lines = 0;
   if (crab && ctx.r3.u32 && crab_lines++ < 16) {
