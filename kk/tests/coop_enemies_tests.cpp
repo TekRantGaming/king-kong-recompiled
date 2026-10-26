@@ -512,6 +512,20 @@ void ShotValidation() {
   bad = {Shot(3, 100.2), 1.2, Inventory(100.2)};
   Check(v.Validate(bad, World(), peer, 1.2) == ShotReject::None, "normal cadence accepted");
   Check(v.Validate(bad, World(), peer, 1.2) == ShotReject::Sequence, "rejected/accepted sequence stays consumed");
+  {
+    ShotValidator jitter;
+    auto round=Shot(1,100); round.weapon=2;
+    Check(jitter.Validate({round,1,Inventory(100,2)},World(),peer,1)==ShotReject::None,"machine gun first native round");
+    round=Shot(2,100.008); round.weapon=2;
+    Check(jitter.Validate({round,1.008,Inventory(100.008,2)},World(),peer,1.008)==ShotReject::None,
+        "native frame catchup may place two legal rounds eight milliseconds apart");
+    round=Shot(3,100.016); round.weapon=2;
+    Check(jitter.Validate({round,1.016,Inventory(100.016,2)},World(),peer,1.016)==ShotReject::Rate,
+        "catchup allowance cannot become sustained rapid fire");
+    round=Shot(4,100.1); round.weapon=2;
+    Check(jitter.Validate({round,1.1,Inventory(100.1,2)},World(),peer,1.1)==ShotReject::None,
+        "normal gun cadence resumes after borrowed scheduling time");
+  }
   v = {}; auto burst = in;
   Check(v.Validate(burst, World(), peer, 1) == ShotReject::None, "burst one");
   burst.intent = Shot(2, 100.2); Check(v.Validate(burst, World(), peer, 1) == ShotReject::None, "burst two allows batching");
