@@ -250,6 +250,7 @@ bool ValidOwnershipChange(const OwnershipChange& c) {
 bool ValidShotIntent(const ShotIntent& s) {
   if (!ValidEnemyWorld(s.world) || !s.number || s.weapon < 1 || s.weapon > 4 ||
       !std::isfinite(s.time) || s.time < 0 || s.time >= 1e12 || !Point(s.origin) || !Point(s.direction) ||
+      !std::isfinite(s.ray_length) || s.ray_length < 0 || s.ray_length > 2000 ||
       s.hits.size() > (s.weapon == 3 ? kMaxShotHits : 1)) return false;
   const float length = std::hypot(s.direction.x, s.direction.y, s.direction.z);
   if (length < .99f || length > 1.01f) return false;
@@ -481,6 +482,7 @@ bool Encode(const Message& m, std::vector<uint8_t>& out) {
       WriteWorld(payload, m.shot.world); payload.U(m.shot.number, 4); payload.U(m.shot.weapon, 1);
       payload.U(std::bit_cast<uint64_t>(m.shot.time), 8);
       WriteVector(payload, m.shot.origin); WriteVector(payload, m.shot.direction);
+      payload.U(std::bit_cast<uint32_t>(m.shot.ray_length), 4);
       payload.U(m.shot.hits.size(), 1);
       for (const auto& hit : m.shot.hits) {
         payload.U(hit.id.source, 8); payload.U(hit.id.sequence, 4); payload.U(uint16_t(hit.id.family), 2);
@@ -706,6 +708,7 @@ bool Decode(std::span<const uint8_t> bytes, Message& out) {
     case MessageType::ShotIntent: {
       m.shot.world = ReadWorld(r); m.shot.number = uint32_t(r.U(4)); m.shot.weapon = uint8_t(r.U(1));
       m.shot.time = std::bit_cast<double>(r.U(8)); m.shot.origin = ReadVector(r); m.shot.direction = ReadVector(r);
+      m.shot.ray_length = std::bit_cast<float>(uint32_t(r.U(4)));
       const size_t count = size_t(r.U(1));
       if (!r.ok || count > kMaxShotHits || count * 30 != bytes.size()-r.at) return false;
       for (size_t i = 0; i < count; ++i) {

@@ -53,11 +53,11 @@ void StimulusDiagnostics() {
   Check(!ReadPool(u32, 1).valid, "record span overflow refused");
 }
 void Codecs() {
-  static_assert(kProtocolVersion == 22);
+  static_assert(kProtocolVersion == 23);
   for (const auto& m : {Damage(), Status()}) {
     const auto bytes = Packet(m); Message out;
     Check(bytes.size() == (m.type == MessageType::DamageEvent ? 119u : 53u), "fixed bounded wire length");
-    Check(bytes[4] == 0 && bytes[5] == kProtocolVersion && bytes[7] == uint16_t(m.type), "protocol 22 byte order");
+    Check(bytes[4] == 0 && bytes[5] == kProtocolVersion && bytes[7] == uint16_t(m.type), "protocol 23 byte order");
     Check(Decode(bytes, out) && Packet(out) == bytes, "canonical combat round trip");
     for (size_t n = 0; n < bytes.size(); ++n) {
       out.type = MessageType::Bye;
@@ -136,6 +136,13 @@ void Codecs() {
   wire = Packet(Status()); wire.back() = 99; Check(!Decode(wire, decoded), "malformed wire condition refused");
 }
 void Replay() {
+  for (const auto caller : {0x82473380u,0x8248C9A4u,0x8248D10Cu,0x824866F0u,0x82487D9Cu,
+       0x824884B8u,0x82468C40u,0x8246B024u,0x8248FC34u}) {
+    Check(NativeImpactProducer(EnemyFamily::VRex,caller),"audited direct native V Rex contact producer admitted");
+    Check(!NativeImpactProducer(EnemyFamily::Raptor,caller) && !NativeImpactProducer(EnemyFamily::Pny,caller),
+        "a direct hit producer cannot borrow another family's identity");
+    Check(!NativeImpactProducer(EnemyFamily::VRex,caller+4),"adjacent unaudited native caller refused");
+  }
   Check(RemoteOwner(EnemyOwner::Host, EnemyOwner::Guest, 4, 4, false) &&
       RemoteOwner(EnemyOwner::Guest, EnemyOwner::Host, 7, 7, false) &&
       RemoteOwner(EnemyOwner::Host, EnemyOwner::Guest, 0, 0, false), "initial host and either committed simulation owner may hit remote player");

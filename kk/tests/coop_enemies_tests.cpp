@@ -461,7 +461,7 @@ void ShotWireAndBounds() {
   m.shot = Shot(); m.shot.weapon = 3; m.shot.hits.clear();
   for (size_t i = 0; i < kMaxShotHits; ++i) m.shot.hits.push_back({Enemy(i+1).id, {10, float(i)*.1f, 0}});
   Message out; auto bytes = Packet(m);
-  Check(bytes.size() == kHeaderBytes+50+30*kMaxShotHits && bytes.size() <= kMaxPacketBytes && Decode(bytes, out), "maximum shotgun intent bounded");
+  Check(bytes.size() == kHeaderBytes+54+30*kMaxShotHits && bytes.size() <= kMaxPacketBytes && Decode(bytes, out), "maximum shotgun intent bounded");
   m.shot.hits.push_back({Enemy(999).id, {10, 0, 0}}); Check(!Encode(m, bytes), "too many shotgun impacts refused");
   m.shot = Shot(); m.shot.hits.push_back({Enemy(456).id, {10, 0, 0}}); Check(!Encode(m, bytes), "single ray weapon cannot send multiple targets");
   m.shot.weapon = 3; m.shot.hits[1].id = m.shot.hits[0].id; Check(!Encode(m, bytes), "repeated shotgun target refused");
@@ -473,7 +473,12 @@ void ShotWireAndBounds() {
   m.shot = Shot(); m.shot.origin.z = std::numeric_limits<float>::quiet_NaN(); Check(!Encode(m, bytes), "nonfinite origin refused");
   m.shot = Shot(); m.shot.hits[0].point.x = 1e6f; Check(!Encode(m, bytes), "hit point range bound");
   m.shot = Shot(); m.shot.time = std::numeric_limits<double>::infinity(); Check(!Encode(m, bytes), "nonfinite shot time refused");
-  m.shot = Shot(); bytes = Packet(m); bytes[kHeaderBytes+49] = 255;
+  m.shot = Shot(); m.shot.ray_length=12.5f; bytes=Packet(m);
+  Check(Decode(bytes,out) && out.shot.ray_length==12.5f,"resolved native miss segment survives codec");
+  for (float invalid : {-1.f,2001.f,std::numeric_limits<float>::infinity(),std::numeric_limits<float>::quiet_NaN()}) {
+    m.shot.ray_length=invalid; Check(!Encode(m,bytes),"invalid threat segment length refused");
+  }
+  m.shot = Shot(); bytes = Packet(m); bytes[kHeaderBytes+53] = 255;
   Check(!Decode(bytes, out), "wire count rejected before allocation");
   bytes = Packet(m); bytes[kHeaderBytes+25] = 0x7F; bytes[kHeaderBytes+26] = 0xC0;
   Check(!Decode(bytes, out), "wire nonfinite origin refused");

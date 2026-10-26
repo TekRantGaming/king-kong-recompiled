@@ -81,7 +81,7 @@ struct Pair {
   }
 };
 void Protocol() {
-  static_assert(kProtocolVersion == 22);
+  static_assert(kProtocolVersion == 23);
   constexpr std::array types{MessageType::Hello, MessageType::HelloAck, MessageType::Reject,
       MessageType::Ping, MessageType::Pong, MessageType::PlayerPose, MessageType::Bye,
       MessageType::EnemySnapshot, MessageType::EnemyEvent, MessageType::ShotIntent,

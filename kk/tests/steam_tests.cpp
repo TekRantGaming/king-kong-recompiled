@@ -211,7 +211,7 @@ void EveryProtocolMessage() {
   };
   const MessageType unreliable[] = {MessageType::Ping, MessageType::Pong, MessageType::PlayerPose,
       MessageType::EnemySnapshot, MessageType::CameraPose};
-  static_assert(kProtocolVersion == 22 && std::size(reliable)+std::size(unreliable) == 36);
+  static_assert(kProtocolVersion == 23 && std::size(reliable)+std::size(unreliable) == 36);
   Backend a,b; a.self=1; b.self=2; a.remote=&b; b.remote=&a;
   SteamMessagesTransport at(a,2),bt(b,1);
   unsigned seen[35]{};
@@ -235,7 +235,7 @@ void EveryProtocolMessage() {
       }
       if (type==MessageType::EnemySnapshot) Check(packet.size()==976,"full enemy batch fits unreliable message limit");
       if (type==MessageType::SaveChunk) Check(packet.size()==798,"768-byte save chunk includes bounded framing");
-      if (type==MessageType::ShotIntent) Check(packet.size()==554,"maximum shotgun hits fit packet cap");
+      if (type==MessageType::ShotIntent) Check(packet.size()==558,"maximum shotgun hits fit packet cap");
     }
   }
   for (unsigned i=1;i<=34;++i) Check(seen[i]==1,"all 34 distinct protocol IDs covered");

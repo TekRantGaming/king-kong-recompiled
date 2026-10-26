@@ -12,7 +12,7 @@
 
 namespace kk::coop {
 constexpr uint32_t kMagic = 0x4B4B4331;  // KKC1, network byte order throughout
-constexpr uint16_t kProtocolVersion = 22; // Preserve native multi-family partner hits.
+constexpr uint16_t kProtocolVersion = 23; // Carry the resolved native shot segment for peer threats.
 constexpr size_t kMaxDisplayNameBytes = 32;
 // Valid UTF-8, no controls or invisible direction/line formatting, bounded at a codepoint.
 // Empty or wholly invalid input becomes "Partner". Never log the input or result.
@@ -251,9 +251,9 @@ struct DamageEvent {
   uint32_t part = UINT32_MAX; // native payload +84, never an address
   float duration = .0001f; // native event lifetime
   uint32_t generation = 0; // initial host ownership is generation zero
-  ShotVector point; // native projectile impact point, never a native reference
+  ShotVector point; // native projectile/contact impact point, never a native reference
   uint32_t surface = UINT32_MAX;
-  bool projectile = false;
+  bool projectile = false; // use the builder that retains the native impact fields
 };
 struct PlayerStatus {
   EnemyWorld world;
@@ -297,6 +297,7 @@ struct ShotIntent {
   double time = 0;
   ShotVector origin, direction;
   std::vector<ShotHit> hits;
+  float ray_length = 0; // Resolved native ray, including a miss. Zero means unavailable.
 };
 constexpr size_t kMaxShotHits = 16, kMaxQueuedShots = 32;
 bool ValidShotIntent(const ShotIntent& shot);

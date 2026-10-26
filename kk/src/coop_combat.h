@@ -36,6 +36,17 @@ inline bool NativeHit(EnemyFamily family, uint32_t flags, uint32_t magnitude, bo
     default: return false;
   }
 }
+inline bool NativeImpactProducer(EnemyFamily family,uint32_t caller) {
+  // KT native contact query, charge, skid, held-target strike, colmap exit,
+  // proximity contact and falling-body impact. These build type4 directly.
+  if (family!=EnemyFamily::VRex) return false;
+  switch (caller) {
+    case 0x82473380: case 0x8248C9A4: case 0x8248D10C: case 0x824866F0:
+    case 0x82487D9C: case 0x824884B8: case 0x82468C40: case 0x8246B024: case 0x8248FC34:
+      return true;
+    default: return false;
+  }
+}
 inline bool RemoteOwner(EnemyOwner owner, EnemyOwner local, uint32_t generation,
                         uint32_t hit_generation, bool frozen) {
   return !frozen && owner <= EnemyOwner::Guest && local <= EnemyOwner::Guest &&
