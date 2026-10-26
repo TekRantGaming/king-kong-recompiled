@@ -8,6 +8,7 @@ param(
     [string[]]$Starts = @(),
     [string]$StoryLayout = '',
     [switch]$Stationary,
+    [ValidateRange(0,180)][int]$RouteSeconds = 32,
     [ValidateRange(15,86400)][int]$Seconds = 150,
     [ValidateRange(70,180)][int]$CheckpointSeconds = 90,
     [string]$Worktree = 'F:\kk-native-coop\kk-recomp',
@@ -110,6 +111,7 @@ $manifest = [ordered]@{
     schema_version = 1; created_utc = [DateTime]::UtcNow.ToString('o')
     seconds = $Seconds; checkpoint_seconds = $CheckpointSeconds; worktree = $Worktree; face_partner = [bool]$FacePartner; runs = $records
     world_diff = [bool]$WorldDiff; checkpoints = [bool]$Checkpoints; source_commit = $sourceCommit
+    stationary = [bool]$Stationary; route_seconds = $RouteSeconds
     source_branch = $sourceBranch; source_dirty = $sourceDirty; exe_sha256 = $exeSha
     protocol = 21; snapshot_schema = 1; fault_profile = 'bad_wifi'; fault_seeds = @(86,86)
     scenarios = $rules; resumed_from = $ResumeManifest
@@ -137,7 +139,10 @@ try {
         $envText = "KK_DEV_LAUNCHER_INPUT=wait-home,direct:code:C86ABC,direct:host,session:$($record.entry)|KK_DEV_AUTOSKIP=1|KK_DEV_SCRIPT=0:SKIP/10|KK_DEV_WANDER=1|KK_DEV_CHEATS_ANYWHERE=1|KK_DEV_EMPTY_LOADOUT=1|KK_DEV_TRIG_TRACE=1|KK_DEV_ENEMY_NEAR=1"
         $joinText = 'KK_DEV_LAUNCHER_INPUT=wait-home,direct:code:C86ABC,direct:join,direct:ready|KK_DEV_FACE_ENEMY=16:0.001'
         if ($StoryLayout) { $envText += "|KK_DEV_STORY_LAYOUT=$StoryLayout" }
-        if ($Stationary) { $envText = $envText.Replace('|KK_DEV_WANDER=1','') }
+        if ($Stationary) {
+            $envText = $envText.Replace('|KK_DEV_WANDER=1','')
+            $joinText = $joinText.Replace('|KK_DEV_FACE_ENEMY=16:0.001','')
+        }
         if ($FacePartner) {
             $envText += '|KK_DEV_FACE_PARTNER=90:0.001'
             $joinText = 'KK_DEV_LAUNCHER_INPUT=wait-home,direct:code:C86ABC,direct:join,direct:ready'
@@ -152,7 +157,7 @@ try {
                 fault_seeds=@(86,86); port=27080; roles=@('host','guest'); scenario=$scenario; flags=$hostArgs; runner=$runner
                 harness_sha256=$toolHashes; harness_sources=$harnessDir }
             $dirtyText=($sourceDirty -join ';')
-            $envText += "|KK_DEV_WORLD_FAULT_PROFILE=bad_wifi|KK_DEV_WORLD_DUMP=5,2,36|KK_DEV_WORLD_ROUTE=32|KK_DEV_WORLD_DIR=$($record.world_evidence)\host|KK_DEV_WORLD_COMMIT=$sourceCommit|KK_DEV_WORLD_DIRTY=$dirtyText|KK_DEV_WORLD_EXE_SHA256=$exeSha|KK_DEV_WORLD_SCENARIO=$scenario"
+            $envText += "|KK_DEV_WORLD_FAULT_PROFILE=bad_wifi|KK_DEV_WORLD_DUMP=5,2,120|KK_DEV_WORLD_ROUTE=$RouteSeconds|KK_DEV_WORLD_DIR=$($record.world_evidence)\host|KK_DEV_WORLD_COMMIT=$sourceCommit|KK_DEV_WORLD_DIRTY=$dirtyText|KK_DEV_WORLD_EXE_SHA256=$exeSha|KK_DEV_WORLD_SCENARIO=$scenario"
             $joinText += "|KK_DEV_WORLD_DIR=$($record.world_evidence)\guest"
             if ($null -ne $record.start) { $envText += "|KK_DEV_START_POINT=$($record.start)" }
             $evidence['env']=$envText; $evidence['join_env']=$joinText

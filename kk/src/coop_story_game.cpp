@@ -739,6 +739,9 @@ void StoryPartnerMoved() {
   needs_move=false;
 }
 void StoryLoaded(uint8_t* b) {
+#if defined(KK_DEV_TOOLS)
+  world::Loaded(b);
+#endif
   ObjectsLoaded(b);
   WorldGuardLoaded();
   const auto v=SessionFlowSnapshot();
