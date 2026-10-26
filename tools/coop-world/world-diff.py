@@ -45,7 +45,7 @@ def validate(d, role=None):
     errors = []
     if not isinstance(d, dict):
         return ["snapshot is not an object"]
-    if d.get("schema") != SCHEMA or d.get("protocol") != 17:
+    if d.get("schema") != SCHEMA or d.get("protocol") != 21:
         errors.append("unsupported schema/protocol")
     if role and d.get("role") != role:
         errors.append("wrong peer role")
@@ -104,6 +104,20 @@ def validate(d, role=None):
             for field in ("loop", "detect", "activity"):
                 if type(row[field]) is not bool:
                     errors.append("unreadable native script " + field)
+        objects = d["shared"]["objects"]
+        if not isinstance(objects["rows"], dict) or not isinstance(objects["bodies"], dict):
+            errors.append("missing native object maps")
+        for key, row in objects["rows"].items():
+            source, kind = key.split(":")
+            if not int(source, 16) or int(kind) != row["kind"] or type(row["available"]) is not bool:
+                errors.append("invalid native object identity")
+            if row["available"] and "flags" not in row:
+                errors.append("missing native object flags")
+        for key, row in objects["bodies"].items():
+            if not int(key, 16) or type(row["available"]) is not bool or type(row["retired"]) is not bool:
+                errors.append("invalid native body identity")
+            if row["available"] and (len(row["pose"]) != 9 or any(type(v) not in (int, float) for v in row["pose"])):
+                errors.append("unreadable native body pose")
         player = d["local"]["player"]
         if player["id"] != d["role"] or len(player["position"]) != 3 or not all(type(v) in (int, float) for v in player["position"]):
             errors.append("missing native local player")
@@ -131,6 +145,8 @@ def shared(d):
     for row in out["enemies"]["rows"].values():
         for key in IGNORED_ENEMY:
             row.pop(key, None)
+    for row in out.get("objects", {}).get("rows", {}).values():
+        row.pop("seconds", None)
     return out
 
 
@@ -143,8 +159,13 @@ def differences(a, b, health_tol=0.01, path="shared"):
                 out.append({"key": p, "host": a.get(key, "<missing>"), "guest": b.get(key, "<missing>")})
             else:
                 out.extend(differences(a[key], b[key], health_tol, p))
+    elif isinstance(a, list) and isinstance(b, list) and len(a) == len(b):
+        for i, (av, bv) in enumerate(zip(a, b)):
+            out.extend(differences(av, bv, health_tol, path + "." + str(i)))
     else:
         tol = health_tol if path.rsplit(".", 1)[-1] in ("health", "secondary_health") else 0
+        if ".objects." in path and (".pose." in path or path.endswith(".position")):
+            tol = .02
         equal = type(a) is type(b) and a == b
         if type(a) in (int, float) and type(b) in (int, float):
             equal = abs(a-b) <= tol

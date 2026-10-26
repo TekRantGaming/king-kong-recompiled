@@ -14,7 +14,7 @@ S = "0000000000005678:0000000000009abc"
 
 
 def fixture(role="host"):
-    return {"schema": 1, "protocol": 17, "role": role, "sample": 1, "captured_utc": 1000., "playing_seconds": 25.,
+    return {"schema": 1, "protocol": 21, "role": role, "sample": 1, "captured_utc": 1000., "playing_seconds": 25.,
             "identity": {"session": "0000000000000001", "generation": 1, "level": 303, "start": 3,
                          "enemy_visit": 1, "checkpoint": 3, "shared_checkpoint": 3, "completed": "0000000000000000", "policy": "together"},
             "evidence": {"source_commit": "a"*40, "build_commit": "a"*40, "source_dirty": "", "exe_sha256": "b"*64,
@@ -23,6 +23,7 @@ def fixture(role="host"):
             "native_checkpoint_ids": [1, 3],
             "shared": {"enemies": {"unbound": 0, "initializing": 0, "rows": {E: {"family": 1, "health": 50., "secondary_health": 0.,
                        "alive": True, "owner": "host", "owner_generation": 1, "native_state": 1234, "scheduled": True, "position": [1., 2., 3.]}}},
+                       "objects": {"rows": {}, "bodies": {}},
                        "story": {"watermark": 4, "ready": True, "rows": {S: {"cursor": 1, "run": 1, "started": 1, "finished": 0,
                                   "loop": True, "detect": False, "activity": True}}}},
             "local": {"player": {"id": role, "position": [1., 2., 3.], "weapon": 2, "ammo": 50, "health": 100},
@@ -35,6 +36,26 @@ class Contract(unittest.TestCase):
 
     def result(self):
         return w.compare(self.h, self.g)
+
+    def test_native_object_damage_and_missing_capture(self):
+        key = "0000000000001234:1"
+        row = dict(kind=1, available=True, flags=0, value=0, position=0, seconds=0)
+        for d in (self.h, self.g):
+            d["shared"]["objects"]["rows"][key] = row.copy()
+        self.g["shared"]["objects"]["rows"][key]["value"] = 100
+        self.assertEqual(self.result()["differences"][0]["key"], "shared.objects.rows." + key + ".value")
+        del self.g["shared"]["objects"]
+        self.assertEqual(self.result()["status"], "INVALID")
+
+    def test_native_body_pose_tolerance_and_countdown(self):
+        key = "0000000000001234"
+        body = dict(available=True, retired=False, topology=key, flags=0, pose=[0.] * 9)
+        for d in (self.h, self.g):
+            d["shared"]["objects"]["bodies"][key] = copy.deepcopy(body)
+        self.g["shared"]["objects"]["bodies"][key]["pose"][0] = .01
+        self.assertEqual(self.result()["status"], "PARTIAL_EQUAL")
+        self.g["shared"]["objects"]["bodies"][key]["pose"][0] = 1.
+        self.assertEqual(self.result()["differences"][0]["key"], "shared.objects.bodies." + key + ".pose.0")
 
     def test_unchanged_native_world(self):
         self.assertEqual(self.result()["status"], "PARTIAL_EQUAL")

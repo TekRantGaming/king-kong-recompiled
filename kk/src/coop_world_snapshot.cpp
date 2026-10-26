@@ -101,6 +101,7 @@ Json Snapshot(uint8_t* b,double now,const FlowView& v,const EnemyLink& link) {
   const auto g=hfr::Load32(b,0x82CC97C0);
   if (!PoseAddress(g,28) || hfr::Load32(b,g+24)!=v.world.level) capture.Error("native-level-mismatch");
   auto enemies=EnemySnapshot(b,capture),story=StorySnapshot(b,capture),body=BodySnapshot(b,capture);
+  auto objects=ObjectSnapshot(b,capture);
   const auto checkpoints=Checkpoints(b,capture);
   const auto env=[](const char* name){ const auto* value=std::getenv(name); return value ? value:""; };
   const auto utc=std::chrono::duration<double>(std::chrono::system_clock::now().time_since_epoch()).count();
@@ -115,12 +116,12 @@ Json Snapshot(uint8_t* b,double now,const FlowView& v,const EnemyLink& link) {
           {"completed",Hex(v.completed)},{"policy",together ? "together":v.policy==ChapterPolicy::SoloRegroup ? "solo-regroup":"observer"}})},
       {"evidence",Json::Object({{"build_commit",KK_WORLD_SOURCE_COMMIT},{"source_commit",env("KK_DEV_WORLD_COMMIT")},
           {"source_dirty",env("KK_DEV_WORLD_DIRTY")},{"exe_sha256",env("KK_DEV_WORLD_EXE_SHA256")},
-          {"scenario",env("KK_DEV_WORLD_SCENARIO")},{"fault_profile",env("KK_DEV_UDP_SIM")}})},
-      {"coverage",Json::Object({{"objects","unsupported:C71-not-integrated"},{"broad_story_flags","unsupported"},
+          {"scenario",env("KK_DEV_WORLD_SCENARIO")},{"fault_profile",env("KK_DEV_WORLD_FAULT_PROFILE")}})},
+      {"coverage",Json::Object({{"objects","native-bound-IOB-door-fire-raft-ODE-tree-and-canonical-bodies;unbound-families-unsupported"},{"broad_story_flags","unsupported"},
           {"streaming_collision_visibility","unsupported"},{"enemies","native-bound-and-unbound-census"},
           {"scripts","native-cursor-and-track;run-metadata-separate"}})},
       {"valid",capture.errors.empty()},{"errors",Json::Array(errors)},
-      {"shared",Json::Object({{"enemies",enemies},{"story",story}})},
+      {"shared",Json::Object({{"enemies",enemies},{"story",story},{"objects",objects}})},
       {"native_checkpoint_ids",checkpoints},
       {"local",Json::Object({{"player",pose.pose ? Json::Object({{"id",v.host ? "host":"guest"},
           {"position",Position(*pose.pose)},{"weapon",pose.pose->weapon},{"fire",ConfirmedShots()},

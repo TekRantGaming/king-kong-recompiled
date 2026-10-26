@@ -52,8 +52,8 @@ struct Capture {
   std::vector<std::string> errors;
   void Error(std::string s) { errors.push_back(std::move(s)); }
 };
-// Object extension seam: future reviewed C71 adapter must fill actual native
-// state and coverage, with stable IDs. No replicated-cache fallback is allowed.
+// Native reads only. Binding identities are metadata, never cached authority.
+Json ObjectSnapshot(const uint8_t* base,Capture& capture);
 Json EnemySnapshot(const uint8_t* base,Capture& capture);
 Json StorySnapshot(const uint8_t* base,Capture& capture);
 Json BodySnapshot(const uint8_t* base,Capture& capture);

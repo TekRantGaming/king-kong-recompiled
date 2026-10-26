@@ -35,7 +35,7 @@ def score(evidence_dir, run):
         target.write_bytes(source.read_bytes())
         result["analysis_harness"][tool_name] = {"sha256": sha(target), "source": str(target)}
     result.update(entry=evidence["entry"], requested_start=evidence["start"], load_proof=evidence["load_proof"],
-                  campaign_progression="UNPROVEN: forced entry/checkpoint smoke only", objects="UNSUPPORTED: C71 not integrated",
+                  campaign_progression="UNPROVEN: forced entry/checkpoint smoke only", objects="PARTIAL: native bound families only",
                   artifacts=[], actions={})
     result["policy"] = evidence["policy"]
     result["native_capture_status"] = result["status"]
@@ -52,31 +52,42 @@ def score(evidence_dir, run):
         shots = max((p.get("fire", 0) for p in players), default=0)
         log_paths = sorted((run / log_role).glob("run*.log"))
         fatal, loaded, simulated, shot_applied, story = [], False, False, 0, 0
+        digest = dict(samples=0, quiet=0, moves=0, guest_reloads=0, decisions=[])
+        chaos_counters = []
         for path in log_paths:
             result["artifacts"].append({"path": str(path), "sha256": sha(path), "bytes": path.stat().st_size})
             with path.open(encoding="utf-8-sig", errors="replace") as f:
                 for n, line in enumerate(f, 1):
-                    if re.search(r"\[(?:critical|fatal)\]|unhandled exception|assertion failed|fatal error", line, re.I):
+                    if re.search(r"\[(?:critical|fatal)\]|unhandled exception|assertion failed|fatal error|VK_ERROR_DEVICE_LOST", line, re.I):
                         fatal.append({"path": str(path), "line": n, "text": line.strip()})
                     loaded |= "KK co-op flow: loaded generation" in line
-                    simulated |= "KK dev UDP simulation:" in line and "one-way-ms=150" in line and "loss-percent=3" in line
+                    simulated |= "KK dev UDP chaos:" in line and "profile=bad_wifi" in line and "seed=86" in line
+                    match = re.search(r"KK co-op desync: samples=(\d+).*quiet=(\d+) moves=(\d+) guest-reloads=(\d+)", line)
+                    if match:
+                        for key, value in zip(("samples", "quiet", "moves", "guest_reloads"), match.groups()):
+                            digest[key] = max(digest[key], int(value))
+                    if "KK co-op desync: decision=" in line or "KK co-op desync: completed=" in line:
+                        digest["decisions"].append(line.strip())
+                    if "chaos" in line.lower() and "drop" in line.lower():
+                        chaos_counters.append(line.strip())
                     shot_applied += "ENEMIES shot number=" in line and "native-queued" in line
                     story += "KK co-op story:" in line and any(s in line for s in ("native hint recorded", "applied", "native loop"))
         result["actions"][role] = {"native_walk_displacement": movement, "walk": movement > .5,
                                    "native_confirmed_shots": shots, "fire": shots > 0,
                                    "native_shot_queues": shot_applied, "hit": "UNPROVEN: queue alone is not native damage",
                                    "story_events": story, "trigger": "UNPROVEN: no scenario-specific trigger postcondition",
-                                   "load_logged": loaded, "wan_logged": simulated, "log_files": len(log_paths), "fatal": fatal}
+                                   "load_logged": loaded, "wan_logged": simulated, "log_files": len(log_paths), "fatal": fatal,
+                                   "digest": digest, "chaos_counters": chaos_counters}
         for path in paths:
             result["artifacts"].append({"path": str(path), "sha256": sha(path), "bytes": path.stat().st_size})
         logs_ok &= bool(log_paths) and loaded and simulated and not fatal
     result["native_checkpoint_ids"] = sorted(set(ids["host"]) & set(ids["guest"]))
     result["checkpoint_ids_by_peer"] = ids
-    binary = run / "bin" / "king_kong.exe"
-    if not binary.exists():
-        binary = Path("F:/kk-native-coop/moved-aside") / run.name / "bin" / "king_kong.exe"
-    result["actual_exe"] = str(binary)
-    result["actual_exe_sha256"] = sha(binary) if binary.exists() else None
+    # The approved runner must delete all private binaries and caches after a run.
+    # Its copy-time hash survives cleanup and is separate from the source build hash.
+    binary_audit = run / "binary-audit.json"
+    result["actual_exe"] = str(binary_audit)
+    result["actual_exe_sha256"] = w.read(binary_audit).get("executable_sha256") if binary_audit.exists() else None
     if result["actual_exe_sha256"] != evidence["exe_sha256"] or not logs_ok:
         result["errors"].append("private executable/log/load/WAN evidence incomplete or mismatched")
         result["status"] = "INVALID"

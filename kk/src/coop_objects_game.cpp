@@ -7,6 +7,7 @@
 #include "coop_pose.h"
 #include "coop_enemies_game.h"
 #include "coop_observer.h"
+#include "coop_world_snapshot.h"
 #include "hfr.h"
 #include "settings.h"
 #include <rex/hook.h>
@@ -1888,6 +1889,56 @@ void ObjectsDevCamera(PPCContext& ctx,uint8_t* b,uint32_t actor,uint32_t caller)
   if (!logged) REXLOG_INFO("KK dev object camera-observation fixture: role={} eye=({:.3f},{:.3f},{:.3f}) target=({:.3f},{:.3f},{:.3f}) player-unmoved=true",
       state.host ? "host" : "guest",p[0],p[1],p[2],p[3],p[4],p[5]);
   logged=true;
+}
+#endif
+#if defined(KK_DEV_TOOLS)
+world::Json world::ObjectSnapshot(const uint8_t* b,world::Capture& capture) {
+  using world::Json;
+  std::map<std::string,Json> rows,bodies;
+  if (!state.ready) capture.Error("native-objects-not-ready");
+  for (const auto& [actor,o]:state.bindings) {
+    const auto key=Hex(o.source)+":"+std::to_string(unsigned(o.kind));
+    const bool available=Valid(b,o) && Match(o.source,o.kind)==&o;
+    std::map<std::string,Json> row{{"kind",unsigned(o.kind)},{"available",available}};
+    if (available) {
+      row["flags"]=Load32(b,actor+4)&0x00620003;
+      if (objects::SupportRoot(o.kind)) {
+        const bool tree=o.kind==ObjectKind::Tree;
+        row["topology"]=Hex(o.support.topology);
+        row["wait"]=Track(b,o.ai,tree ? 0x826E78F0 : 0x826F0E10);
+        row["active"]=Track(b,o.ai,tree ? 0x826E7BF0 : 0x826F1E08);
+        row["end"]=Track(b,o.ai,tree ? 0x826D0770 : 0x826F4948);
+        row["capability"]=Load32(b,o.vars+(tree ? 0x554 : 0x68C));
+      } else if (o.kind==ObjectKind::Raft) {
+        // Native route pointers are process local. Compare authored node indices.
+        const auto index=[&](uint32_t offset) {
+          const auto it=std::find(o.route.nodes.begin(),o.route.nodes.end(),Load32(b,o.vars+offset));
+          return it==o.route.nodes.end() ? -1 : int(it-o.route.nodes.begin());
+        };
+        row["current"]=index(240); row["next"]=index(244);
+        row["stop"]=Load32(b,o.vars+376);
+      } else {
+        const auto native=Sample(b,o);
+        row["value"]=native.value; row["position"]=native.position;
+        row["seconds"]=native.seconds; // Countdown is diagnostic, excluded from quiet equality.
+      }
+    }
+    rows.emplace(key,Json::Object(row));
+  }
+  for (const auto& [actor,p]:state.bodies) {
+    const bool available=!p.retired && BodyValid(b,p);
+    std::map<std::string,Json> row{{"available",available},{"retired",p.retired},{"topology",Hex(p.topology)}};
+    if (available) {
+      row["flags"]=Load32(b,actor+4)&0x00620003;
+      std::vector<Json> pose;
+      for (unsigned i=0;i<3;++i) pose.emplace_back(LoadF(b,p.matrix+48+4*i));
+      for (unsigned i=0;i<3;++i) pose.emplace_back(-LoadF(b,p.matrix+16+4*i));
+      for (unsigned i=0;i<3;++i) pose.emplace_back(LoadF(b,p.matrix+32+4*i));
+      row["pose"]=Json::Array(pose);
+    }
+    bodies.emplace(Hex(p.source),Json::Object(row));
+  }
+  return Json::Object({{"rows",Json::Object(rows)},{"bodies",Json::Object(bodies)}});
 }
 #endif
 void ObjectsPad(uint32_t user,const uint8_t* pad,bool connected) {

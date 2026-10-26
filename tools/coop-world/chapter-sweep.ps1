@@ -81,7 +81,7 @@ $manifest = [ordered]@{
     seconds = $Seconds; worktree = $Worktree; face_partner = [bool]$FacePartner; runs = $records
     world_diff = [bool]$WorldDiff; checkpoints = [bool]$Checkpoints; source_commit = $sourceCommit
     source_branch = $sourceBranch; source_dirty = $sourceDirty; exe_sha256 = $exeSha
-    protocol = 17; snapshot_schema = 1; fault_profile = '150,30,3'; fault_seeds = @(68,69)
+    protocol = 21; snapshot_schema = 1; fault_profile = 'bad_wifi'; fault_seeds = @(86,86)
     scenarios = $rules
     harness_sha256 = $toolHashes; harness_sources = $harnessDir
 }
@@ -104,11 +104,11 @@ try {
         if ([DateTime]::UtcNow.AddSeconds($Seconds + 30) -gt $deadline) { $record.status='blocked-deadline'; Save-Manifest; break }
         $record.status = 'running'; $record.started_utc = [DateTime]::UtcNow.ToString('o'); Save-Manifest
         $runOutput = New-Object 'System.Collections.Generic.List[string]'
-        $envText = "KK_DEV_LAUNCHER_INPUT=wait-home,session:$($record.entry)|KK_DEV_AUTOSKIP=1|KK_DEV_SCRIPT=0:SKIP/10|KK_DEV_WANDER=1|KK_DEV_CHEATS_ANYWHERE=1|KK_DEV_EMPTY_LOADOUT=1|KK_DEV_TRIG_TRACE=1|KK_DEV_ENEMY_NEAR=1"
-        $joinText = 'KK_DEV_LAUNCHER_INPUT=|KK_DEV_FACE_ENEMY=16:0.001'
+        $envText = "KK_DEV_LAUNCHER_INPUT=wait-home,direct:code:C86ABC,direct:host,session:$($record.entry)|KK_DEV_AUTOSKIP=1|KK_DEV_SCRIPT=0:SKIP/10|KK_DEV_WANDER=1|KK_DEV_CHEATS_ANYWHERE=1|KK_DEV_EMPTY_LOADOUT=1|KK_DEV_TRIG_TRACE=1|KK_DEV_ENEMY_NEAR=1"
+        $joinText = 'KK_DEV_LAUNCHER_INPUT=wait-home,direct:code:C86ABC,direct:join,direct:ready|KK_DEV_FACE_ENEMY=16:0.001'
         if ($FacePartner) {
             $envText += '|KK_DEV_FACE_PARTNER=90:0.001'
-            $joinText = 'KK_DEV_LAUNCHER_INPUT='
+            $joinText = 'KK_DEV_LAUNCHER_INPUT=wait-home,direct:code:C86ABC,direct:join,direct:ready'
         }
         $hostArgs = '--kk_cheats=true|--kk_cheat_machine_gun=true|--kk_cheat_ammo=true|--kk_cheat_healing=true|--kk_no_healing=false|--kk_cheat_one_hit=false|--kk_cheat_revolver=false|--kk_cheat_shotgun=false|--kk_cheat_sniper=false'
         if ($WorldDiff) {
@@ -116,11 +116,11 @@ try {
             $scenario="entry-$($record.entry)-start-$($record.start)"
             $evidence=[ordered]@{ entry=$record.entry; start=$record.start; level=$record.level; policy=$record.policy
                 load_proof=$record.load_proof; source_commit=$sourceCommit; source_branch=$sourceBranch; source_dirty=$sourceDirty
-                exe_sha256=$exeSha; exe_path=$exePath; protocol=17; snapshot_schema=1; fault_profile='150,30,3'
-                fault_seeds=@(68,69); port=27080; roles=@('host','guest'); scenario=$scenario; flags=$hostArgs; runner=$runner
+                exe_sha256=$exeSha; exe_path=$exePath; protocol=21; snapshot_schema=1; fault_profile='bad_wifi'
+                fault_seeds=@(86,86); port=27080; roles=@('host','guest'); scenario=$scenario; flags=$hostArgs; runner=$runner
                 harness_sha256=$toolHashes; harness_sources=$harnessDir }
             $dirtyText=($sourceDirty -join ';')
-            $envText += "|KK_DEV_UDP_SIM=150,30,3|KK_DEV_WORLD_DUMP=5,2,26|KK_DEV_WORLD_ROUTE=16|KK_DEV_WORLD_DIR=$($record.world_evidence)\host|KK_DEV_WORLD_COMMIT=$sourceCommit|KK_DEV_WORLD_DIRTY=$dirtyText|KK_DEV_WORLD_EXE_SHA256=$exeSha|KK_DEV_WORLD_SCENARIO=$scenario"
+            $envText += "|KK_DEV_WORLD_FAULT_PROFILE=bad_wifi|KK_DEV_WORLD_DUMP=5,2,26|KK_DEV_WORLD_ROUTE=16|KK_DEV_WORLD_DIR=$($record.world_evidence)\host|KK_DEV_WORLD_COMMIT=$sourceCommit|KK_DEV_WORLD_DIRTY=$dirtyText|KK_DEV_WORLD_EXE_SHA256=$exeSha|KK_DEV_WORLD_SCENARIO=$scenario"
             $joinText += "|KK_DEV_WORLD_DIR=$($record.world_evidence)\guest"
             if ($null -ne $record.start) { $envText += "|KK_DEV_START_POINT=$($record.start)" }
             $evidence['env']=$envText; $evidence['join_env']=$joinText
@@ -136,8 +136,8 @@ try {
             $attempt++; $runOutput.Clear()
             "runner attempt $attempt" | Add-Content -LiteralPath $record.runner_output -Encoding UTF8
             & $shellExe -NoProfile -ExecutionPolicy Bypass -File $runner -Name $record.name `
-                -Seconds $Seconds -Worktree $Worktree -Two -Launcher -Snap '120' -Env $envText -JoinEnv $joinText `
-                -HostExtra $hostArgs -Extra '--kk_launcher=true|--kk_toggle_aim=false' 2>&1 |
+                -Seconds $Seconds -Worktree $Worktree -Two -Launcher -DirectIp -Snap '60' -Env $envText -JoinEnv $joinText `
+                -HostExtra $hostArgs -Extra '--kk_launcher=true|--kk_toggle_aim=false|--kk_coop_udp_profile=bad_wifi|--kk_coop_udp_seed=86' 2>&1 |
                 ForEach-Object {
                     $line = $_.ToString(); $runOutput.Add($line)
                     $line | Add-Content -LiteralPath $record.runner_output -Encoding UTF8
