@@ -1633,7 +1633,7 @@ void PartnerBodyAfterAi(PPCContext& ctx, uint8_t* b, uint32_t w) {
     auto choice = coop::puppet::ChooseAction(s.animation.moving ? s.animation.speed : 0, s.observed_motion);
     const bool human = !s.humans.at(rig.actor).other_human && Load32(b,rig.vars) == 0;
     const auto held=human ? BodyWeapon(b,rig) : 0;
-    const auto weapon=held>=1 && held<=4 ? uint8_t(held) : s.animation.fire_left>0 ? p.fire_weapon : p.weapon;
+    const auto weapon=uint8_t(held);
     const bool firing=s.animation.fire_left>0;
     const auto native = coop::puppet::HumanAction(weapon,s.animation.moving,s.animation.crouched,firing);
     if (human) {
@@ -1672,7 +1672,7 @@ void PartnerBodyAfterAi(PPCContext& ctx, uint8_t* b, uint32_t w) {
       if (!firing && s.animation.use_left>0) {
         // Reloads are authored for an arm-only child layer. Never run one as
         // a full-body clip with undefined leg poses; use the bounded gesture.
-        const auto item=coop::puppet::AnimationDrive::FullBodyEquipmentAction(s.animation.use_action) ?
+        const auto item=held && coop::puppet::AnimationDrive::FullBodyEquipmentAction(s.animation.use_action) ?
             LoadedItem(b,rig,s.animation.use_action) : std::nullopt;
         if (item) choice=coop::puppet::Action{s.animation.use_action,*item,0};
         if (s.animation.new_use) REXLOG_INFO("PUPPET equipment visual actor={:08X} remote-action={} loaded={} gesture-fallback={}",

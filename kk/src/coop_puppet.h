@@ -99,7 +99,10 @@ inline uint16_t HumanAction(uint8_t weapon, bool moving, bool crouched, bool fir
 // Item resolution belongs to the rig; never reuse an item from another bank.
 template<class LoadedItem>
 std::optional<Action> FireAction(uint8_t weapon, bool crouched, LoadedItem loaded) {
-  const uint16_t preferred = HumanAction(weapon ? weapon : 1,false,crouched,true);
+  // An unarmed human can load these action numbers for unrelated gestures
+  // (Ann raises her arms in 165). Availability alone does not mean gunfire.
+  if (weapon<1 || weapon>4) return {};
+  const uint16_t preferred = HumanAction(weapon,false,crouched,true);
   if (auto item=loaded(preferred)) return Action{preferred,*item,0};
   for (const uint16_t action : {11,165,150,26,36})
     if (auto item=loaded(action)) return Action{action,*item,0};

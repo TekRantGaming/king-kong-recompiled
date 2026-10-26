@@ -598,6 +598,7 @@ void PuppetPolicies() {
     return action==11 ? std::optional<uint8_t>{2} : std::nullopt;
   };
   const auto fallback=FireAction(2,false,carl);
+  Check(!FireAction(0,false,carl),"unarmed body never uses an unrelated loaded gesture as gunfire");
   Check(fallback && fallback->action==11 && fallback->item==2,
       "missing machine-gun bank uses loaded revolver aim and its own variant");
   Check(FireAction(2,true,carl)->action==11,"crouched missing weapon still has an aim visual");
