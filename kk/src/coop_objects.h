@@ -92,7 +92,8 @@ template<class Read> bool OdeCheckpointGone(Read read,uint32_t actor,uint32_t va
 // Only authorize the observed ODE Active -> loaded native End program.
 template<class Read,class ReadHalf> uint32_t OdeEndProgram(Read read,ReadHalf half,uint32_t ai,uint32_t actor) {
   if (!PoseAddress(ai,88) || !PoseAddress(actor,32) || read(0x82CCBF64)!=ai || read(0x82CCBF6C)!=actor) return 0;
-  const auto slot=read(0x82CCBF58),first=half(ai+80),last=half(ai+82);
+  const auto slot=read(0x82CCBF58);
+  const auto first=half(ai+80),last=half(ai+82);
   if (first>last || last>=5 || slot<first || slot>last) return 0;
   const auto active=read(ai+(slot+6)*4),end=read(0x82CC8538);
   if (!PoseAddress(active,24) || read(0x82CCBF5C)!=active || read(active+20)!=0x826F1E08 ||
