@@ -208,6 +208,44 @@ class Contract(unittest.TestCase):
         root = self.retained_series()
         self.assertEqual(w.series(root / "host", root / "missing")["status"], "INVALID")
 
+    def extend_series(self, root, mutate):
+        for role in ("host", "guest"):
+            for i in range(3, 7):
+                d = fixture(role)
+                d.update(sample=i+1, captured_utc=1000.+i*2, playing_seconds=25.+i*2)
+                mutate(d, role, i)
+                (root / role / f"world-g1-{i+1}.json").write_text(json.dumps(d), encoding="utf-8")
+
+    def test_early_match_cannot_hide_later_unagreed_checkpoint(self):
+        root = self.retained_series()
+        self.extend_series(root, lambda d, role, i: d["identity"].update(checkpoint=4 if role=="host" else 3))
+        result = w.series(root / "host", root / "guest")
+        self.assertEqual(result["status"], "INVALID")
+        self.assertIn("unagreed identity.checkpoint", result["errors"])
+        self.assertGreater(result["settled_comparisons"], 0)
+
+    def test_early_match_cannot_hide_final_native_read_failure(self):
+        root = self.retained_series()
+        self.extend_series(root, lambda d, role, i: d.update(valid=False, errors=["native-player-dead"]) if role=="guest" else None)
+        result = w.series(root / "host", root / "guest")
+        self.assertEqual(result["status"], "INVALID")
+        self.assertTrue(any("native-player-dead" in e for e in result["errors"]))
+
+    def test_early_match_cannot_hide_final_continuous_state_changes(self):
+        root = self.retained_series()
+        self.extend_series(root, lambda d, role, i: d["shared"]["enemies"]["rows"][E].update(health=50.-i))
+        result = w.series(root / "host", root / "guest")
+        self.assertEqual(result["status"], "INVALID")
+        self.assertIn("final quiet native comparison is stale", result["errors"])
+
+    def test_known_desync_survives_later_incomplete_capture(self):
+        root = self.retained_series(lambda d: d["shared"]["enemies"]["rows"][E].update(health=40.))
+        self.extend_series(root, lambda d, role, i: d.update(valid=False, errors=["native-player-dead"]))
+        result = w.series(root / "host", root / "guest")
+        self.assertEqual(result["status"], "DIFF")
+        self.assertEqual(result["final_status"], "INVALID")
+        self.assertEqual(len(result["differences"]), 1)
+
     def test_duplicate_json_key_invalid(self):
         root = self.retained_series()
         path = root / "duplicate.json"

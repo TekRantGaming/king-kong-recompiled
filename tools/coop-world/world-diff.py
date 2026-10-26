@@ -264,6 +264,20 @@ def series(host_dir, guest_dir, count=3, health_tol=0.01, max_skew=3.0):
         selected["differences"] = list(found.values())
         selected["settled_comparisons"] = len(observations)
         selected["observations"] = [{k: r[k] for k in ("host", "guest", "watermark", "status", "differences")} for r in observations]
+        # An early match is not evidence for a later unreadable, unagreed or
+        # continuously evolving world. Keep known mismatches, but require a
+        # fresh quiet comparison at the end before reporting equality.
+        final = compare(h[-1][1], g[-1][1], health_tol, max_skew)
+        tail_errors = list(final["errors"])
+        last = observations[-1]
+        if any(read(last[role])["captured_utc"] < rows[-1][1]["captured_utc"] - max_skew
+               for role, rows in (("host", h), ("guest", g))):
+            tail_errors.append("final quiet native comparison is stale")
+        if tail_errors:
+            selected["errors"] = sorted(set(tail_errors))
+            selected["final_status"] = "INVALID"
+            selected["status"] = "DIFF" if found else "INVALID"
+            selected["final_captures"] = {"host": h[-1][0], "guest": g[-1][0]}
         return selected
     invalid["errors"] = sorted(set(rejected or ["no three fresh quiet native samples on each peer"]))
     invalid["native_errors"] = {"host": sorted(set(e for _, d in h for e in validate(d, "host"))),
