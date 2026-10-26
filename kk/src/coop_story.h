@@ -62,7 +62,7 @@ struct Progress : Cursor {
 class Hints {
  public:
   void Remember(const StoryEvent& e) {
-    // Hints never gate native execution. Coalesce old evidence under pressure.
+    // Retain observed host boundaries. Coalesce old evidence under pressure.
     if (pending_.size()==kStoryQueue) pending_.pop_front();
     pending_.push_back(e);
   }
@@ -74,7 +74,7 @@ class Hints {
   bool Passed(uint32_t run,uint32_t record) const {
     for (const auto& e : pending_) if (e.run==run &&
         ((e.phase==StoryPhase::Advance && e.record==record) ||
-         ((e.phase==StoryPhase::Finished || StorySnapshotEntry(e.phase)) && e.record>record))) return true;
+         ((e.phase==StoryPhase::Finished || e.phase==StoryPhase::SnapshotLoop || e.phase==StoryPhase::SnapshotFinished) && e.record>record))) return true;
     return false;
   }
  private:

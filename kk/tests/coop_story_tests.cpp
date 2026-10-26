@@ -80,6 +80,13 @@ void HostActivation() {
   Check(gate.CanArm(2),"stale activation cannot rewind the host boundary");
   Check(!gate.CanArm(UINT32_MAX),"activation run cannot wrap");
   gate={}; Check(!gate.CanArm(2),"native rebind discards previous activation authority");
+  story::Hints hints;
+  e=Event(); e.run=3; e.record=8; e.phase=StoryPhase::SnapshotIdle; hints.Remember(e);
+  Check(!hints.Passed(3,7),"idle snapshot cannot authorize a cinematic completion");
+  e.phase=StoryPhase::Checksum; hints.Remember(e);
+  Check(!hints.Passed(3,7),"checksum alone cannot authorize a native completion");
+  e.phase=StoryPhase::Advance; e.record=7; hints.Remember(e);
+  Check(hints.Passed(3,7) && !hints.Passed(2,7) && !hints.Passed(3,8),"native completion needs the exact host activation and boundary");
 }
 void Ordering() {
   story::Ordered queue; queue.Reset(2,203);

@@ -30,6 +30,8 @@ REX_EXTERN(__imp__sub_82543CA0);
 REX_EXTERN(__imp__sub_826F9E70);
 REX_EXTERN(__imp__sub_82847478);
 REX_EXTERN(__imp__sub_82501A30);
+REX_EXTERN(__imp__sub_8250B9D8);
+REX_EXTERN(__imp__sub_8250BED8);
 #if defined(KK_DEV_TOOLS)
 namespace kk { void DevTrigPivotResult(uint8_t*,uint32_t,uint32_t,uint32_t); }
 #endif
@@ -1030,6 +1032,48 @@ bool ConvergeFlagWait(uint8_t* b,uint32_t payload) {
       "host passed same activation; single-target read-only 0x100 wait stalled >20 seconds");
   return true;
 }
+Script* CinematicRecord(uint8_t* b,uint32_t payload,uint32_t fn) {
+  if (!Ensure(b) || host || failed || snapshot_waiting) return nullptr;
+  auto* s=Current(b);
+  // Run 1 may have begun before the shared baseline. Do not infer an unseen
+  // host activation or apply this to another native caller's payload.
+  if (!s || s->exact || !s->saw_loop || s->run<=1) return nullptr;
+  const auto index=Load32(b,s->binding.vars+19812);
+  return index<kStoryRecords && payload==s->binding.vars+992+180*index &&
+      Load32(b,payload-68)==fn ? s:nullptr;
+}
+bool HostCinematicWait(PPCContext& ctx,uint8_t* b) {
+  const auto payload=ctx.r3.u32;
+  auto* s=CinematicRecord(b,payload,0x8250B9D8);
+  if (!s) return false;
+  const auto index=Load32(b,s->binding.vars+19812);
+  // WaitScript consumes the NPC-ready flags when it succeeds. Keep that native
+  // completion behind the host boundary; do not consume them speculatively.
+  if (!s->hints.Passed(s->run,index)) { ctx.r3.u32=0; return true; }
+  const auto flags=Load32(b,payload+84);
+  // Decomp: bits 1/2 test local Jack distance and local camera projection.
+  // Host already passed these tests. The native four-NPC-ready test and its
+  // completion writes still run locally, with the authored flags restored.
+  Store32(b,payload+84,flags&~3u);
+  __imp__sub_8250B9D8(ctx,b);
+  Store32(b,payload+84,flags);
+  if (ctx.r3.u32) Note("host cinematic wait",Event(*s,StoryPhase::Advance,index),"local view gates covered; native NPC completion retained");
+  return true;
+}
+bool HostCinematicSpeech(PPCContext& ctx,uint8_t* b) {
+  const auto payload=ctx.r3.u32;
+  auto* s=CinematicRecord(b,payload,0x8250BED8);
+  if (!s) return false;
+  const auto index=Load32(b,s->binding.vars+19812);
+  // Speech queues its local sound/NPC message once (state 0), then only polls
+  // local voice slots, timers or the speaker's completion flag. Preserve that
+  // native start while the host owns progression beyond this dialogue record.
+  __imp__sub_8250BED8(ctx,b);
+  const bool passed=s->hints.Passed(s->run,index);
+  ctx.r3.u32=passed ? 1:0;
+  if (passed) Note("host cinematic speech",Event(*s,StoryPhase::Advance,index),"native local speech issued; host owns completion boundary");
+  return true;
+}
 } // namespace kk::coop
 
 REX_HOOK_RAW(sub_82476848) {
@@ -1039,6 +1083,12 @@ REX_HOOK_RAW(sub_82501A30) {
   const auto payload=ctx.r3.u32;
   __imp__sub_82501A30(ctx,base);
   if (!ctx.r3.u32 && kk::coop::ConvergeFlagWait(base,payload)) ctx.r3.u32=1;
+}
+REX_HOOK_RAW(sub_8250B9D8) {
+  if (!kk::coop::HostCinematicWait(ctx,base)) __imp__sub_8250B9D8(ctx,base);
+}
+REX_HOOK_RAW(sub_8250BED8) {
+  if (!kk::coop::HostCinematicSpeech(ctx,base)) __imp__sub_8250BED8(ctx,base);
 }
 REX_HOOK_RAW(sub_8244F0E8) {
   const auto rec=ctx.r3.u32,lr=uint32_t(ctx.lr);
