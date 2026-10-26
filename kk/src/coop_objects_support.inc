@@ -51,6 +51,7 @@ void SupportRelations(const uint8_t* b,uint32_t actor,const char* family) {
 #endif
 void PrepareSupport(const uint8_t* b,Binding& o) {
   auto& s=o.support;
+  s.definition=Ptr(b,Ptr(b,o.ai,0,4),0,8);
   const bool tree=o.kind==ObjectKind::Tree;
   const auto base=tree ? 4u : 20u;
   bool terminated=false;

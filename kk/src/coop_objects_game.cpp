@@ -80,6 +80,7 @@ struct Binding : objects::Binding {
   struct Support {
     std::vector<uint32_t> parts,all;
     uint64_t topology=0,tick=0;
+    uint32_t definition=0;
     uint32_t phase=0;
     double intent_until=0;
     CollapseState event;
@@ -238,7 +239,12 @@ bool Components(const uint8_t* b,const Binding& o) {
       Ptr(b,o.actor,12,64)==o.matrix && Vars(b,o.ai,o.kind)==o.vars;
 }
 bool Valid(const uint8_t* b,const Binding& o) {
-  return Components(b,o) && Family(b,o.ai)==o.kind;
+  if (!Components(b,o)) return false;
+  if (Family(b,o.ai)==o.kind) return true;
+  // BT End clears track2, then its last cosmetic timer clears track4. That
+  // does not relinquish the still-registered body's settled world outcome.
+  return o.kind==ObjectKind::Tree && o.support.phase==2 && o.support.definition &&
+      Ptr(b,Ptr(b,o.ai,0,4),0,8)==o.support.definition;
 }
 Binding* Match(uint64_t source,ObjectKind kind) {
   if (!state.identities.Allows(kind,source)) return nullptr;
@@ -1248,7 +1254,7 @@ void ScanInventory(const uint8_t* b,uint32_t w) {
   unsigned counts[15]{};
   constexpr const char* names[]{"unknown","iob","door","ode","tree","bamboo","rack","fire","raft","ammo","javelin","checkpoint","grab","benttree","deadtree"};
   constexpr uint32_t offsets[15][3]{{},{552,556,560},{0,612,1096},{0,8,2444},{0x52C,0x7C4,0x930},
-      {196,24,32},{192,196,228},{440,444,408},{204,224,644},{0,4,24},{0,232,536},{4,9540,9156},{24,20,84},
+      {196,24,32},{192,196,228},{440,444,408},{204,224,644},{0,4,24},{4,232,536},{4,9540,9156},{24,20,84},
       {0,0x400,0x438},{0,4,8}};
   std::set<uint32_t> seen;
   for (auto p=begin;p<end;p+=8) {
@@ -1478,7 +1484,11 @@ void ThrowProbe(PPCContext& ctx,uint8_t* b) {
     StoreF(b,record+36,0); StoreF(b,record+40,0); StoreF(b,record+44,-20);
     StoreF(b,record+48,1); StoreF(b,record+52,1); StoreF(b,record+56,1);
     ctx.r3.u64=projectile; ctx.r4.u64=record; __imp__sub_8271FB98(ctx,b);
-    probe.done=true;
+    static const unsigned count=[] {
+      const auto text=std::getenv("KK_DEV_OBJECT_THROW_COUNT");
+      return text ? unsigned(std::clamp(std::atoi(text),1,8)) : 1u;
+    }();
+    probe.done=++probe.hits>=count; probe.act=t+2; own_copy=0;
     REXLOG_INFO("KK dev object throw fixture: role={} id={:016X} projectile={:08X} kind={} native-message=2000 source=own-Jack origin=({:.3f},{:.3f},{:.3f}) target=({:.3f},{:.3f},{:.3f})",
         state.host ? "host" : "guest",target->source,projectile,Load32(b,projectile_vars+4),origin.x,origin.y,origin.z,target->x,target->y,target->z+1.2f);
   }
@@ -1874,6 +1884,11 @@ void ObjectsAfterAi(PPCContext& ctx,uint8_t* b,uint32_t w) {
 #if defined(KK_DEV_TOOLS)
     if (Trace()) for (const auto& [actor,p]:state.bodies) {
       if (p.retired) continue; // No reads through queued-removal component memory.
+      if (!BodyValid(b,p)) {
+        REXLOG_INFO("KK dev object support detail: role={} id={:016X} valid=false component-unavailable=true",
+            state.host ? "host" : "guest",p.source);
+        continue;
+      }
       const auto* authority=state.host ? (p.sent ? &p.final : nullptr) : state.replica.Find(ObjectKind::SupportBody,p.source);
       REXLOG_INFO("KK dev object support detail: role={} id={:016X} valid={} active={} body={:08X}/{:08X} ph={} sent={} driven={} matched={} pos=({:.3f},{:.3f},{:.3f}) host=({:.3f},{:.3f},{:.3f})",
           state.host ? "host" : "guest",p.source,BodyValid(b,p),BodyActivated(p,!state.host),p.body,Ptr(b,p.physics,0x74,0x108),
