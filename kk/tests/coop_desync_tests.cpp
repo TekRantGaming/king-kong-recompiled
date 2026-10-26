@@ -105,6 +105,22 @@ void Hysteresis() {
   catchup.Reset(1,3); catchup.Observe(1,1,1);
   Check(!catchup.Begin() && catchup.Begin(false,true) && !catchup.Begin(false,true),"proven large drift may return an ahead guest to the authoritative older host checkpoint once");
 }
+void PersistentMissingActor() {
+  using desync::Tier;
+  desync::Guard guard; desync::Evidence e; e.structural=true; e.structural_anchor=42;
+  for (double t=1;t<=19;t+=3) { ++e.progress; Check(guard.Observe(1,201,3,e,t)==Tier::None,"a missing actor retains the full normal grace"); }
+  ++e.progress; Check(guard.Observe(1,201,3,e,22)==Tier::Move,"new births and script progress cannot hide a persistently missing actor");
+  guard.Acted(Tier::Move,22);
+  for (double t=25;t<=43;t+=3) { ++e.progress; Check(guard.Observe(1,201,3,e,t)==Tier::None,"missing actor retains post-move grace"); }
+  ++e.progress; Check(guard.Observe(1,201,3,e,46)==Tier::Reload,"unchanged missing actor reaches guest-only reload despite unrelated progress");
+  guard.Acted(Tier::Reload,46);
+  for (double t=49;t<180;t+=3) { ++e.progress; Check(guard.Observe(1,201,3,e,t)==Tier::None,"structural anchor cannot renew the checkpoint reload budget"); }
+  guard={}; e.progress=0;
+  for (double t=1;t<=19;t+=3) Check(guard.Observe(1,201,3,e,t)==Tier::None,"new anchor starts clean grace");
+  e.structural_anchor=43;
+  Check(guard.Observe(1,201,3,e,22)==Tier::None,"repairing the old missing actor renews grace for a different one");
+  e={}; Check(guard.Observe(1,201,3,e,25)==Tier::None,"equal worlds never recover because of an old anchor");
+}
 void Mailbox() {
   StoryMailbox box; Message m; m.type=MessageType::WorldDigest; m.epoch=17; m.digest=Page();
   Check(box.Submit(m),"digest shares bounded value-only story mailbox");
@@ -118,4 +134,4 @@ void Mailbox() {
   Check(!RetainStoryMessage(paused,action),"real action overflow still fails closed");
 }
 }
-int main() { Codec(); Assembly(); Hysteresis(); Mailbox(); std::puts("World digest codec, complete census, recovery tiers and loop guards passed"); }
+int main() { Codec(); Assembly(); Hysteresis(); PersistentMissingActor(); Mailbox(); std::puts("World digest codec, complete census, recovery tiers and loop guards passed"); }

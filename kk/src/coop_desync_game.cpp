@@ -138,6 +138,7 @@ void WorldGuardFrame(uint8_t* base) {
   const auto enemy=EnemyCompareDigest(base,state,false);
   evidence.progress^=enemy.progress;
   evidence.quiet|=enemy.quiet; evidence.structural|=enemy.structural;
+    evidence.structural_anchor=enemy.structural_anchor;
   evidence.wrong_level|=enemy.wrong_level;
   const auto game=hfr::Load32(base,0x82CC97C0);
   // This is the same validated game global used by the flow adapter.

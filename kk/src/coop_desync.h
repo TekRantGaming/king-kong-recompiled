@@ -54,6 +54,7 @@ class Assembly {
 struct Evidence {
   bool quiet=false, lag=false, structural=false, wrong_level=false;
   uint64_t progress=0;
+  uint64_t structural_anchor=0;
   bool Any() const { return quiet || lag || structural || wrong_level; }
 };
 // Both stamps originate on the host. A whole sweep delayed behind reliable
@@ -76,10 +77,15 @@ class Guard {
     if (checkpoint_!=checkpoint) {
       checkpoint_=checkpoint; seen_=false; samples_=0; last_=0; cooldown_=0; next_quiet_=0;
     }
-    if (!e.Any() || now<last_ || now-last_>8 || (seen_ && progress_!=e.progress)) {
+    // Unrelated script progress or another birth cannot repair a specific
+    // missing host actor. Retain grace while that same structural anchor stays
+    // missing; convergence, a new anchor, stale samples and world changes reset it.
+    const bool anchored=e.structural && e.structural_anchor && !e.wrong_level;
+    const auto progress=anchored ? e.structural_anchor:e.progress;
+    if (!e.Any() || now<last_ || now-last_>8 || (seen_ && (anchored_!=anchored || progress_!=progress))) {
       since_=now; samples_=0;
     }
-    last_=now; progress_=e.progress; seen_=true;
+    last_=now; progress_=progress; anchored_=anchored; seen_=true;
     if (!e.Any() || now<cooldown_) return Tier::None;
     if (!samples_++) since_=now;
     if (samples_<3) return Tier::None;
@@ -107,7 +113,7 @@ class Guard {
  private:
   uint32_t generation_=0,level_=0,checkpoint_=0;
   uint64_t progress_=0;
-  bool seen_=false;
+  bool seen_=false,anchored_=false;
   std::set<uint32_t> moved_,reloaded_;
   unsigned samples_=0;
   double since_=0,last_=0,cooldown_=0,next_quiet_=0;

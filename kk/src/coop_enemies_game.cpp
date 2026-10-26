@@ -2247,7 +2247,15 @@ std::vector<WorldEnemy> EnemyWorldDigest(const uint8_t* b) {
 }
 desync::Evidence EnemyCompareDigest(uint8_t* b,const desync::State& state,bool reconcile) {
   desync::Evidence result;
-  const auto missing=[&](EnemyId id) { result.structural=true; result.progress=Mix(Mix(result.progress,id.source),id.sequence); };
+  EnemyId anchor;
+  const auto missing=[&](EnemyId id) {
+    result.structural=true; result.progress=Mix(Mix(result.progress,id.source),id.sequence);
+    if (!anchor.source || id<anchor) {
+      anchor=id;
+      result.structural_anchor=Mix(Mix(Mix(14695981039346656037ull,id.source),id.sequence),uint16_t(id.family));
+      if (!result.structural_anchor) result.structural_anchor=1;
+    }
+  };
   auto& s=Get();
   if (!Connected() || s.link.role!=Role::Guest) return result;
   if (ValidEnemyWorld(s.identity) && s.identity!=state.header.enemy_world) { result.wrong_level=true; return result; }
