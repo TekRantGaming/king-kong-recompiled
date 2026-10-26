@@ -67,6 +67,11 @@ struct EnemyLink {
   bool SessionConnected() const { return session_state == SessionState::Connected; }
 };
 EnemyLink EnemyLinkSnapshot();
+#if defined(KK_DEV_TOOLS)
+// Diagnostic transport identity also exists in independent/observer chapters.
+// Never use this accessor to enable shared enemy simulation in those chapters.
+EnemyLink WorldDevLinkSnapshot();
+#endif
 bool EnemyConnectionReady();
 void PublishEnemyFrame(const enemies::Frame& frame);
 void SetEnemyCounters(enemies::Counters counters);

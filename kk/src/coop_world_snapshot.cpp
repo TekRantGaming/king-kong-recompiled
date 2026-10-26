@@ -132,7 +132,7 @@ Json Snapshot(uint8_t* b,double now,const FlowView& v,const EnemyLink& link) {
 bool RouteStopped() { return Opt().enabled && playing_at && Now()-playing_at>=Opt().route; }
 void Frame(uint8_t* b) {
   auto& opt=Opt(); if (!opt.enabled || !b) return;
-  const auto v=SessionFlowSnapshot(); const auto link=EnemyLinkSnapshot(); const double now=Now();
+  const auto v=SessionFlowSnapshot(); const auto link=WorldDevLinkSnapshot(); const double now=Now();
   if (epoch!=link.epoch || generation!=v.world.generation || level!=v.world.level) {
     epoch=link.epoch; generation=v.world.generation; level=v.world.level; playing_at=next=0; sample=0;
   }

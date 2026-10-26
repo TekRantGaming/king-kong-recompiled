@@ -821,6 +821,13 @@ EnemyLink EnemyLinkSnapshot() {
   if (flow.active && (flow.phase!=FlowPhase::Playing || flow.policy!=ChapterPolicy::Together)) return {};
   return {v.state == SessionState::Connected && Now()-v.updated <= .5, v.role, v.enemies, v.enemies_sent, v.shots_sent, v.partner, v.epoch, v.state};
 }
+#if defined(KK_DEV_TOOLS)
+EnemyLink WorldDevLinkSnapshot() {
+  if (!REXCVAR_GET(kk_coop_enabled)) return {};
+  const auto v=CurrentView();
+  return {v.state == SessionState::Connected && Now()-v.updated <= .5, v.role, v.enemies, v.enemies_sent, v.shots_sent, v.partner, v.epoch, v.state};
+}
+#endif
 bool EnemyConnectionReady() {
   if (!REXCVAR_GET(kk_coop_enabled)) return false;
   const auto flow=SessionFlowSnapshot();

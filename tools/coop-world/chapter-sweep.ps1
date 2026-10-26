@@ -74,7 +74,9 @@ if ($ResumeManifest) {
     if (-not $resumePath.StartsWith("$coopRoot\runs\",[StringComparison]::OrdinalIgnoreCase)) { throw 'Resume manifest must be a private co-op run.' }
     $prior=Get-Content -LiteralPath $resumePath -Raw | ConvertFrom-Json
     if ($prior.source_branch -ne 'coop-c86') { throw 'Only a C86 sweep may be resumed.' }
-    $scenariosToRun=@($prior.runs | Where-Object { $_.status -in @('pending','blocked-task-stop','blocked-deadline','blocked-disk-space','waiting-runner','stopped','error') })
+    # A service interruption can leave 'running' after the approved runner is
+    # gone. Retrying still goes through that runner and its normal slot checks.
+    $scenariosToRun=@($prior.runs | Where-Object { $_.status -in @('pending','running','blocked-task-stop','blocked-deadline','blocked-disk-space','waiting-runner','stopped','error') })
 }
 for ($i = 0; $i -lt $scenariosToRun.Count; $i++) {
     $scenario=$scenariosToRun[$i]; $entry=[int]$scenario.entry
