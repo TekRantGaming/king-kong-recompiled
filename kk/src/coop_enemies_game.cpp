@@ -47,6 +47,7 @@ REX_EXTERN(__imp__sub_8266F740);
 REX_EXTERN(__imp__sub_8266ACC8);
 REX_EXTERN(__imp__sub_8260EB68);
 REX_EXTERN(__imp__sub_825F2890);
+REX_EXTERN(__imp__sub_82617858);
 REX_EXTERN(__imp__sub_82456778);
 REX_EXTERN(__imp__sub_8241A648);
 REX_EXTERN(__imp__sub_8254A8F8);
@@ -63,6 +64,11 @@ REX_EXTERN(__imp__sub_8271E760);
 REX_EXTERN(__imp__sub_8271E968);
 REX_EXTERN(__imp__sub_8271EBE8);
 REX_EXTERN(__imp__sub_8271E4E8);
+#if defined(KK_DEV_TOOLS)
+REX_EXTERN(__imp__sub_825491B0);
+REX_EXTERN(__imp__sub_8271ECF8);
+REX_EXTERN(__imp__sub_82663550);
+#endif
 #if defined(KK_DEV_TOOLS)
 REX_EXTERN(__imp__sub_82451A60);
 REX_EXTERN(__imp__sub_82569A70);
@@ -433,7 +439,8 @@ struct State {
   std::map<uint32_t, Spawner> spawners;
   std::map<uint32_t, Binding> bindings;
   std::map<uint32_t, RaptorPlayerCache> raptor_players;
-  std::map<uint32_t,double> native_player_switch;
+  struct NativePlayerChoice { uint32_t player=0; double until=0; };
+  std::map<uint32_t,NativePlayerChoice> native_player_switch;
   std::map<uint32_t, Pending> pending;
   std::map<EnemyId, Record> records;
   std::map<EnemyId, Authority> authority; // Always indexed by canonical host ID.
@@ -476,6 +483,7 @@ struct State {
   ShotIntent shot;
   InventoryState shot_inventory;
 #if defined(KK_DEV_TOOLS)
+  struct ProxyGrab { uint32_t actor=0,ai=0,vars=0,id=UINT32_MAX,generation=0; } proxy_grab;
   uint32_t shot_hit_object = 0;
   bool shot_matched = false;
   const char* shot_hit_reason = "no-hit";
@@ -513,6 +521,7 @@ struct State {
     damage_replay = {}; status_replay = {}; injecting_damage = false;
     next_status_time = 0; partner_status_time = -1;
 #if defined(KK_DEV_TOOLS)
+    proxy_grab={};
     raptor_logs.clear(); raptor_candidate_lines = 0;
     combat_targets.clear(); targets_host = targets_guest = hits_host = 0; next_targets = 0;
     diagnostic_keys.clear(); ambiguous_logged.clear();
@@ -945,17 +954,40 @@ void NativePlayerReflex(PPCContext& ctx, uint8_t* b) {
     }
   }
 #endif
-  if (!owner || Load32(b,owner->vars+308)) return; // authored target owns this phase
-  auto& next=Get().native_player_switch[owner->actor];
-  if (Now()<next) return;
+  if (!owner) return;
+  const auto hero=Load32(b,0x82CCBF7C),body=kk::PartnerBodyCombatActor(b),scripted=Load32(b,owner->vars+308);
+  if (!body || (scripted && scripted!=hero && scripted!=body)) return;
+  auto& choice=Get().native_player_switch[owner->actor];
   const auto original=Load32(b,owner->vars+4088);
-  const auto selected=NearestPlayer(ctx,b,*owner,original,false);
+  if (original!=hero && original!=body) return;
+  uint32_t selected=original;
+  if (Now()<choice.until && (choice.player==hero || choice.player==body) && Scratch::CanUse(ctx)) {
+    Scratch scratch(ctx,b); ctx.r3.u64=choice.player; __imp__sub_8266ACC8(ctx,b);
+    if (ctx.r3.u32) selected=choice.player;
+  } else selected=NearestPlayer(ctx,b,*owner,original,false);
   if (selected!=original) {
     Store32(b,owner->vars+4088,selected);
     // A retained valid target otherwise prevents the native selector from
     // running again. Keep four seconds of aggro and the native volume test.
-    next=Now()+4;
+    if (choice.player!=selected) choice={selected,Now()+4};
   }
+}
+void NativePlayerLaunch(PPCContext& ctx,uint8_t* b) {
+  const auto* owner=CombatOwner(b,EnemyFamily::Native);
+  const auto hero=Load32(b,0x82CCBF7C),body=kk::PartnerBodyCombatActor(b);
+  const auto scripted=owner ? Load32(b,owner->vars+308):0;
+  const auto selected=owner ? Load32(b,owner->vars+4088):0;
+  if (!owner || !body || (scripted!=hero && scripted!=body) || (selected!=hero && selected!=body)) {
+    __imp__sub_82617858(ctx,b); return;
+  }
+  const auto binding=*owner;
+  // Launch reasserts the authored target every frame. Offer its selected
+  // player only during this call, so native aim, leading and previous-position
+  // caches agree. The authored record is restored before any other script runs.
+  Store32(b,binding.vars+308,selected);
+  __imp__sub_82617858(ctx,b);
+  if (Ptr(b,binding.ai,64,4492)==binding.vars && RetainedDamageSource(b,binding))
+    Store32(b,binding.vars+308,scripted);
 }
 void VRexPlayerTarget(PPCContext& ctx,uint8_t* b) {
   __imp__sub_82456778(ctx,b);
@@ -2345,8 +2377,54 @@ void BeforeAi(PPCContext& ctx, uint8_t* b, uint32_t w) {
   OwnerShots(ctx, b);
   CombatBeforeAi(ctx, b);
 }
+#if defined(KK_DEV_TOOLS)
+void ProxyGrabTick(PPCContext& ctx,uint8_t* b) {
+  static const bool enabled=[] { const auto* v=std::getenv("KK_DEV_NATIVE_GRABS"); return v && std::strcmp(v,"1")==0; }();
+  if (!enabled || !Scratch::CanUse(ctx)) return;
+  auto& s=Get(); auto& grab=s.proxy_grab;
+  const auto body=EnemyPartnerCombatReady() ? kk::PartnerBodyCombatCopy(b):0;
+  const auto ai=Ptr(b,Ptr(b,body,24,8),4,88),vars=Ptr(b,ai,64,4440);
+  const auto read=[&](uint32_t p) { return Load32(b,p); };
+  if (grab.actor && (body!=grab.actor || ai!=grab.ai || vars!=grab.vars)) {
+    // A disconnect, downed partner or changed lease releases only the exact
+    // native event this fixture created. No copied donor handle is consumed.
+    Scratch scratch(ctx,b);
+    const auto handle=scratch.start+12288+0x100;
+    Store32(b,handle,grab.id); Store32(b,handle+4,grab.generation);
+    const auto record=stimulus_debug::ReadHandle(read,handle);
+    if (record.valid && record.source==grab.actor && (record.id>>24)==65) {
+      ctx.r3.u64=handle; ctx.r4.u64=0; __imp__sub_8271ECF8(ctx,b);
+      REXLOG_INFO("COOP GRAB proxy released actor={:08X} id={:08X}/{}",grab.actor,grab.id,grab.generation);
+    }
+    grab={};
+  }
+  if (!body || !ai || !vars) return;
+  if (!grab.actor) {
+    grab={body,ai,vars};
+    // The copy has independent vars but was duplicated from a story human.
+    // Its old server handle may still name the donor. Create a fresh server.
+    Store32(b,vars+4432,UINT32_MAX); Store32(b,vars+4436,UINT32_MAX);
+  }
+  Scratch scratch(ctx,b);
+  constexpr uint32_t globals[]={0x82CCBF64,0x82CCBF68,0x82CCBF6C,0x82CCBF70};
+  uint32_t saved[4]; for (unsigned i=0;i<4;++i) saved[i]=Load32(b,globals[i]);
+  Store32(b,globals[0],ai); Store32(b,globals[1],ai); Store32(b,globals[2],body); Store32(b,globals[3],body);
+  ctx.r3.u64=1; ctx.r4.u64=vars+4432; ctx.r5.u64=1; ctx.r6.u64=0;
+  __imp__sub_825491B0(ctx,b);
+  for (unsigned i=0;i<4;++i) Store32(b,globals[i],saved[i]);
+  const auto record=stimulus_debug::ReadHandle(read,vars+4432);
+  if (record.valid && record.source==body && (record.id>>24)==65) {
+    if (grab.id!=record.id || grab.generation!=record.generation)
+      REXLOG_INFO("COOP GRAB proxy available actor={:08X} id={:08X}/{}",body,record.id,record.generation);
+    grab.id=record.id; grab.generation=record.generation;
+  }
+}
+#endif
 void AfterAi(PPCContext& ctx, uint8_t* b, uint32_t w) {
   auto& s = Get();
+#if defined(KK_DEV_TOOLS)
+  if (Environment(b,w)) ProxyGrabTick(ctx,b);
+#endif
   if (!s.prepared || !Connected() || !Environment(b, w)) { s.driving.clear(); return; }
   Scan(b);
   Replicas(ctx, b, true);
@@ -2442,6 +2520,30 @@ void AfterAi(PPCContext& ctx, uint8_t* b, uint32_t w) {
 }
 bool Hold(PPCContext& ctx, uint8_t* b) {
   auto& s = Get();
+#if defined(KK_DEV_TOOLS)
+  // Encounter isolation only: other enemy families otherwise kill a bat or
+  // injure the fixture player before its real attack can be observed. This
+  // never changes the selected family's AI, targets, contact or damage.
+  static const auto only_family=[] {
+    const auto* v=std::getenv("KK_DEV_ENEMY_ONLY_FAMILY");
+    return v ? std::strtoul(v,nullptr,10):0ul;
+  }();
+  if (only_family>=1 && only_family<=13 && s.prepared && Connected() &&
+      uint32_t(ctx.lr)==0x8271D304 && Now()-s.prepared_at<=.5 && Environment(b,s.world)) {
+    const auto actor=Load32(b,0x82CCBF6C);
+    const auto found=s.bindings.find(actor);
+    if (found!=s.bindings.end() && unsigned(found->second.id.family)!=only_family &&
+        found->second.id.family!=EnemyFamily::Prey && found->second.ai==Load32(b,0x82CCBF64) && ValidBinding(b,found->second)) {
+      const auto* owner=AuthorityFor(found->second.id);
+      if (owner && owner->Runs(Side())) {
+        static std::set<uint32_t> logged;
+        if (logged.size()<128 && logged.insert(actor).second)
+          REXLOG_INFO("KK dev C89: other family held actor={:08X} family={} selected-family={} fixture-only=true",actor,unsigned(found->second.id.family),only_family);
+        ctx.r3.u64=0; return true;
+      }
+    }
+  }
+#endif
   if (!s.prepared || s.driving.empty() || uint32_t(ctx.lr) != 0x8271D304 ||
       Now()-s.prepared_at > .5 || !Connected()) return false;
   const auto actor = Load32(b, 0x82CCBF6C), ai = Load32(b, 0x82CCBF64);
@@ -2911,13 +3013,25 @@ bool EnemyDamageEnqueue(PPCContext& ctx, uint8_t* b, uint32_t body) {
   if (PoseAddress(ctx.r8.u32, 8)) { Store32(b, ctx.r8.u32, UINT32_MAX); Store32(b, ctx.r8.u32+4, 0); }
   return true;
 }
-bool PartnerBodyGrabRefusal(const uint8_t* b, uint32_t victim) {
+bool PartnerBodyGrabRefusal(const uint8_t* b, uint32_t victim,uint32_t kind) {
   // 82548BC0 explicitly returns zero without side effects for a null victim
   // (.28:19664 -> 82548E7C). Protect only the leased body with that native path.
   // Raptor LR8256D900 falls through to bites; Worm LR82533BA4 returns before
   // damage, and Scorpion LR825FBEAC skips attachment. No other shared combat
   // support is implied by refusing their attachment to an authored human.
-  return victim && kk::PartnerBodyCombatActor(b) == victim;
+  if (!victim || kk::PartnerBodyCombatActor(b)!=victim) return false;
+#if defined(KK_DEV_TOOLS)
+  const auto& grab=Get().proxy_grab;
+  const auto source=Get().bindings.find(Load32(b,0x82CCBF6C));
+  const auto* authority=source==Get().bindings.end() ? nullptr:AuthorityFor(source->second.id);
+  if (kind==1 && authority && authority->Runs(Side()) && ValidBinding(b,source->second) &&
+      victim==kk::PartnerBodyCombatCopy(b) && victim==grab.actor && EnemyPartnerCombatReady()) {
+    const auto record=stimulus_debug::ReadHandle([&](uint32_t p){return Load32(b,p);},grab.vars+4432);
+    if (record.valid && record.source==victim && record.id==grab.id && record.generation==grab.generation)
+      return false;
+  }
+#endif
+  return true;
 }
 #if defined(KK_DEV_TOOLS)
 std::optional<ShotVector> EnemyDormantTarget(const uint8_t* b, uint32_t w, ShotVector origin) {
@@ -2968,6 +3082,21 @@ std::optional<ShotVector> EnemyAimTarget(const uint8_t* b, ShotVector origin) {
 } // namespace kk::coop
 
 #if defined(KK_DEV_TOOLS)
+REX_HOOK_RAW(sub_82663550) {
+  __imp__sub_82663550(ctx,base);
+  const auto* owner=kk::coop::CombatOwner(base,kk::coop::EnemyFamily::Bat);
+  if (!owner) return;
+  static std::map<uint32_t,std::pair<double,unsigned>> samples;
+  if (samples.size()>=32 && !samples.contains(owner->actor)) return;
+  auto& sample=samples[owner->actor];
+  if (kk::coop::Now()<sample.first || sample.second++>=64) return;
+  sample.first=kk::coop::Now()+2;
+  const auto v=owner->vars;
+  REXLOG_INFO("COOP BAT actor={:08X} state={} kind={} aggression={} target={:08X} body={:08X} attack={} flags={:08X} phase={} shot={} sound={} health={:.2f}",
+      owner->actor,kk::hfr::Load32(base,v+3084),kk::hfr::Load32(base,v+4),kk::hfr::Load32(base,v+88),
+      kk::hfr::Load32(base,v+848),kk::PartnerBodyCombatActor(base),kk::hfr::Load32(base,v+880),kk::hfr::Load32(base,v+928),
+      kk::hfr::Load32(base,v+936),kk::hfr::Load32(base,v+7044),kk::hfr::Load32(base,v+6752),kk::hfr::LoadF(base,v+56));
+}
 // Observe the real scripts' activation execution, without changing their
 // conditions, arguments or result. See TrigExec_SetActivity (.115:18091) and
 // TrigExec_SetActiveAndVisible (.25:19027): +4=actor, +84=off.
@@ -2994,7 +3123,7 @@ REX_HOOK_RAW(sub_826A0920) {
   kk::coop::ObserveHumanConsumption(ctx, base);
 }
 REX_HOOK_RAW(sub_82548BC0) {
-  if (kk::coop::PartnerBodyGrabRefusal(base, ctx.r3.u32)) {
+  if (kk::coop::PartnerBodyGrabRefusal(base, ctx.r3.u32,ctx.r4.u32)) {
 #if defined(KK_DEV_TOOLS)
     static unsigned count = 0;
     if (count++ < 32) REXLOG_INFO("BITE body grab refused victim={:08X} caller={:08X} raptor-bite-fallback={}",
@@ -3004,7 +3133,19 @@ REX_HOOK_RAW(sub_82548BC0) {
     __imp__sub_82548BC0(ctx, base); // native null-victim return, preserving native call semantics
     return;
   }
+#if defined(KK_DEV_TOOLS)
+  const auto victim=ctx.r3.u32,kind=ctx.r4.u32,handle=ctx.r5.u32,caller=uint32_t(ctx.lr);
+  const bool copy=victim && victim==kk::PartnerBodyCombatCopy(base);
+#endif
   __imp__sub_82548BC0(ctx, base);
+#if defined(KK_DEV_TOOLS)
+  if (copy) {
+    static unsigned lines=0;
+    const auto record=kk::coop::stimulus_debug::ReadHandle([&](uint32_t p){return kk::hfr::Load32(base,p);},handle);
+    if (lines++<128) REXLOG_INFO("COOP GRAB native-claim victim={:08X} kind={} caller={:08X} result={:08X} id={:08X}/{} source={:08X} target={:08X} native={}",
+        victim,kind,caller,ctx.r3.u32,record.id,record.generation,record.source,record.target,record.valid);
+  }
+#endif
 }
 #if defined(KK_DEV_TOOLS)
 REX_HOOK_RAW(sub_82614DC0) {
@@ -3091,6 +3232,7 @@ REX_HOOK_RAW(sub_82634978) { kk::coop::CrabPlayerTarget(ctx,base); }
 REX_HOOK_RAW(sub_8265BF60) { kk::coop::CrabFight(ctx,base); }
 REX_HOOK_RAW(sub_8266F740) { kk::coop::NativePlayerTarget(ctx,base); }
 REX_HOOK_RAW(sub_8260EB68) { kk::coop::NativePlayerReflex(ctx,base); }
+REX_HOOK_RAW(sub_82617858) { kk::coop::NativePlayerLaunch(ctx,base); }
 REX_HOOK_RAW(sub_82456778) { kk::coop::VRexPlayerTarget(ctx,base); }
 REX_HOOK_RAW(sub_825F2890) {
 #if defined(KK_DEV_TOOLS)

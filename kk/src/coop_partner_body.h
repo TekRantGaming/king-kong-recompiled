@@ -18,6 +18,8 @@ void PartnerBodyTriggerReference(const uint8_t* base, uint32_t record);
 // Current validated borrowed or native-copy partner. Zero after release/load/loss. Used by
 // the one stimulus hook to protect its authored state and route native bites.
 uint32_t PartnerBodyCombatActor(const uint8_t* base);
+// Only an independently allocated native copy, never an authored donor.
+uint32_t PartnerBodyCombatCopy(const uint8_t* base);
 // Proxy animation callbacks must not fire another damaging native shot.
 bool PartnerBodySuppressShot(const uint8_t* base);
 }  // namespace kk

@@ -16,7 +16,7 @@ void EnemyGameFrame();
 bool EnemyDamageEnqueue(PPCContext& ctx, uint8_t* base, uint32_t body);
 bool EnemyCombatReference(const uint8_t* base, uint32_t owner, uint32_t ai,
                           uint32_t vars, uint32_t offset);
-bool PartnerBodyGrabRefusal(const uint8_t* base, uint32_t victim);
+bool PartnerBodyGrabRefusal(const uint8_t* base, uint32_t victim,uint32_t kind);
 bool EnemyPartnerCombatReady();
 // Conservative checkpoint-offer guard: any living scheduled shared enemy
 // within the radius counts, regardless of which peer owns its AI.

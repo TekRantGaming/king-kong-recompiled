@@ -1956,6 +1956,9 @@ uint32_t PartnerBodyCombatActor(const uint8_t* b) {
       (s.selected_copy ? copy_valid && Registered(b, s.world, s.selected.actor) : Member(b, s.world, s.selected.actor)) &&
       ReadRig(b, s.selected.actor, rig) && Same(rig, s.selected) ? rig.actor : 0;
 }
+uint32_t PartnerBodyCombatCopy(const uint8_t* b) {
+  return Get().selected_copy ? PartnerBodyCombatActor(b):0;
+}
 bool PartnerBodyStimulus(PPCContext& ctx, uint8_t* b) {
   auto& s = Get();
   const auto body = PartnerBodyCombatActor(b);
