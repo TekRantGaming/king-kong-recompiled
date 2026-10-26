@@ -108,7 +108,8 @@ std::optional<Action> FireAction(uint8_t weapon, bool crouched, LoadedItem loade
 struct Gait { Action clip; float yaw = 0; bool crouched = false; };
 struct GaitChoice { Action clip; float facing = 0; bool directional = false; };
 inline std::optional<GaitChoice> ChooseGait(float vx, float vy, float view, bool crouched,
-                                          std::span<const Gait> gaits) {
+                                          std::span<const Gait> gaits,
+                                          uint32_t current = UINT32_MAX) {
   const float speed=std::hypot(vx,vy), direction=std::atan2(vy,vx);
   if (!std::isfinite(speed) || speed<kIdleSpeed || !std::isfinite(view)) return {};
   std::optional<GaitChoice> best;
@@ -116,7 +117,10 @@ inline std::optional<GaitChoice> ChooseGait(float vx, float vy, float view, bool
   for (const auto& gait : gaits) {
     if (gait.crouched!=crouched || !std::isfinite(gait.clip.speed) || gait.clip.speed<kIdleSpeed) continue;
     const float error=std::abs(std::remainder(direction-view-gait.yaw,6.283185307f));
-    const float rank=error+0.1f*std::abs(std::log(speed/gait.clip.speed));
+    // Keep the current clip through small speed/direction changes. Network
+    // jitter at the boundary between two gaits must not rewind both clips.
+    const float rank=error+.35f*std::abs(std::log(speed/gait.clip.speed))-
+        (current==((uint32_t(gait.clip.action)<<8)|gait.clip.item) ? .06f : 0.f);
     if (rank>=score) continue;
     score=rank;
     // Without a matching strafe/back clip, face the travel direction. The root
@@ -126,20 +130,48 @@ inline std::optional<GaitChoice> ChooseGait(float vx, float vy, float view, bool
   return best;
 }
 struct AnimationDrive {
-  float speed = 0, fire_left = 0, land_left = 0;
+  float speed = 0, vx = 0, vy = 0, stop_left = 0, fire_left = 0, recoil_left = 0, land_left = 0, use_left = 0;
   bool moving = false, have_fire = false, new_shot = false, was_airborne = false, have_airborne = false;
   uint32_t last_fire = 0;
+  uint16_t last_action = 0, use_action = 0;
+  double action_time = -1;
+  bool crouched = false, airborne = false;
+  static bool EquipmentAction(uint16_t action) {
+    // H pickup actions 0x22/0x23 and H_ETAT_IA_lance's throws 0x56/0x5C.
+    return action==0x22 || action==0x23 || action==0x56 || action==0x5C;
+  }
+  float GesturePitch() const {
+    // Small upper-body gestures also work on an unarmed rig without a gun
+    // clip. Evaluated from time, never accumulated onto last frame's bones.
+    return .16f*std::sin(3.141592654f*std::clamp(recoil_left/.22f,0.f,1.f))-
+        .18f*std::sin(3.141592654f*std::clamp(use_left/.65f,0.f,1.f));
+  }
   void Update(const PlayerPose& p, float dt) {
     dt = std::clamp(dt,0.f,.1f);
     const float target = std::min(std::hypot(p.vx,p.vy),20.f);
-    speed += (target-speed)*(1-std::exp(-dt*14.f));
-    moving = speed > (moving ? .08f : .18f);
+    const float blend = 1-std::exp(-dt*10.f);
+    speed += (target-speed)*blend;
+    const float scale = target>0 ? target/std::hypot(p.vx,p.vy) : 0;
+    vx += (p.vx*scale-vx)*blend; vy += (p.vy*scale-vy)*blend;
+    // A short zero-velocity sample is common between physics/network updates.
+    // Require a sustained stop, but still enter locomotion promptly.
+    stop_left = target>.12f ? .22f : std::max(0.f,stop_left-dt);
+    moving = moving ? speed>.08f || stop_left>0 : speed>.22f;
     fire_left = std::max(0.f,fire_left-dt); new_shot = false;
+    recoil_left=std::max(0.f,recoil_left-dt);
+    use_left=std::max(0.f,use_left-dt);
     land_left=std::max(0.f,land_left-dt);
-    if (have_airborne && was_airborne && !p.airborne) land_left=.5f;
-    was_airborne=p.airborne; have_airborne=true;
+    // The interpolated remote timeline can briefly move backward when a new
+    // packet arrives. Never replay an equipment/landing edge from that rewind.
+    if (p.time>=action_time) {
+      action_time=p.time;
+      if (p.action!=last_action && EquipmentAction(p.action)) { use_action=p.action; use_left=.65f; }
+      last_action=p.action; crouched=p.crouched; airborne=p.airborne;
+      if (have_airborne && was_airborne && !airborne) land_left=.5f;
+      was_airborne=airborne; have_airborne=true;
+    }
     if (have_fire && p.fire != last_fire && uint32_t(p.fire-last_fire) < 0x80000000u) {
-      fire_left = .35f; new_shot = true; last_fire = p.fire;
+      fire_left = .35f; recoil_left=.22f; new_shot = true; last_fire = p.fire;
     }
     if (!have_fire) last_fire = p.fire;
     have_fire = true;

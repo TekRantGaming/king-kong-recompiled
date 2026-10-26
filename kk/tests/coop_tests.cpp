@@ -552,6 +552,28 @@ void PuppetPolicies() {
   motion.vx=0;
   for (unsigned i=0;i<20;++i) drive.Update(motion,.05f);
   Check(!drive.moving && !drive.fire_left, "stop settles to idle and recoil expires");
+  AnimationDrive jitter;
+  motion.vx=2.2f;
+  for (unsigned i=0;i<60;++i) jitter.Update(motion,1.f/60);
+  for (unsigned i=0;i<120;++i) {
+    motion.vx=i%12<8 ? 2.2f : 0;
+    jitter.Update(motion,1.f/60);
+    Check(jitter.moving,"short network/physics gaps never flap walking to idle");
+  }
+  motion.vx=0;
+  for (unsigned i=0;i<45;++i) jitter.Update(motion,1.f/60);
+  Check(!jitter.moving,"sustained stop enters idle within 750 ms");
+  motion.action=0x56; jitter.Update(motion,.05f);
+  Check(jitter.use_left>0 && jitter.use_action==0x56,"peer equipment throw starts its own loaded action");
+  for (unsigned i=0;i<20;++i) jitter.Update(motion,.05f);
+  Check(!jitter.use_left,"repeated equipment pose packets do not restart the gesture");
+  motion.time=2; motion.action=0; jitter.Update(motion,.05f);
+  motion.time=1; motion.action=0x56; jitter.Update(motion,.05f);
+  Check(!jitter.use_left,"rewound network timeline cannot replay an equipment edge");
+  motion.time=3;
+  motion.fire++; jitter.Update(motion,.05f); jitter.Update(motion,.05f);
+  Check(jitter.GesturePitch()>.05f,"confirmed fire supplies bounded recoil even without a gun clip");
+  motion.action=0;
   motion.airborne=1; drive.Update(motion,.05f);
   motion.airborne=0; drive.Update(motion,.05f);
   Check(drive.land_left>0,"native airborne to grounded edge starts a landing clip");
@@ -587,6 +609,14 @@ void PuppetPolicies() {
       "missing strafe turns a forward-only body into its travel direction");
   Check(ChooseGait(1,0,0,true,directional)->clip.action==27,"crouch uses its own calibrated gait");
   Check(!ChooseGait(0,0,0,false,directional),"idle never chooses a directional gait");
+  const Gait similar[] = {{{10,0,2},0,false},{{15,0,2.5f},0,false}};
+  uint32_t current=10<<8;
+  for (unsigned i=0;i<200;++i) {
+    const auto stable=ChooseGait(i%2 ? 2.20f : 2.28f,.01f,0,false,similar,current);
+    Check(stable && stable->clip.action==10,"speed jitter at gait boundary preserves clip phase");
+    current=(uint32_t(stable->clip.action)<<8)|stable->clip.item;
+  }
+  Check(ChooseGait(3,0,0,false,similar,current)->clip.action==15,"sustained faster travel can change gait");
   Check(ChooseAction(.09f, observed)->action == 41, "observed idle below threshold");
   Check(ChooseAction(.1f, observed)->action == 22, "threshold chooses observed moving tuple");
   Check(ChooseAction(1.2f, observed)->action == 22, "walk uses closest observed speed");

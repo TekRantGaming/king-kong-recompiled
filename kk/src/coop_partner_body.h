@@ -22,4 +22,5 @@ uint32_t PartnerBodyCombatActor(const uint8_t* base);
 uint32_t PartnerBodyCombatCopy(const uint8_t* base);
 // Proxy animation callbacks must not fire another damaging native shot.
 bool PartnerBodySuppressShot(const uint8_t* base);
+void PartnerBodyObserveAction(const PPCContext& ctx, const uint8_t* base);
 }  // namespace kk
