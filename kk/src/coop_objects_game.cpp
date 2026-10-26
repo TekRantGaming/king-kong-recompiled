@@ -1239,6 +1239,18 @@ void DoorWait(PPCContext& ctx,uint8_t* b) {
 }
 void DoorInit(PPCContext& ctx,uint8_t* b) {
 #if defined(KK_DEV_TOOLS)
+  // Observe the initializer even before shared AI is released. A checkpoint
+  // can finish this controller before the normal binding census sees it.
+  static std::map<std::pair<uint32_t,uint32_t>,unsigned> init_trace;
+  const auto actor=Load32(b,0x82CCBF6C),ai=Load32(b,0x82CCBF64);
+  const auto vars=Vars(b,ai,ObjectKind::Door),matrix=Ptr(b,actor,12,64);
+  if (Trace() && state.epoch && vars && matrix && init_trace.size()<objects::kCensus && init_trace[{state.level,actor}]++<2) {
+    const auto asset=state.file_keys.find(actor);
+    const auto source=asset==state.file_keys.end() ? objects::Source(ObjectKind::Door,LoadF(b,matrix+48),LoadF(b,matrix+52),LoadF(b,matrix+56),2):objects::AssetSource(ObjectKind::Door,asset->second);
+    REXLOG_INFO("KK dev door init census: role={} level={} id={:016X} actor={:08X} ready={} shared={} flags={:08X} persistent={} capability={} progress={} node={:08X} bound={}",
+        state.host ? "host":"guest",state.level,source,actor,state.ready,Shared(),Load32(b,actor+4),Load32(b,vars+584),Load32(b,vars+588),LoadF(b,vars+1084),
+        PoseAddress(Load32(b,0x82CCBF60)) ? Load32(b,Load32(b,0x82CCBF60)):0,state.bindings.contains(actor));
+  }
   if (auto* o=state.ready && Shared() ? Current(b,ObjectKind::Door) : nullptr) ++o->init_calls;
 #endif
   __imp__sub_82574D80(ctx,b);
