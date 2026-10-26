@@ -237,6 +237,7 @@ struct SteamRuntime::Impl
   double operation_deadline = 0, next_friends = 0, next_lobby = 0, next_invite = 0;
   int logged_friend_count = -1;
   std::string ready_token;
+  LobbyStartReadiness start_readiness;
   std::unique_ptr<SteamMessagesTransport> transport;
   std::unique_ptr<CoopSession> session;
   SessionState last_session_state = SessionState::Idle;
@@ -465,12 +466,14 @@ struct SteamRuntime::Impl
     create_call = join_call = 0;
   }
   void Leave(const char* reason = nullptr) {
+    if (reason) REXLOG_WARN("KK co-op Steam: session stopped: {} (start plan phase {})", reason, int(flow.PlanState()));
     StopSession();
     if (model.lobby) api.SteamAPI_ISteamMatchmaking_LeaveLobby(matchmaking, model.lobby);
     api.SteamAPI_ISteamFriends_ClearRichPresence(friends);
     if (!self_test && !stop) api.SteamAPI_ISteamFriends_SetRichPresence(friends, kPresenceKey, kProductValue);
     model.lobby = model.owner = recorded_owner = epoch = validating = joining = joining_owner = 0;
     model.members.clear(); model.start_requested = false; model.choice={}; ready_token.clear();
+    start_readiness = {};
     presence_lobby = presence_wanted = false;
     RetireCalls();
     model.status = reason ? SocialStatus::Ended : SocialStatus::Idle;
@@ -487,6 +490,12 @@ struct SteamRuntime::Impl
       }
       return session != nullptr;
     }
+    // Once the plan is acknowledged, the lobby is expected to disappear as
+    // each old process exits. Its callbacks may precede the link's final Bye.
+    // Keep the agreed peer link until the plan's own bounded restart completes.
+    const auto plan_phase = flow.PlanState();
+    if (model.start_requested && (plan_phase == handover::PlanPhase::Acked || plan_phase == handover::PlanPhase::Ready))
+      return session != nullptr;
     const auto owner = api.SteamAPI_ISteamMatchmaking_GetLobbyOwner(matchmaking, model.lobby);
     if (owner != recorded_owner) { Leave("The host left the lobby"); return false; }
     if (!CompatibleLobby(ReadKeys(model.lobby), options.compatibility) || Data(model.lobby, "kkrc_epoch") != std::to_string(epoch)) {
@@ -520,11 +529,15 @@ struct SteamRuntime::Impl
     model.members = std::move(members); model.owner = owner;
     const auto phase = Data(model.lobby, "kkrc_phase");
     if (phase == "starting" && !model.start_requested) {
-      if (model.members.size() != 2 || !model.members[0].ready || !model.members[1].ready) {
-        Leave("The lobby was not ready to start"); return false;
+      const bool ready = model.members.size() == 2 && model.members[0].ready && model.members[1].ready;
+      const auto readiness = start_readiness.Observe(true, ready, Now());
+      if (readiness == LobbyStartReadiness::Result::TimedOut) {
+        Leave("The lobby readiness did not arrive. Open a new lobby and try again"); return false;
       }
-      StartSession();
+      if (readiness == LobbyStartReadiness::Result::Ready) StartSession();
+      else if (model.status == SocialStatus::Lobby) Status(SocialStatus::Starting, "Waiting for lobby readiness");
     } else if (phase != "waiting" && phase != "starting") { Leave("Invalid lobby phase"); return false; }
+    else if (phase == "waiting") start_readiness.Observe(false, false, Now());
     Publish(); return true;
   }
   void StartSession() {
@@ -536,6 +549,7 @@ struct SteamRuntime::Impl
                          model.self == recorded_owner ? epoch : 0, options.compatibility};
     // Flat SDK call owned by this worker. Persona stays out of logs and lobby metadata.
     config.display_name = SanitizeDisplayName(Text(api.SteamAPI_ISteamFriends_GetPersonaName(friends)));
+    if (config.role == Role::Guest) config.expected_host_epoch = epoch;
     session = std::make_unique<CoopSession>(config, *transport);
     model.start_requested = true;
     api.SteamAPI_ISteamFriends_SetRichPresence(friends, "connect", nullptr);
@@ -564,6 +578,7 @@ struct SteamRuntime::Impl
     SessionConfig config{true, host ? Role::Host : Role::Guest, host ? token : 0, options.compatibility};
     config.display_name = SanitizeDisplayName(Text(api.SteamAPI_ISteamFriends_GetPersonaName(friends)));
     config.resume_token = token; config.wait_for_peer = host;
+    if (!host) config.expected_host_epoch = token;
     session = std::make_unique<CoopSession>(config, *transport);
     model.start_requested = true; presence_wanted = host;
     REXLOG_INFO("KK co-op Steam: resumed session {} reconnecting to the partner by SteamID", host ? "host" : "guest");
@@ -744,6 +759,8 @@ struct SteamRuntime::Impl
     if (Callback(m, chat)) {
       if (chat.m_ulSteamIDLobby == model.lobby && presence_lobby) return;
       if (chat.m_ulSteamIDLobby == model.lobby) {
+        const auto plan_phase = flow.PlanState();
+        if (model.start_requested && (plan_phase == handover::PlanPhase::Acked || plan_phase == handover::PlanPhase::Ready)) return;
         // Even leave/rejoin between polls must invalidate the previous ready acknowledgements.
         if (model.start_requested) { Leave("Lobby membership changed during the session"); return; }
         if (recorded_owner == model.self) {
@@ -830,7 +847,11 @@ struct SteamRuntime::Impl
     }
 #endif
     { std::lock_guard lock(mutex); session_view = view; }
-    if (session->State() == SessionState::Ended) { Leave("Co-op session ended"); return; }
+    if (session->State() == SessionState::Ended) {
+      if (session->Rejection() != RejectReason::None)
+        REXLOG_WARN("KK co-op Steam: connection rejected: {}", RejectName(session->Rejection()));
+      Leave("Co-op session ended"); return;
+    }
     if (session->State() != last_session_state) {
       last_session_state = session->State();
       if (last_session_state == SessionState::Connected && presence_wanted && !model.lobby && !create_call) {

@@ -557,7 +557,12 @@ void SessionAfterGo(uint8_t* base,uint32_t g,bool loaded) {
   REXLOG_INFO("KK co-op flow: loaded generation {}, waiting for both",loaded_generation);
   // uni_go's loader is synchronous. Stay at this boundary, with the network
   // worker and UI running, before any next simulation step or AI pass.
-  Wait(loaded_generation,true);
+  const auto released=Wait(loaded_generation,true);
+  if (released.phase==FlowPhase::Playing && released.world.generation==loaded_generation)
+    REXLOG_INFO("KK co-op flow: load barrier released role={} generation {} level {} policy={}",
+        released.host ? "host" : "guest",loaded_generation,released.world.level,
+        released.policy==ChapterPolicy::Together ? "together" :
+        released.policy==ChapterPolicy::SoloRegroup ? "solo-regroup" : "observer");
 }
 void SessionCheckpoint(uint32_t level,uint32_t checkpoint) {
   if (!launched) return;
