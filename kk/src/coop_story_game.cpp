@@ -1,5 +1,5 @@
-// Safe door/activation scripts replay exactly. Other scripts run natively on
-// both peers; host events are convergence hints, never arbitrary native calls.
+// Safe door/activation scripts replay exactly. Other callbacks stay native,
+// with bounded host volume activation and cinematic completion gates.
 #include "coop_story_game.h"
 #include "coop_objects_game.h"
 #include "coop_story.h"
@@ -225,8 +225,8 @@ void Census(const uint8_t* b) {
       if (!source) continue;
       Script s; s.binding={source,shape,actor,ai,vars};
       s.Baseline(Load32(b,vars+19812));
-      // Cache the policy before native callbacks mutate their payloads. Mixed
-      // chains stay native too: gating their detector would gate unsafe records.
+      // Cache exact-replay policy before native callbacks mutate payloads.
+      // Mixed callbacks remain native even when their Jack detector is shared.
       s.exact=SafeRequest(b,s);
       if (const auto run=runs.find(source); run!=runs.end()) s.run=run->second;
       it=scripts.emplace(actor,s).first;
@@ -322,6 +322,9 @@ bool HeroPivot(const uint8_t* b,uint32_t payload) {
   return PoseAddress(payload,108) && PoseAddress(Load32(b,payload+4),32) &&
       Tracks(b,ai,0x826718B8) && Ptr(b,hero,12,64) && Load32(b,payload+8)==hero &&
       !Load32(b,payload+96) && !Load32(b,payload+100);
+}
+bool SharedDetector(const uint8_t* b,const Script& s) {
+  return Load32(b,s.binding.vars+20)==kPivot && HeroPivot(b,s.binding.vars+88);
 }
 bool DoorTarget(const uint8_t* b,uint32_t target) {
   const auto ai=Ptr(b,Ptr(b,target,24,44),4,88);
@@ -844,7 +847,10 @@ void StoryGameFrame(uint8_t* b) {
     auto& s=scripts.at(bind->actor);
     if (s.request) { Note("request refused",e,"activation already pending"); continue; }
     if (failed || s.run==UINT32_MAX || e.run!=s.run+1) { Note("request refused",e,"stale activation run"); continue; }
-    if (!SafeRequest(b,s)) { Note("request refused",e,"unsafe predicate or action chain"); continue; }
+    // A request only substitutes the validated guest's volume membership in
+    // the host's own detector. The host still runs the authored native chain;
+    // no received callback or record is executed by this request path.
+    if (!SharedDetector(b,s)) { Note("request refused",e,"not a shared Jack-volume detector"); continue; }
     // Recheck a fresh partner pose and native volume when this script is scheduled.
     s.request=e; s.request_until=now+.5; Note("request pending",e);
   }
@@ -885,7 +891,7 @@ bool StoryDetect(PPCContext& ctx,uint8_t* b) {
       if (Now()>s->request_until) FinishRequest(*s,"request refused","request deadline elapsed");
       else if (failed || !story::DetectIdle(before) || s->run==UINT32_MAX || s->request->run!=s->run+1)
         FinishRequest(*s,"request refused","script already armed or activation changed");
-      else if (!SafeRequest(b,*s)) FinishRequest(*s,"request refused","action chain changed or became unsafe");
+      else if (!SharedDetector(b,*s)) FinishRequest(*s,"request refused","detector changed or became unsafe");
       else {
         const auto link=EnemyLinkSnapshot();
         if (!link.connected || !link.partner || link.partner->level!=level)
@@ -905,7 +911,10 @@ bool StoryDetect(PPCContext& ctx,uint8_t* b) {
       if (s->activation.CanArm(s->run)) {
         forced_pivot=vars+88;
         Note("host volume activation",Event(*s,StoryPhase::Armed,kDetectRecord),"native mixed chain and persistence retained");
-      } else blocked_pivot=vars+88;
+      } else {
+        Request(ctx,b,*s);
+        blocked_pivot=vars+88;
+      }
     }
     __imp__sub_82476848(ctx,b); forced_pivot=blocked_pivot=0;
     if (failed) return true;
