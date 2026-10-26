@@ -2494,12 +2494,17 @@ REX_HOOK_RAW(sub_82715AC8) {
 #if defined(KK_DEV_TOOLS)
   const auto caller = uint32_t(ctx.lr), current = kk::hfr::Load32(base, 0x82CCBF6C);
   bool is_spawner = false; uint32_t state = 0;
-  const bool crab = REXCVAR_GET(kk_coop_enabled) && kk::coop::Tracks(base,
-      kk::coop::Ptr(base, kk::coop::Ptr(base, source, 24, 8), 4, 88), state, is_spawner) == kk::coop::EnemyFamily::Crab;
+  const auto source_family = kk::coop::Tracks(base,
+      kk::coop::Ptr(base, kk::coop::Ptr(base, source, 24, 8), 4, 88), state, is_spawner);
+  const bool crab = REXCVAR_GET(kk_coop_enabled) && source_family == kk::coop::EnemyFamily::Crab;
 #endif
   __imp__sub_82715AC8(ctx, base);
   if (spider_copy && ctx.r3.u32) kk::coop::SpiderCopied(base,source,spider_ordinal,ctx.r3.u32);
 #if defined(KK_DEV_TOOLS)
+  static std::map<uint32_t,unsigned> factory_lines;
+  if (REXCVAR_GET(kk_coop_enabled) && source_family!=kk::coop::EnemyFamily::None && ctx.r3.u32 && factory_lines[caller]++<24)
+    REXLOG_INFO("ENEMIES factory caller={:08X} parent={:08X} template={:08X} child={:08X} family={} known-spawner={} observed={}",
+        caller,current,source,ctx.r3.u32,uint16_t(source_family),kk::coop::Get().spawners.contains(current),observe);
   static unsigned crab_lines = 0;
   if (crab && ctx.r3.u32 && crab_lines++ < 16) {
     const auto vars = kk::coop::Ptr(base, kk::coop::Ptr(base, kk::coop::Ptr(base, current, 24, 8), 4, 88), 64, 7808);
