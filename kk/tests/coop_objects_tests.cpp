@@ -26,7 +26,7 @@ void Codec() {
     }
     if (kind==ObjectKind::SupportBody) { m.object.body.topology=123; m.object.body.pose[3]=m.object.body.pose[8]=1; }
     std::vector<uint8_t> bytes; Check(Encode(m,bytes),"object encodes");
-    Check(bytes.size()==kHeaderBytes+(kind==ObjectKind::Raft ? 91 : objects::SupportRoot(kind) ? 67 : kind==ObjectKind::SupportBody ? 81 : 33) && bytes[5]==kProtocolVersion,"bounded protocol 21 object wire");
+    Check(bytes.size()==kHeaderBytes+(kind==ObjectKind::Raft ? 91 : objects::SupportRoot(kind) ? 67 : kind==ObjectKind::SupportBody ? 81 : 33) && bytes[5]==kProtocolVersion,"bounded protocol 22 object wire");
     Message out; Check(Decode(bytes,out) && out.object==m.object,"object round trip");
     for (size_t i=0;i<bytes.size();++i) {
       Message sentinel; sentinel.sequence=123;

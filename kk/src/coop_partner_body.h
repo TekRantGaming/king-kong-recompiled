@@ -15,7 +15,7 @@ bool PartnerBodyHold(PPCContext& ctx, uint8_t* base);
 void PartnerBodyLateWorld(PPCContext& ctx, uint8_t* base, uint32_t world);
 // Before a trigger callback runs, release an auto body mentioned by its payload.
 void PartnerBodyTriggerReference(const uint8_t* base, uint32_t record);
-// Current validated borrowed partner only. Zero after release/load/loss. Used by
+// Current validated borrowed or native-copy partner. Zero after release/load/loss. Used by
 // the one stimulus hook to protect its authored state and route native bites.
 uint32_t PartnerBodyCombatActor(const uint8_t* base);
 // Proxy animation callbacks must not fire another damaging native shot.

@@ -1156,7 +1156,7 @@ void RefreshScriptEvidence(const uint8_t* b, uint32_t world) {
     }
     for (uint32_t off = 0; off+4 <= size; off += 4) {
       const auto ref = Load32(b, vars+off);
-      // Only a live leased body's audited raptor candidate slots are combat
+      // Only a live leased body's audited native candidate slots are combat
       // references. PRG records and all unknown offsets still disqualify it.
       if (Get().driving && ref == Get().selected.actor &&
           coop::EnemyCombatReference(b, owner, ai, vars, off)) continue;
@@ -1751,7 +1751,7 @@ void PartnerBodyAfterAi(PPCContext& ctx, uint8_t* b, uint32_t w) {
   // Full H Post/AI remains held. Refresh only its audited perception publisher
   // under the body's native context, after committing the driven transform.
   const auto link = coop::EnemyLinkSnapshot();
-  if (Opt().partner && !s.selected_copy && !s.humans.at(rig.actor).other_human && link.connected && link.role == coop::Role::Host && coop::EnemyPartnerCombatReady() &&
+  if (Opt().partner && !s.humans.at(rig.actor).other_human && link.connected && coop::EnemyPartnerCombatReady() &&
       Range(rig.vars, 5152) && Range(Load32(b, 0x82CC9C30), 7144) &&
       Load32(b, rig.vars+4) >= 1 && Load32(b, rig.vars+4) <= 12) {
     Scratch scratch(ctx, b);
@@ -1943,14 +1943,18 @@ bool PartnerBodySuppressShot(const uint8_t* b) {
 }
 uint32_t PartnerBodyCombatActor(const uint8_t* b) {
   const auto& s = Get();
-  if (!Enabled() || !Opt().partner || s.selected_copy || !s.driving || !s.prepared ||
+  if (!Enabled() || !Opt().partner || !s.driving || !s.prepared ||
       !s.partner_eligible || !s.partner.fresh || !s.Environment(b, s.world)) return 0;
   const auto it = s.humans.find(s.selected.actor);
   Rig rig;
   // Read-only even when used by dev diagnostics. The normal before/after AI
   // validators own release; this snapshot never changes lease state.
+  bool copy_valid = false;
+  if (s.selected_copy) for (const auto& copy : s.spawned)
+    copy_valid |= copy.rig.actor == s.selected.actor && SpawnIdentity(b, copy);
   return it != s.humans.end() && !it->second.other_human && it->second.generation == s.selected_generation &&
-      Member(b, s.world, s.selected.actor) && ReadRig(b, s.selected.actor, rig) && Same(rig, s.selected) ? rig.actor : 0;
+      (s.selected_copy ? copy_valid && Registered(b, s.world, s.selected.actor) : Member(b, s.world, s.selected.actor)) &&
+      ReadRig(b, s.selected.actor, rig) && Same(rig, s.selected) ? rig.actor : 0;
 }
 bool PartnerBodyStimulus(PPCContext& ctx, uint8_t* b) {
   auto& s = Get();
@@ -1960,6 +1964,12 @@ bool PartnerBodyStimulus(PPCContext& ctx, uint8_t* b) {
       uint32_t(ctx.lr) == 0x82635DF0 && Range(ctx.r6.u32, 108)) {
     // The publisher alone may mention its own body; no arbitrary stimulus or
     // mission/cinematic payload receives this exemption.
+    // Present the second live player with Jack's perception category. Only the
+    // temporary publisher payload changes; the donor's native H state stays intact.
+    // The native scans retain distance, vision rays, claims and scripted priority.
+    const auto perception = ctx.r6.u32;
+    const auto old_class = Load32(b, perception+96), old_life = Load32(b, perception+48);
+    Store32(b, perception+96, 1); StoreF(b, perception+48, 1.0f);
 #if defined(KK_DEV_TOOLS)
     const auto output = ctx.r8.u32, payload = ctx.r6.u32;
     const bool readable = Range(output, 8);
@@ -1969,6 +1979,7 @@ bool PartnerBodyStimulus(PPCContext& ctx, uint8_t* b) {
     const auto lifetime = ctx.f1.f64;
 #endif
     __imp__sub_8271E4E8(ctx, b);
+    Store32(b, perception+96, old_class); Store32(b, perception+48, old_life);
 #if defined(KK_DEV_TOOLS)
     const auto u32 = [&](uint32_t p) { return Load32(b, p); };
     const auto record = coop::stimulus_debug::ReadHandle(u32, output);

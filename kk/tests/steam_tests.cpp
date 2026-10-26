@@ -211,7 +211,7 @@ void EveryProtocolMessage() {
   };
   const MessageType unreliable[] = {MessageType::Ping, MessageType::Pong, MessageType::PlayerPose,
       MessageType::EnemySnapshot, MessageType::CameraPose};
-  static_assert(kProtocolVersion == 21 && std::size(reliable)+std::size(unreliable) == 36);
+  static_assert(kProtocolVersion == 22 && std::size(reliable)+std::size(unreliable) == 36);
   Backend a,b; a.self=1; b.self=2; a.remote=&b; b.remote=&a;
   SteamMessagesTransport at(a,2),bt(b,1);
   unsigned seen[35]{};
@@ -246,7 +246,7 @@ void StoryOverMessages() {
   CoopSession host({true,Role::Host,12345,Compatible()},at),guest({true,Role::Guest,0,Compatible()},bt);
   for (unsigned i=0;i<20;++i) { host.Tick(i*.01); guest.Tick(i*.01); }
   Check(host.State()==SessionState::Connected && guest.State()==SessionState::Connected,
-      "protocol 21 story session handshakes over Steam adapter");
+      "protocol 22 story session handshakes over Steam adapter");
   StoryMailbox h,g;
   uint32_t number=0;
   double now=.2;

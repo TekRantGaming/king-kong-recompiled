@@ -323,8 +323,7 @@ class CombatMailbox {
     std::lock_guard lock(mutex_);
     while (!outgoing_.empty()) {
       const auto& entry = outgoing_.front();
-      if (entry.message.epoch != session.Epoch() || !combat::Fresh(entry.received, now) ||
-          (entry.message.type == MessageType::DamageEvent ? session.SessionRole() != Role::Host : session.SessionRole() != Role::Guest)) {
+      if (entry.message.epoch != session.Epoch() || !combat::Fresh(entry.received, now)) {
         outgoing_.pop_front(); continue;
       }
       if (!session.QueueCombat(entry.message, entry.received)) break;

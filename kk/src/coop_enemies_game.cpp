@@ -42,8 +42,14 @@ REX_EXTERN(__imp__sub_8261DE68);
 REX_EXTERN(__imp__sub_826A0920);
 REX_EXTERN(__imp__sub_82548BC0);
 REX_EXTERN(__imp__sub_82538B70);
-#if defined(KK_DEV_TOOLS)
+REX_EXTERN(__imp__sub_82634978);
+REX_EXTERN(__imp__sub_82463A58);
+REX_EXTERN(__imp__sub_8266F740);
+REX_EXTERN(__imp__sub_8266ACC8);
 REX_EXTERN(__imp__sub_8254A8F8);
+REX_EXTERN(__imp__sub_825ED648);
+REX_EXTERN(__imp__sub_825EDC70);
+#if defined(KK_DEV_TOOLS)
 REX_EXTERN(__imp__sub_82569A70);
 REX_EXTERN(__imp__sub_8245A7B8);
 REX_EXTERN(__imp__sub_8246DC58);
@@ -439,6 +445,7 @@ struct State {
   combat::DamageReplay damage_replay;
   combat::StatusReplay status_replay;
   std::deque<ReceivedCombat> pending_damage;
+  std::deque<ReceivedCombat> outgoing_damage;
   std::optional<PlayerStatus> sent_status;
   double next_status_time = 0, partner_status_time = -1;
   uint64_t hits_produced = 0, hits_queued = 0, hits_native = 0, hits_refused = 0;
@@ -451,6 +458,9 @@ struct State {
   const char* shot_hit_reason = "no-hit";
   unsigned shot_target_diagnostics = 0;
   std::map<uint32_t, DevRaptorLog> raptor_logs;
+  std::map<uint32_t,uint32_t> combat_targets;
+  uint64_t targets_host = 0, targets_guest = 0, hits_host = 0;
+  double next_targets = 0;
   std::map<uint32_t,uint32_t> diagnostic_keys;
   std::set<uint32_t> ambiguous_logged;
   unsigned raptor_candidate_lines = 0;
@@ -476,11 +486,12 @@ struct State {
     private_reseed.clear();
     census_until = next_numbers = next_log = next_shot_log = error_sum = error_max = 0; error_count = 0;
     combat_epoch = incarnation = 0; combat_hero = combat_ai = combat_vars = 0;
-    next_damage = next_status = 0; pending_damage.clear(); sent_status.reset();
+    next_damage = next_status = 0; pending_damage.clear(); outgoing_damage.clear(); sent_status.reset();
     damage_replay = {}; status_replay = {}; injecting_damage = false;
     next_status_time = 0; partner_status_time = -1;
 #if defined(KK_DEV_TOOLS)
     raptor_logs.clear(); raptor_candidate_lines = 0;
+    combat_targets.clear(); targets_host = targets_guest = hits_host = 0; next_targets = 0;
     diagnostic_keys.clear(); ambiguous_logged.clear();
 #endif
   }
@@ -769,6 +780,76 @@ struct Scratch {
     const auto p = start+12288+offset; StoreF(base, p, x); StoreF(base, p+4, y); StoreF(base, p+8, z); return p;
   }
 };
+const Binding* CombatOwner(const uint8_t* b, EnemyFamily family) {
+  auto& s = Get();
+  if (!EnemyPartnerCombatReady() || Now()-s.prepared_at > .5 || !Environment(b,s.world)) return nullptr;
+  const auto actor = Load32(b,0x82CCBF6C), ai = Load32(b,0x82CCBF64);
+  const auto it = s.bindings.find(actor);
+  if (it == s.bindings.end() || it->second.ai != ai || it->second.id.family != family ||
+      !ValidBinding(b,it->second)) return nullptr;
+  const auto* a = AuthorityFor(it->second.id);
+  return a && a->Runs(Side()) ? &it->second : nullptr;
+}
+float PlayerDistance(const uint8_t* b, uint32_t actor, uint32_t player) {
+  const auto a = Ptr(b,actor,12,64), p = Ptr(b,player,12,64);
+  if (!a || !p) return std::numeric_limits<float>::infinity();
+  const float distance = std::hypot(LoadF(b,a+48)-LoadF(b,p+48), LoadF(b,a+52)-LoadF(b,p+52), LoadF(b,a+56)-LoadF(b,p+56));
+  return std::isfinite(distance) ? distance : std::numeric_limits<float>::infinity();
+}
+uint32_t NearestPlayer(PPCContext& ctx, uint8_t* b, const Binding& owner, uint32_t original, bool crab) {
+  const auto hero = Load32(b,0x82CCBF7C), body = kk::PartnerBodyCombatActor(b);
+  if (!body || (original != hero && original != body) || !Scratch::CanUse(ctx)) return original;
+  const auto other = original == hero ? body : hero;
+  if (!(PlayerDistance(b,owner.actor,other) < PlayerDistance(b,owner.actor,original))) return original;
+  Scratch scratch(ctx,b);
+  ctx.r3.u64 = other;
+  if (crab) __imp__sub_82463A58(ctx,b); else __imp__sub_8266ACC8(ctx,b);
+  return ctx.r3.u32 ? other : original;
+}
+// Refresh only the singular preferred-player index in the native selector.
+// No candidate flag, visibility result, claim, forced target or attack is created.
+void PlayerPriority(uint8_t* b, EnemyFamily family) {
+  const auto* owner = CombatOwner(b,family); if (!owner) return;
+  const auto hero = Load32(b,0x82CCBF7C), body = kk::PartnerBodyCombatActor(b);
+  if (!body) return;
+  const auto table = combat::Candidates(family);
+  const auto vars = owner->vars;
+  const auto count = Load32(b,vars+table.count);
+  if (!table.limit || count > table.limit || !PoseAddress(vars,table.actors+4*table.limit)) return;
+  uint32_t index = 0, kinds = 0, distance = 0, flags = 0;
+  switch (family) {
+    case EnemyFamily::Raptor: index=5224; kinds=5664; distance=5748; flags=5496; break;
+    case EnemyFamily::Scorpion: index=3000; kinds=3440; distance=3608; flags=3272; break;
+    case EnemyFamily::Spider: index=544; kinds=644; distance=728; flags=560; break;
+    default: return;
+  }
+  uint32_t selected = UINT32_MAX; float nearest = std::numeric_limits<float>::infinity();
+  for (uint32_t i=0;i<count;++i) {
+    const auto actor = Load32(b,vars+table.actors+4*i), bits = Load32(b,vars+flags+4*i);
+    if ((actor != hero && actor != body) || Load32(b,vars+kinds+4*i) != 1) continue;
+    if (family == EnemyFamily::Raptor && (!(bits&1) || (bits&0x4600) || !Load32(b,vars+5244+4*i) || !Load32(b,vars+5328+4*i))) continue;
+    if (family == EnemyFamily::Scorpion && ((bits&0x06000402) || !Load32(b,vars+3104+4*i) || !Load32(b,vars+3020+4*i))) continue;
+    if (family == EnemyFamily::Spider && (!(bits&0x10) || (bits&0x300))) continue;
+    const auto score = LoadF(b,vars+distance+4*i);
+    if (std::isfinite(score) && score >= 0 && score < nearest) { nearest=score; selected=i; }
+  }
+  if (selected != UINT32_MAX) Store32(b,vars+index,selected);
+}
+void CrabPlayerTarget(PPCContext& ctx, uint8_t* b) {
+  const auto* owner = CombatOwner(b,EnemyFamily::Crab);
+  if (!owner) { __imp__sub_82634978(ctx,b); return; }
+  const auto binding = *owner;
+  const auto original = Load32(b,binding.vars+2040);
+  const auto nearest = NearestPlayer(ctx,b,binding,original,true);
+  Store32(b,binding.vars+2040,nearest);
+  __imp__sub_82634978(ctx,b);
+  if (Ptr(b,binding.ai,64,2050) == binding.vars) Store32(b,binding.vars+2040,original);
+}
+void NativePlayerTarget(PPCContext& ctx, uint8_t* b) {
+  __imp__sub_8266F740(ctx,b);
+  const auto* owner = CombatOwner(b,EnemyFamily::Native);
+  if (owner) ctx.r3.u64 = NearestPlayer(ctx,b,*owner,ctx.r3.u32,false);
+}
 void WriteLife(uint8_t* b, const Binding& binding, const EnemyState& e) {
   if (const auto cell = LifeCell(b,binding)) StoreF(b,cell,NativeLife(binding.id.family,e.life));
   if (const auto offset = SecondaryLifeOffset(binding.id.family)) StoreF(b, binding.vars+offset, e.secondary_life);
@@ -1122,14 +1203,10 @@ std::optional<HumanStatus> ReadHumanStatus(const uint8_t* b) {
 }
 void CombatContext(const uint8_t* b) {
   auto& s = Get();
-  if (s.link.role == Role::Host) {
-    // Host hit sequence belongs to the guest's life, not the host's Jack or a
-    // transient one-way connection loss. The guest status changes its life.
-    if (s.combat_epoch != s.link.epoch) {
-      s.combat_epoch = s.link.epoch; s.status_replay.Reset(s.combat_epoch, s.identity);
-      s.next_damage = 0; s.partner_status_time = -1; s.pending_damage.clear();
-    }
-    return;
+  if (s.combat_epoch != s.link.epoch) {
+    s.combat_epoch = s.link.epoch; s.status_replay.Reset(s.combat_epoch, s.identity);
+    s.incarnation = 0; s.next_damage = 0; s.partner_status_time = -1;
+    s.pending_damage.clear(); s.outgoing_damage.clear();
   }
   const auto h = ReadHumanStatus(b);
   if (!h) {
@@ -1151,14 +1228,15 @@ void CombatContext(const uint8_t* b) {
     s.combat_epoch = s.link.epoch; s.incarnation = ++life;
     s.combat_hero = h->hero; s.combat_ai = h->ai; s.combat_vars = h->vars;
     s.damage_replay.Reset(s.combat_epoch, s.identity, s.incarnation);
-    s.status_replay.Reset(s.combat_epoch, s.identity);
-    s.sent_status.reset(); s.next_status = s.next_damage = 0;
-    s.next_status_time = 0; s.partner_status_time = -1; s.pending_damage.clear();
+    // Local revival changes incoming replay only. Outgoing hits and peer
+    // status belong to the other player's independent life.
+    s.sent_status.reset(); s.next_status = 0;
+    s.next_status_time = 0; s.pending_damage.clear();
   }
 }
 void PublishPlayerStatus(const uint8_t* b) {
   auto& s = Get();
-  if (!s.prepared || s.link.role != Role::Guest || !Connected() || !Environment(b, s.world) ||
+  if (!s.prepared || !Connected() || !Environment(b, s.world) ||
       !s.combat_epoch || s.combat_epoch != s.link.epoch || !s.incarnation) return;
   const auto h = ReadHumanStatus(b); if (!h || h->hero != s.combat_hero || h->ai != s.combat_ai || h->vars != s.combat_vars) return;
   PlayerStatus p{s.identity, s.incarnation, s.next_status+1, s.damage_replay.Last(), h->condition};
@@ -1182,12 +1260,14 @@ bool NativeDamage(PPCContext& ctx, uint8_t* b, const DamageEvent& d) {
   std::vector<Binding> bindings;
   for (const auto& [actor, binding] : s.bindings) bindings.push_back(binding);
   const Binding* source = Match(alias->second, bindings); // also refuses mutable-component aliases
+  const auto* authority = AuthorityFor(d.enemy);
   const auto h = ReadHumanStatus(b);
-  if (!source || !RetainedDamageSource(b, *source) || !h || h->hero != s.combat_hero || h->ai != s.combat_ai ||
+  if (!source || !authority || !combat::RemoteOwner(authority->owner, Side(), authority->generation, d.generation, authority->Frozen()) ||
+      !RetainedDamageSource(b, *source) || !h || h->hero != s.combat_hero || h->ai != s.combat_ai ||
       h->vars != s.combat_vars || h->condition == PlayerCondition::Dead) return false;
   constexpr uint32_t pool = 0x82C8EF30;
   const auto count = Load32(b, pool+12), used = Load32(b, pool+8);
-  const float duration = LoadF(b, 0x820B0E48); // Raptor bite 8256D2F0 lifetime.
+  const float duration = d.duration;
   if (!count || count > 4096 || used >= count || !Ptr(b, pool, 0, count*116) ||
       !std::isfinite(duration) || duration <= 0 || duration > 10) return false;
   Scratch scratch(ctx, b);
@@ -1198,7 +1278,7 @@ bool NativeDamage(PPCContext& ctx, uint8_t* b, const DamageEvent& d) {
   const uint32_t result = scratch.Vec(0, 0, 0, 0x100);
   Store32(b, result, UINT32_MAX); Store32(b, result+4, 0);
   StoreF(b, ctx.r1.u32+88, d.direction.z);
-  ctx.r3.u64 = result; ctx.r4.s64 = -1; ctx.r5.u64 = d.flags;
+  ctx.r3.u64 = result; ctx.r4.u64 = d.part; ctx.r5.u64 = d.flags;
   ctx.r6.u64 = source->actor; ctx.r8.u64 = h->hero; ctx.r9.u64 = d.magnitude;
   ctx.r10.u64 = (uint64_t(std::bit_cast<uint32_t>(d.direction.x)) << 32) | std::bit_cast<uint32_t>(d.direction.y);
   ctx.f1.f64 = duration;
@@ -1212,11 +1292,11 @@ void CombatBeforeAi(PPCContext& ctx, uint8_t* b) {
   auto& s = Get();
   CombatContext(b);
   for (auto& entry : TakeCombat()) {
-    if (s.link.role == Role::Host) {
+    if (entry.message.type == MessageType::PlayerStatus) {
       const auto old = s.status_replay.Status();
       if (s.status_replay.Accept(entry.message, entry.received, Now())) {
         s.partner_status_time = Now();
-        if (old.incarnation != s.status_replay.Status().incarnation) { s.next_damage = 0; s.pending_damage.clear(); }
+        if (old.incarnation != s.status_replay.Status().incarnation) { s.next_damage = 0; s.outgoing_damage.clear(); }
 #if defined(KK_DEV_TOOLS)
         const auto& p = s.status_replay.Status();
         static unsigned logged = 0;
@@ -1237,14 +1317,15 @@ void CombatBeforeAi(PPCContext& ctx, uint8_t* b) {
       }
     }
   }
-  if (s.link.role == Role::Host) {
-    while (!s.pending_damage.empty()) {
-      const auto& pending = s.pending_damage.front();
-      if (!combat::Fresh(pending.received, Now())) { ++s.hits_refused; s.pending_damage.pop_front(); continue; }
+  {
+    while (!s.outgoing_damage.empty()) {
+      const auto& pending = s.outgoing_damage.front();
+      if (!combat::Fresh(pending.received, Now())) { ++s.hits_refused; s.outgoing_damage.pop_front(); continue; }
       if (!SubmitCombat(pending.message, pending.received)) break;
-      ++s.hits_queued; s.pending_damage.pop_front();
+      ++s.hits_queued; s.outgoing_damage.pop_front();
     }
-  } else {
+  }
+  {
     while (!s.pending_damage.empty()) {
       const auto& entry = s.pending_damage.front();
       // Wait briefly for the normal enemy matcher, without advancing replay.
@@ -1913,6 +1994,41 @@ void AfterAi(PPCContext& ctx, uint8_t* b, uint32_t w) {
   Scan(b);
   Replicas(ctx, b, true);
   HoldReplicas(ctx, b, true);
+#if defined(KK_DEV_TOOLS)
+  if (Now() >= s.next_targets) {
+    s.next_targets = Now()+1;
+    const auto body = kk::PartnerBodyCombatActor(b), hero = Load32(b, 0x82CCBF7C);
+    for (const auto& [actor, binding] : s.bindings) {
+      const auto* authority = AuthorityFor(binding.id);
+      if (!authority || !authority->Runs(Side()) || !ValidBinding(b, binding)) continue;
+      uint32_t handle = 0, target = 0;
+      switch (binding.id.family) {
+        case EnemyFamily::Raptor: handle = 5216; break;
+        case EnemyFamily::Worm: handle = 2948; break;
+        case EnemyFamily::Scorpion: handle = 2992; break;
+        case EnemyFamily::Centipede: handle = 5888; break;
+        case EnemyFamily::Spider: handle = 1420; break;
+        case EnemyFamily::Crab: handle = 1048; break;
+        case EnemyFamily::Bat: target = Load32(b, binding.vars+848); break;
+        case EnemyFamily::Native: target = Load32(b, binding.vars+4088); break;
+        default: continue;
+      }
+      if (handle && PoseAddress(binding.vars, handle+8)) {
+        const auto record = stimulus_debug::ReadHandle([&](uint32_t p) { return Load32(b,p); }, binding.vars+handle);
+        if (record.valid) target = record.target;
+      }
+      if (s.combat_targets[actor] == target) continue;
+      s.combat_targets[actor] = target;
+      if (target == hero) ++s.targets_host;
+      if (body && target == body) ++s.targets_guest;
+      REXLOG_INFO("COOP TARGET family={} actor={:08X} target={:08X} player={} choices-host={} choices-guest={} authority={}",
+          uint16_t(binding.id.family), actor, target, target == hero ? "local" : body && target == body ? "partner" : "other",
+          s.targets_host, s.targets_guest, s.link.role == Role::Host ? "host" : "guest");
+    }
+    REXLOG_INFO("COOP COMBAT level={} start={} targets-host={} targets-guest={} hits-host={} hits-guest={} guest-native-queued={} refused={} body={:08X}",
+        s.identity.level, s.identity.start, s.targets_host, s.targets_guest, s.hits_host, s.hits_produced, s.hits_native, s.hits_refused, body);
+  }
+#endif
   {
     Frame frame{s.identity, Now(), {}};
     for (const auto& [local, r] : s.records) {
@@ -2299,21 +2415,24 @@ void EnemyGameFrame() {
     // Release immediately on loss, but retain this load's identity so recovery
     // can revalidate it. The synchronous load boundary owns pointer teardown.
     auto& s = Get(); ShotSummary("session-inactive"); s.prepared = false; s.driving.clear(); SetEnemyCounters({});
-    s.pending_damage.clear(); s.sent_status.reset(); s.partner_status_time = -1;
-    if (s.link.role == Role::Guest) {
-      s.combat_epoch = s.incarnation = 0; s.damage_replay = {};
-    }
+    s.pending_damage.clear(); s.outgoing_damage.clear(); s.sent_status.reset(); s.partner_status_time = -1;
+    s.combat_epoch = s.incarnation = 0; s.damage_replay = {};
     ClearCombat();
   }
 }
 bool EnemyCombatReference(const uint8_t* b, uint32_t owner, uint32_t ai, uint32_t vars, uint32_t offset) {
   auto& s = Get();
-  if (!s.prepared || s.link.role != Role::Host || !Connected() || !Environment(b, s.world) ||
-      Now()-s.prepared_at > .5 || !PoseAddress(vars, 6324)) return false;
+  if (!s.prepared || !Connected() || !Environment(b, s.world) ||
+      Now()-s.prepared_at > .5) return false;
   const auto binding = s.bindings.find(owner);
-  return binding != s.bindings.end() && binding->second.id.family == EnemyFamily::Raptor &&
-      binding->second.ai == ai && binding->second.vars == vars && ValidBinding(b, binding->second) &&
-      combat::CandidateReference(offset, Load32(b, vars+5236));
+  if (binding == s.bindings.end() || binding->second.ai != ai || binding->second.vars != vars ||
+      !ValidBinding(b, binding->second)) return false;
+  const auto table = combat::Candidates(binding->second.id.family);
+  if ((binding->second.id.family == EnemyFamily::Crab && offset == 1056) ||
+      (binding->second.id.family == EnemyFamily::Bat && offset == 848) ||
+      (binding->second.id.family == EnemyFamily::Native && offset == 4088)) return true;
+  return table.limit && PoseAddress(vars, table.actors+4*table.limit) &&
+      combat::CandidateReference(table, offset, Load32(b, vars+table.count));
 }
 bool EnemyNearPlayer(const uint8_t* b,const PlayerPose& player,float radius) {
   uint32_t begin=0,end=0;
@@ -2336,7 +2455,7 @@ bool EnemyPartnerCombatReady() {
   const auto& s = Get(); const auto& p = s.status_replay.Status();
   const auto flow=SessionFlowSnapshot();
   if (flow.active && flow.partner_life.downed) return false;
-  return s.link.role == Role::Host && s.prepared && Connected() && s.combat_epoch == s.link.epoch &&
+  return s.prepared && Connected() && s.combat_epoch == s.link.epoch &&
       p.world == s.identity && p.incarnation && p.condition != PlayerCondition::Dead &&
       combat::Fresh(s.partner_status_time, Now()) && s.link.partner && s.link.partner->level == s.identity.level;
 }
@@ -2354,6 +2473,15 @@ bool EnemyDamageEnqueue(PPCContext& ctx, uint8_t* b, uint32_t body) {
   }
   const auto action = combat::FilterVictim(4, victim, body, Load32(b, 0x82CCBF7C),
       true, matched_source, s.injecting_damage);
+#if defined(KK_DEV_TOOLS)
+  if (action == combat::VictimAction::Pass && victim == Load32(b, 0x82CCBF7C) && !s.injecting_damage) {
+    const auto binding = s.bindings.find(source);
+    if (binding != s.bindings.end()) {
+      const auto* a = AuthorityFor(binding->second.id);
+      if (a && a->Runs(Side())) ++s.hits_host;
+    }
+  }
+#endif
   if (action == combat::VictimAction::Pass) return false;
   if (action == combat::VictimAction::ProtectBody) {
     ++s.hits_produced;
@@ -2362,18 +2490,22 @@ bool EnemyDamageEnqueue(PPCContext& ctx, uint8_t* b, uint32_t body) {
         Load32(b, payload+88), Load32(b, payload+92),
         {LoadF(b, payload+24), LoadF(b, payload+28), LoadF(b, payload+32)}};
     damage.time = Now();
+    damage.part = Load32(b, payload+84);
+    damage.duration = float(ctx.f1.f64);
+    if (binding != s.bindings.end() && AuthorityFor(binding->second.id))
+      damage.generation = AuthorityFor(binding->second.id)->generation;
     if (binding != s.bindings.end()) damage.enemy = binding->second.id;
     const bool audited = binding != s.bindings.end() &&
-        AuthorityFor(binding->second.id) && AuthorityFor(binding->second.id)->Runs(EnemyOwner::Host) &&
-        binding->second.id.family == EnemyFamily::Raptor && ValidBinding(b, binding->second) &&
-        uint32_t(ctx.lr) == 0x8261DEEC && source == Load32(b, 0x82CCBF6C) &&
-        combat::RaptorHit(damage.flags, damage.magnitude);
+        AuthorityFor(binding->second.id) && AuthorityFor(binding->second.id)->Runs(Side()) &&
+        ValidBinding(b, binding->second) &&
+        uint32_t(ctx.lr) == 0x8261DEEC &&
+        combat::NativeHit(binding->second.id.family, damage.flags, damage.magnitude);
     const bool qualified = audited && EnemyPartnerCombatReady() && ValidDamageEvent(damage);
     bool queued = false;
     if (qualified) {
       Message m; m.type = MessageType::DamageEvent; m.epoch = s.combat_epoch; m.damage = damage;
-      if (s.pending_damage.empty() && SubmitCombat(m, Now())) { queued = true; ++s.hits_queued; }
-      else if (s.pending_damage.size() < combat::kQueueLimit) { s.pending_damage.push_back({m, Now()}); queued = true; }
+      if (s.outgoing_damage.empty() && SubmitCombat(m, Now())) { queued = true; ++s.hits_queued; }
+      else if (s.outgoing_damage.size() < combat::kQueueLimit) { s.outgoing_damage.push_back({m, Now()}); queued = true; }
       if (queued) ++s.next_damage;
     }
     if (!queued) ++s.hits_refused;
@@ -2511,10 +2643,25 @@ REX_HOOK_RAW(sub_82428020) {
 REX_HOOK_RAW(sub_82464680) {
   kk::coop::DevRaptorVisibility(ctx, base, false);
 }
-REX_HOOK_RAW(sub_8254A8F8) {
-  kk::coop::DevRaptorSelection(ctx, base);
-}
 #endif
+REX_HOOK_RAW(sub_8254A8F8) {
+  kk::coop::PlayerPriority(base,kk::coop::EnemyFamily::Raptor);
+#if defined(KK_DEV_TOOLS)
+  kk::coop::DevRaptorSelection(ctx, base);
+#else
+  __imp__sub_8254A8F8(ctx,base);
+#endif
+}
+REX_HOOK_RAW(sub_825ED648) {
+  kk::coop::PlayerPriority(base,kk::coop::EnemyFamily::Scorpion);
+  __imp__sub_825ED648(ctx,base);
+}
+REX_HOOK_RAW(sub_825EDC70) {
+  kk::coop::PlayerPriority(base,kk::coop::EnemyFamily::Spider);
+  __imp__sub_825EDC70(ctx,base);
+}
+REX_HOOK_RAW(sub_82634978) { kk::coop::CrabPlayerTarget(ctx,base); }
+REX_HOOK_RAW(sub_8266F740) { kk::coop::NativePlayerTarget(ctx,base); }
 REX_HOOK_RAW(sub_8261DE68) {
 #if defined(KK_DEV_TOOLS)
   if (REXCVAR_GET(kk_coop_enabled) && kk::coop::EnemyConnectionReady()) {

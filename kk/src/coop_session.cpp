@@ -171,8 +171,9 @@ void CoopSession::Receive(const Message& m, double now) {
           ++camera_info_.accepted_count; camera_info_.accepted=now; camera_info_.accepted_sequence=m.sequence;
           camera_seen_=true; camera_sequence_=m.sequence; break;
         case MessageType::DamageEvent: case MessageType::PlayerStatus:
-          if (state_ != SessionState::Connected ||
-              (m.type == MessageType::DamageEvent ? config_.role != Role::Guest : config_.role != Role::Host)) return;
+          // Either simulation owner can hit the opposite player. The game
+          // thread validates enemy ownership/generation before native enqueue.
+          if (state_ != SessionState::Connected) return;
           if (incoming_combat_.size() >= combat::kQueueLimit) { End(now); return; }
           incoming_combat_.push_back({m, now}); break;
         case MessageType::Cheats:
@@ -413,8 +414,7 @@ std::vector<Message> CoopSession::TakeStory() {
 }
 bool CoopSession::QueueCombat(const Message& m, double submitted) {
   if (state_ != SessionState::Connected || !IsCombatMessage(m.type) || m.epoch != epoch_ ||
-      !std::isfinite(submitted) || outgoing_combat_.size() >= combat::kQueueLimit ||
-      (m.type == MessageType::DamageEvent ? config_.role != Role::Host : config_.role != Role::Guest)) return false;
+      !std::isfinite(submitted) || outgoing_combat_.size() >= combat::kQueueLimit) return false;
   std::vector<uint8_t> bytes; if (!Encode(m, bytes)) return false;
   outgoing_combat_.push_back({m, submitted}); return true;
 }

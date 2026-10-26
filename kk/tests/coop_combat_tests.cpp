@@ -53,11 +53,11 @@ void StimulusDiagnostics() {
   Check(!ReadPool(u32, 1).valid, "record span overflow refused");
 }
 void Codecs() {
-  static_assert(kProtocolVersion == 21);
+  static_assert(kProtocolVersion == 22);
   for (const auto& m : {Damage(), Status()}) {
     const auto bytes = Packet(m); Message out;
-    Check(bytes.size() == (m.type == MessageType::DamageEvent ? 90u : 53u), "fixed bounded wire length");
-    Check(bytes[4] == 0 && bytes[5] == kProtocolVersion && bytes[7] == uint16_t(m.type), "protocol 21 byte order");
+    Check(bytes.size() == (m.type == MessageType::DamageEvent ? 102u : 53u), "fixed bounded wire length");
+    Check(bytes[4] == 0 && bytes[5] == kProtocolVersion && bytes[7] == uint16_t(m.type), "protocol 22 byte order");
     Check(Decode(bytes, out) && Packet(out) == bytes, "canonical combat round trip");
     for (size_t n = 0; n < bytes.size(); ++n) {
       out.type = MessageType::Bye;
@@ -84,7 +84,25 @@ void Codecs() {
   m = Damage(); m.damage.direction.x = std::numeric_limits<float>::quiet_NaN(); Check(!Encode(m, out), "NaN direction refused");
   m.damage.direction = {0, 0, 0}; Check(!Encode(m, out), "zero direction refused");
   m.damage.direction = {2, 0, 0}; Check(!Encode(m, out), "unbounded direction refused");
-  m = Damage(); m.damage.enemy.family = EnemyFamily::Worm; Check(!Encode(m, out), "unaudited family refused");
+  m = Damage(); m.damage.enemy.family = EnemyFamily::Prey; Check(!Encode(m, out), "nonattacking family refused");
+  for (auto family : {EnemyFamily::Crab, EnemyFamily::Worm, EnemyFamily::Scorpion, EnemyFamily::Bat,
+       EnemyFamily::Centipede, EnemyFamily::Native, EnemyFamily::Marine, EnemyFamily::VRex,
+       EnemyFamily::SwampCrawler, EnemyFamily::SwampCrawlerSmall, EnemyFamily::Spider, EnemyFamily::Pny}) {
+    auto hit = Damage(); hit.damage.enemy.family = family; hit.damage.flags = 4096;
+    hit.damage.magnitude = 10; hit.damage.direction = {3, 4, 0}; hit.damage.part = 64; hit.damage.duration = .025f;
+    Message decoded;
+    Check(Decode(Packet(hit), decoded) && decoded.damage.part == 64 && decoded.damage.duration == .025f &&
+        decoded.damage.direction.x == 3 && decoded.damage.enemy.family == family,
+        "native family hit retains raw vector, part and lifetime");
+    hit.damage.duration = 0; Check(!Encode(hit, out), "zero lifetime refused");
+    hit.damage.duration = 11; Check(!Encode(hit, out), "excess lifetime refused");
+    hit.damage.duration = .001f; hit.damage.part = 0x40000000;
+    Check(!Encode(hit, out), "native address cannot cross as a hit part");
+    hit.damage.part = 64; hit.damage.flags = UINT32_MAX;
+    Check(!Encode(hit, out), "unbounded native flags refused");
+    hit.damage.flags = 4096; hit.damage.magnitude = 1000001;
+    Check(!Encode(hit, out), "native damage magnitude bounded");
+  }
   m = Damage(); m.damage.enemy.source = 0; Check(!Encode(m, out), "missing enemy identity refused");
   m = Damage(); m.damage.incarnation = 0; Check(!Encode(m, out), "missing life refused");
   m = Damage(); m.damage.number = 0; Check(!Encode(m, out), "zero damage sequence refused");
@@ -100,6 +118,13 @@ void Codecs() {
   wire = Packet(Status()); wire.back() = 99; Check(!Decode(wire, decoded), "malformed wire condition refused");
 }
 void Replay() {
+  Check(RemoteOwner(EnemyOwner::Host, EnemyOwner::Guest, 4, 4, false) &&
+      RemoteOwner(EnemyOwner::Guest, EnemyOwner::Host, 7, 7, false), "either committed simulation owner may hit remote player");
+  Check(!RemoteOwner(EnemyOwner::Host, EnemyOwner::Host, 4, 4, false) &&
+      !RemoteOwner(EnemyOwner::Host, EnemyOwner::Guest, 5, 4, false) &&
+      !RemoteOwner(EnemyOwner::Guest, EnemyOwner::Host, 4, 5, false) &&
+      !RemoteOwner(EnemyOwner::Host, EnemyOwner::Guest, 4, 4, true) &&
+      !RemoteOwner(EnemyOwner::Host, EnemyOwner::Guest, 0, 0, false), "replica, old generation and frozen-owner hits cannot damage Jack");
   Check(DamageClock(10000, 10000.1) && DamageClock(9999, 10000) && DamageClock(10000.5, 10000), "fresh hits use host clock independently of guest clock");
   Check(!DamageClock(9998.99, 10000) && !DamageClock(10000.51, 10000), "delayed and future native hits refused against host pose");
   DamageReplay replay; replay.Reset(90, World(), 11);
@@ -145,6 +170,15 @@ void VictimsAndLease() {
   for (auto offset : {0u, 5100u, 5216u, 6240u, 6245u, 6324u, 19812u})
     Check(!CandidateReference(offset, 20), "hero, handle, unknown and mission fields still refuse");
   Check(!CandidateReference(6244, 0) && !CandidateReference(6248, 1) && !CandidateReference(6244, 21), "invalid/unoccupied candidate slots refuse");
+  for (auto family : {EnemyFamily::Raptor, EnemyFamily::Worm, EnemyFamily::Scorpion, EnemyFamily::Spider, EnemyFamily::Centipede}) {
+    const auto table = Candidates(family);
+    Check(CandidateReference(table, table.actors, 1) &&
+        CandidateReference(table, table.actors+4*(table.limit-1), table.limit), "occupied family candidate span allowed");
+    Check(!CandidateReference(table, table.actors, 0) && !CandidateReference(table, table.actors, table.limit+1) &&
+        !CandidateReference(table, table.actors+1, table.limit) && !CandidateReference(table, table.actors+4*table.limit, table.limit),
+        "family candidate alias, overflow and unoccupied guards retained");
+    Check(!CandidateReference(table, 19812, table.limit), "mission cursor never exempted as combat reference");
+  }
 }
 void Deaths() {
   using namespace revive;
@@ -206,7 +240,12 @@ struct Pair {
 };
 void Handoff() {
   Pair p; Check(p.host.State() == SessionState::Connected && p.guest.Epoch() == 90, "session epoch learned");
-  Check(!p.guest.QueueCombat(Damage(), .1) && !p.host.QueueCombat(Status(), .1), "wrong-role outgoing rejected");
+  {
+    Pair reverse;
+    Check(reverse.guest.QueueCombat(Damage(), .1) && reverse.host.QueueCombat(Status(), .1), "guest owner sends hit and host publishes independent life");
+    reverse.Tick(.11); reverse.Tick(.12);
+    Check(reverse.host.TakeCombat().size() == 1 && reverse.guest.TakeCombat().size() == 1, "reverse owner hit and life status cross reliable transport");
+  }
   auto stale = Damage(); stale.epoch = 91;
   Check(!p.host.QueueCombat(stale, .1), "wrong-epoch outgoing rejected");
   CombatMailbox host_box, guest_box;
@@ -233,9 +272,9 @@ void Handoff() {
   stale = Damage(); stale.epoch = 100; Check(host_box.Submit(stale, 2), "replacement session fixture");
   host_box.Exchange(p.host, 3.01); p.Tick(3.01);
   Check(p.a.combat_sent == 2, "expired and foreign-session mailbox entries discarded");
-  // Wrong-role incoming packets must not reach game memory, even if well formed.
+  // Both directions reach the game-thread owner/generation validator.
   p.b.incoming.push_back(Packet(Status())); p.a.incoming.push_back(Packet(Damage())); p.Tick(3.02);
-  Check(p.host.TakeCombat().empty() && p.guest.TakeCombat().empty(), "wrong-role incoming refused");
+  Check(p.host.TakeCombat().size() == 1 && p.guest.TakeCombat().size() == 1, "both directions reach ownership validation");
   p.a.incoming.push_back(Packet(Status())); p.host.Tick(3.03); p.host.End(3.04);
   Check(p.host.TakeCombat().empty(), "end clears incoming combat");
 }

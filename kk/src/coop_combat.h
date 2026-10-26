@@ -19,8 +19,42 @@ inline bool RaptorHit(uint32_t flags, uint32_t magnitude) {
   return (flags == 4096 && magnitude == 1) || (flags == 16644 && magnitude == 1000) ||
       (flags == 16388 && (magnitude == 6 || magnitude == 10)) || (flags == 16386 && magnitude == 6);
 }
+// The authority captures an already produced native type-4 event. Bounds here
+// do not create hits or decide contact, range, immunity or the native reaction.
+inline bool NativeHit(EnemyFamily family, uint32_t flags, uint32_t magnitude) {
+  if (family == EnemyFamily::Raptor) return RaptorHit(flags, magnitude);
+  switch (family) {
+    case EnemyFamily::Crab: case EnemyFamily::Worm: case EnemyFamily::Scorpion:
+    case EnemyFamily::Bat: case EnemyFamily::Centipede: case EnemyFamily::Native:
+    case EnemyFamily::Marine: case EnemyFamily::VRex: case EnemyFamily::SwampCrawler:
+    case EnemyFamily::SwampCrawlerSmall: case EnemyFamily::Spider: case EnemyFamily::Pny:
+      return flags && flags <= 0x00FFFFFF && magnitude && magnitude <= 1000000;
+    default: return false;
+  }
+}
+inline bool RemoteOwner(EnemyOwner owner, EnemyOwner local, uint32_t generation,
+                        uint32_t hit_generation, bool frozen) {
+  return !frozen && owner != local && generation && generation == hit_generation;
+}
 inline bool CandidateReference(uint32_t offset, uint32_t count) {
   return count <= 20 && offset >= 6244 && offset < 6244+4*count && (offset-6244)%4 == 0;
+}
+struct CandidateTable { uint32_t count = 0, actors = 0, limit = 0; };
+inline CandidateTable Candidates(EnemyFamily family) {
+  // Native registration helpers: 8246DC58, 825533E0, 82508158,
+  // 826E6948 and ScoloInterest27. Offsets are never peer supplied.
+  switch (family) {
+    case EnemyFamily::Raptor: return {5236, 6244, 20};
+    case EnemyFamily::Worm: return {2964, 4056, 20};
+    case EnemyFamily::Scorpion: return {3012, 4020, 20};
+    case EnemyFamily::Spider: return {552, 1140, 20};
+    case EnemyFamily::Centipede: return {1400, 3236, 50};
+    default: return {};
+  }
+}
+inline bool CandidateReference(CandidateTable table, uint32_t offset, uint32_t count) {
+  return table.limit && count <= table.limit && offset >= table.actors &&
+      offset < table.actors+4*count && (offset-table.actors)%4 == 0;
 }
 enum class VictimAction { Pass, ProtectBody, SuppressDuplicate };
 inline VictimAction FilterVictim(uint32_t type, uint32_t victim, uint32_t body,

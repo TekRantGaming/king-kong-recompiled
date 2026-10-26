@@ -270,8 +270,12 @@ bool ValidInventory(const InventoryState& i) {
 bool ValidDamageEvent(const DamageEvent& d) {
   const float length = std::hypot(d.direction.x, d.direction.y, d.direction.z);
   return ValidEnemyWorld(d.world) && d.incarnation && d.number && d.enemy.source &&
-      d.enemy.family == EnemyFamily::Raptor && combat::RaptorHit(d.flags, d.magnitude) &&
-      Point(d.direction) && length >= .9f && length <= 1.1f && std::isfinite(d.time) && d.time >= 0 && d.time < 1e12;
+      combat::NativeHit(d.enemy.family, d.flags, d.magnitude) &&
+      Point(d.direction) && length <= 2000 &&
+      (d.enemy.family != EnemyFamily::Raptor || (length >= .9f && length <= 1.1f)) &&
+      (d.part == UINT32_MAX || d.part <= 1024) &&
+      d.generation && std::isfinite(d.duration) && d.duration > 0 && d.duration <= 10 &&
+      std::isfinite(d.time) && d.time >= 0 && d.time < 1e12;
 }
 bool ValidPlayerStatus(const PlayerStatus& p) {
   return ValidEnemyWorld(p.world) && p.incarnation && p.number &&
@@ -366,6 +370,8 @@ bool Encode(const Message& m, std::vector<uint8_t>& out) {
       payload.U(m.damage.enemy.source, 8); payload.U(m.damage.enemy.sequence, 4); payload.U(uint16_t(m.damage.enemy.family), 2);
       payload.U(m.damage.flags, 4); payload.U(m.damage.magnitude, 4); WriteVector(payload, m.damage.direction);
       payload.U(std::bit_cast<uint64_t>(m.damage.time), 8);
+      payload.U(m.damage.part, 4); payload.U(std::bit_cast<uint32_t>(m.damage.duration), 4);
+      payload.U(m.damage.generation, 4);
       break;
     case MessageType::PlayerStatus:
       if (!ValidPlayerStatus(m.player_status)) return false;
@@ -572,6 +578,8 @@ bool Decode(std::span<const uint8_t> bytes, Message& out) {
       m.damage.enemy = {r.U(8), uint32_t(r.U(4)), EnemyFamily(r.U(2))};
       m.damage.flags = uint32_t(r.U(4)); m.damage.magnitude = uint32_t(r.U(4)); m.damage.direction = ReadVector(r);
       m.damage.time = std::bit_cast<double>(r.U(8));
+      m.damage.part = uint32_t(r.U(4)); m.damage.duration = std::bit_cast<float>(uint32_t(r.U(4)));
+      m.damage.generation = uint32_t(r.U(4));
       if (!ValidDamageEvent(m.damage)) return false;
       break;
     case MessageType::PlayerStatus:
