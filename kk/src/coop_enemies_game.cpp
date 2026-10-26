@@ -41,6 +41,7 @@ REX_EXTERN(__imp__sub_826A0920);
 REX_EXTERN(__imp__sub_82548BC0);
 REX_EXTERN(__imp__sub_82538B70);
 REX_EXTERN(__imp__sub_82634978);
+REX_EXTERN(__imp__sub_8265BF60);
 REX_EXTERN(__imp__sub_82463A58);
 REX_EXTERN(__imp__sub_8266F740);
 REX_EXTERN(__imp__sub_8266ACC8);
@@ -844,6 +845,26 @@ void PlayerPriority(uint8_t* b, EnemyFamily family) {
   }
   if (selected != UINT32_MAX) Store32(b,vars+index,selected);
 }
+thread_local uint32_t crab_player_scope = 0;
+uint32_t CrabSelectedPlayer(const uint8_t* b, const Binding& binding, uint32_t hero) {
+  const auto body=kk::PartnerBodyCombatActor(b);
+  const auto claim=stimulus_debug::ReadHandle([&](uint32_t p) { return Load32(b,p); },binding.vars+1048);
+  return body && claim.valid && (claim.id>>24)==16 && claim.source==binding.actor && claim.target==body ? body : hero;
+}
+void CrabFight(PPCContext& ctx, uint8_t* b) {
+  const auto* owner=CombatOwner(b,EnemyFamily::Crab);
+  const auto hero=Load32(b,0x82CCBF7C);
+  if (!owner || Load32(b,owner->vars+2040)!=hero) { __imp__sub_8265BF60(ctx,b); return; }
+  const auto binding=*owner;
+  const auto previous=crab_player_scope;
+  crab_player_scope=binding.actor;
+  // CR kind1 uses its cached Jack to choose the native melee branch rather
+  // than an NPC grab. Only an already selected native partner claim aliases it.
+  Store32(b,binding.vars+2040,CrabSelectedPlayer(b,binding,hero));
+  __imp__sub_8265BF60(ctx,b);
+  if (Ptr(b,binding.ai,64,2050)==binding.vars && ValidBinding(b,binding)) Store32(b,binding.vars+2040,hero);
+  crab_player_scope=previous;
+}
 void CrabPlayerTarget(PPCContext& ctx, uint8_t* b) {
   const auto* owner = CombatOwner(b,EnemyFamily::Crab);
   if (!owner) { __imp__sub_82634978(ctx,b); return; }
@@ -876,7 +897,9 @@ void CrabPlayerTarget(PPCContext& ctx, uint8_t* b) {
     }
   }
 #endif
-  if (Ptr(b,binding.ai,64,2050) == binding.vars) Store32(b,binding.vars+2040,original);
+  if (Ptr(b,binding.ai,64,2050) == binding.vars)
+    Store32(b,binding.vars+2040,crab_player_scope==binding.actor ?
+        CrabSelectedPlayer(b,binding,Load32(b,0x82CCBF7C)) : original);
 }
 void NativePlayerTarget(PPCContext& ctx, uint8_t* b) {
   __imp__sub_8266F740(ctx,b);
@@ -925,7 +948,7 @@ void ContactVictim(PPCContext& ctx, const uint8_t* b) {
   const auto& s = Get();
   if (!s.prepared || !Connected() || !Environment(b,s.world) || Now()-s.prepared_at>.5) return;
   const auto it=s.bindings.find(ctx.r6.u32);
-  if (it==s.bindings.end() || (it->second.id.family!=EnemyFamily::Centipede && it->second.id.family!=EnemyFamily::Crab) ||
+  if (it==s.bindings.end() || it->second.id.family!=EnemyFamily::Centipede ||
       it->second.vars!=ctx.r30.u32 || !ValidBinding(b,it->second)) return;
   const auto* a=AuthorityFor(it->second.id);
   if (!a || !a->Runs(Side())) return;
@@ -1452,8 +1475,9 @@ void CombatBeforeAi(PPCContext& ctx, uint8_t* b) {
       const bool queued = accepted && NativeDamage(ctx, b, entry.message.damage);
       if (queued) ++s.hits_native; else ++s.hits_refused;
 #if defined(KK_DEV_TOOLS)
-      REXLOG_INFO("BITE guest number={} incarnation={} replay-accepted={} native-queued={} processed={} injured=observe-native-consumer",
-          entry.message.damage.number, entry.message.damage.incarnation, accepted, queued, s.damage_replay.Last());
+      REXLOG_INFO("BITE guest number={} incarnation={} replay-accepted={} native-queued={} processed={} injured=observe-native-consumer role={} family={} generation={}",
+          entry.message.damage.number, entry.message.damage.incarnation, accepted, queued, s.damage_replay.Last(),
+          s.link.role==Role::Host ? "host" : "guest",uint16_t(entry.message.damage.enemy.family),entry.message.damage.generation);
 #endif
       s.pending_damage.pop_front();
     }
@@ -2673,10 +2697,11 @@ bool EnemyDamageEnqueue(PPCContext& ctx, uint8_t* b, uint32_t body) {
     if (!audited) kk::PartnerBodyTriggerReference(b, payload); // unknown reference still releases auto leases
 #if defined(KK_DEV_TOOLS)
     static unsigned logged = 0;
-    if (logged++ < 256) REXLOG_INFO("BITE host melee-enqueue source={:08X} victim={:08X} body={:08X} flags={:08X} magnitude={} qualified={} queued={} number={} body-protected=true produced={} sent={} refused={} audited={} ready={} wire={} direction-length={:.3f} part={} duration={:.6f} generation={} caller={:08X}",
+    if (logged++ < 256) REXLOG_INFO("BITE host melee-enqueue source={:08X} victim={:08X} body={:08X} flags={:08X} magnitude={} qualified={} queued={} number={} body-protected=true produced={} sent={} refused={} audited={} ready={} wire={} direction-length={:.3f} part={} duration={:.6f} generation={} caller={:08X} role={} family={} incarnation={}",
         source, victim, body, damage.flags, damage.magnitude, qualified, queued, damage.number,
         s.hits_produced, s.hits_queued, s.hits_refused, audited, ready, wire_valid,
-        std::hypot(damage.direction.x,damage.direction.y,damage.direction.z), damage.part, damage.duration, damage.generation,uint32_t(ctx.lr));
+        std::hypot(damage.direction.x,damage.direction.y,damage.direction.z), damage.part, damage.duration, damage.generation,uint32_t(ctx.lr),
+        s.link.role==Role::Host ? "host" : "guest",uint16_t(damage.enemy.family),damage.incarnation);
 #endif
   }
 #if defined(KK_DEV_TOOLS)
@@ -2826,6 +2851,7 @@ REX_HOOK_RAW(sub_825EDC70) {
   __imp__sub_825EDC70(ctx,base);
 }
 REX_HOOK_RAW(sub_82634978) { kk::coop::CrabPlayerTarget(ctx,base); }
+REX_HOOK_RAW(sub_8265BF60) { kk::coop::CrabFight(ctx,base); }
 REX_HOOK_RAW(sub_8266F740) { kk::coop::NativePlayerTarget(ctx,base); }
 REX_HOOK_RAW(sub_8261DE68) {
   kk::coop::ContactVictim(ctx,base);
