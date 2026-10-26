@@ -4,6 +4,7 @@ import importlib.util
 import json
 from pathlib import Path
 import sys
+sys.dont_write_bytecode = True
 
 spec = importlib.util.spec_from_file_location("world_diff", Path(__file__).with_name("world-diff.py"))
 w = importlib.util.module_from_spec(spec)

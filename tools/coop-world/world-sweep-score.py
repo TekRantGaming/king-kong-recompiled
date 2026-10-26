@@ -7,6 +7,7 @@ from pathlib import Path
 import re
 import sys
 import time
+sys.dont_write_bytecode = True
 
 spec = importlib.util.spec_from_file_location("world_diff", Path(__file__).with_name("world-diff.py"))
 w = importlib.util.module_from_spec(spec)
@@ -68,7 +69,7 @@ def score(evidence_dir, run):
                             digest[key] = max(digest[key], int(value))
                     if "KK co-op desync: decision=" in line or "KK co-op desync: completed=" in line:
                         digest["decisions"].append(line.strip())
-                    if "chaos" in line.lower() and "drop" in line.lower():
+                    if "KK dev UDP faults:" in line:
                         chaos_counters.append(line.strip())
                     shot_applied += "ENEMIES shot number=" in line and "native-queued" in line
                     story += "KK co-op story:" in line and any(s in line for s in ("native hint recorded", "applied", "native loop"))

@@ -8919,6 +8919,10 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
       const auto value=t.substr(8);
       coop::SelectSessionStart(value=="continue" ? play::StartRequest{play::StartKind::kContinue,-1,-1,{}} :
           play::StartRequest{play::StartKind::kChapter,ChapterSlot(),std::atoi(value.c_str()),{}});
+      // Automated sweeps use the real Direct IP lobby, which requires the host
+      // to ready the displayed choice as well as the guest.
+      const auto model=coop::Social().Snapshot();
+      if (model.choice.valid()) coop::Social().Act({coop::SocialAction::SetReady,0,true,model.choice});
       if (!coop::RequestSessionStart()) { --next; at=now+0.5; }
       return;
     }
