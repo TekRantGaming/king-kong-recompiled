@@ -69,6 +69,7 @@ REX_EXTERN(__imp__sub_82449F18);
 REX_EXTERN(__imp__sub_8242AA88);
 REX_EXTERN(__imp__sub_8271A6F8);
 REX_EXTERN(__imp__sub_827128F0);
+REX_EXTERN(__imp__sub_8286A660);
 #if defined(KK_DEV_TOOLS)
 namespace kk {
 void DevFishAfterWorld(PPCContext&, uint8_t*);
@@ -88,6 +89,20 @@ uint32_t Ptr(const uint8_t* b, uint32_t p, uint32_t offset, uint32_t bytes) {
   if (!Range(p, offset + 4)) return 0;
   const uint32_t q = Load32(b, p + offset);
   return Range(q, bytes) ? q : 0;
+}
+void GroupInstanceLookup(PPCContext& ctx, uint8_t* b) {
+  // C90: the 26 October host crash is the first load in 8286A660,
+  // group_instance_find, with object argument 0100005C. Missing groups already
+  // return null natively. Reject an invalid object before reading its flags.
+  if (REXCVAR_GET(kk_coop_enabled) && !Range(ctx.r3.u32, 4)) {
+    static unsigned logged = 0;
+    if (logged++ < 16)
+      REXLOG_WARN("KK co-op group lookup: invalid object {:08X} tag={} caller={:08X}; missing group returned",
+          ctx.r3.u32,ctx.r4.u32 & 255,uint32_t(ctx.lr));
+    ctx.r3.u64 = 0;
+    return;
+  }
+  __imp__sub_8286A660(ctx,b);
 }
 struct Vec {
   float x = 0, y = 0, z = 0;
@@ -2033,6 +2048,28 @@ void PartnerBodyScriptRecord(const uint8_t* b) {
   }
 }
 }  // namespace kk
+
+REX_HOOK_RAW(sub_8286A660) {
+#if defined(KK_DEV_TOOLS)
+  // Exercise the exact historical bad argument in a real native game context.
+  // The real caller's context and its ordinary lookup are left intact.
+  static const bool probe_enabled = std::getenv("KK_DEV_GROUP_LOOKUP_PROBE") != nullptr;
+  static bool probed = false;
+  if (probe_enabled && !probed && REXCVAR_GET(kk_coop_enabled)) {
+    const auto flow = kk::coop::SessionFlowSnapshot();
+    if (flow.active && flow.phase == kk::coop::FlowPhase::Playing && flow.world.level == 1702) {
+      probed = true;
+      for (const uint32_t actor : {0u,1u,0x0100005Cu}) {
+        auto test = ctx;
+        test.r3.u64 = actor;
+        kk::GroupInstanceLookup(test,base);
+        REXLOG_INFO("KK dev group lookup probe: object={:08X} result={:08X} normal lookup follows",actor,test.r3.u32);
+      }
+    }
+  }
+#endif
+  kk::GroupInstanceLookup(ctx,base);
+}
 
 REX_HOOK_RAW(sub_8280F328) {
   if (REXCVAR_GET(kk_coop_enabled) && kk::Range(ctx.r4.u32, 12) &&
