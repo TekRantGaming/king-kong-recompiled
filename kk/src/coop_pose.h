@@ -81,6 +81,14 @@ PoseRead ReadJackPose(U32 load32, U16 load16, F32 loadf, double now) {
     if (PoseAddress(animation, 164)) {
       p.action = load16(animation + 156);
       p.item = uint8_t(load32(animation + 160) >> 24);  // Big-endian first byte.
+      // H_exec_loading_weapon (826947F0) plays gun+0x72 on the child
+      // channel, leaving the main action unchanged. Publish that visual use
+      // action while it is active; the existing wire field needs no new data.
+      const uint32_t child=load32(animation+0x60);
+      if (p.weapon>=1 && p.weapon<=4 && PoseAddress(child,2) &&
+          !(load16(child)&0x80) && load16(animation+0x7C)==p.weapon+0x72) {
+        p.action=uint16_t(p.weapon+0x72); p.item=0;
+      }
     }
   }
   Message check; check.type = MessageType::PlayerPose; check.pose = p;

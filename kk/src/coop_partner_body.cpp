@@ -1424,6 +1424,12 @@ void CensusAndSelect(PPCContext& ctx, uint8_t* b, uint32_t w) {
       pick = &c;
     }
   }
+  if (!pick && !Opt().automatic && Opt().partner && now-s.loaded<std::chrono::seconds(8)) {
+    // A fast dev-link connection may arrive before a full second of census
+    // stability. Keep the explicit visual-test selector alive until then.
+    s.attempted=false;
+    return;
+  }
   if (!pick || tied) { s.Abort(tied ? "ambiguous-selector" : "no-qualified-selector-within-limit"); return; }
   if (!(Opt().automatic && s.selected_tier == 6 ? Registered(b, w, pick->rig.actor) :
         Opt().automatic ? AutoMembership(b, w, pick->rig) : Member(b, w, pick->rig.actor))) {
@@ -1664,8 +1670,13 @@ void PartnerBodyAfterAi(PPCContext& ctx, uint8_t* b, uint32_t w) {
         else if (!s.animation.airborne) if (const auto item=LoadedItem(b,rig,22)) choice=coop::puppet::Action{22,*item,0};
       }
       if (!firing && s.animation.use_left>0) {
-        if (const auto item=LoadedItem(b,rig,s.animation.use_action))
-          choice=coop::puppet::Action{s.animation.use_action,*item,0};
+        // Reloads are authored for an arm-only child layer. Never run one as
+        // a full-body clip with undefined leg poses; use the bounded gesture.
+        const auto item=coop::puppet::AnimationDrive::FullBodyEquipmentAction(s.animation.use_action) ?
+            LoadedItem(b,rig,s.animation.use_action) : std::nullopt;
+        if (item) choice=coop::puppet::Action{s.animation.use_action,*item,0};
+        if (s.animation.new_use) REXLOG_INFO("PUPPET equipment visual actor={:08X} remote-action={} loaded={} gesture-fallback={}",
+            rig.actor,s.animation.use_action,bool(item),!item);
       }
     } else if (s.animation.moving && !firing) {
       const float direction=std::atan2(s.animation.vy,s.animation.vx);

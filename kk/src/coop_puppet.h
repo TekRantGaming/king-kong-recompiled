@@ -131,14 +131,17 @@ inline std::optional<GaitChoice> ChooseGait(float vx, float vy, float view, bool
 }
 struct AnimationDrive {
   float speed = 0, vx = 0, vy = 0, stop_left = 0, fire_left = 0, recoil_left = 0, land_left = 0, use_left = 0;
-  bool moving = false, have_fire = false, new_shot = false, was_airborne = false, have_airborne = false;
+  bool moving = false, have_fire = false, new_shot = false, new_use = false, was_airborne = false, have_airborne = false;
   uint32_t last_fire = 0;
   uint16_t last_action = 0, use_action = 0;
   double action_time = -1;
   bool crouched = false, airborne = false;
-  static bool EquipmentAction(uint16_t action) {
+  static bool FullBodyEquipmentAction(uint16_t action) {
     // H pickup actions 0x22/0x23 and H_ETAT_IA_lance's throws 0x56/0x5C.
     return action==0x22 || action==0x23 || action==0x56 || action==0x5C;
+  }
+  static bool EquipmentAction(uint16_t action) {
+    return FullBodyEquipmentAction(action) || (action>=0x73 && action<=0x76);
   }
   float GesturePitch() const {
     // Small upper-body gestures also work on an unarmed rig without a gun
@@ -160,12 +163,13 @@ struct AnimationDrive {
     fire_left = std::max(0.f,fire_left-dt); new_shot = false;
     recoil_left=std::max(0.f,recoil_left-dt);
     use_left=std::max(0.f,use_left-dt);
+    new_use=false;
     land_left=std::max(0.f,land_left-dt);
     // The interpolated remote timeline can briefly move backward when a new
     // packet arrives. Never replay an equipment/landing edge from that rewind.
     if (p.time>=action_time) {
       action_time=p.time;
-      if (p.action!=last_action && EquipmentAction(p.action)) { use_action=p.action; use_left=.65f; }
+      if (p.action!=last_action && EquipmentAction(p.action)) { use_action=p.action; use_left=.65f; new_use=true; }
       last_action=p.action; crouched=p.crouched; airborne=p.airborne;
       if (have_airborne && was_airborne && !airborne) land_left=.5f;
       was_airborne=airborne; have_airborne=true;

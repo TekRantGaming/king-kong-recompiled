@@ -432,6 +432,14 @@ void PoseReadingAndDisplay() {
   Check(pose.pose && pose.pose->level == 201 && pose.pose->x == 3 &&
       std::string_view(pose.failure) == "ok", "retained load-page mode does not suppress a loaded Jack");
   Check(pose.pose->action == 123 && pose.pose->item == 0xAB, "read diagnostic action and big-endian item byte");
+  constexpr uint32_t child=0x4000C000;
+  words[g+13128]=2; words[animation+0x60]=child; words[animation+0x7C]=0x74;
+  Check(read().pose->action==0x74 && read().pose->item==0,"active machine-gun reload child is visible to the peer");
+  words[child]=0x80;
+  Check(read().pose->action==123,"finished reload never hides the main animation");
+  words[child]=0; words[animation+0x7C]=0x73;
+  Check(read().pose->action==123,"another weapon's child action is not a reload");
+  words[animation+0x60]=0; words[g+13128]=0;
   Check(!read().pose->airborne,"cleared native flight height stays grounded");
   floats[vars+13268]=1;
   Check(!read().pose->airborne,"native one-unit flight threshold excludes small steps");
@@ -570,6 +578,8 @@ void PuppetPolicies() {
   motion.time=2; motion.action=0; jitter.Update(motion,.05f);
   motion.time=1; motion.action=0x56; jitter.Update(motion,.05f);
   Check(!jitter.use_left,"rewound network timeline cannot replay an equipment edge");
+  Check(AnimationDrive::EquipmentAction(0x74) && !AnimationDrive::FullBodyEquipmentAction(0x74),
+      "native arm-only reload uses a gesture without replacing the leg pose");
   motion.time=3;
   motion.fire++; jitter.Update(motion,.05f); jitter.Update(motion,.05f);
   Check(jitter.GesturePitch()>.05f,"confirmed fire supplies bounded recoil even without a gun clip");
