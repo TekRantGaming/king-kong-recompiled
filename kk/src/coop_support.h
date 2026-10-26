@@ -8,6 +8,15 @@ struct PartRoot {
   std::vector<uint32_t> parts;
 };
 struct PartIdentity { uint64_t source=0,topology=0; };
+// The physics RECORD is owned by the actor. Its ODE body is ephemeral: native
+// scene init detaches it and later activation can create another one. Require
+// the same geom/body relationship that the native transform helper consumes.
+template<class Read> std::optional<uint32_t> BodyHandle(Read read,uint32_t physics) {
+  if (!PoseAddress(physics,0x78)) return {};
+  const auto geom=read(physics+0x70),body=read(physics+0x74);
+  if (!PoseAddress(geom,32) || (body && !PoseAddress(body,0x170)) || read(geom+16)!=body) return {};
+  return body;
+}
 // Canonicalize ALL aliases before touching physics. Membership, never heap
 // ordering or a nearest-position guess, selects the one physical operation.
 inline std::map<uint32_t,PartIdentity> CanonicalParts(std::vector<PartRoot> roots) {

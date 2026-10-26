@@ -16,7 +16,7 @@ bool PersonalOrHuman(const uint8_t* b,uint32_t actor) {
 bool UnitBody(const uint8_t* b,uint32_t actor) {
   const auto m=Ptr(b,actor,12,64),ph=Physics(b,actor);
   if (!m || !ph || !Ptr(b,ph,0x70,32) || b[ph+13]==4 || !(b[ph+14]&1) ||
-      (Load32(b,actor)&0x00400005) || PersonalOrHuman(b,actor)) return false;
+      (Load32(b,actor)&0x00400025) || PersonalOrHuman(b,actor)) return false;
   float lengths[3]{};
   for (unsigned row=0;row<3;++row) {
     lengths[row]=std::hypot(LoadF(b,m+16*row),LoadF(b,m+16*row+4),LoadF(b,m+16*row+8));
@@ -70,12 +70,23 @@ void PrepareSupport(const uint8_t* b,Binding& o) {
       !(Load32(b,o.actor)&0x400001) &&
       (tree || (!Load32(b,o.vars+2496) && !Load32(b,o.vars+2256) && !Load32(b,o.vars+3368)));
   for (const auto actor:s.all) s.eligible&=UnitBody(b,actor);
+  // A host can first bind after a native loader has already advanced the root.
+  // Retain a generic collapse plus the final physical outcome in that case.
+  if (Track(b,o.ai,tree ? 0x826E7BF0 : 0x826F1E08)) s.phase=1;
+  if (Track(b,o.ai,tree ? 0x826D0770 : 0x826F4948)) s.phase=2;
+  if (s.phase) s.event.trigger=1;
   if (Trace()) REXLOG_INFO("KK dev object support profile: role={} id={:016X} family={} mode={} parts={} members={} eligible={}",
       state.host ? "host" : "guest",o.source,tree ? "tree" : "ode",mode,s.parts.size(),s.all.size(),s.eligible);
 }
 bool BodyValid(const uint8_t* b,const State::Body& p) {
   return PoseAddress(p.actor,32) && Ptr(b,p.actor,12,64)==p.matrix && Ptr(b,p.actor,20,12)==p.link &&
-      Physics(b,p.actor)==p.physics && (!p.body || Ptr(b,p.physics,0x74,0x108)==p.body) && !PersonalOrHuman(b,p.actor);
+      Physics(b,p.actor)==p.physics && objects::BodyHandle([&](uint32_t a){return Load32(b,a);},p.physics).has_value() && !PersonalOrHuman(b,p.actor);
+}
+bool RefreshBody(const uint8_t* b,State::Body& p) {
+  if (!BodyValid(b,p)) return false;
+  const auto body=*objects::BodyHandle([&](uint32_t a){return Load32(b,a);},p.physics);
+  if (p.body!=body) { p.body=body; p.saved_body=false; p.driven=false; }
+  return true;
 }
 void FreezeSupport(const uint8_t* b) {
   if (state.support_frozen || !state.census_started) return;
@@ -129,6 +140,7 @@ void FreezeSupport(const uint8_t* b) {
       if (added) {
         p.actor=actor; p.matrix=Ptr(b,actor,12,64); p.link=Ptr(b,actor,20,12); p.physics=Physics(b,actor);
         p.body=Ptr(b,p.physics,0x74,0x108); p.source=ids.at(actor).source; p.topology=ids.at(actor).topology;
+        p.home={LoadF(b,p.matrix+48),LoadF(b,p.matrix+52),LoadF(b,p.matrix+56)};
       }
       if (std::find(p.roots.begin(),p.roots.end(),o->actor)==p.roots.end()) p.roots.push_back(o->actor);
     }
@@ -278,11 +290,10 @@ void PublishBodies(const uint8_t* b) {
   for (auto& [actor,p]:state.bodies) {
     if (p.retired) continue;
     if (!BodyActivated(p,false)) continue;
-    if (!BodyValid(b,p)) {
+    if (!RefreshBody(b,p)) {
       for (const auto root:p.roots) InvalidateSupport(b,root);
       continue;
     }
-    if (BodyValid(b,p) && !p.body) p.body=Ptr(b,p.physics,0x74,0x108); // Native deferred body creation.
     SupportBodyState sample;
     if (!ReadBody(b,p,sample)) { for (const auto root:p.roots) InvalidateSupport(b,root); continue; }
     const auto differs=[](const SupportBodyState& a,const SupportBodyState& c) {
@@ -305,8 +316,7 @@ void PublishBodies(const uint8_t* b) {
 void ApplyBodies(PPCContext& ctx,uint8_t* b) {
   for (auto& [actor,p]:state.bodies) {
     if (p.retired) continue;
-    if (!BodyValid(b,p) || !BodyActivated(p,true)) continue;
-    if (!p.body) p.body=Ptr(b,p.physics,0x74,0x108);
+    if (!RefreshBody(b,p) || !BodyActivated(p,true)) continue;
     const auto* s=state.replica.Find(ObjectKind::SupportBody,p.source);
     if (!s || s->body.topology!=p.topology) continue;
     if (p.body && !p.saved_body) { p.saved_body=true; p.saved_disabled=(Load32(b,p.body+0x18)&4)!=0; }
@@ -352,7 +362,7 @@ void ApplyBodies(PPCContext& ctx,uint8_t* b) {
 void ReleaseBodies(PPCContext& ctx,uint8_t* b,bool all=true) {
   for (auto& [actor,p]:state.bodies) {
     if (!p.driven || (!all && BodyActivated(p,true))) continue;
-    if (!p.retired && p.saved_body && !p.saved_disabled && BodyValid(b,p)) {
+    if (!p.retired && p.saved_body && !p.saved_disabled && BodyValid(b,p) && Load32(b,p.physics+0x74)==p.body) {
       const PPCContext saved=ctx; ctx.r3.u64=p.body; __imp__sub_82744988(ctx,b); ctx=saved;
     }
     p.driven=p.saved_body=false;
@@ -372,11 +382,13 @@ void ReplaySupports(PPCContext& ctx,uint8_t* b) {
   }();
   static uint64_t selected=0;
   if (state.host && !selected && fixture_at>=0 && kk::DevSecondsSinceMenu()>=fixture_at) {
+    Binding* choice=nullptr;
     for (auto& [actor,o]:state.bindings) if (objects::SupportRoot(o.kind) && o.support.topology &&
-        Load32(b,o.vars+(o.kind==ObjectKind::Tree ? 0x52C : 0))==fixture_mode && Valid(b,o)) {
-      o.support.fixture=true; selected=o.source;
-      REXLOG_INFO("KK dev object support fixture: role=host id={:016X} mode={} native-trigger=1",o.source,fixture_mode);
-      break;
+        Load32(b,o.vars+(o.kind==ObjectKind::Tree ? 0x52C : 0))==fixture_mode && Valid(b,o) &&
+        (!choice || o.source<choice->source)) choice=&o;
+    if (choice) {
+      choice->support.fixture=true; selected=choice->source;
+      REXLOG_INFO("KK dev object support fixture: role=host id={:016X} mode={} native-trigger=1",choice->source,fixture_mode);
     }
   }
 #endif
@@ -392,6 +404,14 @@ void ReplaySupports(PPCContext& ctx,uint8_t* b) {
       if (!o.support.fixture && !o.support.phase && Now()>o.support.intent_until) continue;
     }
     const auto* s=state.replica.Find(o.kind,o.source);
+    if (!state.host && s && s->collapse.topology==o.support.topology && (s->value==1 || s->value==2)) {
+      // Active's tracked-member notification is semantic progression, not a
+      // guest physics observation. Replay it even after the native End track
+      // has cleared itself, including on a private native reload.
+      const auto ext=Ptr(b,o.actor,24,42);
+      Store32(b,o.vars+(o.kind==ObjectKind::Tree ? 0x554 : 0x68C),s->position==1);
+      if (ext) Store16(b,ext+40,(Load16(b,ext+40)&~0x100u)|(s->position==1 ? 0x100u : 0));
+    }
     if ((!state.host && (!s || !s->value || s->collapse.topology!=o.support.topology)) ||
         o.support.tick==state.ai_tick || o.support.phase==2) continue;
     // Dormant and privately reloaded roots replay through THEIR native state

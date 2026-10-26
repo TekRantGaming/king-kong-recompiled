@@ -33,6 +33,7 @@
 #include "hfr.h"
 #include "coop_nametag.h"
 #include "coop_observer.h"
+#include "coop_objects_game.h"
 
 #if defined(KK_DEV_TOOLS)
 namespace kk {
@@ -173,4 +174,7 @@ REX_HOOK_RAW(sub_82711328) {
   __imp__sub_82711328(ctx, base);
   kk::coop::nametag::NormalCamera(base, actor, caller);
   kk::coop::observer::NormalCamera(base, actor, caller);
+#if defined(KK_DEV_TOOLS)
+  kk::coop::ObjectsDevCamera(ctx,base,actor,caller);
+#endif
 }

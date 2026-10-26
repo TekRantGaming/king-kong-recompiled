@@ -137,11 +137,11 @@ bool ValidObjectState(const ObjectState& s) {
   if (s.kind!=ObjectKind::SupportBody && s.body!=SupportBodyState{}) return false;
   if (s.kind==ObjectKind::Ode || s.kind==ObjectKind::Tree) {
     if (s.value==3) return s.position==0 && s.seconds==0 && s.collapse==CollapseState{};
-    if (!s.collapse.topology || s.value>2 || s.position!=0 || s.seconds!=0 ||
+    if (!s.collapse.topology || s.value>2 || (s.position!=0 && s.position!=1) || s.seconds!=0 ||
         s.collapse.trigger>7 || (s.collapse.part>=32 && s.collapse.part!=255)) return false;
     for (unsigned i=0;i<6;++i) if (!std::isfinite(s.collapse.impulse[i]) ||
         std::abs(s.collapse.impulse[i])>(i<3 ? 1000 : 100000)) return false;
-    if (!s.value) return s.collapse.trigger==0 && s.collapse.part==255 && s.collapse.impulse==std::array<float,6>{};
+    if (!s.value) return s.position==0 && s.collapse.trigger==0 && s.collapse.part==255 && s.collapse.impulse==std::array<float,6>{};
     return s.collapse.trigger && (bool(s.collapse.trigger&2)==(s.collapse.part!=255));
   }
   if (s.kind==ObjectKind::SupportBody) {

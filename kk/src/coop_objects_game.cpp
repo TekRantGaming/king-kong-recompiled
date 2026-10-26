@@ -17,6 +17,7 @@
 #include <cstring>
 #include <set>
 #include <atomic>
+#include <cstdio>
 
 REX_EXTERN(__imp__sub_824ADD48);
 REX_EXTERN(__imp__sub_82448E08);
@@ -59,6 +60,7 @@ REX_EXTERN(__imp__sub_82860678);
 #if defined(KK_DEV_TOOLS)
 REX_EXTERN(__imp__sub_8271FB98);
 REX_EXTERN(__imp__sub_82715AC8);
+REX_EXTERN(__imp__sub_828007B0);
 #endif
 #if defined(KK_DEV_TOOLS)
 namespace kk {
@@ -117,6 +119,7 @@ struct State {
     std::vector<uint32_t> roots;
     double quiet_since=0;
     SupportBodyState candidate;
+    ShotVector home;
     ObjectState final;
     bool sent=false,driven=false,saved_disabled=false,saved_body=false,retired=false;
   };
@@ -138,6 +141,8 @@ struct State {
   objects::Requests requests;
   objects::Identities identities;
 #if defined(KK_DEV_TOOLS)
+  bool view_ready=false;
+  std::array<float,6> view_home{};
   struct Plane { float x,y,z,nx,ny,nz; double next=0; };
   std::map<uint64_t,Plane> planes; // Immutable values survive native door retirement.
   struct Pickup { uint32_t actor=0,ai=0,vars=0,matrix=0; uint64_t source=0; bool rack=false; };
@@ -339,7 +344,12 @@ ObjectState Sample(const uint8_t* b,const Binding& o) {
   ObjectState s{state.generation,state.level,1,o.source,o.kind};
   if (objects::SupportRoot(o.kind)) {
     if (o.support.withdrawn || !o.support.eligible) s.value=3;
-    else { s.value=o.support.phase; s.collapse=o.support.event; s.collapse.topology=o.support.topology; }
+    else {
+      s.value=o.support.phase; s.collapse=o.support.event; s.collapse.topology=o.support.topology;
+      // Native Active records the tracked member leaving its authored place
+      // and raises the root's capability100 for later scene watches.
+      if (s.value) s.position=Load32(b,o.vars+(o.kind==ObjectKind::Tree ? 0x554 : 0x68C)) ? 1.f : 0.f;
+    }
   }
   else if (o.kind==ObjectKind::Breakable) { s.value=Load32(b,o.vars+552); s.position=float(Load32(b,o.vars+560)); }
   else if (o.kind==ObjectKind::Fire) {
@@ -1290,6 +1300,14 @@ void ScanInventory(const uint8_t* b,uint32_t w) {
           Load32(b,vars+188),LoadF(b,vars+388),LoadF(b,vars+416),LoadF(b,vars+424));
     if (kind==5 || kind==6) SupportRelations(b,actor,names[kind]);
     if (kind==3 && vars && bytes>=3376) {
+      for (const auto watch:{1700u,1884u,2068u,2252u}) {
+        const auto payload=vars+watch+72,target=Load32(b,payload+4);
+        const auto ext=Ptr(b,target,24,42);
+        REXLOG_INFO("KK dev object support watch: role={} root={:08X} slot={} fn={:08X} refs={:08X}/{:08X}/{:08X}/{:08X}/{:08X}/{:08X} mask={:08X} inverse={} target-type={:08X} target-cap={:04X}",
+            v.host ? "host" : "guest",actor,(watch-1700)/184,Load32(b,vars+watch+4),
+            Load32(b,payload),target,Load32(b,payload+8),Load32(b,payload+12),Load32(b,payload+16),Load32(b,payload+20),
+            Load32(b,payload+84),Load32(b,payload+100),PoseAddress(target,32) ? Load32(b,target) : 0,ext ? Load16(b,ext+40) : 0);
+      }
       unsigned parts=0; bool terminated=false;
       for (unsigned i=0;i<=32;++i) {
         const auto part=Load32(b,vars+20+4*i);
@@ -1419,9 +1437,11 @@ void ThrowProbe(PPCContext& ctx,uint8_t* b) {
   for (auto p=begin;p<end;p+=8) {
     if (projectile) break;
     const auto actor=Load32(b,p),ai=Ptr(b,Ptr(b,actor,24,8),4,88);
-    if ((!Track(b,ai,0x8258E228) && !Track(b,ai,0x8257C560)) || (Load32(b,actor+4)&0x00600000)) continue;
+    if (!Track(b,ai,0x8258E228) && !Track(b,ai,0x8257C560)) continue;
     const auto definition=Ptr(b,Ptr(b,ai,0,4),0,8),vars=Ptr(b,ai,64,568);
     if (!definition || Load32(b,definition+4)<568 || !vars || Load32(b,vars+232)) continue;
+    const auto wanted=std::getenv("KK_DEV_OBJECT_THROW_KIND");
+    if (wanted && *wanted && Load32(b,vars+4)!=unsigned(std::atoi(wanted))) continue;
     projectile=actor; projectile_vars=vars; break;
   }
   if (!projectile) return;
@@ -1437,10 +1457,13 @@ void ThrowProbe(PPCContext& ctx,uint8_t* b) {
   if (!own_copy) {
     // Native Javelin replacement uses this same local copy/reuse API. Never
     // consume or move the authored template or a player's personal stock.
+    const auto source=projectile;
     ctx.r3.u64=projectile; ctx.r4.u64=position; __imp__sub_82715AC8(ctx,b);
     projectile=ctx.r3.u32;
     if (PoseAddress(projectile,32)) own_copy=projectile;
     projectile_vars=Ptr(b,Ptr(b,Ptr(b,projectile,24,8),4,88),64,568);
+    REXLOG_INFO("KK dev object throw fixture: native-copy source={:08X} result={:08X} vars={:08X} flags={:08X} queue={:08X}",
+        source,projectile,projectile_vars,PoseAddress(projectile,32) ? Load32(b,projectile+4) : 0,Ptr(b,Ptr(b,projectile,24,24),20,12));
   }
   if (!projectile_vars || !Ptr(b,Ptr(b,projectile,24,24),20,12)) {
     for (unsigned i=0;i<7;++i) Store32(b,globals[i],values[i]);
@@ -1462,7 +1485,47 @@ void ThrowProbe(PPCContext& ctx,uint8_t* b) {
   for (unsigned i=0;i<7;++i) Store32(b,globals[i],values[i]);
   std::memcpy(b+start,scratch,sizeof(scratch)); ctx=saved;
 }
+// Explicit developer staging uses a native downward collision query rather
+// than guessing a floor height. Preserve the native query scratch/results.
+void FloorProbe(PPCContext& ctx,uint8_t* b) {
+  static Probe probe("KK_DEV_OBJECT_FLOOR");
+  const auto t=kk::DevSecondsSinceMenu();
+  if (probe.done || probe.due<0 || t<probe.due) return;
+  const auto text=std::getenv("KK_DEV_OBJECT_FLOOR_POINT");
+  float x=0,y=0,z=0; char tail=0;
+  if (!text || std::sscanf(text,"%f,%f,%f%c",&x,&y,&z,&tail)!=3 ||
+      !std::isfinite(x) || !std::isfinite(y) || !std::isfinite(z) || std::abs(x)>100000 || std::abs(y)>100000 || std::abs(z)>100000) { probe.done=true; return; }
+  const auto hero=Load32(b,0x82CCBF7C),ai=Ptr(b,Ptr(b,hero,24,8),4,88),sp=ctx.r1.u32,w=state.world;
+  if (!Track(b,ai,0x826718B8) || !PoseAddress(w,0x16300) || (sp&15) || sp<0x40014000 || sp>=0xA0000000) return;
+  const PPCContext saved=ctx; uint8_t scratch[16384],query[0x44],hit[0x40],deferred[0x44];
+  const auto start=sp-sizeof(scratch);
+  std::memcpy(scratch,b+start,sizeof(scratch)); std::memcpy(query,b+0x82977230,sizeof(query));
+  std::memcpy(hit,b+w+0x16268,sizeof(hit)); std::memcpy(deferred,b+w+0x294,sizeof(deferred));
+  constexpr uint32_t counters[]{0x82CCABF4,0x82CCAC00,0x82CCAC04,0x82CCAC08,0x82CCAC0C};
+  uint32_t values[5]; for (unsigned n=0;n<5;++n) values[n]=Load32(b,counters[n]);
+  ctx.r1.u64=start+12288; std::memset(b+ctx.r1.u32,0,4096); Store32(b,ctx.r1.u32,sp);
+  const auto vectors=ctx.r1.u32+256;
+  StoreF(b,vectors,x); StoreF(b,vectors+4,y); StoreF(b,vectors+8,z);
+  StoreF(b,vectors+16,0); StoreF(b,vectors+20,0); StoreF(b,vectors+24,-1);
+  std::memset(b+0x82977230,0,sizeof(query)); Store32(b,0x82977238,hero);
+  ctx.r3.u64=w; ctx.r4.u64=hero; ctx.r5.u64=vectors; ctx.r6.u64=vectors+16;
+  ctx.f1.f64=80; ctx.r8.u64=0xFFFFFFFF; ctx.r9.u64=0; ctx.r10.u64=0;
+  Store32(b,ctx.r1.u32+84,0); Store32(b,ctx.r1.u32+92,0); Store32(b,ctx.r1.u32+100,1);
+  __imp__sub_828007B0(ctx,b);
+  const auto object=ctx.r3.u32;
+  const ShotVector floor{LoadF(b,w+0x1626C),LoadF(b,w+0x16270),LoadF(b,w+0x16274)};
+  const auto normal=LoadF(b,w+0x16280);
+  REXLOG_INFO("KK dev object floor fixture: role={} ray=({:.3f},{:.3f},{:.3f}) hit={:08X} point=({:.3f},{:.3f},{:.3f}) normal-z={:.3f}",
+      state.host ? "host" : "guest",x,y,z,object,floor.x,floor.y,floor.z,normal);
+  std::memcpy(b+0x82977230,query,sizeof(query)); std::memcpy(b+w+0x16268,hit,sizeof(hit)); std::memcpy(b+w+0x294,deferred,sizeof(deferred));
+  for (unsigned n=0;n<5;++n) Store32(b,counters[n],values[n]);
+  std::memcpy(b+start,scratch,sizeof(scratch)); ctx=saved; probe.done=true;
+  if (object && std::isfinite(floor.z) && std::isfinite(normal) && normal>.75f && floor.z<=z && floor.z>z-80 &&
+      std::abs(floor.x-x)<.1f && std::abs(floor.y-y)<.1f)
+    kk::DevTeleportJack(ctx,b,hero,{floor.x,floor.y,floor.z+.2f},0,1);
+}
 void Probes(PPCContext& ctx,uint8_t* b) {
+  FloorProbe(ctx,b);
   ThrowProbe(ctx,b);
   static Probe hit("KK_DEV_OBJECT_HIT"),lever("KK_DEV_OBJECT_LEVER");
   DevProbe(ctx,b,hit,ObjectKind::Breakable); DevProbe(ctx,b,lever,ObjectKind::Door);
@@ -1603,6 +1666,55 @@ void PickupProbe(PPCContext& ctx,uint8_t* b) {
 }
 #endif
 } // namespace
+#if defined(KK_DEV_TOOLS)
+void ObjectsDevCamera(PPCContext& ctx,uint8_t* b,uint32_t actor,uint32_t caller) {
+  struct View { double at=-1; unsigned mode=0,part=0; std::array<float,6> points{}; };
+  static const View view=[] {
+    View v; const auto relative=std::getenv("KK_DEV_OBJECT_VIEW_PART");
+    const auto text=relative && *relative ? relative : std::getenv("KK_DEV_OBJECT_VIEW"); if (!text || !*text) return v;
+    char tail=0;
+    const bool parsed=relative && *relative ?
+        std::sscanf(text,"%lf,%u,%u,%f,%f,%f%c",&v.at,&v.mode,&v.part,&v.points[0],&v.points[1],&v.points[2],&tail)==6 && v.mode>=1 && v.mode<=3 && v.part<32 :
+        std::sscanf(text,"%lf,%f,%f,%f,%f,%f,%f%c",&v.at,&v.points[0],&v.points[1],&v.points[2],&v.points[3],&v.points[4],&v.points[5],&tail)==7;
+    if (!parsed || !std::isfinite(v.at) || v.at<0 || v.at>3600) { v.at=-1; return v; }
+    for (const auto x:v.points) if (!std::isfinite(x) || std::abs(x)>100000) v.at=-1;
+    return v;
+  }();
+  if (view.at<0 || caller!=0x824715FC || !Trace() || !state.ready || !Shared() || kk::DevSecondsSinceMenu()<view.at ||
+      observer::Active() || observer::InCutscene(b)) return;
+  const auto hero=Load32(b,0x82CCBF7C),ai=Load32(b,0x82CCBF64),cm=Ptr(b,ai,64,232);
+  if (!cm || Load32(b,cm)!=hero || actor!=Load32(b,0x82CCBF6C) || actor==hero || !Ptr(b,actor,12,64) || (Load32(b,actor)&0x400001)) return;
+  if (view.mode && !state.view_ready) {
+    const Binding* selected=nullptr;
+    for (const auto& [root,o]:state.bindings) if (objects::SupportRoot(o.kind) && o.support.topology && view.part<o.support.parts.size() &&
+        Valid(b,o) && Load32(b,o.vars+(o.kind==ObjectKind::Tree ? 0x52C : 0))==view.mode &&
+        (!selected || o.source<selected->source)) selected=&o;
+    if (!selected) return;
+    const auto body=state.bodies.find(selected->support.parts[view.part]); if (body==state.bodies.end()) return;
+    const auto& home=body->second.home;
+    state.view_home={home.x+view.points[0],home.y+view.points[1],home.z+view.points[2],home.x,home.y,home.z};
+    state.view_ready=true;
+  }
+  const auto& p=view.mode ? state.view_home : view.points;
+  const auto dx=p[3]-p[0],dy=p[4]-p[1],dz=p[5]-p[2],length=std::hypot(dx,dy,dz);
+  const auto sp=ctx.r1.u32;
+  if (!std::isfinite(length) || length<.1f || (sp&15) || sp<0x40014000 || sp>=0xA0000000) return;
+  const PPCContext saved=ctx; uint8_t scratch[16384]; const auto start=sp-sizeof(scratch);
+  std::memcpy(scratch,b+start,sizeof(scratch)); ctx.r1.u64=start+12288;
+  std::memset(b+ctx.r1.u32,0,4096); Store32(b,ctx.r1.u32,sp);
+  const auto out=ctx.r1.u32+256;
+  for (unsigned i=0;i<3;++i) StoreF(b,out+4*i,p[i]);
+  StoreF(b,out+16,dx/length); StoreF(b,out+20,dy/length); StoreF(b,out+24,dz/length);
+  StoreF(b,out+32,0); StoreF(b,out+36,0); StoreF(b,out+40,1);
+  ctx.r3.u64=actor; ctx.r4.u64=out; __imp__sub_827117E0(ctx,b);
+  ctx.r3.u64=actor; ctx.r4.u64=out+16; ctx.r5.u64=out+32; __imp__sub_82711328(ctx,b);
+  std::memcpy(b+start,scratch,sizeof(scratch)); ctx=saved;
+  static bool logged=false;
+  if (!logged) REXLOG_INFO("KK dev object camera-observation fixture: role={} eye=({:.3f},{:.3f},{:.3f}) target=({:.3f},{:.3f},{:.3f}) player-unmoved=true",
+      state.host ? "host" : "guest",p[0],p[1],p[2],p[3],p[4],p[5]);
+  logged=true;
+}
+#endif
 void ObjectsPad(uint32_t user,const uint8_t* pad,bool connected) {
   if (user) return;
   use_until.store(connected && pad && pad[7]>30 && pad[6]<=30 ? Now()+.2 : 0,std::memory_order_relaxed);
@@ -1612,7 +1724,8 @@ void ObjectsFirearm(const PPCContext& input,const uint8_t* b) {
   const auto caller=uint32_t(input.lr);
   const auto ai=Ptr(b,Ptr(b,Load32(b,0x82CCBF6C),24,8),4,88);
   const auto javelin=Track(b,ai,0x8258C5F8) ? Ptr(b,ai,64,236) : 0;
-  const bool thrown=javelin && Load32(b,javelin+232)==input.r6.u32;
+  const bool thrown=(javelin && Load32(b,javelin+232)==input.r6.u32) ||
+      (caller>=0x8258C5F8 && caller<0x8258E228 && input.r5.u32==0x00400400);
   if (!thrown && caller!=0x82696E74 && caller!=0x82697494 && caller!=0x82697970 && caller!=0x82698C00) return;
   const Binding* target=nullptr; bool part=false;
   for (const auto& [actor,o] : state.bindings) if (o.kind==ObjectKind::Breakable && Valid(b,o)) {
@@ -1674,6 +1787,7 @@ void ObjectsLoaded(uint8_t* b) {
   state.census_started=false;
 #if defined(KK_DEV_TOOLS)
   state.pickups.clear(); state.debug_sources.clear();
+  state.view_ready=false;
   state.scan_pass=state.scan_rows=0; state.scan_next=0; state.scan_seen.clear();
 #endif
   state.census_until=Now()+10; state.next_census=state.next_full=state.next_sample=0;

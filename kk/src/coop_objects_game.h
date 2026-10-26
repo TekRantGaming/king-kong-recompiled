@@ -15,4 +15,7 @@ struct ObjectEnqueue {
 ObjectEnqueue ObjectsBeginEnqueue(const PPCContext& input,const uint8_t* base);
 void ObjectsEnqueued(const ObjectEnqueue& input,const uint8_t* base);
 void ObjectsFirearm(const PPCContext& input,const uint8_t* base);
+#if defined(KK_DEV_TOOLS)
+void ObjectsDevCamera(PPCContext& ctx,uint8_t* base,uint32_t actor,uint32_t caller);
+#endif
 }

@@ -67,6 +67,15 @@ void Codec() {
   raft.raft.route=1; Check(!ValidObjectState(raft),"raft withdrawal cannot smuggle a stale pose");
 }
 void Policies() {
+  std::map<uint32_t,uint32_t> physics{{0x42000070,0x43000000},{0x42000074,0x44000000},{0x43000010,0x44000000}};
+  const auto body_read=[&](uint32_t a){return physics[a];};
+  Check(objects::BodyHandle(body_read,0x42000000)==0x44000000,"physical body must belong to the actor's own geom");
+  physics[0x42000074]=physics[0x43000010]=0;
+  Check(objects::BodyHandle(body_read,0x42000000)==0,"native scene body detachment preserves the physical record identity");
+  physics[0x42000074]=physics[0x43000010]=0x45000000;
+  Check(objects::BodyHandle(body_read,0x42000000)==0x45000000,"native reactivation can bind a new owned body without retaining a freed handle");
+  physics[0x43000010]=0x44000000;
+  Check(!objects::BodyHandle(body_read,0x42000000),"mismatching geom and body refuse before native writes");
   const std::vector<objects::PartRoot> aliases{{200,{40,50,40}},{100,{30,40}}};
   const auto canonical=objects::CanonicalParts(aliases);
   Check(canonical.size()==3,"aliases within and across roots produce one physical body each");
@@ -80,6 +89,9 @@ void Policies() {
   auto collapse=Packet(MessageType::ObjectState,ObjectKind::Ode).object;
   collapse.collapse.topology=123; collapse.collapse.trigger=2; collapse.collapse.part=3;
   Check(ValidObjectState(collapse),"host part collapse input is bounded and typed");
+  collapse.position=1; Check(ValidObjectState(collapse),"host tracked-member scene notification survives collapse replay");
+  collapse.position=.5f; Check(!ValidObjectState(collapse),"tracked-member scene notification is a boolean");
+  collapse.position=0;
   collapse.collapse.part=255; Check(!ValidObjectState(collapse),"hit trigger requires an own part ordinal");
   collapse.collapse.part=32; Check(!ValidObjectState(collapse),"native collapse part list bounded at32");
   collapse.collapse.part=3; collapse.collapse.impulse[0]=std::numeric_limits<float>::quiet_NaN();
