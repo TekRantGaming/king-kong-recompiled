@@ -133,7 +133,7 @@ template<class Read> std::map<uint32_t,uint32_t> FileKeys(Read read) {
   return out;
 }
 inline uint64_t AssetSource(ObjectKind kind,uint32_t key) {
-  if (!key || (kind!=ObjectKind::Breakable && kind!=ObjectKind::Door && kind!=ObjectKind::Fire && kind!=ObjectKind::Raft)) return 0;
+  if (!key || uint8_t(kind)<1 || uint8_t(kind)>6) return 0;
   const auto hash=enemies::Mix(enemies::Mix(14695981039346656037ull,0x4f424a4b),uint64_t(kind)<<32|key);
   return hash ? hash : 1;
 }
@@ -211,7 +211,7 @@ class Requests {
     last_=r.number;
     if (now-window_>=1) { window_=now; count_=0; }
     if (++count_>16) return false;
-    return r.kind==ObjectKind::Breakable ? distance<=80 :
+    return (r.kind==ObjectKind::Breakable || r.kind==ObjectKind::Ode || r.kind==ObjectKind::Tree) ? distance<=80 :
         (r.kind==ObjectKind::Door || r.kind==ObjectKind::Fire) && distance<=6;
   }
  private:

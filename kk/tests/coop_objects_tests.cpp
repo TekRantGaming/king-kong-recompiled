@@ -1,4 +1,5 @@
 #include "coop_objects.h"
+#include "coop_support.h"
 #include "coop_session.h"
 #include "coop_stimulus_debug.h"
 #include <cstdio>
@@ -11,15 +12,21 @@ Message Packet(MessageType type=MessageType::ObjectState,ObjectKind kind=ObjectK
   Message m; m.type=type; m.epoch=17; m.object={2,203,1,0x123456789abcdef0ull,kind,type==MessageType::ObjectRequest && kind==ObjectKind::Breakable ? 0u : 1u}; return m;
 }
 void Codec() {
-  for (auto type : {MessageType::ObjectState,MessageType::ObjectRequest}) for (auto kind : {ObjectKind::Breakable,ObjectKind::Door,ObjectKind::Fire,ObjectKind::Raft}) {
-    if (type==MessageType::ObjectRequest && kind==ObjectKind::Raft) continue;
+  for (auto type : {MessageType::ObjectState,MessageType::ObjectRequest}) for (auto kind : {ObjectKind::Breakable,ObjectKind::Door,ObjectKind::Fire,ObjectKind::Raft,ObjectKind::Ode,ObjectKind::Tree,ObjectKind::SupportBody}) {
+    if (type==MessageType::ObjectRequest && (kind==ObjectKind::Raft || kind==ObjectKind::SupportBody)) continue;
     auto m=Packet(type,kind);
     if (type==MessageType::ObjectRequest && kind==ObjectKind::Breakable) { m.object.value=0x800010; m.object.position=42; m.object.seconds=.125f; }
     if (type==MessageType::ObjectState && kind==ObjectKind::Door) { m.object.position=.375f; m.object.seconds=2.5f; m.object.value=511; }
     if (type==MessageType::ObjectState && kind==ObjectKind::Fire) { m.object.position=37.5f; m.object.seconds=-1; }
     if (kind==ObjectKind::Raft) { m.object.raft.route=123; m.object.raft.pose[3]=m.object.raft.pose[8]=1; }
+    if (objects::SupportRoot(kind)) {
+      m.object.collapse.topology=123;
+      if (type==MessageType::ObjectRequest) m.object.collapse.part=3;
+      else m.object.collapse.trigger=1;
+    }
+    if (kind==ObjectKind::SupportBody) { m.object.body.topology=123; m.object.body.pose[3]=m.object.body.pose[8]=1; }
     std::vector<uint8_t> bytes; Check(Encode(m,bytes),"object encodes");
-    Check(bytes.size()==kHeaderBytes+(kind==ObjectKind::Raft ? 91 : 33) && bytes[5]==kProtocolVersion,"bounded protocol 19 object wire");
+    Check(bytes.size()==kHeaderBytes+(kind==ObjectKind::Raft ? 91 : objects::SupportRoot(kind) ? 67 : kind==ObjectKind::SupportBody ? 81 : 33) && bytes[5]==kProtocolVersion,"bounded protocol 20 object wire");
     Message out; Check(Decode(bytes,out) && out.object==m.object,"object round trip");
     for (size_t i=0;i<bytes.size();++i) {
       Message sentinel; sentinel.sequence=123;
@@ -60,6 +67,46 @@ void Codec() {
   raft.raft.route=1; Check(!ValidObjectState(raft),"raft withdrawal cannot smuggle a stale pose");
 }
 void Policies() {
+  const std::vector<objects::PartRoot> aliases{{200,{40,50,40}},{100,{30,40}}};
+  const auto canonical=objects::CanonicalParts(aliases);
+  Check(canonical.size()==3,"aliases within and across roots produce one physical body each");
+  const auto relocated=objects::CanonicalParts({{100,{3000,4000}},{200,{4000,5000,4000}}});
+  Check(relocated.at(4000).source==canonical.at(40).source && relocated.at(4000).topology==canonical.at(40).topology,
+      "canonical physical identity survives heap relocation and census order");
+  const auto missing_alias=objects::CanonicalParts({{100,{30,40}},{200,{40,50}}});
+  Check(missing_alias.at(40).topology!=canonical.at(40).topology,"different alias ownership cannot reuse an accepted topology");
+  Check(objects::CanonicalParts({{100,{30}},{100,{40}}}).empty(),"ambiguous root identities refuse the complete physical map");
+  Check(objects::RootTopology(aliases[0],canonical)!=objects::RootTopology({200,{40,40,50}},canonical),"part reordering changes the native topology contract");
+  auto collapse=Packet(MessageType::ObjectState,ObjectKind::Ode).object;
+  collapse.collapse.topology=123; collapse.collapse.trigger=2; collapse.collapse.part=3;
+  Check(ValidObjectState(collapse),"host part collapse input is bounded and typed");
+  collapse.collapse.part=255; Check(!ValidObjectState(collapse),"hit trigger requires an own part ordinal");
+  collapse.collapse.part=32; Check(!ValidObjectState(collapse),"native collapse part list bounded at32");
+  collapse.collapse.part=3; collapse.collapse.impulse[0]=std::numeric_limits<float>::quiet_NaN();
+  Check(!ValidObjectState(collapse),"nonfinite native impulses cannot enter replay");
+  collapse.collapse.impulse[0]=0; collapse.value=0;
+  Check(!ValidObjectState(collapse),"waiting authority cannot smuggle an activation");
+  collapse.collapse.trigger=0; collapse.collapse.part=255;
+  Check(ValidObjectState(collapse),"waiting host authority is explicit");
+  collapse.value=1; collapse.collapse.part=2;
+  Check(ValidObjectRequest(collapse),"guest can request a bounded hit on an exact support part");
+  collapse.collapse.trigger=1; Check(!ValidObjectRequest(collapse),"guest cannot choose collapse phase or trigger");
+  collapse.value=3; collapse.collapse={};
+  Check(ValidObjectState(collapse) && !ValidObjectRequest(collapse),"unsupported or retired support authority explicitly releases the guest adapter");
+  collapse.collapse.topology=123; Check(!ValidObjectState(collapse),"withdrawal cannot retain a hidden collapse input");
+  auto body=Packet(MessageType::ObjectState,ObjectKind::SupportBody).object;
+  body.body.topology=123; body.body.pose[3]=body.body.pose[8]=1;
+  Check(ValidObjectState(body) && !ValidObjectRequest(body),"settled physical poses are host only");
+  body.body.flags=0x80000000; Check(!ValidObjectState(body),"unrelated native body flags cannot cross the wire");
+  body.body.flags=0; body.body.pose[8]=2;
+  Check(!ValidObjectState(body),"scaled bodies cannot be silently normalized on the guest");
+  std::map<uint32_t,objects::Binding> targets{{100,{100,200,0x42000000,300,10,ObjectKind::Breakable}},
+      {101,{101,201,0x42001000,301,11,ObjectKind::Breakable}}};
+  std::map<uint32_t,uint32_t> pieces{{0x42000014,500},{0x42001014,501}};
+  const auto find_target=[&](uint32_t actor) { return objects::StrikeTarget(targets,[&](uint32_t a){return pieces[a];},[](const auto&){return true;},actor); };
+  Check(find_target(500)==&targets.at(100) && find_target(101)==&targets.at(101),"thrown impacts resolve exact authored pieces and roots");
+  pieces[0x42001014]=500;
+  Check(!find_target(500) && !find_target(999) && !find_target(0),"shared and unrelated hit targets refuse provenance normalization");
   Check(objects::StaticFireParameters(0,0,0,0,60),"dormant fire layout admits deferred local path setup");
   Check(!objects::StaticFireParameters(1,0,0,1,60) && !objects::StaticFireParameters(0,1,0,1,60) &&
       !objects::StaticFireParameters(0,0,0x82500000,1,60),"write, moving and arbitrary completion fire paths excluded");
@@ -268,6 +315,18 @@ void Network() {
   auto unavailable=withdrawal; unavailable.object.source^=0x1234; unavailable.object.number=1;
   Check(raft_replica.Observe(transfer(unavailable,.27)) && raft_replica.Find(ObjectKind::Raft,unavailable.object.source)->value==2,
       "an unsupported initial route needs no earlier pose to release authority");
+  auto terminal=Packet(MessageType::ObjectState,ObjectKind::Ode);
+  terminal.object.value=2; terminal.object.collapse.topology=77; terminal.object.collapse.trigger=2; terminal.object.collapse.part=3;
+  terminal.object.collapse.impulse={1,2,3,40,50,60};
+  objects::Replica support_replica;
+  Check(support_replica.Observe(transfer(terminal,.28)),"terminal collapse retains its first activation even when intermediate events were coalesced");
+  auto settled=Packet(MessageType::ObjectState,ObjectKind::SupportBody);
+  settled.object.source=999; settled.object.body.topology=88; settled.object.body.pose={70,80,90,1,0,0,0,0,1};
+  Check(support_replica.Observe(transfer(settled,.281)),"settled body survives real reliable transport and mailbox");
+  Check(support_replica.Find(ObjectKind::Ode,terminal.object.source)->collapse.part==3 &&
+      support_replica.Find(ObjectKind::SupportBody,999)->body.pose[1]==80,"private native identity replacement does not clear retained collapse or final pose");
+  auto released=terminal; released.object.number=2; released.object.value=3; released.object.collapse={};
+  Check(support_replica.Observe(transfer(released,.282)) && !support_replica.Observe(terminal.object),"withdrawn support cannot be resurrected by an older activation");
   Check(!guest.QueueObjects(Packet()),"guest cannot author outcomes");
   Check(!host.QueueObjects(Packet(MessageType::ObjectRequest)),"host cannot impersonate guest intent");
   auto old=Packet(); old.epoch=18; Check(!host.QueueObjects(old),"stale epoch refused");

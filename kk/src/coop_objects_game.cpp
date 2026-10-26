@@ -2,6 +2,7 @@
 // remain independent. All memory and native calls stay on the AI thread.
 #include "coop_objects_game.h"
 #include "coop_objects.h"
+#include "coop_support.h"
 #include "coop_runtime.h"
 #include "coop_pose.h"
 #include "coop_enemies_game.h"
@@ -40,6 +41,25 @@ REX_EXTERN(__imp__sub_825EF890);
 REX_EXTERN(__imp__sub_825E7348);
 REX_EXTERN(__imp__sub_827117E0);
 REX_EXTERN(__imp__sub_82711328);
+REX_EXTERN(__imp__sub_826EA1A0);
+REX_EXTERN(__imp__sub_826F0E10);
+REX_EXTERN(__imp__sub_826F1E08);
+REX_EXTERN(__imp__sub_826F4948);
+REX_EXTERN(__imp__sub_826F0418);
+REX_EXTERN(__imp__sub_826E6390);
+REX_EXTERN(__imp__sub_826E78F0);
+REX_EXTERN(__imp__sub_826E7BF0);
+REX_EXTERN(__imp__sub_826D0770);
+REX_EXTERN(__imp__sub_826D3568);
+REX_EXTERN(__imp__sub_82710130);
+REX_EXTERN(__imp__sub_8270FB68);
+REX_EXTERN(__imp__sub_82744978);
+REX_EXTERN(__imp__sub_82744988);
+REX_EXTERN(__imp__sub_82860678);
+#if defined(KK_DEV_TOOLS)
+REX_EXTERN(__imp__sub_8271FB98);
+REX_EXTERN(__imp__sub_82715AC8);
+#endif
 #if defined(KK_DEV_TOOLS)
 namespace kk {
 double DevSecondsSinceMenu();
@@ -55,6 +75,15 @@ using namespace hfr;
 // directly rather than assuming another library's globals alias it.
 constexpr uint32_t kDoorGamePtr=0x82CC8F40;
 struct Binding : objects::Binding {
+  struct Support {
+    std::vector<uint32_t> parts,all;
+    uint64_t topology=0,tick=0;
+    uint32_t phase=0;
+    double intent_until=0;
+    CollapseState event;
+    bool eligible=false,initialized=false,withdrawn=false;
+    bool fixture=false;
+  } support;
   uint64_t hold_tick=0;
   uint64_t damage_tick=0;
   float x=0,y=0,z=0;
@@ -82,6 +111,17 @@ struct Binding : objects::Binding {
 #endif
 };
 struct State {
+  struct Body {
+    uint32_t actor=0,matrix=0,link=0,physics=0,body=0;
+    uint64_t source=0,topology=0;
+    std::vector<uint32_t> roots;
+    double quiet_since=0;
+    SupportBodyState candidate;
+    ObjectState final;
+    bool sent=false,driven=false,saved_disabled=false,saved_body=false,retired=false;
+  };
+  std::map<uint32_t,Body> bodies;
+  bool support_frozen=false;
   uint64_t epoch=0;
   uint64_t ai_tick=0;
   uint32_t generation=0,level=0,world=0,number=0,request=0;
@@ -166,13 +206,17 @@ ObjectKind Family(const uint8_t* b,uint32_t ai) {
   if (Track(b,ai,0x82551ED8) || Track(b,ai,0x82574D80) || Track(b,ai,0x8256C3F8) || Track(b,ai,0x82543478)) return ObjectKind::Door;
   if (Track(b,ai,0x825FAF58) || Track(b,ai,0x8260F858)) return ObjectKind::Fire;
   if (Track(b,ai,0x825FD388) || Track(b,ai,0x825E7348) || Track(b,ai,0x8260C988) || Track(b,ai,0x82604E68)) return ObjectKind::Raft;
+  if (Track(b,ai,0x826EA1A0) || Track(b,ai,0x826F0E10) || Track(b,ai,0x826F1E08) || Track(b,ai,0x826F4948)) return ObjectKind::Ode;
+  if (Track(b,ai,0x826E6390) || Track(b,ai,0x826E78F0) || Track(b,ai,0x826E7BF0) || Track(b,ai,0x826D0770) ||
+      Track(b,ai,0x826D0440) || Track(b,ai,0x826D05D8)) return ObjectKind::Tree;
   return ObjectKind(0);
 }
 bool DoorScheduled(const uint8_t* b,uint32_t ai) {
   return Track(b,ai,0x8256C3F8) || Track(b,ai,0x82543478) || Track(b,ai,0x82574D80);
 }
 uint32_t Vars(const uint8_t* b,uint32_t ai,ObjectKind kind) {
-  const uint32_t needed=kind==ObjectKind::Breakable ? 580 : kind==ObjectKind::Fire ? 884 : kind==ObjectKind::Raft ? 1312 : 1340;
+  const uint32_t needed=kind==ObjectKind::Breakable ? 580 : kind==ObjectKind::Fire ? 884 : kind==ObjectKind::Raft ? 1312 :
+      kind==ObjectKind::Ode ? 3376 : kind==ObjectKind::Tree ? 0xA20 : 1340;
   const auto definition=Ptr(b,Ptr(b,ai,0,4),0,8);
   if (!definition || Load32(b,definition+4)<needed || Load32(b,definition+4)>1024*1024) return 0;
   return Ptr(b,ai,64,needed);
@@ -210,6 +254,8 @@ bool Shared() {
       link.epoch==state.epoch && link.SessionConnected();
 }
 void WithdrawRaft(const uint8_t* b,Binding& o);
+void PrepareSupport(const uint8_t* b,Binding& o);
+void InvalidateSupport(const uint8_t* b,uint32_t actor);
 void Census(const uint8_t* b) {
   const auto w=Load32(b,0x828E8388);
   if (!PoseAddress(w,44)) return;
@@ -245,9 +291,19 @@ void Census(const uint8_t* b) {
     Binding o; o.actor=actor; o.ai=ai; o.vars=vars; o.matrix=matrix; o.kind=kind;
     o.x=LoadF(b,matrix+48); o.y=LoadF(b,matrix+52); o.z=LoadF(b,matrix+56);
     const auto asset=state.file_keys.find(actor);
-    const uint64_t shape=uint8_t(kind);
+    const uint64_t shape=objects::SupportRoot(kind) ? enemies::Mix(uint8_t(kind),Load32(b,vars+(kind==ObjectKind::Tree ? 0x52C : 0))) : uint8_t(kind);
     o.source=asset==state.file_keys.end() ? objects::Source(kind,o.x,o.y,o.z,shape) : objects::AssetSource(kind,asset->second);
     if (o.source) {
+      if (objects::SupportRoot(kind)) PrepareSupport(b,o);
+      if (objects::SupportRoot(kind) && state.support_frozen) {
+        // A newly discovered alias must not reassign a body that is already
+        // driven or retired. Withdraw its entire connected ownership set.
+        for (const auto part:o.support.all) if (const auto body=state.bodies.find(part); body!=state.bodies.end()) {
+          o.support.eligible=false;
+          for (const auto root:body->second.roots) InvalidateSupport(b,root);
+        }
+        state.support_frozen=false;
+      }
       state.identities.Record(o);
       state.bindings.emplace(actor,o);
 #if defined(KK_DEV_TOOLS)
@@ -281,7 +337,11 @@ uint32_t Lever(const uint8_t* b,const Binding& o,unsigned slot) {
 }
 ObjectState Sample(const uint8_t* b,const Binding& o) {
   ObjectState s{state.generation,state.level,1,o.source,o.kind};
-  if (o.kind==ObjectKind::Breakable) { s.value=Load32(b,o.vars+552); s.position=float(Load32(b,o.vars+560)); }
+  if (objects::SupportRoot(o.kind)) {
+    if (o.support.withdrawn || !o.support.eligible) s.value=3;
+    else { s.value=o.support.phase; s.collapse=o.support.event; s.collapse.topology=o.support.topology; }
+  }
+  else if (o.kind==ObjectKind::Breakable) { s.value=Load32(b,o.vars+552); s.position=float(Load32(b,o.vars+560)); }
   else if (o.kind==ObjectKind::Fire) {
     if (Track(b,o.ai,0x825FAF58)) return s;
     s.position=LoadF(b,o.vars+416); s.seconds=LoadF(b,o.vars+388);
@@ -304,6 +364,9 @@ ObjectState Sample(const uint8_t* b,const Binding& o) {
 }
 void Observe(const uint8_t* b,Binding& o) {
   auto s=Sample(b,o);
+  if (!ValidObjectState(s) && objects::SupportRoot(o.kind) && o.support.topology) {
+    o.support.withdrawn=true; s=Sample(b,o);
+  }
   if (!ValidObjectState(s) || (o.sent && o.last==s) || state.number==UINT32_MAX) return;
   if (!state.outcomes.contains(s.source) && state.outcomes.size()>=objects::kCensus) { ++state.rejected; return; }
   o.last=s; o.sent=true; s.number=++state.number;
@@ -316,6 +379,7 @@ void Observe(const uint8_t* b,Binding& o) {
 #endif
 }
 void WithdrawRaft(const uint8_t* b,Binding& o) {
+  if (state.host && objects::SupportRoot(o.kind)) { o.support.withdrawn=true; Observe(b,o); return; }
   if (!state.host || o.kind!=ObjectKind::Raft) return;
   o.raft_ready=false; o.raft_classified=true;
   Observe(b,o); // Canonical withdrawal reads no retired components, even before the first pose.
@@ -331,10 +395,11 @@ void Flush() {
     state.pending.erase(it);
   }
 }
-bool Request(const Binding& o,uint32_t value,float position=0,float seconds=0) {
+bool Request(const Binding& o,uint32_t value,float position=0,float seconds=0,uint8_t part=255) {
   if (state.request==UINT32_MAX || state.outgoing.size()>=objects::kQueue) { ++state.rejected; return false; }
   Message m; m.type=MessageType::ObjectRequest; m.epoch=state.epoch;
   m.object={state.generation,state.level,++state.request,o.source,o.kind,value,position,seconds};
+  if (objects::SupportRoot(o.kind)) { m.object.collapse.topology=o.support.topology; m.object.collapse.part=part; }
   if (!ValidObjectRequest(m.object)) { ++state.rejected; return false; }
   state.outgoing.push_back(m); ++state.requested;
   return true;
@@ -423,6 +488,11 @@ void Receive(const uint8_t* b) {
       ++state.rejected; continue;
     }
     auto matrix=o->matrix;
+    if (objects::SupportRoot(r.kind)) {
+      if (!o->support.topology || r.collapse.topology!=o->support.topology || r.collapse.part>=o->support.parts.size()) { ++state.rejected; continue; }
+      matrix=Ptr(b,o->support.parts[r.collapse.part],12,64);
+      if (!matrix) { ++state.rejected; continue; }
+    }
     if (r.kind==ObjectKind::Door) {
       if (Load32(b,o->vars)!=2 || r.value>=8 || !Lever(b,*o,r.value)) { ++state.rejected; continue; }
       matrix=Ptr(b,Load32(b,o->vars+640+r.value*4),12,64);
@@ -431,7 +501,7 @@ void Receive(const uint8_t* b) {
     const auto& p=*link.partner;
     const double distance=std::hypot(std::hypot(double(p.x)-LoadF(b,matrix+48),double(p.y)-LoadF(b,matrix+52)),double(p.z)-LoadF(b,matrix+56));
     if (!state.requests.Admit(r,Now(),distance)) { ++state.rejected; continue; }
-    if (r.kind==ObjectKind::Breakable) {
+    if (r.kind==ObjectKind::Breakable || objects::SupportRoot(r.kind)) {
       if (o->pending_hits.size()>=16) { ++state.rejected; continue; }
       o->pending_hits.push_back({r,Now()+.5});
     }
@@ -455,7 +525,7 @@ void Receive(const uint8_t* b) {
     ++state.accepted;
   }
 }
-bool NativeHit(PPCContext& ctx,uint8_t* b,const Binding& o,uint32_t hero,uint32_t ai,uint32_t flags,uint32_t magnitude,float seconds=.5f) {
+bool NativeHit(PPCContext& ctx,uint8_t* b,const Binding& o,uint32_t hero,uint32_t ai,uint32_t flags,uint32_t magnitude,float seconds=.5f,uint32_t target=0) {
   const auto sp=ctx.r1.u32;
   if ((sp&15) || sp<0x40014000 || sp>=0xA0000000) return false;
   constexpr uint32_t pool=0x82C8EF30;
@@ -472,12 +542,13 @@ bool NativeHit(PPCContext& ctx,uint8_t* b,const Binding& o,uint32_t hero,uint32_
   StoreF(b,ctx.r1.u32+80,0); StoreF(b,ctx.r1.u32+84,0); StoreF(b,ctx.r1.u32+88,1);
   StoreF(b,ctx.r1.u32+96,LoadF(b,o.matrix+48)); StoreF(b,ctx.r1.u32+100,LoadF(b,o.matrix+52)); StoreF(b,ctx.r1.u32+104,LoadF(b,o.matrix+56));
   ctx.r3.u64=result; ctx.r4.s64=-1; ctx.r5.u64=flags; ctx.r6.u64=hero; ctx.r7.u64=0;
-  ctx.r8.u64=o.actor; ctx.r9.s64=-1; ctx.r10.u64=magnitude; ctx.f1.f64=seconds;
+  ctx.r8.u64=target ? target : o.actor; ctx.r9.s64=-1; ctx.r10.u64=magnitude; ctx.f1.f64=seconds;
   __imp__sub_82634428(ctx,b);
   const bool queued=Load32(b,result)!=UINT32_MAX && Load32(b,result+4)!=0;
   for (unsigned i=0;i<4;++i) Store32(b,globals[i],values[i]);
   std::memcpy(b+start,scratch,sizeof(scratch)); ctx=saved; return queued;
 }
+#include "coop_objects_support.inc"
 void Damage(PPCContext& ctx,uint8_t* b) {
   const auto output=ctx.r4.u32;
   // A private loader can run native prop callbacks before the new registry is
@@ -1159,6 +1230,11 @@ void ScanInventory(const uint8_t* b,uint32_t w) {
   const auto begin=Load32(b,w+40),end=Load32(b,w+28);
   if (!PoseAddress(begin) || !PoseAddress(end) || end<begin || (end-begin)%8 || end-begin>8*20000) return;
   ++state.scan_pass; state.scan_next=Now()+3;
+  if (Trace()) for (const auto cache:{0x82CC84F0u,0x82CC8720u,0x82CC97D0u}) {
+    const auto block=Ptr(b,cache,0,24);
+    REXLOG_INFO("KK dev object tree descriptors: role={} level={} cache={:08X} block={:08X} native={:08X}",
+        v.host ? "host" : "guest",v.world.level,cache,block,block ? Load32(b,block+20) : 0);
+  }
   unsigned counts[15]{};
   constexpr const char* names[]{"unknown","iob","door","ode","tree","bamboo","rack","fire","raft","ammo","javelin","checkpoint","grab","benttree","deadtree"};
   constexpr uint32_t offsets[15][3]{{},{552,556,560},{0,612,1096},{0,8,2444},{0x52C,0x7C4,0x930},
@@ -1212,6 +1288,7 @@ void ScanInventory(const uint8_t* b,uint32_t w) {
       REXLOG_INFO("KK dev object fire contract: role={} actor={:08X} supported={} mode={} repeat={} completion={:08X} timer={} spread={} total={}",
           v.host ? "host" : "guest",actor,FireContract(b,vars),Load32(b,vars+364),Load32(b,vars+372),
           Load32(b,vars+188),LoadF(b,vars+388),LoadF(b,vars+416),LoadF(b,vars+424));
+    if (kind==5 || kind==6) SupportRelations(b,actor,names[kind]);
     if (kind==3 && vars && bytes>=3376) {
       unsigned parts=0; bool terminated=false;
       for (unsigned i=0;i<=32;++i) {
@@ -1318,7 +1395,75 @@ void DevProbe(PPCContext& ctx,uint8_t* b,Probe& probe,ObjectKind kind) {
   REXLOG_INFO("KK dev object probe: native input role={} kind={} id={:016X} supplied={} native-result-awaiting=true",
       state.host ? "host" : "guest",uint8_t(kind),o->source,supplied);
 }
+void ThrowProbe(PPCContext& ctx,uint8_t* b) {
+  static Probe probe("KK_DEV_OBJECT_THROW");
+  const auto t=kk::DevSecondsSinceMenu();
+  if (probe.done || probe.due<0 || t<probe.due) return;
+  if (t>probe.due+20) { probe.done=true; REXLOG_WARN("KK dev object throw fixture: expired, no own loose javelin and initialized obstacle"); return; }
+  const auto hero=Load32(b,0x82CCBF7C),human=Ptr(b,Ptr(b,hero,24,8),4,88),hm=Ptr(b,hero,12,64);
+  if (!hm || !Track(b,human,0x826718B8)) return;
+  Binding* target=nullptr;
+  for (auto& [actor,o]:state.bindings) if (o.kind==ObjectKind::Breakable && Valid(b,o) && Match(o.source,o.kind)==&o &&
+      Load32(b,o.vars+556)>Load32(b,o.vars+552) && std::abs(o.z-LoadF(b,hm+56))<2) { target=&o; break; }
+  if (!target) return;
+  if (!probe.source) {
+    if (!kk::DevTeleportJack(ctx,b,hero,{target->x+3,target->y,LoadF(b,hm+56)},-1,0)) return;
+    probe.source=target->source; probe.act=t+1; return;
+  }
+  if (t<probe.act || probe.source!=target->source) return;
+  const auto w=state.world,begin=Load32(b,w+40),end=Load32(b,w+28);
+  if (!PoseAddress(begin) || end<begin || end-begin>20000*8 || (end-begin)%8) return;
+  static uint32_t own_copy=0;
+  uint32_t projectile=own_copy,projectile_vars=0;
+  if (projectile) projectile_vars=Ptr(b,Ptr(b,Ptr(b,projectile,24,8),4,88),64,568);
+  for (auto p=begin;p<end;p+=8) {
+    if (projectile) break;
+    const auto actor=Load32(b,p),ai=Ptr(b,Ptr(b,actor,24,8),4,88);
+    if ((!Track(b,ai,0x8258E228) && !Track(b,ai,0x8257C560)) || (Load32(b,actor+4)&0x00600000)) continue;
+    const auto definition=Ptr(b,Ptr(b,ai,0,4),0,8),vars=Ptr(b,ai,64,568);
+    if (!definition || Load32(b,definition+4)<568 || !vars || Load32(b,vars+232)) continue;
+    projectile=actor; projectile_vars=vars; break;
+  }
+  if (!projectile) return;
+  const auto sp=ctx.r1.u32; if ((sp&15) || sp<0x40014000 || sp>=0xA0000000) return;
+  const PPCContext saved=ctx; uint8_t scratch[16384]; const auto start=sp-sizeof(scratch);
+  std::memcpy(scratch,b+start,sizeof(scratch)); ctx.r1.u64=start+12288;
+  std::memset(b+ctx.r1.u32,0,4096); Store32(b,ctx.r1.u32,sp);
+  const auto position=ctx.r1.u32+256,record=position+64;
+  const ShotVector origin{LoadF(b,hm+48)-.5f,LoadF(b,hm+52),LoadF(b,hm+56)+1.2f};
+  StoreF(b,position,origin.x); StoreF(b,position+4,origin.y); StoreF(b,position+8,origin.z);
+  constexpr uint32_t globals[]{0x82CCBF58,0x82CCBF5C,0x82CCBF60,0x82CCBF64,0x82CCBF68,0x82CCBF6C,0x82CCBF70};
+  uint32_t values[7]; for (unsigned i=0;i<7;++i) values[i]=Load32(b,globals[i]);
+  if (!own_copy) {
+    // Native Javelin replacement uses this same local copy/reuse API. Never
+    // consume or move the authored template or a player's personal stock.
+    ctx.r3.u64=projectile; ctx.r4.u64=position; __imp__sub_82715AC8(ctx,b);
+    projectile=ctx.r3.u32;
+    if (PoseAddress(projectile,32)) own_copy=projectile;
+    projectile_vars=Ptr(b,Ptr(b,Ptr(b,projectile,24,8),4,88),64,568);
+  }
+  if (!projectile_vars || !Ptr(b,Ptr(b,projectile,24,24),20,12)) {
+    for (unsigned i=0;i<7;++i) Store32(b,globals[i],values[i]);
+    std::memcpy(b+start,scratch,sizeof(scratch)); ctx=saved; return;
+  }
+  ctx.r3.u64=projectile; ctx.r4.u64=position; __imp__sub_827117E0(ctx,b);
+  const float dx=target->x-origin.x,dy=target->y-origin.y,dz=target->z+1.2f-origin.z;
+  const float length=std::hypot(dx,dy,dz),flight=length/25;
+  if (length>.1f && length<10) {
+    Store32(b,record,hero); Store32(b,record+104,2000);
+    StoreF(b,record+24,25*dx/length); StoreF(b,record+28,25*dy/length); StoreF(b,record+32,25*dz/length+10*flight);
+    StoreF(b,record+36,0); StoreF(b,record+40,0); StoreF(b,record+44,-20);
+    StoreF(b,record+48,1); StoreF(b,record+52,1); StoreF(b,record+56,1);
+    ctx.r3.u64=projectile; ctx.r4.u64=record; __imp__sub_8271FB98(ctx,b);
+    probe.done=true;
+    REXLOG_INFO("KK dev object throw fixture: role={} id={:016X} projectile={:08X} kind={} native-message=2000 source=own-Jack origin=({:.3f},{:.3f},{:.3f}) target=({:.3f},{:.3f},{:.3f})",
+        state.host ? "host" : "guest",target->source,projectile,Load32(b,projectile_vars+4),origin.x,origin.y,origin.z,target->x,target->y,target->z+1.2f);
+  }
+  for (unsigned i=0;i<7;++i) Store32(b,globals[i],values[i]);
+  std::memcpy(b+start,scratch,sizeof(scratch)); ctx=saved;
+}
 void Probes(PPCContext& ctx,uint8_t* b) {
+  ThrowProbe(ctx,b);
   static Probe hit("KK_DEV_OBJECT_HIT"),lever("KK_DEV_OBJECT_LEVER");
   DevProbe(ctx,b,hit,ObjectKind::Breakable); DevProbe(ctx,b,lever,ObjectKind::Door);
   static Probe fire("KK_DEV_OBJECT_FIRE"),off("KK_DEV_OBJECT_EXTINGUISH");
@@ -1465,7 +1610,10 @@ void ObjectsPad(uint32_t user,const uint8_t* pad,bool connected) {
 void ObjectsFirearm(const PPCContext& input,const uint8_t* b) {
   if (!Trace() || !state.ready || !Shared() || input.r6.u32!=Load32(b,0x82CCBF7C)) return;
   const auto caller=uint32_t(input.lr);
-  if (caller!=0x82696E74 && caller!=0x82697494 && caller!=0x82697970 && caller!=0x82698C00) return;
+  const auto ai=Ptr(b,Ptr(b,Load32(b,0x82CCBF6C),24,8),4,88);
+  const auto javelin=Track(b,ai,0x8258C5F8) ? Ptr(b,ai,64,236) : 0;
+  const bool thrown=javelin && Load32(b,javelin+232)==input.r6.u32;
+  if (!thrown && caller!=0x82696E74 && caller!=0x82697494 && caller!=0x82697970 && caller!=0x82698C00) return;
   const Binding* target=nullptr; bool part=false;
   for (const auto& [actor,o] : state.bindings) if (o.kind==ObjectKind::Breakable && Valid(b,o)) {
     bool hit=actor==input.r8.u32;
@@ -1473,6 +1621,8 @@ void ObjectsFirearm(const PPCContext& input,const uint8_t* b) {
     if (hit) { if (target) return; target=&o; part=actor!=input.r8.u32; }
   }
   if (!target) return;
+  if (thrown) REXLOG_INFO("KK dev object javelin provenance: role={} id={:016X} projectile={:08X} thrower=own-Jack target={:08X} part={} flags={:08X} magnitude={} caller={:08X}",
+      state.host ? "host" : "guest",target->source,Load32(b,0x82CCBF6C),input.r8.u32,part,input.r5.u32,input.r10.u32,caller);
   REXLOG_INFO("KK dev object firearm: role={} id={:016X} target={:08X} part={} weapon-caller={:08X} flags={:08X} magnitude={}",
       state.host ? "host" : "guest",target->source,input.r8.u32,part,caller,input.r5.u32,input.r10.u32);
 }
@@ -1490,13 +1640,20 @@ void ObjectsEnqueued(const ObjectEnqueue& input,const uint8_t* b) {
       hero,Load32(b,payload+4),Load32(b,payload+88),Load32(b,payload+92),input.seconds)) return;
   const auto ai=Ptr(b,Ptr(b,hero,24,8),4,88);
   if (!Track(b,ai,0x826718B8)) return;
-  const auto it=state.bindings.find(Load32(b,payload+4));
-  if (it==state.bindings.end()) return;
-  const auto& o=it->second;
-  if (o.kind!=ObjectKind::Breakable || !Valid(b,o) || Match(o.source,o.kind)!=&o) return;
+  auto* target=objects::StrikeTarget(state.bindings,[&](uint32_t a){return Load32(b,a);},
+      [&](const Binding& o){return Valid(b,o) && Match(o.source,o.kind)==&o;},Load32(b,payload+4));
+  uint8_t part=255;
+  if (!target) for (auto& [actor,candidate]:state.bindings) {
+    if (!objects::SupportRoot(candidate.kind) || !candidate.support.topology || !Valid(b,candidate) || Match(candidate.source,candidate.kind)!=&candidate) continue;
+    const auto it=std::find(candidate.support.parts.begin(),candidate.support.parts.end(),Load32(b,payload+4));
+    if (it==candidate.support.parts.end()) continue;
+    if (!target || candidate.source<target->source) { target=&candidate; part=uint8_t(it-candidate.support.parts.begin()); }
+  }
+  if (!target) return;
+  const auto& o=*target;
   const auto flags=Load32(b,payload+88),magnitude=Load32(b,payload+92);
   if ((flags&~kObjectHitFlags) || magnitude>100000 || !std::isfinite(input.seconds) || input.seconds<0 || input.seconds>2) return;
-  if (!state.host) Request(o,flags,float(magnitude),input.seconds);
+  if (!state.host) Request(o,flags,float(magnitude),input.seconds,part);
   if (Trace()) REXLOG_INFO("KK dev object raw hit: role={} id={:016X} handle={:08X}/{} flags={:08X} magnitude={} lifetime={:.3f} caller={:08X}",
       state.host ? "host" : "guest",o.source,Load32(b,input.output),Load32(b,input.output+4),flags,magnitude,input.seconds,input.caller);
 }
@@ -1513,6 +1670,7 @@ void ObjectsLoaded(uint8_t* b) {
   state.file_keys=objects::FileKeys([&](uint32_t address){ return Load32(b,address); });
   state.bindings.clear(); state.retired.clear(); state.pending.clear(); state.outgoing.clear(); state.ready=false;
   state.identities.Clear();
+  state.bodies.clear(); state.support_frozen=false;
   state.census_started=false;
 #if defined(KK_DEV_TOOLS)
   state.pickups.clear(); state.debug_sources.clear();
@@ -1535,6 +1693,7 @@ void ObjectsBeforeAi(PPCContext& ctx,uint8_t* b,uint32_t w) {
       o.pending_hits.clear(); o.local_levers=o.sent_holds=o.observed_hold=0;
       o.local_holds={}; o.remote_holds={};
     }
+    if (w==state.world) ReleaseBodies(ctx,b);
     return;
   }
   // The partner may spend longer than ten seconds behind the load barrier.
@@ -1542,7 +1701,7 @@ void ObjectsBeforeAi(PPCContext& ctx,uint8_t* b,uint32_t w) {
   // for ten seconds of actual shared AI, rather than expiring while waiting.
   if (!state.census_started) { state.census_started=true; state.census_until=Now()+10; state.next_census=0; }
   if (Now()>=state.next_census) Census(b);
-  state.ready=true; ++state.ai_tick; Receive(b); Holds(b); Flush();
+  state.ready=true; ++state.ai_tick; Receive(b); FreezeSupport(b); Holds(b); Flush();
 #if defined(KK_DEV_TOOLS)
   Probes(ctx,b);
   PickupProbe(ctx,b);
@@ -1557,6 +1716,8 @@ void ObjectsAfterAi(PPCContext& ctx,uint8_t* b,uint32_t w) {
   TickRaftFixture(ctx,b);
 #endif
   UpdateRafts(ctx,b);
+  ReplaySupports(ctx,b);
+  if (state.host) PublishBodies(b); else ApplyBodies(ctx,b);
   const auto now=Now();
 #if defined(KK_DEV_TOOLS)
   if (Trace() && std::getenv("KK_DEV_OBJECT_PASSAGE")) {
@@ -1597,6 +1758,14 @@ void ObjectsAfterAi(PPCContext& ctx,uint8_t* b,uint32_t w) {
     REXLOG_INFO("KK co-op objects: role={} generation={} level={} breakables={} doors={} requests={} accepted={} applied={} received={} refused={} pending={}",
         state.host ? "host" : "guest",state.generation,state.level,breakables,doors,state.requested,state.accepted,state.applied,state.received,state.rejected,state.pending.size()+state.outgoing.size());
 #if defined(KK_DEV_TOOLS)
+    if (Trace()) for (const auto& [actor,p]:state.bodies) {
+      if (p.retired) continue; // No reads through queued-removal component memory.
+      const auto* authority=state.host ? (p.sent ? &p.final : nullptr) : state.replica.Find(ObjectKind::SupportBody,p.source);
+      REXLOG_INFO("KK dev object support detail: role={} id={:016X} valid={} active={} body={:08X}/{:08X} ph={} sent={} driven={} matched={} pos=({:.3f},{:.3f},{:.3f}) host=({:.3f},{:.3f},{:.3f})",
+          state.host ? "host" : "guest",p.source,BodyValid(b,p),BodyActivated(p,!state.host),p.body,Ptr(b,p.physics,0x74,0x108),
+          unsigned(b[p.physics+14]),p.sent,p.driven,authority!=nullptr,LoadF(b,p.matrix+48),LoadF(b,p.matrix+52),LoadF(b,p.matrix+56),
+          authority ? authority->body.pose[0] : 0,authority ? authority->body.pose[1] : 0,authority ? authority->body.pose[2] : 0);
+    }
     unsigned details=0;
     if (Trace()) {
       const auto hero=Load32(b,0x82CCBF7C),matrix=Ptr(b,hero,12,64);
@@ -1679,6 +1848,17 @@ REX_HOOK_RAW(sub_826F9DC0) { kk::coop::DoorStop(ctx,base); }
 REX_HOOK_RAW(sub_825FAF58) { kk::coop::FireInit(ctx,base); }
 REX_HOOK_RAW(sub_8260F858) { kk::coop::FireBurn(ctx,base); }
 REX_HOOK_RAW(sub_8260C988) { kk::coop::RaftFollow(ctx,base); }
+REX_HOOK_RAW(sub_826EA1A0) { kk::coop::SupportNative(ctx,base,false,0); }
+REX_HOOK_RAW(sub_826F0E10) { kk::coop::SupportNative(ctx,base,false,1); }
+REX_HOOK_RAW(sub_826F1E08) { kk::coop::SupportNative(ctx,base,false,2); }
+REX_HOOK_RAW(sub_826F4948) { kk::coop::SupportNative(ctx,base,false,3); }
+REX_HOOK_RAW(sub_826F0418) { kk::coop::SupportTrigger(ctx,base,false); }
+REX_HOOK_RAW(sub_826E6390) { kk::coop::SupportNative(ctx,base,true,0); }
+REX_HOOK_RAW(sub_826E78F0) { kk::coop::SupportNative(ctx,base,true,1); }
+REX_HOOK_RAW(sub_826E7BF0) { kk::coop::SupportNative(ctx,base,true,2); }
+REX_HOOK_RAW(sub_826D0770) { kk::coop::SupportNative(ctx,base,true,3); }
+REX_HOOK_RAW(sub_826D3568) { kk::coop::SupportTrigger(ctx,base,true); }
+REX_HOOK_RAW(sub_82860678) { kk::coop::SupportPhysics(ctx,base); }
 #if defined(KK_DEV_TOOLS)
 REX_HOOK_RAW(sub_825E7348) { kk::coop::RaftWait(ctx,base); }
 #endif

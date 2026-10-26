@@ -133,6 +133,24 @@ bool ValidObjectState(const ObjectState& s) {
   if (!s.generation || !s.level || s.level>100000 || !s.number || !s.source ||
       !std::isfinite(s.position) || !std::isfinite(s.seconds)) return false;
   if (s.kind!=ObjectKind::Raft && s.raft!=RaftState{}) return false;
+  if (s.kind!=ObjectKind::Ode && s.kind!=ObjectKind::Tree && s.collapse!=CollapseState{}) return false;
+  if (s.kind!=ObjectKind::SupportBody && s.body!=SupportBodyState{}) return false;
+  if (s.kind==ObjectKind::Ode || s.kind==ObjectKind::Tree) {
+    if (s.value==3) return s.position==0 && s.seconds==0 && s.collapse==CollapseState{};
+    if (!s.collapse.topology || s.value>2 || s.position!=0 || s.seconds!=0 ||
+        s.collapse.trigger>7 || (s.collapse.part>=32 && s.collapse.part!=255)) return false;
+    for (unsigned i=0;i<6;++i) if (!std::isfinite(s.collapse.impulse[i]) ||
+        std::abs(s.collapse.impulse[i])>(i<3 ? 1000 : 100000)) return false;
+    if (!s.value) return s.collapse.trigger==0 && s.collapse.part==255 && s.collapse.impulse==std::array<float,6>{};
+    return s.collapse.trigger && (bool(s.collapse.trigger&2)==(s.collapse.part!=255));
+  }
+  if (s.kind==ObjectKind::SupportBody) {
+    if (s.value!=1 || s.position!=0 || s.seconds!=0 || !s.body.topology || (s.body.flags&~0x00620003u)) return false;
+    const auto& p=s.body.pose;
+    for (unsigned i=0;i<9;++i) if (!std::isfinite(p[i]) || std::abs(p[i])>(i<3 ? 100000 : 1.01f)) return false;
+    return std::abs(std::hypot(p[3],p[4],p[5])-1)<.01f && std::abs(std::hypot(p[6],p[7],p[8])-1)<.01f &&
+        std::abs(p[3]*p[6]+p[4]*p[7]+p[5]*p[8])<.02f;
+  }
   if (s.kind==ObjectKind::Raft) {
     if (s.value==2) return s.position==0 && s.seconds==0 && s.raft==RaftState{};
     if (s.value>1 || s.position<0 || s.position>1000 || s.seconds<0 || s.seconds>86400 ||
@@ -155,7 +173,11 @@ bool ValidObjectState(const ObjectState& s) {
 bool ValidObjectRequest(const ObjectState& s) {
   if (!s.generation || !s.level || s.level>100000 || !s.number || !s.source ||
       !std::isfinite(s.position) || !std::isfinite(s.seconds)) return false;
-  if (s.raft!=RaftState{}) return false;
+  if (s.raft!=RaftState{} || s.body!=SupportBodyState{}) return false;
+  if (s.kind==ObjectKind::Ode || s.kind==ObjectKind::Tree) return s.collapse.topology && s.collapse.part<32 &&
+      s.collapse.trigger==0 && s.collapse.impulse==std::array<float,6>{} && !(s.value&~kObjectHitFlags) &&
+      s.position>=0 && s.position<=100000 && std::floor(s.position)==s.position && s.seconds>=0 && s.seconds<=2;
+  if (s.collapse!=CollapseState{}) return false;
   if (s.kind==ObjectKind::Breakable) return !(s.value&~kObjectHitFlags) && s.position>=0 &&
       s.position<=100000 && std::floor(s.position)==s.position && s.seconds>=0 && s.seconds<=2;
   if (s.kind==ObjectKind::Fire) return s.value==1 && s.position==0 && s.seconds==0;
@@ -285,6 +307,14 @@ bool Encode(const Message& m, std::vector<uint8_t>& out) {
       if (m.object.kind==ObjectKind::Raft) {
         payload.U(m.object.raft.route,8); payload.U(m.object.raft.current,1); payload.U(m.object.raft.next,1);
         for (float v:m.object.raft.pose) payload.U(std::bit_cast<uint32_t>(v),4);
+      }
+      if (m.object.kind==ObjectKind::Ode || m.object.kind==ObjectKind::Tree) {
+        payload.U(m.object.collapse.topology,8); payload.U(m.object.collapse.trigger,1); payload.U(m.object.collapse.part,1);
+        for (float v:m.object.collapse.impulse) payload.U(std::bit_cast<uint32_t>(v),4);
+      }
+      if (m.object.kind==ObjectKind::SupportBody) {
+        payload.U(m.object.body.topology,8); payload.U(m.object.body.flags,4);
+        for (float v:m.object.body.pose) payload.U(std::bit_cast<uint32_t>(v),4);
       }
       break;
     case MessageType::WorldDigest: {
@@ -476,6 +506,14 @@ bool Decode(std::span<const uint8_t> bytes, Message& out) {
       if (m.object.kind==ObjectKind::Raft) {
         m.object.raft.route=r.U(8); m.object.raft.current=uint8_t(r.U(1)); m.object.raft.next=uint8_t(r.U(1));
         for (float& v:m.object.raft.pose) v=std::bit_cast<float>(uint32_t(r.U(4)));
+      }
+      if (m.object.kind==ObjectKind::Ode || m.object.kind==ObjectKind::Tree) {
+        m.object.collapse.topology=r.U(8); m.object.collapse.trigger=uint8_t(r.U(1)); m.object.collapse.part=uint8_t(r.U(1));
+        for (float& v:m.object.collapse.impulse) v=std::bit_cast<float>(uint32_t(r.U(4)));
+      }
+      if (m.object.kind==ObjectKind::SupportBody) {
+        m.object.body.topology=r.U(8); m.object.body.flags=uint32_t(r.U(4));
+        for (float& v:m.object.body.pose) v=std::bit_cast<float>(uint32_t(r.U(4)));
       }
       if (!(m.type==MessageType::ObjectRequest ? ValidObjectRequest(m.object) : ValidObjectState(m.object))) return false;
       break;

@@ -12,7 +12,7 @@
 
 namespace kk::coop {
 constexpr uint32_t kMagic = 0x4B4B4331;  // KKC1, network byte order throughout
-constexpr uint16_t kProtocolVersion = 19; // Objects and Play restart handover, with distinct message IDs.
+constexpr uint16_t kProtocolVersion = 20; // Typed collapse events and settled support bodies.
 constexpr size_t kMaxDisplayNameBytes = 32;
 // Valid UTF-8, no controls or invisible direction/line formatting, bounded at a codepoint.
 // Empty or wholly invalid input becomes "Partner". Never log the input or result.
@@ -29,7 +29,7 @@ enum class MessageType : uint16_t {
   StartPlan = 33, StartPlanAck = 34, ObjectState = 35, ObjectRequest = 36
 };
 
-enum class ObjectKind : uint8_t { Breakable=1, Door=2, Fire=3, Raft=4 };
+enum class ObjectKind : uint8_t { Breakable=1, Door=2, Fire=3, Raft=4, Ode=5, Tree=6, SupportBody=7 };
 constexpr uint32_t kDoorScheduled=0x100;
 constexpr uint32_t kObjectHitFlags=0x00FFFFFF;
 constexpr size_t kObjectQueue=256,kObjectCensus=2048;
@@ -50,6 +50,23 @@ struct RaftState {
   std::array<float,12> pose{}; // World XYZ, forward, up, velocity. Values only.
   auto operator<=>(const RaftState&) const = default;
 };
+// One native collapse activation, retained with its terminal phase. Part is an
+// ordinal in the checked LOCAL list; no event handle or actor address is sent.
+struct CollapseState {
+  uint64_t topology=0;
+  uint8_t trigger=0,part=255;
+  std::array<float,6> impulse{}; // Native direction and point.
+  auto operator<=>(const CollapseState&) const = default;
+};
+// Ode/Tree state value0 waits,1 plays the native collapse,2 ends it,3 withdraws
+// with a default collapse payload. Their requests carry raw hits plus a part
+// ordinal/topology, never an activation chosen by the guest.
+struct SupportBodyState {
+  uint64_t topology=0;
+  std::array<float,9> pose{}; // World position, forward, up. Settled outcomes only.
+  uint32_t flags=0; // Bounded native visibility/removal flags.
+  auto operator<=>(const SupportBodyState&) const = default;
+};
 struct ObjectState {
   uint32_t generation=0, level=0, number=0;
   uint64_t source=0;
@@ -57,6 +74,8 @@ struct ObjectState {
   uint32_t value=0;
   float position=0, seconds=0;
   RaftState raft; // Appends58 bytes. Raft value2 withdraws with zero scalars/default raft data. No raft requests.
+  CollapseState collapse;
+  SupportBodyState body;
   auto operator<=>(const ObjectState&) const = default;
 };
 bool ValidObjectState(const ObjectState& object);
