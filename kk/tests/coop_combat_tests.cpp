@@ -56,7 +56,7 @@ void Codecs() {
   static_assert(kProtocolVersion == 22);
   for (const auto& m : {Damage(), Status()}) {
     const auto bytes = Packet(m); Message out;
-    Check(bytes.size() == (m.type == MessageType::DamageEvent ? 102u : 53u), "fixed bounded wire length");
+    Check(bytes.size() == (m.type == MessageType::DamageEvent ? 119u : 53u), "fixed bounded wire length");
     Check(bytes[4] == 0 && bytes[5] == kProtocolVersion && bytes[7] == uint16_t(m.type), "protocol 22 byte order");
     Check(Decode(bytes, out) && Packet(out) == bytes, "canonical combat round trip");
     for (size_t n = 0; n < bytes.size(); ++n) {
@@ -71,7 +71,7 @@ void Codecs() {
     m.damage.flags = flags; Check(!Encode(m, out) && out == std::vector<uint8_t>{9}, "unaudited flags refuse atomically");
   }
   m = Damage(); m.damage.magnitude = 1000; Check(!Encode(m, out), "flag magnitude pair must match producer");
-  for (const auto& pair : {std::pair{4096u, 1u}, {16644u, 1000u}, {16388u, 10u}, {16386u, 6u}, {16388u, 6u}}) {
+  for (const auto& pair : {std::pair{4096u, 1u}, {16644u, 1000u}, {16388u, 10u}, {16386u, 6u}, {16388u, 6u}, {2048u,1u}, {2048u,2u}, {2048u,4u}}) {
     auto valid = Damage(); valid.damage.flags = pair.first; valid.damage.magnitude = pair.second;
     const auto wire = Packet(valid); Message decoded;
     Check(Decode(wire, decoded) && decoded.damage.flags == pair.first && decoded.damage.magnitude == pair.second,
@@ -82,8 +82,9 @@ void Codecs() {
     m.damage.magnitude = magnitude; Check(!Encode(m, out), "integer magnitude bounded");
   }
   m = Damage(); m.damage.direction.x = std::numeric_limits<float>::quiet_NaN(); Check(!Encode(m, out), "NaN direction refused");
-  m.damage.direction = {0, 0, 0}; Check(!Encode(m, out), "zero direction refused");
-  m.damage.direction = {2, 0, 0}; Check(!Encode(m, out), "unbounded direction refused");
+  m.damage.direction = {0, 0, 0}; Check(Encode(m, out), "native consumer handles a zero direction");
+  m.damage.direction = {2, 0, 0}; Check(Encode(m, out), "scaled native forward is retained for Jack's native normalization");
+  m.damage.direction = {2001, 0, 0}; Check(!Encode(m, out), "unbounded direction refused");
   m = Damage(); m.damage.enemy.family = EnemyFamily::Prey; Check(!Encode(m, out), "nonattacking family refused");
   for (auto family : {EnemyFamily::Crab, EnemyFamily::Worm, EnemyFamily::Scorpion, EnemyFamily::Bat,
        EnemyFamily::Centipede, EnemyFamily::Native, EnemyFamily::Marine, EnemyFamily::VRex,
@@ -104,6 +105,15 @@ void Codecs() {
     Check(!Encode(hit, out), "native damage magnitude bounded");
   }
   m = Damage(); m.damage.enemy.source = 0; Check(!Encode(m, out), "missing enemy identity refused");
+  for (auto family : {EnemyFamily::Native,EnemyFamily::Raptor,EnemyFamily::VRex}) {
+    auto hit=Damage(); hit.damage.enemy.family=family; hit.damage.projectile=true;
+    hit.damage.flags=0x400400; hit.damage.magnitude=10; hit.damage.surface=19; hit.damage.point={12,34,56};
+    Message decoded; Check(Decode(Packet(hit),decoded) && decoded.damage.projectile && decoded.damage.point.z==56 &&
+        decoded.damage.surface==19 && decoded.damage.generation==0,"native projectile retains impact and initial owner generation");
+    auto bytes=Packet(hit); bytes.back()=2; Check(!Decode(bytes,decoded),"malformed projectile discriminator refused");
+    hit.damage.surface=0x40000000; Check(!Encode(hit,out),"projectile selector cannot carry a native pointer");
+    hit.damage.surface=19; hit.damage.projectile=false; Check(!Encode(hit,out),"melee cannot smuggle unused impact data");
+  }
   m = Damage(); m.damage.incarnation = 0; Check(!Encode(m, out), "missing life refused");
   m = Damage(); m.damage.number = 0; Check(!Encode(m, out), "zero damage sequence refused");
   m = Damage(); m.damage.world.serial = 0; Check(!Encode(m, out), "missing visit refused");
@@ -119,12 +129,14 @@ void Codecs() {
 }
 void Replay() {
   Check(RemoteOwner(EnemyOwner::Host, EnemyOwner::Guest, 4, 4, false) &&
-      RemoteOwner(EnemyOwner::Guest, EnemyOwner::Host, 7, 7, false), "either committed simulation owner may hit remote player");
+      RemoteOwner(EnemyOwner::Guest, EnemyOwner::Host, 7, 7, false) &&
+      RemoteOwner(EnemyOwner::Host, EnemyOwner::Guest, 0, 0, false), "initial host and either committed simulation owner may hit remote player");
   Check(!RemoteOwner(EnemyOwner::Host, EnemyOwner::Host, 4, 4, false) &&
       !RemoteOwner(EnemyOwner::Host, EnemyOwner::Guest, 5, 4, false) &&
       !RemoteOwner(EnemyOwner::Guest, EnemyOwner::Host, 4, 5, false) &&
       !RemoteOwner(EnemyOwner::Host, EnemyOwner::Guest, 4, 4, true) &&
-      !RemoteOwner(EnemyOwner::Host, EnemyOwner::Guest, 0, 0, false), "replica, old generation and frozen-owner hits cannot damage Jack");
+      !RemoteOwner(EnemyOwner::Host, EnemyOwner::Guest, 1, 0, false) &&
+      !RemoteOwner(EnemyOwner(2), EnemyOwner::Guest, 0, 0, false), "replica, old generation and frozen-owner hits cannot damage Jack");
   Check(DamageClock(10000, 10000.1) && DamageClock(9999, 10000) && DamageClock(10000.5, 10000), "fresh hits use host clock independently of guest clock");
   Check(!DamageClock(9998.99, 10000) && !DamageClock(10000.51, 10000), "delayed and future native hits refused against host pose");
   DamageReplay replay; replay.Reset(90, World(), 11);

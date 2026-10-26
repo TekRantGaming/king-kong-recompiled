@@ -247,10 +247,13 @@ struct DamageEvent {
   EnemyId enemy;
   uint32_t flags = 0, magnitude = 0; // native payload +88/+92 are integer words
   ShotVector direction;
-  double time = 0; // host pose clock, bounds reliable transport delay as well as mailbox age
+  double time = 0; // simulation owner's pose clock bounds transport delay and mailbox age
   uint32_t part = UINT32_MAX; // native payload +84, never an address
   float duration = .0001f; // native event lifetime
-  uint32_t generation = 1; // source ownership generation at native contact
+  uint32_t generation = 0; // initial host ownership is generation zero
+  ShotVector point; // native projectile impact point, never a native reference
+  uint32_t surface = UINT32_MAX;
+  bool projectile = false;
 };
 struct PlayerStatus {
   EnemyWorld world;

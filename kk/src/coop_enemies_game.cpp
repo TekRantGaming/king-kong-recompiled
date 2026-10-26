@@ -12,9 +12,7 @@
 #include "photo_mode.h"
 #include "coop_partner_body.h"
 #include "coop_world_snapshot.h"
-#if defined(KK_DEV_TOOLS)
 #include "coop_stimulus_debug.h"
-#endif
 #include <algorithm>
 #include <bit>
 #include <rex/logging.h>
@@ -49,6 +47,8 @@ REX_EXTERN(__imp__sub_8266ACC8);
 REX_EXTERN(__imp__sub_8254A8F8);
 REX_EXTERN(__imp__sub_825ED648);
 REX_EXTERN(__imp__sub_825EDC70);
+REX_EXTERN(__imp__sub_82572E40);
+REX_EXTERN(__imp__sub_8255C9D8);
 #if defined(KK_DEV_TOOLS)
 REX_EXTERN(__imp__sub_82569A70);
 REX_EXTERN(__imp__sub_8245A7B8);
@@ -291,8 +291,14 @@ void DevWakeTick(PPCContext& ctx, uint8_t* b, uint32_t w) {
     }
     const auto all = DevEnemies(b, w, origin);
     const DevEnemy* nearest = nullptr;
+    // The fixture names this authored scorpion, rather than whichever other
+    // dormant family happens to be closest at the checkpoint.
+    if (p.level==203 && Load32(b,game+12)==5) for (const auto& e:all)
+      if (!e.scheduled && e.family==EnemyFamily::Scorpion && (e.initializing || e.life>0) &&
+          ShotDistance(e.position,{51.110620f,132.907700f,19.930140f})<=.5f) nearest=&e;
+    const bool named=nearest!=nullptr;
     for (const auto& e : all)
-      if (!e.scheduled && (e.initializing || e.life > 0) && e.distance <= 200 &&
+      if (!named && !e.scheduled && (e.initializing || e.life > 0) && e.distance <= 200 &&
           (!nearest || e.distance < nearest->distance)) nearest = &e;
     if (!nearest) {
       wake.phase = DevWake::Done;
@@ -395,6 +401,7 @@ struct Authored {
 };
 struct Pending { EnemyId id; uint32_t ai, matrix; float x, y, z; };
 struct Spawner { uint64_t key; uint32_t ai, vars, sequence = 0; };
+struct RaptorPlayerCache { Binding binding; uint32_t hero = 0, reference = 0; };
 #if defined(KK_DEV_TOOLS)
 struct DevRaptorLog {
   double select_next = 0, vision_next = 0, filter_next = 0, register_next = 0, ray_next = 0, gate_next = 0;
@@ -411,6 +418,7 @@ struct State {
   std::map<uint32_t, Authored> authored;
   std::map<uint32_t, Spawner> spawners;
   std::map<uint32_t, Binding> bindings;
+  std::map<uint32_t, RaptorPlayerCache> raptor_players;
   std::map<uint32_t, Pending> pending;
   std::map<EnemyId, Record> records;
   std::map<EnemyId, Authority> authority; // Always indexed by canonical host ID.
@@ -475,7 +483,7 @@ struct State {
     ShotSummary("world-end");
     world = game = 0; capture = prepared = false; identity = {};
     load_refused_logged = false;
-    authored.clear(); spawners.clear(); bindings.clear(); pending.clear(); records.clear(); driving.clear(); unmatched_logged.clear(); counts = {};
+    authored.clear(); spawners.clear(); bindings.clear(); raptor_players.clear(); pending.clear(); records.clear(); driving.clear(); unmatched_logged.clear(); counts = {};
     death_applied.clear(); death_refused.clear();
     orphan_logged.clear(); unbound = 0;
     aliases.clear(); retry.clear(); retry_diagnosed.clear(); shots = {}; shot_validator = {}; shot_targets = {}; shooting = shot_resolved = false; shot = {};
@@ -849,6 +857,57 @@ void NativePlayerTarget(PPCContext& ctx, uint8_t* b) {
   __imp__sub_8266F740(ctx,b);
   const auto* owner = CombatOwner(b,EnemyFamily::Native);
   if (owner) ctx.r3.u64 = NearestPlayer(ctx,b,*owner,ctx.r3.u32,false);
+}
+void RestoreRaptorPlayers(uint8_t* b) {
+  // Reflex has early reads before it refreshes the single-player caches. Start
+  // every native AI pass with its own Jack references, including after loss.
+  auto& s=Get();
+  for (const auto& [actor,cache] : s.raptor_players) {
+    const auto current=s.bindings.find(actor);
+    if (current==s.bindings.end() || current->second.id!=cache.binding.id ||
+        cache.hero!=Load32(b,0x82CCBF7C) || !Environment(b,s.world) || !ValidBinding(b,cache.binding)) continue;
+    Store32(b,cache.binding.vars+5100,cache.hero);
+    Store32(b,cache.binding.vars+14192,cache.reference);
+    const auto distance=PlayerDistance(b,actor,cache.hero);
+    if (std::isfinite(distance)) StoreF(b,cache.binding.vars+5104,distance);
+  }
+}
+void RaptorPlayer(uint8_t* b, bool capture) {
+  const auto* owner=CombatOwner(b,EnemyFamily::Raptor); if (!owner || !PoseAddress(owner->vars,14200)) return;
+  auto& s=Get(); const auto hero=Load32(b,0x82CCBF7C);
+  if (capture && Load32(b,owner->vars+5100)==hero && PoseAddress(Load32(b,owner->vars+14192),32))
+    s.raptor_players[owner->actor]={*owner,hero,Load32(b,owner->vars+14192)};
+  const auto it=s.raptor_players.find(owner->actor);
+  if (it==s.raptor_players.end() || it->second.hero!=hero || it->second.binding.ai!=owner->ai ||
+      it->second.binding.vars!=owner->vars || it->second.binding.matrix!=owner->matrix) return;
+  const auto body=kk::PartnerBodyCombatActor(b);
+  const auto claim=stimulus_debug::ReadHandle([&](uint32_t p) { return Load32(b,p); },owner->vars+5216);
+  const bool partner=body && claim.valid && (claim.id>>24)==16 && claim.source==owner->actor && claim.target==body;
+  const auto player=partner ? body : hero;
+  // FIGHT compares against5100. Test-bite and neck alignment aim at14192 for
+  // classification1. Both must follow the actual selected player, otherwise
+  // the partner is selected but the native bite still aims at local Jack.
+  Store32(b,owner->vars+5100,player);
+  Store32(b,owner->vars+14192,partner ? body : it->second.reference);
+  const auto distance=PlayerDistance(b,owner->actor,player);
+  if (std::isfinite(distance)) StoreF(b,owner->vars+5104,distance);
+}
+void ContactVictim(PPCContext& ctx, const uint8_t* b) {
+  // 82638B30 has already tested contact with *r29, but its kind-1 branch
+  // passes the singular Jack cache at vars+6112. Keep the actual contact
+  // victim when a second class-1 player is present. Never redirect by proximity.
+  if (uint32_t(ctx.lr) != 0x82638CE0 || !REXCVAR_GET(kk_coop_enabled)) return;
+  const auto& s = Get();
+  if (!s.prepared || !Connected() || !Environment(b,s.world) || Now()-s.prepared_at>.5) return;
+  const auto it=s.bindings.find(ctx.r6.u32);
+  if (it==s.bindings.end() || (it->second.id.family!=EnemyFamily::Centipede && it->second.id.family!=EnemyFamily::Crab) ||
+      it->second.vars!=ctx.r30.u32 || !ValidBinding(b,it->second)) return;
+  const auto* a=AuthorityFor(it->second.id);
+  if (!a || !a->Runs(Side())) return;
+  const auto vars=it->second.vars, slot=ctx.r29.u32-vars;
+  if (!PoseAddress(vars,7440) || !combat::CandidateReference(combat::Candidates(EnemyFamily::Centipede),slot,Load32(b,vars+1400))) return;
+  const auto index=(slot-3236)/4, victim=Load32(b,vars+slot);
+  if (victim && PoseAddress(victim,32) && Load32(b,vars+2020+4*index)==1 && ctx.r8.u32==Load32(b,vars+6112)) ctx.r8.u64=victim;
 }
 void WriteLife(uint8_t* b, const Binding& binding, const EnemyState& e) {
   if (const auto cell = LifeCell(b,binding)) StoreF(b,cell,NativeLife(binding.id.family,e.life));
@@ -1277,13 +1336,20 @@ bool NativeDamage(PPCContext& ctx, uint8_t* b, const DamageEvent& d) {
   Store32(b, globals[2], source->actor); Store32(b, globals[3], source->actor);
   const uint32_t result = scratch.Vec(0, 0, 0, 0x100);
   Store32(b, result, UINT32_MAX); Store32(b, result+4, 0);
-  StoreF(b, ctx.r1.u32+88, d.direction.z);
-  ctx.r3.u64 = result; ctx.r4.u64 = d.part; ctx.r5.u64 = d.flags;
-  ctx.r6.u64 = source->actor; ctx.r8.u64 = h->hero; ctx.r9.u64 = d.magnitude;
-  ctx.r10.u64 = (uint64_t(std::bit_cast<uint32_t>(d.direction.x)) << 32) | std::bit_cast<uint32_t>(d.direction.y);
-  ctx.f1.f64 = duration;
   s.injecting_damage = true;
-  __imp__sub_8261DE68(ctx, b);
+  ctx.r3.u64 = result; ctx.r4.u64 = d.part; ctx.r5.u64 = d.flags;
+  ctx.r6.u64 = source->actor; ctx.r8.u64 = h->hero; ctx.f1.f64 = duration;
+  if (d.projectile) {
+    scratch.Vec(d.direction.x,d.direction.y,d.direction.z,80);
+    scratch.Vec(d.point.x,d.point.y,d.point.z,96);
+    ctx.r7.u64=0; ctx.r9.u64=d.surface; ctx.r10.u64=d.magnitude;
+    // The native builder recomputes victim-local impact vectors for local Jack.
+    __imp__sub_82634428(ctx,b);
+  } else {
+    StoreF(b, ctx.r1.u32+88, d.direction.z); ctx.r9.u64=d.magnitude;
+    ctx.r10.u64=(uint64_t(std::bit_cast<uint32_t>(d.direction.x))<<32)|std::bit_cast<uint32_t>(d.direction.y);
+    __imp__sub_8261DE68(ctx,b);
+  }
   s.injecting_damage = false;
   for (unsigned i = 0; i < 4; ++i) Store32(b, globals[i], saved[i]);
   return Load32(b, result) != UINT32_MAX && Load32(b, result+4) != 0;
@@ -1485,7 +1551,19 @@ void DevBait(PPCContext& ctx, uint8_t* b) {
   struct Bait {
     double due = -1;
     bool done = false;
+    EnemyFamily family = EnemyFamily::Raptor;
+    double repeat = 0;
+    unsigned placements = 0;
     Bait() {
+      if (const char* value=std::getenv("KK_DEV_BAIT_REPEAT")) {
+        char* end=nullptr; const auto parsed=std::strtod(value,&end);
+        if (end!=value && !*end && std::isfinite(parsed) && parsed>=3 && parsed<=30) repeat=parsed;
+      }
+      if (const char* value=std::getenv("KK_DEV_BAIT_FAMILY")) {
+        char* end=nullptr; const auto parsed=std::strtoul(value,&end,10);
+        if (end!=value && !*end && parsed>=unsigned(EnemyFamily::Raptor) && parsed<unsigned(EnemyFamily::Prey))
+          family=EnemyFamily(parsed);
+      }
       const char* value = std::getenv("KK_DEV_BAIT");
       if (!value || !*value) return;
       char* end = nullptr; const auto parsed = std::strtod(value, &end);
@@ -1497,16 +1575,18 @@ void DevBait(PPCContext& ctx, uint8_t* b) {
   if (bait.done || bait.due < 0) return;
   const double t = kk::DevSecondsSinceMenu();
   if (t < bait.due) return;
-  if (t > bait.due+10) { bait.done = true; REXLOG_WARN("KK dev bait: expired waiting for matched live raptor on guest"); return; }
+  if (t > bait.due+40) { bait.done = true; REXLOG_WARN("KK dev bait: expired waiting for matched live family={} on guest",uint16_t(bait.family)); return; }
   auto& s = Get();
   if (!s.prepared || s.link.role != Role::Guest || !Connected() || !Environment(b, s.world)) return;
+  const auto condition=LocalPlayerCondition(b);
+  if (!condition || *condition==PlayerCondition::Dead) return;
   const auto jack = ReadJackPose([&](uint32_t p) { return Load32(b, p); },
       [&](uint32_t p) { return Load16(b, p); }, [&](uint32_t p) { return LoadF(b, p); }, Now());
   if (!jack.pose) return;
   const ShotVector origin{jack.pose->x, jack.pose->y, jack.pose->z};
   const Record* nearest = nullptr; float distance = 300;
   for (const auto& [actor, record] : s.driving) {
-    if (record.kind != EnemyEventKind::Spawned || record.enemy.life <= 0 || record.enemy.id.family != EnemyFamily::Raptor) continue;
+    if (record.kind != EnemyEventKind::Spawned || record.enemy.life <= 0 || record.enemy.id.family != bait.family) continue;
     const auto it = s.bindings.find(actor); const auto alias = s.aliases.find(record.enemy.id);
     if (it == s.bindings.end() || alias == s.aliases.end() || alias->second != it->second.id || !ValidBinding(b, it->second)) continue;
     const float d = ShotDistance(origin, {record.enemy.x, record.enemy.y, record.enemy.z});
@@ -1519,9 +1599,10 @@ void DevBait(PPCContext& ctx, uint8_t* b) {
   const float fy = length > .001f ? dy/length : std::sin(e.facing);
   const ShotVector target{e.x-3*fx, e.y-3*fy, e.z};
   if (!kk::DevTeleportJack(ctx, b, Load32(b, 0x82CCBF7C), target, fx, fy)) return;
-  bait.done = true;
-  REXLOG_INFO("KK dev bait: at {:.2f} guest teleported by native 82538B70 raptor={:016X}/{} from=({:.3f},{:.3f},{:.3f}) to=({:.3f},{:.3f},{:.3f}) stand-off=3 collision-unverified=true",
-      t, e.id.source, e.id.sequence, origin.x, origin.y, origin.z, target.x, target.y, target.z);
+  bait.done = !bait.repeat || ++bait.placements>=12;
+  if (!bait.done) bait.due=t+bait.repeat;
+  REXLOG_INFO("KK dev bait: at {:.2f} guest teleported by native 82538B70 family={} enemy={:016X}/{} from=({:.3f},{:.3f},{:.3f}) to=({:.3f},{:.3f},{:.3f}) stand-off=3 collision-unverified=true",
+      t, uint16_t(e.id.family), e.id.source, e.id.sequence, origin.x, origin.y, origin.z, target.x, target.y, target.z);
 }
 // Diagnostics are per validated host raptor, bounded and reset on load. The old
 // process-wide timer hid other raptors; a handle alone did not identify a victim.
@@ -2019,14 +2100,17 @@ void AfterAi(PPCContext& ctx, uint8_t* b, uint32_t w) {
       }
       if (s.combat_targets[actor] == target) continue;
       s.combat_targets[actor] = target;
-      if (target == hero) ++s.targets_host;
-      if (body && target == body) ++s.targets_guest;
+      const bool host=s.link.role==Role::Host;
+      if (target == hero) { if (host) ++s.targets_host; else ++s.targets_guest; }
+      if (body && target == body) { if (host) ++s.targets_guest; else ++s.targets_host; }
       REXLOG_INFO("COOP TARGET family={} actor={:08X} target={:08X} player={} choices-host={} choices-guest={} authority={}",
           uint16_t(binding.id.family), actor, target, target == hero ? "local" : body && target == body ? "partner" : "other",
           s.targets_host, s.targets_guest, s.link.role == Role::Host ? "host" : "guest");
     }
     REXLOG_INFO("COOP COMBAT level={} start={} targets-host={} targets-guest={} hits-host={} hits-guest={} guest-native-queued={} refused={} body={:08X}",
-        s.identity.level, s.identity.start, s.targets_host, s.targets_guest, s.hits_host, s.hits_produced, s.hits_native, s.hits_refused, body);
+        s.identity.level, s.identity.start, s.targets_host, s.targets_guest,
+        s.link.role==Role::Host ? s.hits_host+s.hits_native : s.hits_produced,
+        s.link.role==Role::Host ? s.hits_produced : s.hits_host+s.hits_native, s.hits_native, s.hits_refused, body);
   }
 #endif
   {
@@ -2253,10 +2337,8 @@ void EnemyAfterLoad(const uint8_t* b, uint32_t game) {
       s.ownership_in=std::move(private_ownership.incoming);
       for (const auto& [id,a] : s.authority) s.private_reseed.insert(id);
     }
-    if (EnemyLinkSnapshot().role==Role::Host) {
-      s.next_damage=private_sequences.damage; s.combat_epoch=private_sequences.epoch;
-      s.status_replay=private_sequences.status;
-    }
+    s.next_damage=private_sequences.damage; s.combat_epoch=private_sequences.epoch;
+    s.status_replay=private_sequences.status;
   }
   else s.identity = {level, start, ++s.visits[{level, start}]};
   private_identity.reset();
@@ -2428,6 +2510,13 @@ bool EnemyCombatReference(const uint8_t* b, uint32_t owner, uint32_t ai, uint32_
   if (binding == s.bindings.end() || binding->second.ai != ai || binding->second.vars != vars ||
       !ValidBinding(b, binding->second)) return false;
   const auto table = combat::Candidates(binding->second.id.family);
+  if (binding->second.id.family==EnemyFamily::Raptor && (offset==5100 || offset==14192 || offset==7756)) {
+    const auto cache=s.raptor_players.find(owner);
+    return cache!=s.raptor_players.end() && cache->second.binding.id==binding->second.id &&
+        cache->second.binding.ai==ai && cache->second.binding.vars==vars;
+  }
+  if (binding->second.id.family==EnemyFamily::Crab && PoseAddress(vars,1708) &&
+      combat::CandidateReference(combat::CandidateTable{1536,1544,20},offset,Load32(b,vars+1536))) return true;
   if ((binding->second.id.family == EnemyFamily::Crab && offset == 1056) ||
       (binding->second.id.family == EnemyFamily::Bat && offset == 848) ||
       (binding->second.id.family == EnemyFamily::Native && offset == 4088)) return true;
@@ -2492,15 +2581,21 @@ bool EnemyDamageEnqueue(PPCContext& ctx, uint8_t* b, uint32_t body) {
     damage.time = Now();
     damage.part = Load32(b, payload+84);
     damage.duration = float(ctx.f1.f64);
+    damage.projectile=uint32_t(ctx.lr)==0x826345F8;
+    if (damage.projectile) {
+      damage.point={LoadF(b,payload+48),LoadF(b,payload+52),LoadF(b,payload+56)};
+      damage.surface=Load32(b,payload+96);
+    }
     if (binding != s.bindings.end() && AuthorityFor(binding->second.id))
       damage.generation = AuthorityFor(binding->second.id)->generation;
-    if (binding != s.bindings.end()) damage.enemy = binding->second.id;
+    if (binding != s.bindings.end()) damage.enemy = Canonical(binding->second.id);
     const bool audited = binding != s.bindings.end() &&
         AuthorityFor(binding->second.id) && AuthorityFor(binding->second.id)->Runs(Side()) &&
-        ValidBinding(b, binding->second) &&
-        uint32_t(ctx.lr) == 0x8261DEEC &&
-        combat::NativeHit(binding->second.id.family, damage.flags, damage.magnitude);
-    const bool qualified = audited && EnemyPartnerCombatReady() && ValidDamageEvent(damage);
+        RetainedDamageSource(b, binding->second) &&
+        (uint32_t(ctx.lr)==0x8261DEEC || uint32_t(ctx.lr)==0x826345F8) &&
+        combat::NativeHit(binding->second.id.family, damage.flags, damage.magnitude,damage.projectile);
+    const bool ready=EnemyPartnerCombatReady(), wire_valid=ValidDamageEvent(damage);
+    const bool qualified = audited && ready && wire_valid;
     bool queued = false;
     if (qualified) {
       Message m; m.type = MessageType::DamageEvent; m.epoch = s.combat_epoch; m.damage = damage;
@@ -2512,9 +2607,10 @@ bool EnemyDamageEnqueue(PPCContext& ctx, uint8_t* b, uint32_t body) {
     if (!audited) kk::PartnerBodyTriggerReference(b, payload); // unknown reference still releases auto leases
 #if defined(KK_DEV_TOOLS)
     static unsigned logged = 0;
-    if (logged++ < 256) REXLOG_INFO("BITE host melee-enqueue source={:08X} victim={:08X} body={:08X} flags={:08X} magnitude={} qualified={} queued={} number={} body-protected=true produced={} sent={} refused={}",
+    if (logged++ < 256) REXLOG_INFO("BITE host melee-enqueue source={:08X} victim={:08X} body={:08X} flags={:08X} magnitude={} qualified={} queued={} number={} body-protected=true produced={} sent={} refused={} audited={} ready={} wire={} direction-length={:.3f} part={} duration={:.6f} generation={} caller={:08X}",
         source, victim, body, damage.flags, damage.magnitude, qualified, queued, damage.number,
-        s.hits_produced, s.hits_queued, s.hits_refused);
+        s.hits_produced, s.hits_queued, s.hits_refused, audited, ready, wire_valid,
+        std::hypot(damage.direction.x,damage.direction.y,damage.direction.z), damage.part, damage.duration, damage.generation,uint32_t(ctx.lr));
 #endif
   }
 #if defined(KK_DEV_TOOLS)
@@ -2651,7 +2747,10 @@ REX_HOOK_RAW(sub_8254A8F8) {
 #else
   __imp__sub_8254A8F8(ctx,base);
 #endif
+  kk::coop::RaptorPlayer(base,false);
 }
+REX_HOOK_RAW(sub_82572E40) { __imp__sub_82572E40(ctx,base); kk::coop::RaptorPlayer(base,true); }
+REX_HOOK_RAW(sub_8255C9D8) { kk::coop::RaptorPlayer(base,false); __imp__sub_8255C9D8(ctx,base); }
 REX_HOOK_RAW(sub_825ED648) {
   kk::coop::PlayerPriority(base,kk::coop::EnemyFamily::Scorpion);
   __imp__sub_825ED648(ctx,base);
@@ -2663,6 +2762,7 @@ REX_HOOK_RAW(sub_825EDC70) {
 REX_HOOK_RAW(sub_82634978) { kk::coop::CrabPlayerTarget(ctx,base); }
 REX_HOOK_RAW(sub_8266F740) { kk::coop::NativePlayerTarget(ctx,base); }
 REX_HOOK_RAW(sub_8261DE68) {
+  kk::coop::ContactVictim(ctx,base);
 #if defined(KK_DEV_TOOLS)
   if (REXCVAR_GET(kk_coop_enabled) && kk::coop::EnemyConnectionReady()) {
     static unsigned count = 0;
@@ -2677,6 +2777,7 @@ REX_HOOK_RAW(sub_8271D498) {
 #if defined(KK_DEV_TOOLS)
   kk::DevSampleTick(&ctx, base, world);
 #endif
+  if (uint32_t(ctx.lr)==0x82881CF0) kk::coop::RestoreRaptorPlayers(base);
   kk::PartnerBodyBeforeAi(ctx, base, world);
   kk::coop::ObjectsBeforeAi(ctx,base,world);
   kk::coop::BeforeAi(ctx, base, world);
@@ -2729,6 +2830,25 @@ REX_HOOK_RAW(sub_82696A28) {
     ctx.r3.u64=0;
     return;
   }
+#if defined(KK_DEV_TOOLS)
+  // Controlled C88 encounter fixture: story allies otherwise kill the test
+  // enemies before the guest can reach them. This never changes player fire,
+  // creature attacks, collision, damage, life or the shipping build.
+  static const bool hold_npcs=[] {
+    const auto* value=std::getenv("KK_DEV_NPC_HOLD_FIRE"); return value && std::strcmp(value,"1")==0;
+  }();
+  if (hold_npcs && kk::coop::EnemyConnectionReady()) {
+    const auto actor=kk::hfr::Load32(base,0x82CCBF6C), hero=kk::hfr::Load32(base,0x82CCBF7C);
+    const auto ai=kk::coop::Ptr(base,kk::coop::Ptr(base,actor,24,8),4,88);
+    const auto hero_ai=kk::coop::Ptr(base,kk::coop::Ptr(base,hero,24,8),4,88);
+    const auto model=kk::coop::Ptr(base,ai,0,16);
+    if (actor!=hero && model && model==kk::coop::Ptr(base,hero_ai,0,16)) {
+      static unsigned count=0;
+      if (count++<16) REXLOG_INFO("KK dev C88: story ally firearm held actor={:08X} fixture-only=true",actor);
+      ctx.r3.u64=0; return;
+    }
+  }
+#endif
   const char* reason = kk::coop::BeginShot(base);
   const bool observe = reason == nullptr;
   const auto game = kk::hfr::Load32(base, 0x82CC97C0);

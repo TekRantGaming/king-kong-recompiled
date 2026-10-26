@@ -16,15 +16,16 @@ inline bool DamageClock(double hit_time, double host_pose_time) {
 }
 // Exact flags observed in Raptor 8256D2F0's non-grab branches (.17).
 inline bool RaptorHit(uint32_t flags, uint32_t magnitude) {
-  return (flags == 4096 && magnitude == 1) || (flags == 16644 && magnitude == 1000) ||
+  return (flags == 2048 && (magnitude == 1 || magnitude == 2 || magnitude == 4)) ||
+      (flags == 4096 && magnitude == 1) || (flags == 16644 && magnitude == 1000) ||
       (flags == 16388 && (magnitude == 6 || magnitude == 10)) || (flags == 16386 && magnitude == 6);
 }
 // The authority captures an already produced native type-4 event. Bounds here
 // do not create hits or decide contact, range, immunity or the native reaction.
-inline bool NativeHit(EnemyFamily family, uint32_t flags, uint32_t magnitude) {
-  if (family == EnemyFamily::Raptor) return RaptorHit(flags, magnitude);
+inline bool NativeHit(EnemyFamily family, uint32_t flags, uint32_t magnitude, bool projectile = false) {
+  if (family == EnemyFamily::Raptor && !projectile) return RaptorHit(flags, magnitude);
   switch (family) {
-    case EnemyFamily::Crab: case EnemyFamily::Worm: case EnemyFamily::Scorpion:
+    case EnemyFamily::Raptor: case EnemyFamily::Crab: case EnemyFamily::Worm: case EnemyFamily::Scorpion:
     case EnemyFamily::Bat: case EnemyFamily::Centipede: case EnemyFamily::Native:
     case EnemyFamily::Marine: case EnemyFamily::VRex: case EnemyFamily::SwampCrawler:
     case EnemyFamily::SwampCrawlerSmall: case EnemyFamily::Spider: case EnemyFamily::Pny:
@@ -34,7 +35,8 @@ inline bool NativeHit(EnemyFamily family, uint32_t flags, uint32_t magnitude) {
 }
 inline bool RemoteOwner(EnemyOwner owner, EnemyOwner local, uint32_t generation,
                         uint32_t hit_generation, bool frozen) {
-  return !frozen && owner != local && generation && generation == hit_generation;
+  return !frozen && owner <= EnemyOwner::Guest && local <= EnemyOwner::Guest &&
+      owner != local && generation == hit_generation;
 }
 inline bool CandidateReference(uint32_t offset, uint32_t count) {
   return count <= 20 && offset >= 6244 && offset < 6244+4*count && (offset-6244)%4 == 0;

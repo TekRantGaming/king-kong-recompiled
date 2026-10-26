@@ -1969,6 +1969,12 @@ bool PartnerBodyStimulus(PPCContext& ctx, uint8_t* b) {
     // The native scans retain distance, vision rays, claims and scripted priority.
     const auto perception = ctx.r6.u32;
     const auto old_class = Load32(b, perception+96), old_life = Load32(b, perception+48);
+    const auto old_interest = Load32(b, perception+44);
+    const auto hero_vars = Ptr(b,Ptr(b,Ptr(b,Load32(b,0x82CCBF7C),24,8),4,88),64,5152);
+    if (hero_vars) {
+      const auto interest = LoadF(b,hero_vars+5148);
+      if (std::isfinite(interest) && interest > 0 && interest <= 1000000) StoreF(b,perception+44,interest);
+    }
     Store32(b, perception+96, 1); StoreF(b, perception+48, 1.0f);
 #if defined(KK_DEV_TOOLS)
     const auto output = ctx.r8.u32, payload = ctx.r6.u32;
@@ -1980,6 +1986,7 @@ bool PartnerBodyStimulus(PPCContext& ctx, uint8_t* b) {
 #endif
     __imp__sub_8271E4E8(ctx, b);
     Store32(b, perception+96, old_class); Store32(b, perception+48, old_life);
+    Store32(b, perception+44, old_interest);
 #if defined(KK_DEV_TOOLS)
     const auto u32 = [&](uint32_t p) { return Load32(b, p); };
     const auto record = coop::stimulus_debug::ReadHandle(u32, output);

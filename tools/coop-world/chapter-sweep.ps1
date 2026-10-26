@@ -115,7 +115,7 @@ $manifest = [ordered]@{
     stationary = [bool]$Stationary; route_seconds = $RouteSeconds
     object_trace = [bool]$ObjectTrace
     source_branch = $sourceBranch; source_dirty = $sourceDirty; exe_sha256 = $exeSha
-    protocol = 21; snapshot_schema = 1; fault_profile = 'bad_wifi'; fault_seeds = @(86,86)
+    protocol = 22; snapshot_schema = 1; fault_profile = 'bad_wifi'; fault_seeds = @(86,86)
     scenarios = $rules; resumed_from = $ResumeManifest
     harness_sha256 = $toolHashes; harness_sources = $harnessDir
 }
@@ -156,7 +156,7 @@ try {
             $scenario="entry-$($record.entry)-start-$($record.start)"
             $evidence=[ordered]@{ entry=$record.entry; start=$record.start; level=$record.level; policy=$record.policy
                 load_proof=$record.load_proof; source_commit=$sourceCommit; source_branch=$sourceBranch; source_dirty=$sourceDirty
-                exe_sha256=$exeSha; exe_path=$exePath; protocol=21; snapshot_schema=1; fault_profile='bad_wifi'; seconds=$record.seconds
+                exe_sha256=$exeSha; exe_path=$exePath; protocol=22; snapshot_schema=1; fault_profile='bad_wifi'; seconds=$record.seconds
                 fault_seeds=@(86,86); port=27080; roles=@('host','guest'); scenario=$scenario; flags=$hostArgs; runner=$runner
                 harness_sha256=$toolHashes; harness_sources=$harnessDir }
             $dirtyText=($sourceDirty -join ';')
