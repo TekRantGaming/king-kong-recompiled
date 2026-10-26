@@ -150,6 +150,15 @@ inline uint64_t CentipedeAuthoredKey(uint64_t position,uint32_t kind) {
   const auto h=Mix(Mix(position,0x53434f4c4f4b494eull),kind);
   return h ? h:1;
 }
+// Spawner_init/generate use the two authored fallback templates and 17 wave
+// slots. Co-located spawners need this immutable numeric definition as well as
+// position; native pointers and mutable wave cursors never enter the hash.
+inline uint64_t SpawnerAuthoredKey(uint64_t position,std::span<const uint64_t> templates) {
+  if (!position || templates.size()!=19 || std::none_of(templates.begin(),templates.end(),[](auto key){return key!=0;})) return 0;
+  auto h=Mix(position,0x535041574e444546ull);
+  for (const auto key:templates) h=Mix(h,key);
+  return h ? h:1;
+}
 inline EnemyId SpawnId(uint64_t spawner, uint64_t source, uint32_t sequence, EnemyFamily family) {
   if (!spawner || !source || !sequence || family == EnemyFamily::None) return {};
   const uint64_t h = Mix(Mix(14695981039346656037ull, spawner), source);

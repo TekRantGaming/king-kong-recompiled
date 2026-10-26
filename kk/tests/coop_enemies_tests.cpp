@@ -792,6 +792,13 @@ void OwnershipSessions() {
 }
 } // namespace
 int main() {
+  uint64_t templates[19]{};
+  Check(!SpawnerAuthoredKey(123,templates),"spawner without recognized authored templates refuses");
+  templates[0]=CentipedeAuthoredKey(123,1); const auto first=SpawnerAuthoredKey(456,templates);
+  templates[0]=CentipedeAuthoredKey(123,2);
+  Check(first && first!=SpawnerAuthoredKey(456,templates),"colocated spawners distinguish native centipede template kinds");
+  templates[0]=0; templates[1]=CentipedeAuthoredKey(123,1);
+  Check(first!=SpawnerAuthoredKey(456,templates),"different authored template slots cannot alias");
   Check(CentipedeAuthoredKey(123,1)!=CentipedeAuthoredKey(123,2), "colocated authored centipede kinds are distinct");
   Check(CentipedeAuthoredKey(123,1)==CentipedeAuthoredKey(123,1), "centipede kind identity stable across heaps");
   Check(!CentipedeAuthoredKey(0,1) && !CentipedeAuthoredKey(123,6), "unknown centipede provenance refuses");

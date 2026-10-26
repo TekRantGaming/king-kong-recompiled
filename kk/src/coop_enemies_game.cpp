@@ -560,6 +560,16 @@ uint64_t KeyAt(const uint8_t* b, uint32_t actor, uint32_t family) {
   if (!m) return 0;
   return AuthoredKey(family, LoadF(b, m+48), LoadF(b, m+52), LoadF(b, m+56));
 }
+uint64_t TemplateIdentity(const uint8_t* b,uint32_t actor) {
+  bool spawner=false; uint32_t state=0;
+  const auto ai=Ptr(b,Ptr(b,actor,24,8),4,88);
+  const auto family=Tracks(b,ai,state,spawner);
+  if (spawner || family==EnemyFamily::None) return 0;
+  const auto key=KeyAt(b,actor,uint32_t(family));
+  if (family!=EnemyFamily::Centipede) return key;
+  const auto vars=Ptr(b,ai,64,4);
+  return vars ? CentipedeAuthoredKey(key,Load32(b,vars)):0;
+}
 void Capture(const uint8_t* b, uint32_t w, bool initial = true) {
   auto& s = Get();
   // The full registry includes dormant actors before they enter the scheduled AI table.
@@ -580,6 +590,20 @@ void Capture(const uint8_t* b, uint32_t w, bool initial = true) {
     // a newly noticed moving actor as an authored spawn point.
     if (!initial && !initializing) continue;
     auto key = KeyAt(b, actor, spawner ? 0x53504157u : uint32_t(family));
+    if (spawner) {
+      const auto vars=Ptr(b,ai,64,2040);
+      uint64_t templates[19]{};
+      if (vars) {
+        templates[0]=TemplateIdentity(b,Load32(b,vars+1592));
+        templates[1]=TemplateIdentity(b,Load32(b,vars+1776));
+        for (unsigned i=0;i<17;++i) templates[i+2]=TemplateIdentity(b,Load32(b,vars+1972+4*i));
+      }
+      key=SpawnerAuthoredKey(key,templates);
+#if defined(KK_DEV_TOOLS)
+      if (initial) REXLOG_INFO("ENEMIES spawner definition actor={:08X} id={:016X} primary={:016X} secondary={:016X} first-wave={:016X}",
+          actor,key,templates[0],templates[1],templates[2]);
+#endif
+    }
     if (!spawner && family==EnemyFamily::Centipede) {
       const auto vars=Ptr(b,ai,64,4);
       key=vars ? CentipedeAuthoredKey(key,Load32(b,vars)):0;
