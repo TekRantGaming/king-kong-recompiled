@@ -12,6 +12,7 @@
 #include "play_internal.h"
 #include "hfr.h"
 #include <rex/logging.h>
+#include <rex/hook.h>
 #include <algorithm>
 #include <chrono>
 #include <cctype>
@@ -20,6 +21,8 @@
 #include <filesystem>
 #include <fstream>
 #include <set>
+
+REX_EXTERN(__imp__sub_826437D0);
 
 namespace kk::coop::world {
 namespace {
@@ -60,6 +63,7 @@ double playing_at=0,next=0;
 uint32_t checkpoint_level=0,checkpoint_generation=0;
 uint64_t checkpoint_epoch=0;
 std::set<uint32_t> load_checkpoints;
+std::set<uint32_t> observed_checkpoints;
 Json Position(const PlayerPose& p) { return Json::Array({p.x,p.y,p.z}); }
 std::set<uint32_t> CheckpointIds(const uint8_t* b,Capture& capture) {
   using namespace hfr;
@@ -110,7 +114,10 @@ Json Snapshot(uint8_t* b,double now,const FlowView& v,const EnemyLink& link) {
   auto objects=ObjectSnapshot(b,capture);
   auto checkpoint_ids=CheckpointIds(b,capture);
   const bool same_checkpoint_load=checkpoint_epoch==link.epoch && checkpoint_level==v.world.level && checkpoint_generation==v.world.generation;
-  if (same_checkpoint_load) checkpoint_ids.insert(load_checkpoints.begin(),load_checkpoints.end());
+  if (same_checkpoint_load) {
+    checkpoint_ids.insert(load_checkpoints.begin(),load_checkpoints.end());
+    checkpoint_ids.insert(observed_checkpoints.begin(),observed_checkpoints.end());
+  }
   const auto checkpoints=CheckpointArray(checkpoint_ids);
   const auto env=[](const char* name){ const auto* value=std::getenv(name); return value ? value:""; };
   const auto utc=std::chrono::duration<double>(std::chrono::system_clock::now().time_since_epoch()).count();
@@ -133,6 +140,7 @@ Json Snapshot(uint8_t* b,double now,const FlowView& v,const EnemyLink& link) {
       {"shared",Json::Object({{"enemies",enemies},{"story",story},{"objects",objects}})},
       {"native_checkpoint_ids",checkpoints},
       {"native_checkpoint_load_ids",same_checkpoint_load ? CheckpointArray(load_checkpoints):Json::Array({})},
+      {"native_checkpoint_observed_ids",same_checkpoint_load ? CheckpointArray(observed_checkpoints):Json::Array({})},
       {"local",Json::Object({{"player",pose.pose ? Json::Object({{"id",v.host ? "host":"guest"},
           {"position",Position(*pose.pose)},{"weapon",pose.pose->weapon},{"fire",ConfirmedShots()},
           {"condition",unsigned(LocalPlayerCondition(b).value_or(PlayerCondition::Dead))}}):Json()},
@@ -141,7 +149,7 @@ Json Snapshot(uint8_t* b,double now,const FlowView& v,const EnemyLink& link) {
 }
 bool RouteStopped() { return Opt().enabled && playing_at && Now()-playing_at>=Opt().route; }
 void Loaded(const uint8_t* b) {
-  load_checkpoints.clear(); checkpoint_epoch=0; checkpoint_level=checkpoint_generation=0;
+  load_checkpoints.clear(); observed_checkpoints.clear(); checkpoint_epoch=0; checkpoint_level=checkpoint_generation=0;
   if (!Opt().enabled || !b) return;
   const auto v=SessionFlowSnapshot(); const auto link=WorldDevLinkSnapshot();
   const auto game=hfr::Load32(b,0x82CC97C0);
@@ -152,6 +160,21 @@ void Loaded(const uint8_t* b) {
   load_checkpoints=std::move(ids);
   REXLOG_INFO("KK dev world: checkpoint load census level={} generation={} count={} before load release",
       checkpoint_level,checkpoint_generation,load_checkpoints.size());
+}
+void CheckpointEntering(const uint8_t* b) {
+  if (!Opt().enabled || !b) return;
+  const auto v=SessionFlowSnapshot(); const auto link=WorldDevLinkSnapshot();
+  if (!v.active || link.epoch!=checkpoint_epoch || v.world.level!=checkpoint_level || v.world.generation!=checkpoint_generation) return;
+  const auto actor=hfr::Load32(b,0x82CCBF6C),ai=hfr::Load32(b,0x82CCBF64);
+  if (!PoseAddress(actor,28) || !PoseAddress(ai,68)) return;
+  const auto ext=hfr::Load32(b,actor+24);
+  if (!PoseAddress(ext,8) || hfr::Load32(b,ext+4)!=ai) return;
+  const auto vars=hfr::Load32(b,ai+64);
+  if (!PoseAddress(vars,8)) return;
+  const auto id=hfr::Load32(b,vars+4);
+  if (id<=65535 && observed_checkpoints.insert(id).second)
+    REXLOG_INFO("KK dev world: checkpoint observed level={} generation={} id={} before ES_CheckPoint native effects",
+        checkpoint_level,checkpoint_generation,id);
 }
 void Frame(uint8_t* b) {
   auto& opt=Opt(); if (!opt.enabled || !b) return;
@@ -172,5 +195,9 @@ void Frame(uint8_t* b) {
     else REXLOG_INFO("KK dev world: dumped sample={} generation={} level={} path={}",sample,generation,level,path.string());
   } catch (const std::exception& e) { REXLOG_WARN("KK dev world: dump failed {}",e.what()); }
 }
+}
+REX_HOOK_RAW(sub_826437D0) {
+  kk::coop::world::CheckpointEntering(base);
+  __imp__sub_826437D0(ctx,base);
 }
 #endif
