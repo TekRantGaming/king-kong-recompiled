@@ -48,8 +48,14 @@ REX_EXTERN(__imp__sub_8266ACC8);
 REX_EXTERN(__imp__sub_8254A8F8);
 REX_EXTERN(__imp__sub_825ED648);
 REX_EXTERN(__imp__sub_825EDC70);
+REX_EXTERN(__imp__sub_825043E0);
 REX_EXTERN(__imp__sub_82572E40);
 REX_EXTERN(__imp__sub_8255C9D8);
+REX_EXTERN(__imp__sub_825CE478);
+REX_EXTERN(__imp__sub_826627D0);
+REX_EXTERN(__imp__sub_8263F790);
+REX_EXTERN(__imp__sub_82614DC0);
+REX_EXTERN(__imp__sub_8271E760);
 #if defined(KK_DEV_TOOLS)
 REX_EXTERN(__imp__sub_82451A60);
 REX_EXTERN(__imp__sub_82569A70);
@@ -57,7 +63,6 @@ REX_EXTERN(__imp__sub_8245A7B8);
 REX_EXTERN(__imp__sub_8246DC58);
 REX_EXTERN(__imp__sub_82428020);
 REX_EXTERN(__imp__sub_82464680);
-REX_EXTERN(__imp__sub_82614DC0);
 #endif
 #if defined(KK_DEV_TOOLS)
 REX_EXTERN(__imp__sub_8250EE50);
@@ -831,6 +836,7 @@ void PlayerPriority(uint8_t* b, EnemyFamily family) {
     case EnemyFamily::Raptor: index=5224; kinds=5664; distance=5748; flags=5496; break;
     case EnemyFamily::Scorpion: index=3000; kinds=3440; distance=3608; flags=3272; break;
     case EnemyFamily::Spider: index=544; kinds=644; distance=728; flags=560; break;
+    case EnemyFamily::Worm: index=2956; kinds=3392; distance=3644; flags=3224; break;
     default: return;
   }
   uint32_t selected = UINT32_MAX; float nearest = std::numeric_limits<float>::infinity();
@@ -840,12 +846,21 @@ void PlayerPriority(uint8_t* b, EnemyFamily family) {
     if (family == EnemyFamily::Raptor && (!(bits&1) || (bits&0x4600) || !Load32(b,vars+5244+4*i) || !Load32(b,vars+5328+4*i))) continue;
     if (family == EnemyFamily::Scorpion && ((bits&0x06000402) || !Load32(b,vars+3104+4*i) || !Load32(b,vars+3020+4*i))) continue;
     if (family == EnemyFamily::Spider && (!(bits&0x10) || (bits&0x300))) continue;
+    if (family == EnemyFamily::Worm && ((bits&0x140) || (!Load32(b,vars+2972+4*i) && !(bits&0x90)))) continue;
     const auto score = LoadF(b,vars+distance+4*i);
     if (std::isfinite(score) && score >= 0 && score < nearest) { nearest=score; selected=i; }
   }
   if (selected != UINT32_MAX) Store32(b,vars+index,selected);
 }
 thread_local uint32_t crab_player_scope = 0;
+struct CrabFightGuard {
+  uint8_t* base; Binding binding; uint32_t hero, previous;
+  ~CrabFightGuard() {
+    if (Ptr(base,binding.ai,64,2050)==binding.vars && RetainedDamageSource(base,binding))
+      Store32(base,binding.vars+2040,hero);
+    crab_player_scope=previous;
+  }
+};
 uint32_t CrabSelectedPlayer(const uint8_t* b, const Binding& binding, uint32_t hero) {
   const auto body=kk::PartnerBodyCombatActor(b);
   const auto claim=stimulus_debug::ReadHandle([&](uint32_t p) { return Load32(b,p); },binding.vars+1048);
@@ -856,14 +871,12 @@ void CrabFight(PPCContext& ctx, uint8_t* b) {
   const auto hero=Load32(b,0x82CCBF7C);
   if (!owner || Load32(b,owner->vars+2040)!=hero) { __imp__sub_8265BF60(ctx,b); return; }
   const auto binding=*owner;
-  const auto previous=crab_player_scope;
+  CrabFightGuard guard{b,binding,hero,crab_player_scope};
   crab_player_scope=binding.actor;
   // CR kind1 uses its cached Jack to choose the native melee branch rather
   // than an NPC grab. Only an already selected native partner claim aliases it.
   Store32(b,binding.vars+2040,CrabSelectedPlayer(b,binding,hero));
   __imp__sub_8265BF60(ctx,b);
-  if (Ptr(b,binding.ai,64,2050)==binding.vars && ValidBinding(b,binding)) Store32(b,binding.vars+2040,hero);
-  crab_player_scope=previous;
 }
 void CrabPlayerTarget(PPCContext& ctx, uint8_t* b) {
   const auto* owner = CombatOwner(b,EnemyFamily::Crab);
@@ -913,7 +926,7 @@ void RestoreRaptorPlayers(uint8_t* b) {
   for (const auto& [actor,cache] : s.raptor_players) {
     const auto current=s.bindings.find(actor);
     if (current==s.bindings.end() || current->second.id!=cache.binding.id ||
-        cache.hero!=Load32(b,0x82CCBF7C) || !Environment(b,s.world) || !ValidBinding(b,cache.binding)) continue;
+        cache.hero!=Load32(b,0x82CCBF7C) || !Environment(b,s.world) || !RetainedDamageSource(b,cache.binding)) continue;
     Store32(b,cache.binding.vars+5100,cache.hero);
     Store32(b,cache.binding.vars+14192,cache.reference);
     const auto distance=PlayerDistance(b,actor,cache.hero);
@@ -956,6 +969,57 @@ void ContactVictim(PPCContext& ctx, const uint8_t* b) {
   if (!PoseAddress(vars,7440) || !combat::CandidateReference(combat::Candidates(EnemyFamily::Centipede),slot,Load32(b,vars+1400))) return;
   const auto index=(slot-3236)/4, victim=Load32(b,vars+slot);
   if (victim && PoseAddress(victim,32) && Load32(b,vars+2020+4*index)==1 && ctx.r8.u32==Load32(b,vars+6112)) ctx.r8.u64=victim;
+}
+uint32_t PlayerDamageCache(EnemyFamily family) {
+  switch (family) {
+    case EnemyFamily::Raptor: return 5100;
+    case EnemyFamily::Crab: return 2040;
+    case EnemyFamily::Bat: return 3108;
+    case EnemyFamily::Scorpion: return 2972;
+    default: return 0;
+  }
+}
+struct PlayerDamageFrame { Binding binding; uint32_t offset=0, hero=0, body=0; };
+thread_local std::optional<PlayerDamageFrame> player_damage_frame;
+struct PlayerDamageGuard {
+  uint8_t* base; PlayerDamageFrame frame; uint32_t original;
+  std::optional<PlayerDamageFrame> previous;
+  ~PlayerDamageGuard() {
+    if (Ptr(base,frame.binding.ai,64,frame.offset+4)==frame.binding.vars && RetainedDamageSource(base,frame.binding))
+      Store32(base,frame.binding.vars+frame.offset,original);
+    player_damage_frame=previous;
+  }
+};
+void PlayerDamage(PPCContext& ctx, uint8_t* b, EnemyFamily family, void (*native)(PPCContext&,uint8_t*)) {
+  const auto* owner=CombatOwner(b,family);
+  const auto hero=Load32(b,0x82CCBF7C),body=kk::PartnerBodyCombatActor(b),offset=PlayerDamageCache(family);
+  if (!owner || !body || !offset) { native(ctx,b); return; }
+  const auto binding=*owner;
+  const auto original=Load32(b,binding.vars+offset);
+  if (original!=hero && original!=body) { native(ctx,b); return; }
+  PlayerDamageGuard guard{b,{binding,offset,hero,body},original,player_damage_frame};
+  player_damage_frame=guard.frame;
+  // Attack aiming can use the selected partner. Health consumption instead
+  // treats each real player's own hit as a player hit, including mixed volleys.
+  Store32(b,binding.vars+offset,hero);
+  native(ctx,b);
+}
+void PlayerDamageRecord(uint8_t* b, uint32_t packed, uint32_t returned) {
+  if (!player_damage_frame || (packed>>24)!=4) return;
+  const auto& frame=*player_damage_frame;
+  const auto pool=stimulus_debug::ReadPool([&](uint32_t p) { return Load32(b,p); },4);
+  if (!pool.valid || pool.capacity>4096) return;
+  const auto hit=stimulus_debug::ReadSlot([&](uint32_t p) { return Load32(b,p); },pool,packed&0xFFFFFF);
+  if (!hit.valid || hit.address!=returned || hit.target!=frame.binding.actor ||
+      Ptr(b,frame.binding.ai,64,frame.offset+4)!=frame.binding.vars) return;
+  const auto player=hit.source==frame.body && kk::PartnerBodyCombatActor(b)==frame.body ? frame.body : frame.hero;
+#if defined(KK_DEV_TOOLS)
+  static unsigned logged=0;
+  if (player==frame.body && Load32(b,frame.binding.vars+frame.offset)!=player && logged++<64)
+    REXLOG_INFO("COOP THREAT player-hit-class family={} actor={:08X} source={:08X} cached-player={:08X}",
+        uint16_t(frame.binding.id.family),frame.binding.actor,hit.source,player);
+#endif
+  Store32(b,frame.binding.vars+frame.offset,player);
 }
 void WriteLife(uint8_t* b, const Binding& binding, const EnemyState& e) {
   if (const auto cell = LifeCell(b,binding)) StoreF(b,cell,NativeLife(binding.id.family,e.life));
@@ -2006,6 +2070,14 @@ bool NativeShot(PPCContext& ctx, uint8_t* b, const ShotIntent& shot, const ShotH
       !Scratch::CanUse(ctx) || !ValidBinding(b, target) || !PoseAddress(s.game, 18500) || !JackReady(b)) return false;
   const auto hero = Load32(b, 0x82CCBF7C), ai = Ptr(b, Ptr(b, hero, 24, 8), 4, 88);
   if (!ai || !Ptr(b, ai, 64, 13652) || !Ptr(b, hero, 12, 64)) return false;
+  // This path consumes the peer's authenticated shot intent. For the audited
+  // per-hit player adapters, use the validated body so aggro names the shooter.
+  // Keep local Jack's native weapon tables and host cheat choices for damage.
+  const auto player_cache=PlayerDamageCache(target.id.family);
+  const auto body_candidate=player_cache ? kk::PartnerBodyCombatActor(b) : 0;
+  const auto cached_player=player_cache ? Load32(b,target.vars+player_cache) : 0;
+  const auto peer_body=body_candidate && (cached_player==hero || cached_player==body_candidate) ? body_candidate : 0;
+  const auto shooter=peer_body ? peer_body : hero;
   // Native type-4 pool layout verified in 8271E4E8 (.52:27465).
   constexpr uint32_t pool = 0x82C8EF30;
   const auto count = Load32(b, pool+12), used = Load32(b, pool+8);
@@ -2033,10 +2105,16 @@ bool NativeShot(PPCContext& ctx, uint8_t* b, const ShotIntent& shot, const ShotH
     scratch.Vec(normal.x, normal.y, normal.z, 80);
     scratch.Vec(hit.point.x, hit.point.y, hit.point.z, 96);
     ctx.r3.u64 = result; ctx.r4.s64 = -1; ctx.r5.u64 = shot.weapon == 1 ? 68 : 64;
-    ctx.r6.u64 = hero; ctx.r7.u64 = 0; ctx.r8.u64 = target.actor; ctx.r9.s64 = -1; ctx.r10.u64 = uint32_t(damage);
+    ctx.r6.u64 = shooter; ctx.r7.u64 = 0; ctx.r8.u64 = target.actor; ctx.r9.s64 = -1; ctx.r10.u64 = uint32_t(damage);
     ctx.f1.f64 = duration;
     __imp__sub_82634428(ctx, b);
     queued = Load32(b, result) != UINT32_MAX && Load32(b, result+4) != 0;
+#if defined(KK_DEV_TOOLS)
+    static unsigned attribution_logs=0;
+    if (queued && attribution_logs++<64)
+      REXLOG_INFO("COOP THREAT native-shot number={} shooter={:08X} partner={} target={:08X} family={} magnitude={}",
+          shot.number,shooter,bool(peer_body),target.actor,uint16_t(target.id.family),damage);
+#endif
   }
   for (unsigned i = 0; i < 4; ++i) Store32(b, globals[i], saved[i]);
   return queued;
@@ -2603,6 +2681,13 @@ bool EnemyCombatReference(const uint8_t* b, uint32_t owner, uint32_t ai, uint32_
   if (binding == s.bindings.end() || binding->second.ai != ai || binding->second.vars != vars ||
       !ValidBinding(b, binding->second)) return false;
   const auto table = combat::Candidates(binding->second.id.family);
+  // Native PAF consumers retain real attackers as well as perception targets.
+  // These exact fields are combat evidence, not authored story references.
+  if ((binding->second.id.family==EnemyFamily::Raptor && offset==7248) ||
+      (binding->second.id.family==EnemyFamily::Crab && offset==764) ||
+      (binding->second.id.family==EnemyFamily::Bat && offset==1032)) return true;
+  if (binding->second.id.family==EnemyFamily::Raptor && PoseAddress(vars,7388) &&
+      combat::CandidateReference(combat::CandidateTable{7296,7304,20},offset,Load32(b,vars+7296))) return true;
   if (binding->second.id.family==EnemyFamily::Raptor && (offset==5100 || offset==14192 || offset==7756)) {
     const auto cache=s.raptor_players.find(owner);
     return cache!=s.raptor_players.end() && cache->second.binding.id==binding->second.id &&
@@ -2808,7 +2893,7 @@ REX_HOOK_RAW(sub_82614DC0) {
   const bool observe = vars && kk::coop::Connected() && kk::coop::Get().bindings.contains(actor);
   const float before = observe ? kk::hfr::LoadF(base, vars+5444) : -1;
   const float secondary = observe ? kk::hfr::LoadF(base, vars+5792) : -1;
-  __imp__sub_82614DC0(ctx, base);
+  kk::coop::PlayerDamage(ctx,base,kk::coop::EnemyFamily::Scorpion,__imp__sub_82614DC0);
   if (observe && kk::coop::Ptr(base, ai, 64, 6380) == vars) {
     const float after = kk::hfr::LoadF(base, vars+5444), remaining = kk::hfr::LoadF(base, vars+5792);
     static unsigned lines = 0;
@@ -2818,6 +2903,20 @@ REX_HOOK_RAW(sub_82614DC0) {
           kk::coop::Get().link.role == kk::coop::Role::Host ? "host" : "guest");
   }
 }
+#else
+REX_HOOK_RAW(sub_82614DC0) {
+  kk::coop::PlayerDamage(ctx,base,kk::coop::EnemyFamily::Scorpion,__imp__sub_82614DC0);
+}
+#endif
+REX_HOOK_RAW(sub_8271E760) {
+  const auto packed=ctx.r3.u32;
+  __imp__sub_8271E760(ctx,base);
+  kk::coop::PlayerDamageRecord(base,packed,ctx.r3.u32);
+}
+REX_HOOK_RAW(sub_825CE478) { kk::coop::PlayerDamage(ctx,base,kk::coop::EnemyFamily::Raptor,__imp__sub_825CE478); }
+REX_HOOK_RAW(sub_826627D0) { kk::coop::PlayerDamage(ctx,base,kk::coop::EnemyFamily::Bat,__imp__sub_826627D0); }
+REX_HOOK_RAW(sub_8263F790) { kk::coop::PlayerDamage(ctx,base,kk::coop::EnemyFamily::Crab,__imp__sub_8263F790); }
+#if defined(KK_DEV_TOOLS)
 REX_HOOK_RAW(sub_82569A70) {
   kk::coop::DevRaptorVision(ctx, base);
 }
@@ -2852,6 +2951,10 @@ REX_HOOK_RAW(sub_825ED648) {
 REX_HOOK_RAW(sub_825EDC70) {
   kk::coop::PlayerPriority(base,kk::coop::EnemyFamily::Spider);
   __imp__sub_825EDC70(ctx,base);
+}
+REX_HOOK_RAW(sub_825043E0) {
+  kk::coop::PlayerPriority(base,kk::coop::EnemyFamily::Worm);
+  __imp__sub_825043E0(ctx,base);
 }
 REX_HOOK_RAW(sub_82634978) { kk::coop::CrabPlayerTarget(ctx,base); }
 REX_HOOK_RAW(sub_8265BF60) { kk::coop::CrabFight(ctx,base); }
