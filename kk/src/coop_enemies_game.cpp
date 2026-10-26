@@ -50,6 +50,7 @@ REX_EXTERN(__imp__sub_825EDC70);
 REX_EXTERN(__imp__sub_82572E40);
 REX_EXTERN(__imp__sub_8255C9D8);
 #if defined(KK_DEV_TOOLS)
+REX_EXTERN(__imp__sub_82451A60);
 REX_EXTERN(__imp__sub_82569A70);
 REX_EXTERN(__imp__sub_8245A7B8);
 REX_EXTERN(__imp__sub_8246DC58);
@@ -851,6 +852,30 @@ void CrabPlayerTarget(PPCContext& ctx, uint8_t* b) {
   const auto nearest = NearestPlayer(ctx,b,binding,original,true);
   Store32(b,binding.vars+2040,nearest);
   __imp__sub_82634978(ctx,b);
+#if defined(KK_DEV_TOOLS)
+  static std::map<uint32_t,std::pair<double,unsigned>> samples;
+  if (samples.size()<32 || samples.contains(binding.actor)) {
+    auto& sample=samples[binding.actor];
+    if (sample.second<32 && Now()>=sample.first) {
+      sample.first=Now()+2; ++sample.second;
+      const auto body=kk::PartnerBodyCombatActor(b),hero=Load32(b,0x82CCBF7C);
+      uint32_t body_live=0,hero_live=0;
+      if (Scratch::CanUse(ctx)) {
+        Scratch scratch(ctx,b);
+        ctx.r3.u64=body; __imp__sub_82451A60(ctx,b); body_live=ctx.r3.u32;
+        ctx.r3.u64=hero; __imp__sub_82451A60(ctx,b); hero_live=ctx.r3.u32;
+      }
+      REXLOG_INFO("COOP CRAB selector actor={:08X} original={:08X} preferred={:08X} target={:08X} candidates={} enabled={} default-enabled={} retained={} forbidden={:08X} cooldown={:.2f} body={:08X} distance={:.2f}",
+          binding.actor,original,nearest,Load32(b,binding.vars+1056),Load32(b,binding.vars+1536),
+          Load32(b,binding.vars+288),Load32(b,binding.vars+772),Load32(b,binding.vars+3496),
+          Load32(b,binding.vars+4424),LoadF(b,binding.vars+1148),kk::PartnerBodyCombatActor(b),
+          PlayerDistance(b,binding.actor,kk::PartnerBodyCombatActor(b)));
+      REXLOG_INFO("COOP CRAB eligibility actor={:08X} body-live={} hero-live={} body-flags={:08X} hero-flags={:08X} required={:08X} delay={:.2f}",
+          binding.actor,body_live,hero_live,body ? Load32(b,body+4) : 0,Load32(b,hero+4),
+          Load32(b,binding.vars+(Load32(b,binding.vars+3532) ? 16 : 12)),LoadF(b,binding.vars+216));
+    }
+  }
+#endif
   if (Ptr(b,binding.ai,64,2050) == binding.vars) Store32(b,binding.vars+2040,original);
 }
 void NativePlayerTarget(PPCContext& ctx, uint8_t* b) {
