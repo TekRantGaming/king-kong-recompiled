@@ -41,6 +41,8 @@ GpuInfo DetectGpu();
 
 // Running on a Steam Deck (SteamOS sets SteamDeck=1; else the board's name).
 bool IsSteamDeck();
+// Running inside gamescope (Steam's Game Mode on a Steam Deck, Bazzite and other handhelds). Linux only.
+bool InGamescope();
 
 struct MonitorInfo {
   std::string name;

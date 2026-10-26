@@ -45,6 +45,7 @@ namespace kk {
 HardwareProfile fake;
 GpuInfo DetectGpu() { return fake.gpu; }
 HardwareProfile DetectHardware() { return fake; }
+bool InGamescope() { return false; }  // settings.cpp's Game Mode default (desktop here)
 }
 namespace {
 int checks = 0;

@@ -231,6 +231,17 @@ bool IsSteamDeck() {
   return false;
 }
 
+bool InGamescope() {
+#if defined(_WIN32)
+  return false;
+#else
+  // gamescope gives its clients its own Wayland display; SteamOS style sessions also name it the desktop.
+  if (const char* v = std::getenv("GAMESCOPE_WAYLAND_DISPLAY"); v && *v) return true;
+  const char* desktop = std::getenv("XDG_CURRENT_DESKTOP");
+  return desktop && std::strstr(desktop, "gamescope") != nullptr;
+#endif
+}
+
 bool ScreenHdrOn() {
   if (const char* v = std::getenv("KK_DEV_SCREEN_HDR"); v && *v) return *v == '1';  // tests
 #if defined(_WIN32)

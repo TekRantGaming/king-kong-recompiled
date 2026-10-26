@@ -1593,7 +1593,9 @@ class SettingsPages {
     it.description = "How the game fills your screen: in a window, borderless or fullscreen.";
     it.options = {"Windowed", "Borderless", "Fullscreen"};
     it.index = !GetBool("fullscreen") ? 0 : ExclusiveFullscreen() ? 2 : 1;
-    it.default_text = "Windowed";
+    // Windowed, except in Game Mode (gamescope, ApplyPortDefaults): the screen's own size, as Borderless.
+    const auto* mode_flag = FindFlag("fullscreen");
+    it.default_text = mode_flag && mode_flag->default_value == "true" ? "Borderless" : "Windowed";
     it.on_choice = [this](int i) {
       if (i == 1) Set("kk_fullscreen_mode", "desktop");
       if (i == 2 && !ParseDisplayMode(Get("kk_fullscreen_mode"))) Set("kk_fullscreen_mode", DesktopModeValue());

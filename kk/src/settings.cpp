@@ -1014,6 +1014,15 @@ void SetCvarDefault(std::string_view name, std::string_view value) {
 void ApplyPortDefaults() {
   // Windowed by default so the launcher isn't a giant fullscreen dialog.
   SetCvarDefault("fullscreen", "false");
+#if !defined(_WIN32)
+  // Owner, 26 Oct: in Game Mode (gamescope) the game fills the screen: a window there was 1280x720 stretched to the
+  // screen. At the screen's own resolution (kk_fullscreen_mode "desktop"); gamescope shows only the game, so this
+  // looks the same as Fullscreen without switching the display's mode. A player's own choice still wins.
+  if (InGamescope()) {
+    SetCvarDefault("fullscreen", "true");
+    SetCvarDefault("kk_fullscreen_mode", "desktop");
+  }
+#endif
 #if defined(_WIN32)
   // Task 350a (owner, 21 Oct): DirectX 12 is the graphics API on Windows; startup recovery switches to Vulkan when
   // DirectX 12 cannot start (startup_recovery.cpp). Linux keeps the renderer's own "auto" (Vulkan). A settings file
