@@ -61,6 +61,7 @@ REX_EXTERN(__imp__sub_82860678);
 REX_EXTERN(__imp__sub_8271FB98);
 REX_EXTERN(__imp__sub_82715AC8);
 REX_EXTERN(__imp__sub_828007B0);
+REX_EXTERN(__imp__sub_827061B0);
 #endif
 #if defined(KK_DEV_TOOLS)
 namespace kk {
@@ -153,7 +154,8 @@ struct State {
   bool observed_change=false;
   uint64_t raft_fixture=0;
   double raft_withdraw_until=0;
-  double scan_next=0;
+  double scan_next=0,scan_started=0;
+  bool scan_late=false;
   std::set<uint32_t> scan_seen;
 #endif
 } state;
@@ -1239,13 +1241,24 @@ void DoorInit(PPCContext& ctx,uint8_t* b) {
   __imp__sub_82574D80(ctx,b);
 }
 #if defined(KK_DEV_TOOLS)
-void ScanInventory(const uint8_t* b,uint32_t w) {
+void ScanInventory(PPCContext& ctx,uint8_t* b,uint32_t w) {
   static const bool enabled=std::getenv("KK_DEV_OBJECTS_SCAN")!=nullptr;
-  if (!enabled || state.scan_pass>=2 || Now()<state.scan_next) return;
+  static const double late=[] {
+    const auto text=std::getenv("KK_DEV_OBJECTS_SCAN_LATE"); if (!text || !*text) return -1.;
+    char* end=nullptr; const auto n=std::strtod(text,&end);
+    return end!=text && !*end && std::isfinite(n) && n>=4 && n<=120 ? n : -1.;
+  }();
+  if (!enabled || Now()<state.scan_next) return;
+  if (state.scan_pass>=2) {
+    if (!state.scan_late && late>=0 && Now()-state.scan_started>=late) {
+      state.scan_late=true; state.scan_rows=0; state.scan_seen.clear();
+    } else if (!state.scan_late || state.scan_pass>=4) return;
+  }
   const auto v=SessionFlowSnapshot();
   if (!v.active || v.phase!=FlowPhase::Playing || w!=Load32(b,0x828E8388) || !PoseAddress(w,44)) return;
   const auto begin=Load32(b,w+40),end=Load32(b,w+28);
   if (!PoseAddress(begin) || !PoseAddress(end) || end<begin || (end-begin)%8 || end-begin>8*20000) return;
+  if (!state.scan_pass) state.scan_started=Now();
   ++state.scan_pass; state.scan_next=Now()+3;
   if (Trace()) for (const auto cache:{0x82CC84F0u,0x82CC8720u,0x82CC97D0u}) {
     const auto block=Ptr(b,cache,0,24);
@@ -1253,18 +1266,74 @@ void ScanInventory(const uint8_t* b,uint32_t w) {
         v.host ? "host" : "guest",v.world.level,cache,block,block ? Load32(b,block+20) : 0);
   }
   unsigned counts[15]{};
+  struct TreeReference { uint32_t key,address; unsigned family; };
+  std::array<TreeReference,12> tree_refs{{{0x4D000113,0,4},{0x4D000116,0,4},{0x4D000114,0,4},
+      {0x4D00011A,0,4},{0x4D00012E,0,4},{0x4D00165A,0,13},{0x4D00015D,0,13},
+      {0x4D000065,0,13},{0x4D000066,0,13},{0x4D000068,0,13},{0x9E007F24,0,14},{0x9E007B6A,0,0}}};
+  // 827061B0 performs two read-only registry lookups. Unlike FileKeys it does
+  // not discard aliases, and can resolve the real method behind a copied
+  // descriptor. Last entry is the known live bamboo Wait control.
+  const auto sp=ctx.r1.u32;
+  const bool resolver=(sp&15)==0 && sp>=0x40014000 && sp<0xA0000000;
+  if (resolver) {
+    const PPCContext saved=ctx; uint8_t scratch[16384]; const auto start=sp-sizeof(scratch);
+    std::memcpy(scratch,b+start,sizeof(scratch)); ctx.r1.u64=start+12288;
+    std::memset(b+ctx.r1.u32,0,4096); Store32(b,ctx.r1.u32,sp);
+    for (auto& ref:tree_refs) {
+      ctx.r3.u64=ref.key; __imp__sub_827061B0(ctx,b);
+      if (ctx.r3.u32!=ref.key && PoseAddress(ctx.r3.u32,24)) ref.address=ctx.r3.u32;
+    }
+    std::memcpy(b+start,scratch,sizeof(scratch)); ctx=saved;
+  }
+  if (state.scan_pass==1 || state.scan_pass==3) for (const auto& ref:tree_refs)
+    REXLOG_INFO("KK dev object tree resource: role={} key={:08X} address={:08X} entry={:08X} native={:08X} resolver={} control={}",
+        v.host ? "host" : "guest",ref.key,ref.address,ref.address ? Load32(b,ref.address) : 0,
+        ref.address ? Load32(b,ref.address+20) : 0,resolver,!ref.family);
+  // Script resource identity also covers interpreted methods whose native
+  // pointer is0. This is census-only: it never grants a production binding.
+  const auto tree_key=[&](uint32_t block)->unsigned {
+    if (!PoseAddress(block,24)) return 0;
+    for (const auto& ref:tree_refs) if (ref.family && ref.address && (ref.address==block ||
+        (!Load32(b,block+20) && !Load32(b,ref.address+20) && Load32(b,block) && Load32(b,block)==Load32(b,ref.address))))
+      return ref.family;
+    const auto it=state.file_keys.find(block); if (it==state.file_keys.end()) return 0;
+    switch (it->second) {
+      case 0x4D000113: case 0x4D000116: case 0x4D000114: case 0x4D00011A: case 0x4D00012E: return 4;
+      case 0x4D00165A: case 0x4D00015D: case 0x4D000065: case 0x4D000066: case 0x4D000068: return 13;
+      case 0x9E007F24: return 14;
+    }
+    return 0;
+  };
+  if (state.scan_pass==1 || state.scan_pass==3) for (const auto& [address,key]:state.file_keys) if (tree_key(address) && PoseAddress(address,24))
+    REXLOG_INFO("KK dev object tree resource: role={} key={:08X} address={:08X} entry={:08X} native={:08X}",
+        v.host ? "host" : "guest",key,address,Load32(b,address),Load32(b,address+20));
   constexpr const char* names[]{"unknown","iob","door","ode","tree","bamboo","rack","fire","raft","ammo","javelin","checkpoint","grab","benttree","deadtree"};
   constexpr uint32_t offsets[15][3]{{},{552,556,560},{0,612,1096},{0,8,2444},{0x52C,0x7C4,0x930},
       {196,24,32},{192,196,228},{440,444,408},{204,224,644},{0,4,24},{4,232,536},{4,9540,9156},{24,20,84},
       {0,0x400,0x438},{0,4,8}};
   std::set<uint32_t> seen;
-  for (auto p=begin;p<end;p+=8) {
-    const auto actor=Load32(b,p);
-    if (!PoseAddress(actor,32) || !seen.insert(actor).second) continue;
+  std::vector<uint32_t> actors;
+  const auto enqueue=[&](uint32_t actor) {
+    if (actors.size()<20000 && PoseAddress(actor,32) && seen.insert(actor).second) actors.push_back(actor);
+  };
+  for (auto p=begin;p<end;p+=8) enqueue(Load32(b,p));
+  const auto top_level=actors.size();
+  for (size_t index=0;index<actors.size();++index) {
+    const auto actor=actors[index];
+    // Native group instances keep their own child object list. Read it without
+    // treating a child as a production network identity or changing its parent.
+    if (Load32(b,actor)&2) {
+      const auto group=Ptr(b,Ptr(b,actor,20,16),0,0x58);
+      const auto list=Ptr(b,Ptr(b,group,8,4),0,28);
+      const auto first=list ? Load32(b,list+16) : 0,last=list ? Load32(b,list+4) : 0;
+      if (list && b[list+20]==0x1E && last>=first && last-first<=256*8 &&
+          (last-first)%8==0 && PoseAddress(first,last-first))
+        for (auto child=first;child<last;child+=8) enqueue(Load32(b,child));
+    }
     const auto ai=Ptr(b,Ptr(b,actor,24,8),4,88),matrix=Ptr(b,actor,12,64);
-    if (!ai || !matrix) continue;
+    if (!ai) continue; // Logical controllers can own a tree without an own pose.
     const auto first=Load16(b,ai+80),last=Load16(b,ai+82);
-    unsigned kind=0; uint32_t selected=0;
+    unsigned kind=0; uint32_t selected=0,selected_block=0;
     for (uint32_t t=first;t<=last && first<=last && last<=4096 && last-first<=64 && PoseAddress(ai,(last+7)*4);++t) {
       const auto block=Ptr(b,ai,(t+6)*4,24); if (!block) continue;
       const auto fn=Load32(b,block+20); unsigned next=0;
@@ -1287,10 +1356,35 @@ void ScanInventory(const uint8_t* b,uint32_t w) {
         case 0x8257C560: case 0x8258E228: case 0x8258C5F8: case 0x825CE2F0: next=10; break;
         case 0x826437D0: next=11; break;
       }
-      if (next) { kind=next; selected=fn; }
+      if (!next) next=tree_key(block);
+      if (next) { kind=next; selected=fn; selected_block=block; }
     }
     if (!kind) for (const auto [native,family]:{std::pair{0x826E6390u,4u},std::pair{0x82690148u,13u},std::pair{0x8249DBB0u,14u}})
       if (objects::DefaultTrack([&](uint32_t a){return Load32(b,a);},ai,native)) { kind=family; selected=native; break; }
+    if (!kind) {
+      const auto definition=Ptr(b,Ptr(b,ai,0,4),0,40);
+      if (definition) for (unsigned slot=0;slot<5;++slot) {
+        const auto block=Ptr(b,definition,20+4*slot,24),family=tree_key(block);
+        if (family) { kind=family; selected=Load32(b,block+20); selected_block=block; break; }
+      }
+    }
+    if (!kind) {
+      // ScriptModelData.programs contains the model's method descriptors even
+      // when all live/default tracks have stopped or invoke an interpreted
+      // wrapper. Treat membership as a candidate, never as drive permission.
+      const auto model=Ptr(b,ai,0,32);
+      const auto count=model ? Load32(b,model+8) : 0;
+      const auto programs=count && count<=512 ? Ptr(b,model,4,count*4) : 0;
+      if (programs) for (unsigned method=0;method<count;++method) {
+        const auto block=Ptr(b,programs,method*4,24); if (!block) continue;
+        const auto native=Load32(b,block+20);
+        unsigned family=tree_key(block);
+        if (native==0x826E6390 || native==0x826E78F0 || native==0x826E7BF0 || native==0x826D0770) family=4;
+        if (native==0x82690148 || native==0x826A7440 || native==0x82672D48) family=13;
+        if (native==0x8249DBB0 || native==0x824B4F40 || native==0x824A1BD8) family=14;
+        if (family) { kind=family; selected=native; selected_block=block; break; }
+      }
+    }
     ++counts[kind];
     if (!kind || state.scan_rows>=96 || !state.scan_seen.insert(actor).second) continue;
     const auto definition=Ptr(b,Ptr(b,ai,0,4),0,8);
@@ -1299,9 +1393,16 @@ void ScanInventory(const uint8_t* b,uint32_t w) {
     const auto word=[&](unsigned n) { return vars && offsets[kind][n]+4<=bytes ? Load32(b,vars+offsets[kind][n]) : UINT32_MAX; };
     ++state.scan_rows;
     const auto key=state.file_keys.find(actor);
-    REXLOG_INFO("KK dev object inventory: role={} level={} family={} fn={:08X} actor={:08X} vars={:08X} bytes={} pos=({:.3f},{:.3f},{:.3f}) word+{}={:08X} word+{}={:08X} word+{}={:08X} asset={:08X}",
+    const auto method_key=state.file_keys.find(selected_block);
+    if (state.scan_rows<=8 && selected_block) REXLOG_INFO("KK dev object method lookup: role={} family={} block={:08X} resource={:08X} entry={:08X} native={:08X}",
+        v.host ? "host" : "guest",names[kind],selected_block,method_key==state.file_keys.end() ? 0 : method_key->second,
+        Load32(b,selected_block),Load32(b,selected_block+20));
+    if (kind==4 || kind==13 || kind==14) REXLOG_INFO("KK dev object tree method candidate: role={} actor={:08X} family={} resource={:08X} native={:08X} production-by-key=false",
+        v.host ? "host" : "guest",actor,names[kind],method_key==state.file_keys.end() ? 0 : method_key->second,selected);
+    REXLOG_INFO("KK dev object inventory: role={} level={} family={} fn={:08X} actor={:08X} vars={:08X} bytes={} pos=({:.3f},{:.3f},{:.3f}) word+{}={:08X} word+{}={:08X} word+{}={:08X} asset={:08X} matrix-present={}",
         v.host ? "host" : "guest",v.world.level,names[kind],selected,actor,vars,bytes,
-        LoadF(b,matrix+48),LoadF(b,matrix+52),LoadF(b,matrix+56),offsets[kind][0],word(0),offsets[kind][1],word(1),offsets[kind][2],word(2),key==state.file_keys.end() ? 0 : key->second);
+        matrix ? LoadF(b,matrix+48) : 0,matrix ? LoadF(b,matrix+52) : 0,matrix ? LoadF(b,matrix+56) : 0,
+        offsets[kind][0],word(0),offsets[kind][1],word(1),offsets[kind][2],word(2),key==state.file_keys.end() ? 0 : key->second,matrix!=0);
     if (kind==7 && vars && bytes>=884)
       REXLOG_INFO("KK dev object fire contract: role={} actor={:08X} supported={} mode={} repeat={} completion={:08X} timer={} spread={} total={}",
           v.host ? "host" : "guest",actor,FireContract(b,vars),Load32(b,vars+364),Load32(b,vars+372),
@@ -1351,8 +1452,8 @@ void ScanInventory(const uint8_t* b,uint32_t w) {
       }
     }
   }
-  REXLOG_INFO("KK dev object inventory totals: role={} level={} pass={} iob={} door={} ode={} tree={} bamboo={} rack={} fire={} raft={} ammo={} javelin={} checkpoint={} grab={} benttree={} deadtree={} unknown={} bounded-rows={} model-defaults=true",
-      v.host ? "host" : "guest",v.world.level,state.scan_pass,counts[1],counts[2],counts[3],counts[4],counts[5],counts[6],counts[7],counts[8],counts[9],counts[10],counts[11],counts[12],counts[13],counts[14],counts[0],state.scan_rows);
+  REXLOG_INFO("KK dev object inventory totals: role={} level={} pass={} iob={} door={} ode={} tree={} bamboo={} rack={} fire={} raft={} ammo={} javelin={} checkpoint={} grab={} benttree={} deadtree={} unknown={} bounded-rows={} model-defaults=true resource-keys=true group-children=true top-level={} scanned={}",
+      v.host ? "host" : "guest",v.world.level,state.scan_pass,counts[1],counts[2],counts[3],counts[4],counts[5],counts[6],counts[7],counts[8],counts[9],counts[10],counts[11],counts[12],counts[13],counts[14],counts[0],state.scan_rows,top_level,actors.size());
 }
 // Explicit native-input fixtures, never a network outcome injector. Selects a
 // real loaded object, moves only this process's Jack, then supplies a native
@@ -1811,7 +1912,7 @@ void ObjectsLoaded(uint8_t* b) {
 #if defined(KK_DEV_TOOLS)
   state.pickups.clear(); state.debug_sources.clear();
   state.view_ready=false;
-  state.scan_pass=state.scan_rows=0; state.scan_next=0; state.scan_seen.clear();
+  state.scan_pass=state.scan_rows=0; state.scan_next=state.scan_started=0; state.scan_late=false; state.scan_seen.clear();
 #endif
   state.census_until=Now()+10; state.next_census=state.next_full=state.next_sample=0;
   Census(b);
@@ -1821,7 +1922,7 @@ void ObjectsBeforeAi(PPCContext& ctx,uint8_t* b,uint32_t w) {
   state.ready=false;
   if (uint32_t(ctx.lr)!=0x82881CF0) return;
 #if defined(KK_DEV_TOOLS)
-  ScanInventory(b,w);
+  ScanInventory(ctx,b,w);
 #endif
   if (!Shared() || w!=Load32(b,0x828E8388)) {
     state.outgoing.clear();

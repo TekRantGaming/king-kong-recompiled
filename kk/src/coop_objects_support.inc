@@ -40,19 +40,20 @@ uint64_t DevSupportSource() {
 // Read-only native group relationships. Pickup children2..6 are NOT physical
 // support identities. No relationship is inferred from matching positions.
 void SupportRelations(const uint8_t* b,uint32_t actor,const char* family) {
+  const auto host=SessionFlowSnapshot().host;
   const auto link=Ptr(b,actor,20,16),pose=Ptr(b,link,12,88);
   const auto group=(Load32(b,actor)&2) ? Ptr(b,link,0,0x58) : 0;
   const auto list=Ptr(b,Ptr(b,group,8,4),0,28);
   const auto begin=list ? Load32(b,list+16) : 0,end=list ? Load32(b,list+4) : 0;
   const auto swap=Ptr(b,group,0x54,0x84);
   REXLOG_INFO("KK dev object support relation: role={} family={} root={:08X} type={:08X} parent={:08X} group={:08X} physics={:08X}",
-      state.host ? "host" : "guest",family,actor,Load32(b,actor),pose ? Load32(b,pose+80) : 0,group,Physics(b,actor));
+      host ? "host" : "guest",family,actor,Load32(b,actor),pose ? Load32(b,pose+80) : 0,group,Physics(b,actor));
   if (!list || b[list+20]!=0x1E || !PoseAddress(begin) || end<begin || end-begin>64*8 || (end-begin)%8 || !PoseAddress(begin,end-begin)) return;
   for (unsigned n=0;n<(end-begin)/8;++n) {
     const auto child=Load32(b,begin+8*n); if (!PoseAddress(child,32)) continue;
     const auto child_pose=Ptr(b,Ptr(b,child,20,16),12,88);
     REXLOG_INFO("KK dev object support relation: role={} family={} root={:08X} slot={} child={:08X} type={:08X} flags={:08X} parent={:08X} physics={:08X}",
-        state.host ? "host" : "guest",family,actor,swap ? unsigned(b[swap+4+n]) : n,child,Load32(b,child),Load32(b,child+4),
+        host ? "host" : "guest",family,actor,swap ? unsigned(b[swap+4+n]) : n,child,Load32(b,child),Load32(b,child+4),
         child_pose ? Load32(b,child_pose+80) : 0,Physics(b,child));
   }
 }
