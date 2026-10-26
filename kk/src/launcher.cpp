@@ -6604,17 +6604,29 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
     } else if (update_->done && !relaunched_) {  // start the new version, then close this one
       relaunched_ = true;
       std::wstring extra;
-#if defined(KK_DEV_TOOLS) && defined(_WIN32)
+#if defined(KK_DEV_TOOLS)
       // Task 370: a KK_DEV_UPDATE_ZIP test. The new process must not offer it again (nor its steps install it again),
       // and it must not log over this run's log (with the second --log_file it writes logs\king_kong_NNN.log in the
       // program folder, as a run without one does).
       if (const char* zip = std::getenv("KK_DEV_UPDATE_ZIP"); zip && *zip) {
+#if defined(_WIN32)
         _putenv_s("KK_DEV_UPDATE_RELAUNCHED", "1");
         _putenv_s("KK_DEV_LAUNCHER_INPUT", "");
+#else
+        setenv("KK_DEV_UPDATE_RELAUNCHED", "1", 1);
+        setenv("KK_DEV_LAUNCHER_INPUT", "", 1);
+#endif
         const std::filesystem::path log = rex::cvar::GetFlagByName("log_file");
+        // (Windows parses a command line, so the path is quoted; on Linux the argument arrives whole as it is.)
+#if defined(_WIN32)
+        constexpr const wchar_t* kQuote = L"\"";
+#else
+        constexpr const wchar_t* kQuote = L"";
+#endif
         if (!log.empty())
-          extra = L"--log_file=\"" +
-                  (log.parent_path() / (log.stem().wstring() + L"-relaunch" + log.extension().wstring())).wstring() + L"\"";
+          extra = L"--log_file=" + std::wstring(kQuote) +
+                  (log.parent_path() / (log.stem().wstring() + L"-relaunch" + log.extension().wstring())).wstring() +
+                  kQuote;
       }
 #endif
       RelaunchSelf(extra);

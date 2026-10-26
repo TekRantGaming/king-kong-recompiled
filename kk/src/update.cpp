@@ -157,11 +157,17 @@ bool ParseRelease(const std::string& json, UpdateInfo& info) {
   return !info.version.empty() && !info.zip_url.empty();
 }
 
-// The latest release in one repo (its releases/latest API), for this platform.
-bool LatestRelease(const char* api, UpdateInfo& info) {
+// The latest release in one repo (its releases/latest API), for this platform. False only when the repo did not
+// answer. A release without this platform's download (no AppImage: a Windows only release) is no release here, so
+// Linux players get "no update" instead of "Could not check for updates" (and Windows likewise for a Linux only one).
+bool LatestRelease(const char* api, std::optional<UpdateInfo>& out) {
   std::vector<uint8_t> data;
   if (!HttpGet(api, data)) return false;
-  return ParseRelease(std::string(data.begin(), data.end()), info);
+  UpdateInfo info;
+  if (ParseRelease(std::string(data.begin(), data.end()), info)) out = info;
+  else if (!info.version.empty()) REXLOG_INFO("KK: update: v{} has no download for this platform", info.version);
+  else return false;
+  return true;
 }
 
 #if defined(_WIN32)
@@ -431,11 +437,11 @@ void CheckForUpdate(UpdateStatus& status, const std::string& wanted, bool switch
   const std::string channel = CheckChannel(kBuildChannel, wanted);
   // Stable is read on both channels (a beta's final release is a stable one); beta only on beta.
   std::optional<UpdateInfo> stable, beta;
-  if (UpdateInfo s; LatestRelease(kReleasesApi, s)) stable = s;
-  if (channel == "beta")
-    if (UpdateInfo b; LatestRelease(kBetaReleasesApi, b)) beta = b;
+  const bool stable_answered = LatestRelease(kReleasesApi, stable);
+  const bool beta_answered = channel == "beta" && LatestRelease(kBetaReleasesApi, beta);
   // Neither answered: say so. (A beta repo without releases, with stable answering, is "no update".)
-  if (!stable && !beta) {
+  if (!stable_answered && !beta_answered) {
+    REXLOG_WARN("KK: update check: GitHub did not answer");
     status.message = "Could not check for updates.";
     status.failed = true;
     status.busy = false;
@@ -541,19 +547,37 @@ void InstallUpdate(const UpdateInfo& info, UpdateStatus& status) {
   // The expected hash: the release's SHA256SUMS.txt line for the AppImage (owner, 25 Oct: the same check as
   // the Windows zip's). A release without SHA256SUMS.txt is checked by its size only, as on Windows.
   std::string want;
-  if (!info.sums_url.empty()) {
-    std::vector<uint8_t> sums;
-    if (!HttpGet(info.sums_url, sums)) return fail(kDownloadFailed);
-    want = uf::SumFor(std::string(sums.begin(), sums.end()), UrlFileName(info.zip_url));
-    if (want.empty()) {
-      REXLOG_WARN("KK: update: SHA256SUMS.txt has no line for {}", UrlFileName(info.zip_url));
-      return fail(kDamaged);
-    }
-  } else {
-    REXLOG_WARN("KK: update: the release has no SHA256SUMS.txt: only its size is checked");
-  }
   std::vector<uint8_t> data;
-  if (!HttpGet(info.zip_url, data, &status.bytes, &status.total)) return fail(kDownloadFailed);
+  bool dev = false;
+#if defined(KK_DEV_TOOLS)
+  // KK_DEV_UPDATE_ZIP=<an AppImage on this PC>, with the SHA256SUMS.txt beside it when there is one.
+  if (DevUpdateZip()) {
+    dev = true;
+    const fs::path file(info.zip_url), sums = file.parent_path() / "SHA256SUMS.txt";
+    if (std::ifstream in{sums, std::ios::binary}) {
+      const std::string text((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
+      want = uf::SumFor(text, file.filename().string());
+      if (want.empty()) return fail(kDamaged);
+    }
+    std::ifstream in(file, std::ios::binary);
+    data.assign(std::istreambuf_iterator<char>(in), std::istreambuf_iterator<char>());
+    status.total = status.bytes = data.size();
+  }
+#endif
+  if (!dev) {
+    if (!info.sums_url.empty()) {
+      std::vector<uint8_t> sums;
+      if (!HttpGet(info.sums_url, sums)) return fail(kDownloadFailed);
+      want = uf::SumFor(std::string(sums.begin(), sums.end()), UrlFileName(info.zip_url));
+      if (want.empty()) {
+        REXLOG_WARN("KK: update: SHA256SUMS.txt has no line for {}", UrlFileName(info.zip_url));
+        return fail(kDamaged);
+      }
+    } else {
+      REXLOG_WARN("KK: update: the release has no SHA256SUMS.txt: only its size is checked");
+    }
+    if (!HttpGet(info.zip_url, data, &status.bytes, &status.total)) return fail(kDownloadFailed);
+  }
   if (data.size() < (1u << 20) || std::memcmp(data.data(), "\x7f" "ELF", 4) != 0)
     return fail("The download wasn't the game's AppImage.");
   if (info.zip_size && data.size() != info.zip_size) {
