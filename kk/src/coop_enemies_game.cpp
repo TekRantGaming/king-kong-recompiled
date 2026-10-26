@@ -1,6 +1,7 @@
 // Per-enemy authority. Native memory is accessed on the game thread only.
 #include "coop_enemies_game.h"
 #include "coop_objects_game.h"
+#include "coop_objects.h"
 #include "coop_enemies.h"
 #include "coop_ownership.h"
 #include "coop_runtime.h"
@@ -449,6 +450,8 @@ struct State {
   const char* shot_hit_reason = "no-hit";
   unsigned shot_target_diagnostics = 0;
   std::map<uint32_t, DevRaptorLog> raptor_logs;
+  std::map<uint32_t,uint32_t> diagnostic_keys;
+  std::set<uint32_t> ambiguous_logged;
   unsigned raptor_candidate_lines = 0;
 #endif
   double census_until = 0, next_numbers = 0, next_shot_log = 0;
@@ -477,6 +480,7 @@ struct State {
     next_status_time = 0; partner_status_time = -1;
 #if defined(KK_DEV_TOOLS)
     raptor_logs.clear(); raptor_candidate_lines = 0;
+    diagnostic_keys.clear(); ambiguous_logged.clear();
 #endif
   }
 };
@@ -561,6 +565,9 @@ void Capture(const uint8_t* b, uint32_t w, bool initial = true) {
   // The full registry includes dormant actors before they enter the scheduled AI table.
   uint32_t begin, end; if (!Table(b, w, begin, end, true)) return;
   s.world = w; s.capture = false;
+#if defined(KK_DEV_TOOLS)
+  if (initial) s.diagnostic_keys=objects::FileKeys([&](uint32_t p){ return Load32(b,p); });
+#endif
   if (initial) s.census_until = Now()+10;
   for (uint32_t p = begin; p < end; p += 8) {
     const auto actor = Load32(b, p);
@@ -592,6 +599,16 @@ void Capture(const uint8_t* b, uint32_t w, bool initial = true) {
   std::map<uint64_t, unsigned> counts;
   for (const auto& [actor, a] : s.authored) ++counts[a.key];
   for (auto& [actor, a] : s.authored) a.ambiguous = counts[a.key] != 1;
+#if defined(KK_DEV_TOOLS)
+  for (const auto& [actor,a]:s.authored) if (a.ambiguous && a.family!=EnemyFamily::None && s.ambiguous_logged.insert(actor).second) {
+    const auto v=Ptr(b,a.ai,64,64);
+    const auto key=[&](uint32_t p){ const auto it=s.diagnostic_keys.find(p); return it==s.diagnostic_keys.end() ? 0:it->second; };
+    REXLOG_INFO("ENEMIES ambiguous id={:016X} family={} actor={:08X} asset={:08X} model-key={:08X} type={:08X} vars0-16={:08X},{:08X},{:08X},{:08X},{:08X} vars48-56={:08X},{:08X},{:08X}",
+        a.key,uint16_t(a.family),actor,key(actor),key(Load32(b,a.ai)),Load32(b,actor),
+        v ? Load32(b,v):0,v ? Load32(b,v+4):0,v ? Load32(b,v+8):0,v ? Load32(b,v+12):0,v ? Load32(b,v+16):0,
+        v ? Load32(b,v+48):0,v ? Load32(b,v+52):0,v ? Load32(b,v+56):0);
+  }
+#endif
   std::erase_if(s.spawners, [&](const auto& item) { return counts[item.second.key] != 1; });
   if (initial) REXLOG_INFO("ENEMIES identity level={} start={} serial={} authored={} spawners={}",
       s.identity.level, s.identity.start, s.identity.serial, s.authored.size(), s.spawners.size());
