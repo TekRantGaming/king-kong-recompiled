@@ -85,6 +85,7 @@ double checkpoint_loaded_at=0;
 bool SafeRequest(const uint8_t* b,const Script& s);
 // Only wraps the exact safe native predicate call. No hero/global pointer swap.
 thread_local uint32_t forced_pivot=0;
+thread_local uint32_t blocked_pivot=0;
 double Now() { return std::chrono::duration<double>(std::chrono::steady_clock::now().time_since_epoch()).count(); }
 bool Trace() {
 #if defined(KK_DEV_TOOLS)
@@ -103,8 +104,9 @@ void TraceLayout(const uint8_t* b,const Script& s) {
   }();
   if (!all && (!selected || s.binding.source!=selected)) return;
   const auto vars=s.binding.vars;
-  REXLOG_INFO("KK dev story layout: source={:016X} script={:016X} actor={:08X} vars={:08X} detect={:08X}",
-      s.binding.source,s.binding.script,s.binding.actor,vars,Load32(b,vars+20));
+  REXLOG_INFO("KK dev story layout: source={:016X} script={:016X} actor={:08X} vars={:08X} detect={:08X} persistent={} volume={:08X} target={:08X} hero={:08X} inverse={}/{}",
+      s.binding.source,s.binding.script,s.binding.actor,vars,Load32(b,vars+20),Load32(b,vars+8),
+      Load32(b,vars+92),Load32(b,vars+96),Load32(b,0x82CCBF7C),Load32(b,vars+184),Load32(b,vars+188));
   for (uint32_t i=0;i<=kStoryRecords;++i) {
     const auto fn=Load32(b,vars+924+180*i),p=vars+992+180*i;
     REXLOG_INFO("KK dev story record: source={:016X} index={} fn={:08X} args={:08X},{:08X},{:08X},{:08X} flags={:08X} local={}",
@@ -894,14 +896,17 @@ bool StoryDetect(PPCContext& ctx,uint8_t* b) {
     }
     // The predicate itself is read-only apart from its local result word.
     // Mixed action chains still execute entirely through their own native loop;
-    // only their noninverted, nonpersistent Jack-volume activation is shared.
-    if (!host && !s->exact && !Load32(b,vars+8) && Load32(b,vars+20)==kPivot && HeroPivot(b,vars+88) &&
+    // only their noninverted Jack-volume activation is shared. Always run
+    // SSDetect itself so its native checkpoint claim, removal and completion
+    // bit bookkeeping remain intact, including persistent programs.
+    if (!host && !s->exact && Load32(b,vars+20)==kPivot && HeroPivot(b,vars+88) &&
         story::DetectIdle(before)) {
-      if (!s->activation.CanArm(s->run)) { ctx.r3.u32=0; return true; }
-      forced_pivot=vars+88;
-      Note("host volume activation",Event(*s,StoryPhase::Armed,kDetectRecord),"native mixed chain retained");
+      if (s->activation.CanArm(s->run)) {
+        forced_pivot=vars+88;
+        Note("host volume activation",Event(*s,StoryPhase::Armed,kDetectRecord),"native mixed chain and persistence retained");
+      } else blocked_pivot=vars+88;
     }
-    __imp__sub_82476848(ctx,b); forced_pivot=0;
+    __imp__sub_82476848(ctx,b); forced_pivot=blocked_pivot=0;
     if (failed) return true;
     const auto after=Load32(b,flag);
     if (story::DetectArmed(before,after)) {
@@ -1105,6 +1110,8 @@ REX_HOOK_RAW(sub_8244F0E8) {
   __imp__sub_8244F0E8(ctx,base);
   if (kk::coop::forced_pivot==rec) {
     kk::hfr::Store32(base,rec+20,kk::hfr::Load32(base,0x82CCBF7C)); ctx.r3.u32=1;
+  } else if (kk::coop::blocked_pivot==rec) {
+    kk::hfr::Store32(base,rec+20,0); ctx.r3.u32=0;
   }
 #if defined(KK_DEV_TOOLS)
   kk::DevTrigPivotResult(base,rec,lr,ctx.r3.u32);
