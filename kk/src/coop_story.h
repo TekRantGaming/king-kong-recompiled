@@ -19,6 +19,17 @@ inline bool DetectArmed(uint32_t before,uint32_t after) { return DetectIdle(befo
 inline bool DetectStarted(uint32_t before,uint32_t result,bool loop_program) {
   return before==1 && result==5 && loop_program;
 }
+// Only reliable host activation evidence can arm a shared Jack-volume detector.
+// Never skip a missing activation or infer one from an idle checksum baseline.
+struct ActivationGate {
+  uint32_t armed=0;
+  void Observe(const StoryEvent& e) {
+    if (e.phase==StoryPhase::Armed || e.phase==StoryPhase::Started || e.phase==StoryPhase::Advance ||
+        e.phase==StoryPhase::Finished || e.phase==StoryPhase::SnapshotLoop || e.phase==StoryPhase::SnapshotFinished)
+      armed=std::max(armed,e.run);
+  }
+  bool CanArm(uint32_t local) const { return local!=UINT32_MAX && armed==local+1; }
+};
 // A loaded record is already shared, including scripts armed or looping before
 // our hooks saw them. Baseline never emits a story transition.
 struct Cursor {

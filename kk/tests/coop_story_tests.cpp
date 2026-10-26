@@ -66,6 +66,21 @@ void Codec() {
     Check(!Decode(bytes,sentinel) && sentinel.sequence==19,"decoder also rejects zero scalar/identity fields atomically");
   }
 }
+void HostActivation() {
+  story::ActivationGate gate;
+  Check(!gate.CanArm(1),"guest volume alone cannot arm a shared detector");
+  auto e=Event(); e.run=2;
+  gate.Observe(e);
+  Check(gate.CanArm(1) && !gate.CanArm(2),"host activation permits exactly one native activation");
+  e.phase=StoryPhase::Checksum; e.run=8; gate.Observe(e);
+  Check(gate.CanArm(1),"idle checksum cannot invent an activation");
+  e.phase=StoryPhase::Started; e.run=3; gate.Observe(e);
+  Check(gate.CanArm(2) && !gate.CanArm(1),"missing intermediate activation is never skipped");
+  e.phase=StoryPhase::Armed; e.run=2; gate.Observe(e);
+  Check(gate.CanArm(2),"stale activation cannot rewind the host boundary");
+  Check(!gate.CanArm(UINT32_MAX),"activation run cannot wrap");
+  gate={}; Check(!gate.CanArm(2),"native rebind discards previous activation authority");
+}
 void Ordering() {
   story::Ordered queue; queue.Reset(2,203);
   Check(queue.Push(Event(2,StoryPhase::Started),1) && !queue.Front(),"native schedule cannot bypass earlier script event");
@@ -466,4 +481,4 @@ void TransportAndMailbox() {
   Check(CheckCompatibility(hc.compatibility,old)==RejectReason::Protocol,"v12 peers rejected at handshake");
 }
 }
-int main() { Codec(); Ordering(); Requests(); Identity(); LoadBaselineAndChecksums(); LenientConvergence(); PersistentLagAndSoftFix(); PrivateSnapshots(); TransportAndMailbox(); std::puts("co-op story tests passed"); }
+int main() { HostActivation(); Codec(); Ordering(); Requests(); Identity(); LoadBaselineAndChecksums(); LenientConvergence(); PersistentLagAndSoftFix(); PrivateSnapshots(); TransportAndMailbox(); std::puts("co-op story tests passed"); }

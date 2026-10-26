@@ -43,6 +43,7 @@ constexpr uint32_t kNothing=0x824FC2D0, kActivity=0x8250EE50, kVisible=0x8250EDE
 constexpr uint32_t kDetectRecord=kStoryRecords;
 struct Script : story::Progress {
   Binding binding;
+  story::ActivationGate activation;
   story::RequestLatch requested;
   std::optional<StoryEvent> request;
   double request_until=0;
@@ -444,6 +445,7 @@ void RestoreSnapshot(uint8_t* b) {
     }
     ++matched;
     auto& s=scripts.at(bind->actor); s.restore.clear(); s.lag={};
+    s.activation.Observe(e);
     const auto index=Load32(b,bind->vars+19812);
     if (index>kStoryRecords) { snapshot_unresolved.push_back(e); continue; }
     const bool looping=Tracks(b,bind->ai,kLoop);
@@ -578,6 +580,7 @@ void ChecksumFrame(uint8_t* b,double now) {
         ordered.Applied(now); continue;
       }
       auto& s=scripts.at(bind->actor);
+      s.activation.Observe(e);
       if (e.phase==StoryPhase::Recovery) {
         Note("legacy recovery hint ignored",e,"only persistent checksum lag requests recovery");
         ordered.Applied(now); continue;
@@ -883,6 +886,15 @@ bool StoryDetect(PPCContext& ctx,uint8_t* b) {
           FinishRequest(*s,"request refused","guest outside native trigger volume");
         else forced_pivot=vars+88;
       }
+    }
+    // The predicate itself is read-only apart from its local result word.
+    // Mixed action chains still execute entirely through their own native loop;
+    // only their noninverted, nonpersistent Jack-volume activation is shared.
+    if (!host && !s->exact && !Load32(b,vars+8) && Load32(b,vars+20)==kPivot && HeroPivot(b,vars+88) &&
+        story::DetectIdle(before)) {
+      if (!s->activation.CanArm(s->run)) { ctx.r3.u32=0; return true; }
+      forced_pivot=vars+88;
+      Note("host volume activation",Event(*s,StoryPhase::Armed,kDetectRecord),"native mixed chain retained");
     }
     __imp__sub_82476848(ctx,b); forced_pivot=0;
     if (failed) return true;
