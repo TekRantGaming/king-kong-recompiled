@@ -12,7 +12,6 @@
 #include "play_internal.h"
 #include "hfr.h"
 #include <rex/logging.h>
-#include <rex/hook.h>
 #include <algorithm>
 #include <chrono>
 #include <cctype>
@@ -22,7 +21,6 @@
 #include <fstream>
 #include <set>
 
-REX_EXTERN(__imp__sub_826437D0);
 
 namespace kk::coop::world {
 namespace {
@@ -195,9 +193,5 @@ void Frame(uint8_t* b) {
     else REXLOG_INFO("KK dev world: dumped sample={} generation={} level={} path={}",sample,generation,level,path.string());
   } catch (const std::exception& e) { REXLOG_WARN("KK dev world: dump failed {}",e.what()); }
 }
-}
-REX_HOOK_RAW(sub_826437D0) {
-  kk::coop::world::CheckpointEntering(base);
-  __imp__sub_826437D0(ctx,base);
 }
 #endif

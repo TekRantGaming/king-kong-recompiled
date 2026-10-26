@@ -26,6 +26,7 @@
 // (resume, again, checkpoint, score, quit, open = press Start), for tests.
 
 #include "ui_paint.h"
+#include "coop_world_snapshot.h"
 
 #include <algorithm>
 #include "debug_overlay.h"
@@ -948,6 +949,9 @@ REX_HOOK_RAW(sub_82413190) {
 // Retain developer diagnostics around the checkpoint predicate.
 REX_EXTERN(__imp__sub_826437D0);
 REX_HOOK_RAW(sub_826437D0) {
+#if defined(KK_DEV_TOOLS)
+  kk::coop::world::CheckpointEntering(base);
+#endif
   const uint32_t g = kk::play::Load32(base, kk::play::kGamePtr);
   const int32_t before = g ? int32_t(kk::play::Load32(base, g + 0xC)) : -1;
   [[maybe_unused]] const uint32_t self = kk::play::Load32(base, 0x82CCBF6C);  // the checkpoint object (for dev_bug_trace.cpp)
