@@ -792,7 +792,14 @@ void OwnershipSessions() {
 }
 } // namespace
 int main() {
-  Check(FileAuthoredKey(6,0x12345678) && FileAuthoredKey(6,0x12345678)==FileAuthoredKey(6,0x12345678),"native BIG object identity survives native heap relocation");
+  const auto decoded_a=FileAuthoredKey(5,0x12345678),decoded_b=FileAuthoredKey(5,0x12345679);
+  std::vector<MatchCandidate> decoded{
+      {{{decoded_a,0,EnemyFamily::Bat},1,2,3,4},10,20,30,true},
+      {{{decoded_b,0,EnemyFamily::Bat},5,6,7,8},10,20,30,true}};
+  auto keyed=Enemy(); keyed.id={decoded_b,0,EnemyFamily::Bat};
+  Check(MatchAuthored(keyed,decoded,false)==&decoded[1].binding,"colocated decoded objects match by resource key across different native allocations");
+  decoded[1].available=false;
+  Check(!MatchAuthored(keyed,decoded,true),"an unavailable exact resource cannot be replaced by its colocated neighbour");
   Check(FileAuthoredKey(6,0x12345678)!=FileAuthoredKey(6,0x12345679) && FileAuthoredKey(6,0x12345678)!=FileAuthoredKey(5,0x12345678),"native file key and family distinguish authored actors");
   Check(!FileAuthoredKey(6,0) && !FileAuthoredKey(6,UINT32_MAX),"new or invalid native objects need separate provenance");
   uint64_t templates[19]{};
