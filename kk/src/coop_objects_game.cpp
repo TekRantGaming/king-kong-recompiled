@@ -308,8 +308,10 @@ void Census(const uint8_t* b) {
     Binding o; o.actor=actor; o.ai=ai; o.vars=vars; o.matrix=matrix; o.kind=kind;
     o.x=LoadF(b,matrix+48); o.y=LoadF(b,matrix+52); o.z=LoadF(b,matrix+56);
     const auto asset=state.file_keys.find(actor);
+    const auto direct=PoseAddress(actor,36) ? enemies::ObjectFileKey(Load32(b,actor+32)):0;
+    const auto asset_key=direct ? direct:asset==state.file_keys.end() ? 0:asset->second;
     const uint64_t shape=objects::SupportRoot(kind) ? enemies::Mix(uint8_t(kind),Load32(b,vars+(kind==ObjectKind::Tree ? 0x52C : 0))) : uint8_t(kind);
-    o.source=asset==state.file_keys.end() ? objects::Source(kind,o.x,o.y,o.z,shape) : objects::AssetSource(kind,asset->second);
+    o.source=asset_key ? objects::AssetSource(kind,asset_key):objects::Source(kind,o.x,o.y,o.z,shape);
     if (o.source) {
       if (objects::SupportRoot(kind)) PrepareSupport(b,o);
       if (objects::SupportRoot(kind) && state.support_frozen) {
@@ -330,7 +332,7 @@ void Census(const uint8_t* b) {
       if (Trace()) REXLOG_INFO("KK dev object: role={} kind={} id={:016X} actor={:08X} vars={:08X} pos=({:.3f},{:.3f},{:.3f}) damage={} maximum={} levers={} type={} asset={:08X}",
           state.host ? "host" : "guest",uint8_t(kind),o.source,actor,vars,o.x,o.y,o.z,
           kind==ObjectKind::Breakable ? Load32(b,vars+552) : 0,kind==ObjectKind::Breakable ? Load32(b,vars+556) : 0,
-          kind==ObjectKind::Door ? Load32(b,vars+612) : 0,Load32(b,vars),asset==state.file_keys.end() ? 0 : asset->second);
+          kind==ObjectKind::Door ? Load32(b,vars+612) : 0,Load32(b,vars),asset_key);
     }
   }
   // Keep terminal breakable bindings as tombstones while still registered.
@@ -1248,10 +1250,13 @@ void DoorInit(PPCContext& ctx,uint8_t* b) {
   uint64_t trace_source=0;
   if (trace_init) {
     const auto asset=state.file_keys.find(actor);
-    const auto source=asset==state.file_keys.end() ? objects::Source(ObjectKind::Door,LoadF(b,matrix+48),LoadF(b,matrix+52),LoadF(b,matrix+56),2):objects::AssetSource(ObjectKind::Door,asset->second);
+    const auto direct=PoseAddress(actor,36) ? enemies::ObjectFileKey(Load32(b,actor+32)):0;
+    const auto asset_key=direct ? direct:asset==state.file_keys.end() ? 0:asset->second;
+    const auto legacy=objects::Source(ObjectKind::Door,LoadF(b,matrix+48),LoadF(b,matrix+52),LoadF(b,matrix+56),2);
+    const auto source=asset_key ? objects::AssetSource(ObjectKind::Door,asset_key):legacy;
     trace_source=source;
-    REXLOG_INFO("KK dev door init census: role={} level={} id={:016X} actor={:08X} ready={} shared={} flags={:08X} persistent={} capability={} progress={} node={:08X} bound={}",
-        state.host ? "host":"guest",state.level,source,actor,state.ready,Shared(),Load32(b,actor+4),Load32(b,vars+584),Load32(b,vars+588),LoadF(b,vars+1084),
+    REXLOG_INFO("KK dev door init census: role={} level={} id={:016X} legacy-id={:016X} file-key={:08X} actor={:08X} ready={} shared={} flags={:08X} persistent={} capability={} progress={} node={:08X} bound={}",
+        state.host ? "host":"guest",state.level,source,legacy,asset_key,actor,state.ready,Shared(),Load32(b,actor+4),Load32(b,vars+584),Load32(b,vars+588),LoadF(b,vars+1084),
         PoseAddress(Load32(b,0x82CCBF60)) ? Load32(b,Load32(b,0x82CCBF60)):0,state.bindings.contains(actor));
   }
   if (auto* o=state.ready && Shared() ? Current(b,ObjectKind::Door) : nullptr) ++o->init_calls;

@@ -792,6 +792,9 @@ void OwnershipSessions() {
 }
 } // namespace
 int main() {
+  Check(FileAuthoredKey(6,0x12345678) && FileAuthoredKey(6,0x12345678)==FileAuthoredKey(6,0x12345678),"native BIG object identity survives native heap relocation");
+  Check(FileAuthoredKey(6,0x12345678)!=FileAuthoredKey(6,0x12345679) && FileAuthoredKey(6,0x12345678)!=FileAuthoredKey(5,0x12345678),"native file key and family distinguish authored actors");
+  Check(!FileAuthoredKey(6,0) && !FileAuthoredKey(6,UINT32_MAX),"new or invalid native objects need separate provenance");
   uint64_t templates[19]{};
   Check(!SpawnerAuthoredKey(123,templates),"spawner without recognized authored templates refuses");
   templates[0]=CentipedeAuthoredKey(123,1); const auto first=SpawnerAuthoredKey(456,templates);

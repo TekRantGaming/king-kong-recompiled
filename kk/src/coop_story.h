@@ -157,6 +157,10 @@ inline uint64_t Source(uint64_t script, float x, float y, float z) {
   const auto position = enemies::AuthoredKey(0x53544f52, x, y, z);
   return script && position ? enemies::Mix(position, script) : 0;
 }
+inline uint64_t FileSource(uint64_t script,uint32_t key) {
+  const auto source=enemies::FileAuthoredKey(0x53544f52,key);
+  return script && source ? enemies::Mix(source,script):0;
+}
 struct Binding { uint64_t source=0, script=0; uint32_t actor=0, ai=0, vars=0; };
 inline bool CanReplaySnapshotPrefix(bool looping,uint32_t native_index,const StoryEvent& target) {
   return (target.phase==StoryPhase::SnapshotLoop || target.phase==StoryPhase::SnapshotFinished) &&

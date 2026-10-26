@@ -385,6 +385,7 @@ void DevEnemyNear(const uint8_t* b, uint32_t w) {
 struct Authored {
   uint64_t key; uint32_t ai, matrix; EnemyFamily family;
   float x, y, z; bool ambiguous = false;
+  uint32_t file_key = 0;
 };
 struct Pending { EnemyId id; uint32_t ai, matrix; float x, y, z; };
 struct Spawner { uint64_t key; uint32_t ai, vars, sequence = 0; };
@@ -556,6 +557,7 @@ bool Environment(const uint8_t* b, uint32_t w) {
       !Load32(b, s.game+4) && Load32(b, s.game+0x18) == s.identity.level && !play::StartLevelLoading() && !photo::Active();
 }
 uint64_t KeyAt(const uint8_t* b, uint32_t actor, uint32_t family) {
+  if (PoseAddress(actor,36)) if (const auto key=FileAuthoredKey(family,Load32(b,actor+32))) return key;
   const auto m = Ptr(b, actor, 12, 64);
   if (!m) return 0;
   return AuthoredKey(family, LoadF(b, m+48), LoadF(b, m+52), LoadF(b, m+56));
@@ -600,8 +602,8 @@ void Capture(const uint8_t* b, uint32_t w, bool initial = true) {
       }
       key=SpawnerAuthoredKey(key,templates);
 #if defined(KK_DEV_TOOLS)
-      if (initial) REXLOG_INFO("ENEMIES spawner definition actor={:08X} id={:016X} primary={:016X} secondary={:016X} first-wave={:016X}",
-          actor,key,templates[0],templates[1],templates[2]);
+      if (initial) REXLOG_INFO("ENEMIES spawner definition actor={:08X} id={:016X} file-key={:08X} primary={:016X} secondary={:016X} first-wave={:016X}",
+          actor,key,PoseAddress(actor,36) ? Load32(b,actor+32):0,templates[0],templates[1],templates[2]);
 #endif
     }
     if (!spawner && family==EnemyFamily::Centipede) {
@@ -611,6 +613,7 @@ void Capture(const uint8_t* b, uint32_t w, bool initial = true) {
     if (!key || s.authored.contains(actor) || s.authored.size() >= kMaxEnemies) continue;
     const auto matrix = Ptr(b, actor, 12, 64);
     s.authored[actor] = {key, ai, matrix, family, LoadF(b, matrix+48), LoadF(b, matrix+52), LoadF(b, matrix+56)};
+    s.authored[actor].file_key=PoseAddress(actor,36) ? ObjectFileKey(Load32(b,actor+32)):0;
 #if defined(KK_DEV_TOOLS)
     const auto& a = s.authored[actor];
     REXLOG_INFO("ENEMIES census id={:016X}/0/{} spawn=({:.3f},{:.3f},{:.3f}) scheduled={} init={}",
@@ -855,6 +858,9 @@ void Replicas(PPCContext& ctx, uint8_t* b, bool drive) {
       for (const auto& local : bindings) {
         const auto it = s.records.find(local.id); if (it == s.records.end()) continue;
         bool available = it->second.kind != EnemyEventKind::Removed && !claimed.contains(local.id);
+        // A distinct decoded BIG resource is never a positional substitute.
+        const auto authored=s.authored.find(local.actor);
+        if (local.id!=r.enemy.id && authored!=s.authored.end() && authored->second.file_key) available=false;
         // Do not let a fallback take another host ID's exact local actor.
         if (local.id != r.enemy.id && remote_ids.contains(local.id)) available = false;
         const auto& e = it->second.enemy;

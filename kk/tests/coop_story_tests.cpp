@@ -67,6 +67,8 @@ void Codec() {
   }
 }
 void HostActivation() {
+  Check(story::FileSource(123,0x12345678) && story::FileSource(123,0x12345678)!=story::FileSource(123,0x12345679),"script BIG keys distinguish colocated native controllers");
+  Check(!story::FileSource(123,0) && !story::FileSource(0,0x12345678),"unproven script resources cannot acquire authored identity");
   story::ActivationGate gate;
   Check(!gate.CanArm(1),"guest volume alone cannot arm a shared detector");
   auto e=Event(); e.run=2;

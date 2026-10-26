@@ -135,6 +135,15 @@ inline uint64_t Mix(uint64_t h, uint64_t v) {
   for (unsigned i = 0; i < 8; ++i) { h ^= uint8_t(v >> (i*8)); h *= 1099511628211ull; }
   return h;
 }
+// object_decode (8287B4D8) stores the BIG request key at object+32.
+// ai_claim (826F9AC0) uses it for persistent identity. obj_new clears it and
+// obj_clone does not copy it, so zero-key dynamic copies still need provenance.
+inline uint32_t ObjectFileKey(uint32_t key) { return key && key!=UINT32_MAX ? key:0; }
+inline uint64_t FileAuthoredKey(uint32_t family,uint32_t key) {
+  if (!family || !ObjectFileKey(key)) return 0;
+  const auto h=Mix(Mix(14695981039346656037ull,0x4b4b4f424a4b4559ull),uint64_t(family)<<32|key);
+  return h ? h:1;
+}
 inline uint64_t AuthoredKey(uint32_t family, float x, float y, float z) {
   uint64_t h = Mix(14695981039346656037ull, family);
   for (float v : {x, y, z}) {

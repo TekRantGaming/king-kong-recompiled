@@ -220,7 +220,8 @@ void Census(const uint8_t* b) {
       const auto matrix=Ptr(b,actor,12,64);
       const auto shape=Shape(b,vars);
       if (!matrix || !shape || scripts.size()>=4096) continue;
-      const auto source=story::Source(shape,LoadF(b,matrix+48),LoadF(b,matrix+52),LoadF(b,matrix+56));
+      const auto file_source=PoseAddress(actor,36) ? story::FileSource(shape,Load32(b,actor+32)):0;
+      const auto source=file_source ? file_source:story::Source(shape,LoadF(b,matrix+48),LoadF(b,matrix+52),LoadF(b,matrix+56));
       if (!source) continue;
       Script s; s.binding={source,shape,actor,ai,vars};
       s.Baseline(Load32(b,vars+19812));
