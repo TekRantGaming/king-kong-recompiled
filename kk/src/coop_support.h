@@ -3,6 +3,20 @@
 
 namespace kk::coop::objects {
 inline bool SupportRoot(ObjectKind kind) { return kind==ObjectKind::Ode || kind==ObjectKind::Tree; }
+// Final poses carry forward/up only, so they represent a proper rotation.
+// A unit length reflected basis would otherwise silently lose its handedness.
+inline bool RigidSupportBasis(const std::array<float,9>& m) {
+  for (unsigned row=0;row<3;++row) {
+    const auto length=std::hypot(m[3*row],m[3*row+1],m[3*row+2]);
+    if (!std::isfinite(length) || std::abs(length-1)>=.01f) return false;
+    for (unsigned other=row+1;other<3;++other) {
+      float dot=0; for (unsigned c=0;c<3;++c) dot+=m[3*row+c]*m[3*other+c];
+      if (!std::isfinite(dot) || std::abs(dot)>=.02f) return false;
+    }
+  }
+  const auto determinant=m[0]*(m[4]*m[8]-m[5]*m[7])-m[1]*(m[3]*m[8]-m[5]*m[6])+m[2]*(m[3]*m[7]-m[4]*m[6]);
+  return std::isfinite(determinant) && determinant>0;
+}
 struct PartRoot {
   uint64_t source=0;
   std::vector<uint32_t> parts;

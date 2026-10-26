@@ -17,16 +17,9 @@ bool UnitBody(const uint8_t* b,uint32_t actor) {
   const auto m=Ptr(b,actor,12,64),ph=Physics(b,actor);
   if (!m || !ph || !Ptr(b,ph,0x70,32) || b[ph+13]==4 || !(b[ph+14]&1) ||
       (Load32(b,actor)&0x00400025) || PersonalOrHuman(b,actor)) return false;
-  float lengths[3]{};
-  for (unsigned row=0;row<3;++row) {
-    lengths[row]=std::hypot(LoadF(b,m+16*row),LoadF(b,m+16*row+4),LoadF(b,m+16*row+8));
-    if (!std::isfinite(lengths[row]) || std::abs(lengths[row]-1)>=.01f) return false;
-  }
-  for (unsigned row=0;row<3;++row) for (unsigned other=row+1;other<3;++other) {
-    float dot=0; for (unsigned c=0;c<3;++c) dot+=LoadF(b,m+16*row+4*c)*LoadF(b,m+16*other+4*c);
-    if (!std::isfinite(dot) || std::abs(dot)>=.02f) return false;
-  }
-  return true;
+  std::array<float,9> basis;
+  for (unsigned row=0;row<3;++row) for (unsigned c=0;c<3;++c) basis[3*row+c]=LoadF(b,m+16*row+4*c);
+  return objects::RigidSupportBasis(basis);
 }
 #if defined(KK_DEV_TOOLS)
 uint64_t DevSupportSource() {

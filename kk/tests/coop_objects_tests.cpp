@@ -67,6 +67,16 @@ void Codec() {
   raft.raft.route=1; Check(!ValidObjectState(raft),"raft withdrawal cannot smuggle a stale pose");
 }
 void Policies() {
+  std::array<float,9> basis{1,0,0,0,1,0,0,0,1};
+  Check(objects::RigidSupportBasis(basis),"unit support rotations can retain their complete orientation");
+  basis={0,1,0,-1,0,0,0,0,1};
+  Check(objects::RigidSupportBasis(basis),"a rotated unit support basis remains representable");
+  basis[8]=-1;
+  Check(!objects::RigidSupportBasis(basis),"a reflected support cannot lose handedness through forward and up replay");
+  basis={1,0,0,0,1,.1f,0,0,1};
+  Check(!objects::RigidSupportBasis(basis),"sheared support transforms remain outside rigid replay");
+  basis={1,0,0,0,1,0,0,0,std::numeric_limits<float>::quiet_NaN()};
+  Check(!objects::RigidSupportBasis(basis),"nonfinite support transforms cannot acquire physical ownership");
   std::map<uint32_t,uint32_t> physics{{0x42000070,0x43000000},{0x42000074,0x44000000},{0x43000010,0x44000000}};
   const auto body_read=[&](uint32_t a){return physics[a];};
   Check(objects::BodyHandle(body_read,0x42000000)==0x44000000,"physical body must belong to the actor's own geom");
