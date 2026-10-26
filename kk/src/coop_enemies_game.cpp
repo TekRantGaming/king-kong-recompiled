@@ -609,7 +609,22 @@ void Scan(const uint8_t* b) {
   for (auto p = begin; p < end; p += 8) {
     const auto actor = Load32(b, p);
     Binding binding; EnemyState e;
-    if (!Read(b, actor, binding, e)) continue;
+    if (!Read(b, actor, binding, e)) {
+#if defined(KK_DEV_TOOLS)
+      const auto authored=s.authored.find(actor);
+      if (authored!=s.authored.end()) {
+        bool spawner=false,initializing=false; uint32_t state=0;
+        Tracks(b,authored->second.ai,state,spawner,&initializing);
+        if (!initializing && s.orphan_logged.insert(actor).second) {
+          const auto m=authored->second.matrix;
+          REXLOG_INFO("ENEMIES native-read-refused id={:016X} family={} actor={:08X} state={:08X} forward=({},{},{}) right=({},{},{}) flags={:08X}",
+              authored->second.key,uint16_t(authored->second.family),actor,state,
+              LoadF(b,m+16),LoadF(b,m+20),LoadF(b,m+24),LoadF(b,m),LoadF(b,m+4),LoadF(b,m+8),Load32(b,actor));
+        }
+      }
+#endif
+      continue;
+    }
     auto existing = s.bindings.find(actor);
     if (s.link.role == Role::Host && existing == s.bindings.end() && !Member(b, s.world, actor)) continue;
     if (existing != s.bindings.end()) {

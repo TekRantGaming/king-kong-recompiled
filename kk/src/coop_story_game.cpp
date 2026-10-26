@@ -93,18 +93,19 @@ bool Trace() {
 }
 void TraceLayout(const uint8_t* b,const Script& s) {
 #if defined(KK_DEV_TOOLS)
+  static const bool all=[] { const auto* v=std::getenv("KK_DEV_STORY_LAYOUT"); return v && std::strcmp(v,"all")==0; }();
   static const uint64_t selected=[] {
     const char* value=std::getenv("KK_DEV_STORY_LAYOUT");
     return value ? std::strtoull(value,nullptr,16) : 0ull;
   }();
-  if (!selected || s.binding.source!=selected) return;
+  if (!all && (!selected || s.binding.source!=selected)) return;
   const auto vars=s.binding.vars;
   REXLOG_INFO("KK dev story layout: source={:016X} script={:016X} actor={:08X} vars={:08X} detect={:08X}",
       s.binding.source,s.binding.script,s.binding.actor,vars,Load32(b,vars+20));
   for (uint32_t i=0;i<=kStoryRecords;++i) {
     const auto fn=Load32(b,vars+924+180*i),p=vars+992+180*i;
     REXLOG_INFO("KK dev story record: source={:016X} index={} fn={:08X} args={:08X},{:08X},{:08X},{:08X} flags={:08X} local={}",
-        selected,i,fn,Load32(b,p+4),Load32(b,p+8),Load32(b,p+12),Load32(b,p+16),Load32(b,p+84),Load32(b,p+100));
+        s.binding.source,i,fn,Load32(b,p+4),Load32(b,p+8),Load32(b,p+12),Load32(b,p+16),Load32(b,p+84),Load32(b,p+100));
     if (!fn) break;
   }
 #endif

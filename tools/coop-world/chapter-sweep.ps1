@@ -5,6 +5,9 @@
 [CmdletBinding()]
 param(
     [Parameter(Mandatory)][string[]]$Entries,
+    [string[]]$Starts = @(),
+    [string]$StoryLayout = '',
+    [switch]$Stationary,
     [ValidateRange(15,86400)][int]$Seconds = 150,
     [ValidateRange(70,180)][int]$CheckpointSeconds = 90,
     [string]$Worktree = 'F:\kk-native-coop\kk-recomp',
@@ -33,6 +36,13 @@ $entryList = @($Entries | ForEach-Object {
         $entry
     }
 })
+$startList = @($Starts | ForEach-Object { $_ -split ',' })
+if ($startList.Count -and $startList.Count -ne $entryList.Count) { throw '-Starts must have one checkpoint per entry.' }
+foreach ($start in $startList) {
+    $parsed=0
+    if (-not [int]::TryParse($start,[ref]$parsed) -or $parsed -lt 0 -or $parsed -gt 10000) { throw 'Invalid checkpoint.' }
+}
+if ($StoryLayout -and $StoryLayout -ne 'all' -and $StoryLayout -notmatch '^[0-9a-fA-F]{1,16}$') { throw 'Invalid story layout selector.' }
 $Worktree = (Resolve-Path -LiteralPath $Worktree).ProviderPath.TrimEnd('\')
 if (-not $Worktree.StartsWith("$coopRoot\", [StringComparison]::OrdinalIgnoreCase)) {
     throw 'Worktree must be inside F:\kk-native-coop.'
@@ -70,6 +80,12 @@ if ($WorldDiff) {
 }
 $records = @()
 $scenariosToRun = @($entryList | ForEach-Object { [pscustomobject]@{entry=$_;start=$null;load_proof='chapter-entry-smoke'} })
+if ($startList.Count) {
+    for ($i=0;$i -lt $scenariosToRun.Count;$i++) {
+        $scenariosToRun[$i].start=[int]$startList[$i]
+        $scenariosToRun[$i].load_proof='forced-checkpoint-smoke'
+    }
+}
 if ($ResumeManifest) {
     $resumePath=[IO.Path]::GetFullPath($ResumeManifest)
     if (-not $resumePath.StartsWith("$coopRoot\runs\",[StringComparison]::OrdinalIgnoreCase)) { throw 'Resume manifest must be a private co-op run.' }
@@ -120,6 +136,8 @@ try {
         $runOutput = New-Object 'System.Collections.Generic.List[string]'
         $envText = "KK_DEV_LAUNCHER_INPUT=wait-home,direct:code:C86ABC,direct:host,session:$($record.entry)|KK_DEV_AUTOSKIP=1|KK_DEV_SCRIPT=0:SKIP/10|KK_DEV_WANDER=1|KK_DEV_CHEATS_ANYWHERE=1|KK_DEV_EMPTY_LOADOUT=1|KK_DEV_TRIG_TRACE=1|KK_DEV_ENEMY_NEAR=1"
         $joinText = 'KK_DEV_LAUNCHER_INPUT=wait-home,direct:code:C86ABC,direct:join,direct:ready|KK_DEV_FACE_ENEMY=16:0.001'
+        if ($StoryLayout) { $envText += "|KK_DEV_STORY_LAYOUT=$StoryLayout" }
+        if ($Stationary) { $envText = $envText.Replace('|KK_DEV_WANDER=1','') }
         if ($FacePartner) {
             $envText += '|KK_DEV_FACE_PARTNER=90:0.001'
             $joinText = 'KK_DEV_LAUNCHER_INPUT=wait-home,direct:code:C86ABC,direct:join,direct:ready'
