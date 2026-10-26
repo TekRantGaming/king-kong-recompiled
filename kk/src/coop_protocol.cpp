@@ -145,7 +145,7 @@ bool ValidObjectState(const ObjectState& s) {
     return s.collapse.trigger && (bool(s.collapse.trigger&2)==(s.collapse.part!=255));
   }
   if (s.kind==ObjectKind::SupportBody) {
-    if (s.value!=1 || s.position!=0 || s.seconds!=0 || !s.body.topology || (s.body.flags&~0x00620003u)) return false;
+    if ((s.value!=1 && s.value!=2) || s.position!=0 || s.seconds!=0 || !s.body.topology || (s.body.flags&~0x00620003u)) return false;
     const auto& p=s.body.pose;
     for (unsigned i=0;i<9;++i) if (!std::isfinite(p[i]) || std::abs(p[i])>(i<3 ? 100000 : 1.01f)) return false;
     return std::abs(std::hypot(p[3],p[4],p[5])-1)<.01f && std::abs(std::hypot(p[6],p[7],p[8])-1)<.01f &&

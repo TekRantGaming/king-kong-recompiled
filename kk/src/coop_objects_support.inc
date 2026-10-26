@@ -30,6 +30,14 @@ uint64_t DevSupportSource() {
   }();
   return source;
 }
+unsigned DevSupportPart() {
+  static const unsigned part=[] {
+    const auto value=std::getenv("KK_DEV_OBJECT_COLLAPSE_PART"); if (!value || !*value) return 0u;
+    char* end=nullptr; const auto index=std::strtoul(value,&end,10);
+    return end!=value && !*end && index<32 ? unsigned(index) : 32u;
+  }();
+  return part;
+}
 // Read-only native group relationships. Pickup children2..6 are NOT physical
 // support identities. No relationship is inferred from matching positions.
 void SupportRelations(const uint8_t* b,uint32_t actor,const char* family) {
@@ -83,6 +91,9 @@ void PrepareSupport(const uint8_t* b,Binding& o) {
   if (Trace()) REXLOG_INFO("KK dev object support profile: role={} id={:016X} family={} mode={} parts={} members={} eligible={}",
       state.host ? "host" : "guest",o.source,tree ? "tree" : "ode",mode,s.parts.size(),s.all.size(),s.eligible);
 #if defined(KK_DEV_TOOLS)
+  if (Trace()) REXLOG_INFO("KK dev object support activation contract: role={} id={:016X} push={} strength={} throw={:08X} speed={} end-delay={}",
+      state.host ? "host" : "guest",o.source,Load32(b,o.vars+(tree ? 0x794 : 2436)),LoadF(b,o.vars+(tree ? 0x798 : 2440)),
+      Load32(b,o.vars+(tree ? 0x7F0 : 2548)),LoadF(b,o.vars+(tree ? 0x7F4 : 2552)),LoadF(b,o.vars+(tree ? 0x7BC : 2480)));
   if (Trace()) for (unsigned i=0;i<s.all.size();++i) {
     const auto actor=s.all[i],matrix=Ptr(b,actor,12,64),physics=Physics(b,actor);
     REXLOG_INFO("KK dev object support member: role={} root={:016X} actor={:08X} slot={} part={:08X} pos=({:.3f},{:.3f},{:.3f}) physics={:08X} flags={} unit={}",
@@ -205,9 +216,11 @@ void SupportTrigger(PPCContext& ctx,uint8_t* b,bool tree) {
         const auto value=std::getenv("KK_DEV_OBJECT_COLLAPSE_TRIGGER");
         return value && (*value=='2' || *value=='4') ? unsigned(*value-'0') : 1u;
       }();
+      const auto part_index=DevSupportPart();
+      if (fixture_trigger==2 && part_index>=o->support.parts.size()) return;
       for (unsigned i=0;i<3;++i) Store32(b,o->vars+offsets[i],bool(fixture_trigger&(1u<<i)));
       if (fixture_trigger==2 && !o->support.parts.empty()) {
-        const auto part=o->support.parts.front(),matrix=Ptr(b,part,12,64);
+        const auto part=o->support.parts[part_index],matrix=Ptr(b,part,12,64);
         if (matrix) {
           Store32(b,o->vars+hit,part);
           StoreF(b,o->vars+vector,0); StoreF(b,o->vars+vector+4,1); StoreF(b,o->vars+vector+8,-.25f);
@@ -338,15 +351,20 @@ void PublishBodies(const uint8_t* b) {
       return false;
     };
     const bool removed=(sample.flags&0x00600000)==0x00600000;
-    if (!removed && !BodyQuiet(b,p)) { p.quiet_since=0; p.candidate=sample; continue; }
-    if (!p.quiet_since || differs(sample,p.candidate)) { p.quiet_since=now; p.candidate=sample; }
-    if ((!removed && now-p.quiet_since<1) || (p.sent && !differs(p.final.body,sample))) continue;
+    if (!removed && !BodyQuiet(b,p)) { p.quiet_since=0; p.candidate=sample; }
+    else if (!p.quiet_since || differs(sample,p.candidate)) { p.quiet_since=now; p.candidate=sample; }
+    const uint32_t phase=removed || (p.quiet_since && now-p.quiet_since>=1) ? 1u : 2u;
+    // Mode1/3 pieces can stay awake indefinitely. Retain a bounded live pose
+    // too, otherwise a private loader has only the intact home transform and
+    // independent guest physics can diverge throughout the visible collapse.
+    if ((phase==2 && now<p.next_pose) || (p.sent && p.final.value==phase && !differs(p.final.body,sample))) continue;
     if (state.number==UINT32_MAX || (!state.outcomes.contains(p.source) && state.outcomes.size()>=objects::kCensus)) continue;
-    ObjectState s{state.generation,state.level,++state.number,p.source,ObjectKind::SupportBody,1}; s.body=sample;
+    ObjectState s{state.generation,state.level,++state.number,p.source,ObjectKind::SupportBody,phase}; s.body=sample;
     state.pending[s.source]=state.outcomes[s.source]=s; p.sent=true; p.final=s;
+    p.next_pose=now+.1; // At most ten changed poses per second per canonical body.
     p.retired=removed; // Retain values only before native sweep frees the component.
-    if (Trace()) REXLOG_INFO("KK dev object body settled: role=host id={:016X} topology={:016X} aliases={} pos=({:.3f},{:.3f},{:.3f}) flags={:08X} forward=({:.4f},{:.4f},{:.4f}) up=({:.4f},{:.4f},{:.4f})",
-        p.source,p.topology,p.roots.size(),sample.pose[0],sample.pose[1],sample.pose[2],sample.flags,
+    if (Trace()) REXLOG_INFO("KK dev object body {}: role=host id={:016X} topology={:016X} aliases={} number={} pos=({:.3f},{:.3f},{:.3f}) flags={:08X} forward=({:.4f},{:.4f},{:.4f}) up=({:.4f},{:.4f},{:.4f})",
+        phase==1 ? "settled" : "moving",p.source,p.topology,p.roots.size(),s.number,sample.pose[0],sample.pose[1],sample.pose[2],sample.flags,
         sample.pose[3],sample.pose[4],sample.pose[5],sample.pose[6],sample.pose[7],sample.pose[8]);
   }
 }
@@ -369,8 +387,8 @@ void ApplyBodies(PPCContext& ctx,uint8_t* b) {
     for (unsigned n=0;n<9;++n) StoreF(b,out+16*(n/3)+4*(n%3),s->body.pose[n]);
     ctx.r3.u64=actor; ctx.r4.u64=out; __imp__sub_827117E0(ctx,b);
     ctx.r3.u64=actor; ctx.r4.u64=out+16; ctx.r5.u64=out+32; __imp__sub_82711328(ctx,b);
-    // Settled bodies on the guest are an explicit host-final-pose workaround.
-    // Only these owned bodies are stopped. The native transform helper moves
+    // Host motion and settled outcomes own only these canonical guest bodies.
+    // The native transform helper moves
     // their own ODE geom and broadphase bounds through the authored rest matrix.
     ctx.r3.u64=actor; __imp__sub_82710130(ctx,b);
     ctx.r3.u64=actor; ctx.r4.u64=s->body.flags&0x00620000; ctx.r5.u64=(~s->body.flags)&0x00620000;
@@ -385,8 +403,8 @@ void ApplyBodies(PPCContext& ctx,uint8_t* b) {
     if (p.body) { ctx.r3.u64=p.body; __imp__sub_82744978(ctx,b); }
     std::memcpy(b+start,scratch,sizeof(scratch)); ctx=saved;
     if (!p.driven || p.final.number!=s->number) {
-      if (Trace()) REXLOG_INFO("KK dev object body applied: role=guest id={:016X} topology={:016X} aliases={} pos=({:.3f},{:.3f},{:.3f}) flags={:08X} forward=({:.4f},{:.4f},{:.4f}) up=({:.4f},{:.4f},{:.4f})",
-          p.source,p.topology,p.roots.size(),LoadF(b,p.matrix+48),LoadF(b,p.matrix+52),LoadF(b,p.matrix+56),Load32(b,actor+4)&0x00620003,
+      if (Trace()) REXLOG_INFO("KK dev object body applied: role=guest id={:016X} topology={:016X} aliases={} number={} phase={} pos=({:.3f},{:.3f},{:.3f}) flags={:08X} forward=({:.4f},{:.4f},{:.4f}) up=({:.4f},{:.4f},{:.4f})",
+          p.source,p.topology,p.roots.size(),s->number,s->value,LoadF(b,p.matrix+48),LoadF(b,p.matrix+52),LoadF(b,p.matrix+56),Load32(b,actor+4)&0x00620003,
           -LoadF(b,p.matrix+16),-LoadF(b,p.matrix+20),-LoadF(b,p.matrix+24),LoadF(b,p.matrix+32),LoadF(b,p.matrix+36),LoadF(b,p.matrix+40));
       ++state.applied;
     }
@@ -479,6 +497,42 @@ void ReplaySupports(PPCContext& ctx,uint8_t* b) {
     }
   }
 }
+#if defined(KK_DEV_TOOLS)
+// A single explicit native physical push, for modes whose authored trigger
+// only enables dynamics. This is developer staging, never a gameplay fallback.
+void SupportPushFixture(PPCContext& ctx,uint8_t* b) {
+  static const double at=[] {
+    const auto value=std::getenv("KK_DEV_OBJECT_PUSH"); if (!value || !*value) return -1.0;
+    char* end=nullptr; const auto t=std::strtod(value,&end);
+    return end!=value && !*end && std::isfinite(t) && t>=0 && t<=300 ? t : -1.0;
+  }();
+  static bool done=false;
+  if (done || !state.host || at<0 || kk::DevSecondsSinceMenu()<at || !DevSupportSource()) return;
+  auto* o=Match(DevSupportSource(),ObjectKind::Ode); if (!o) o=Match(DevSupportSource(),ObjectKind::Tree);
+  const auto part=DevSupportPart();
+  if (!o || !Valid(b,*o) || !o->support.eligible || !o->support.topology || !o->support.phase || part>=o->support.parts.size()) return;
+  const auto actor=o->support.parts[part],matrix=Ptr(b,actor,12,64);
+  const auto body=state.bodies.find(actor);
+  if (!matrix || body==state.bodies.end() || !RefreshBody(b,body->second) || !body->second.body) return;
+  std::array<float,3> force{20000,0,0}; char tail=0;
+  if (const auto value=std::getenv("KK_DEV_OBJECT_PUSH_FORCE"); value && *value)
+    if (std::sscanf(value,"%f,%f,%f%c",&force[0],&force[1],&force[2],&tail)!=3) { done=true; return; }
+  const auto length=std::hypot(force[0],force[1],force[2]);
+  if (!std::isfinite(length) || length<.01f || length>1000000) { done=true; return; }
+  const auto sp=ctx.r1.u32; if ((sp&15) || sp<0x40014000 || sp>=0xA0000000) return;
+  const PPCContext saved=ctx; uint8_t scratch[16384]; const auto start=sp-sizeof(scratch);
+  std::memcpy(scratch,b+start,sizeof(scratch)); ctx.r1.u64=start+12288;
+  std::memset(b+ctx.r1.u32,0,4096); Store32(b,ctx.r1.u32,sp);
+  const auto vectors=ctx.r1.u32+256;
+  for (unsigned i=0;i<3;++i) {
+    StoreF(b,vectors+4*i,force[i]); StoreF(b,vectors+16+4*i,LoadF(b,matrix+48+4*i));
+  }
+  ctx.r3.u64=actor; ctx.r4.u64=vectors; ctx.r5.u64=vectors+16; __imp__sub_82408648(ctx,b);
+  std::memcpy(b+start,scratch,sizeof(scratch)); ctx=saved; done=true;
+  REXLOG_INFO("KK dev object physical push fixture: role=host id={:016X} part={} force=({:.3f},{:.3f},{:.3f}) native-82408648=true authored-parameters-unchanged=true",
+      o->source,part,force[0],force[1],force[2]);
+}
+#endif
 void SupportPhysics(PPCContext& ctx,uint8_t* b) {
   const auto world=ctx.r3.u32;
   const bool driven=state.ready && !state.host && Shared() && world==state.world;

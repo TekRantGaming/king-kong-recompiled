@@ -26,7 +26,7 @@ void Codec() {
     }
     if (kind==ObjectKind::SupportBody) { m.object.body.topology=123; m.object.body.pose[3]=m.object.body.pose[8]=1; }
     std::vector<uint8_t> bytes; Check(Encode(m,bytes),"object encodes");
-    Check(bytes.size()==kHeaderBytes+(kind==ObjectKind::Raft ? 91 : objects::SupportRoot(kind) ? 67 : kind==ObjectKind::SupportBody ? 81 : 33) && bytes[5]==kProtocolVersion,"bounded protocol 20 object wire");
+    Check(bytes.size()==kHeaderBytes+(kind==ObjectKind::Raft ? 91 : objects::SupportRoot(kind) ? 67 : kind==ObjectKind::SupportBody ? 81 : 33) && bytes[5]==kProtocolVersion,"bounded protocol 21 object wire");
     Message out; Check(Decode(bytes,out) && out.object==m.object,"object round trip");
     for (size_t i=0;i<bytes.size();++i) {
       Message sentinel; sentinel.sequence=123;
@@ -38,6 +38,15 @@ void Codec() {
     Check(!Decode(bad,out),"nonfinite float refused");
   }
   auto m=Packet(MessageType::ObjectRequest); std::vector<uint8_t> bytes;
+  auto moving=Packet(MessageType::ObjectState,ObjectKind::SupportBody);
+  moving.object.value=2; moving.object.body.topology=99; moving.object.body.pose={10,20,30,1,0,0,0,0,1};
+  Message moving_out;
+  Check(Encode(moving,bytes) && Decode(bytes,moving_out) && moving_out.object==moving.object,
+      "moving support pose survives codec with the same topology and physical bounds");
+  Check(!ValidObjectRequest(moving.object),"guest cannot publish a moving support pose");
+  moving.object.value=3; Check(!Encode(moving,bytes),"unknown support motion phase refused");
+  moving.object.value=2; moving.object.body.pose[8]=0;
+  Check(!Encode(moving,bytes),"moving support cannot bypass orientation validation");
   m.object.value=0x01000000; Check(!Encode(m,bytes),"unsupported native hit flag range refused");
   m=Packet(MessageType::ObjectRequest,ObjectKind::Door); m.object.value=8;
   Check(!Encode(m,bytes),"lever slot bounded"); m.object.value=0; m.object.position=.1f;
@@ -354,8 +363,16 @@ void Network() {
   Check(support_replica.Observe(transfer(settled,.281)),"settled body survives real reliable transport and mailbox");
   Check(support_replica.Find(ObjectKind::Ode,terminal.object.source)->collapse.part==3 &&
       support_replica.Find(ObjectKind::SupportBody,999)->body.pose[1]==80,"private native identity replacement does not clear retained collapse or final pose");
+  auto moving=settled; moving.object.number=2; moving.object.value=2; moving.object.body.pose[1]=81;
+  Check(support_replica.Observe(transfer(moving,.282)) &&
+      support_replica.Find(ObjectKind::SupportBody,999)->value==2 && !support_replica.Observe(settled.object),
+      "a host body that wakes replaces its old settled pose without accepting stale final data");
+  auto final=moving; final.object.number=3; final.object.value=1; final.object.body.pose[1]=85;
+  Check(support_replica.Observe(transfer(final,.283)) && !support_replica.Observe(moving.object) &&
+      support_replica.Find(ObjectKind::SupportBody,999)->body.pose[1]==85,
+      "settled authority replaces motion and survives a private native binding replacement");
   auto released=terminal; released.object.number=2; released.object.value=3; released.object.collapse={};
-  Check(support_replica.Observe(transfer(released,.282)) && !support_replica.Observe(terminal.object),"withdrawn support cannot be resurrected by an older activation");
+  Check(support_replica.Observe(transfer(released,.284)) && !support_replica.Observe(terminal.object),"withdrawn support cannot be resurrected by an older activation");
   Check(!guest.QueueObjects(Packet()),"guest cannot author outcomes");
   Check(!host.QueueObjects(Packet(MessageType::ObjectRequest)),"host cannot impersonate guest intent");
   auto old=Packet(); old.epoch=18; Check(!host.QueueObjects(old),"stale epoch refused");

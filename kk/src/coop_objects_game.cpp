@@ -62,6 +62,7 @@ REX_EXTERN(__imp__sub_8271FB98);
 REX_EXTERN(__imp__sub_82715AC8);
 REX_EXTERN(__imp__sub_828007B0);
 REX_EXTERN(__imp__sub_827061B0);
+REX_EXTERN(__imp__sub_82408648);
 #endif
 #if defined(KK_DEV_TOOLS)
 namespace kk {
@@ -119,7 +120,7 @@ struct State {
     uint32_t actor=0,matrix=0,link=0,physics=0,body=0;
     uint64_t source=0,topology=0;
     std::vector<uint32_t> roots;
-    double quiet_since=0;
+    double quiet_since=0,next_pose=0;
     SupportBodyState candidate;
     ShotVector home;
     ObjectState final;
@@ -1968,6 +1969,9 @@ void ObjectsAfterAi(PPCContext& ctx,uint8_t* b,uint32_t w) {
 #endif
   UpdateRafts(ctx,b);
   ReplaySupports(ctx,b);
+#if defined(KK_DEV_TOOLS)
+  SupportPushFixture(ctx,b);
+#endif
   if (state.host) PublishBodies(b); else ApplyBodies(ctx,b);
   const auto now=Now();
 #if defined(KK_DEV_TOOLS)
@@ -1995,7 +1999,14 @@ void ObjectsAfterAi(PPCContext& ctx,uint8_t* b,uint32_t w) {
     }
     if (full) for (auto& [source,s] : state.outcomes) {
       if (state.number==UINT32_MAX) break;
+#if defined(KK_DEV_TOOLS)
+      const auto previous=s.number;
+#endif
       s.number=++state.number; state.pending[source]=s;
+#if defined(KK_DEV_TOOLS)
+      if (Trace() && s.kind==ObjectKind::SupportBody)
+        REXLOG_INFO("KK dev object body resend: id={:016X} previous={} number={}",source,previous,s.number);
+#endif
     }
   }
   Flush();

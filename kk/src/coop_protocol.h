@@ -12,7 +12,7 @@
 
 namespace kk::coop {
 constexpr uint32_t kMagic = 0x4B4B4331;  // KKC1, network byte order throughout
-constexpr uint16_t kProtocolVersion = 20; // Typed collapse events and settled support bodies.
+constexpr uint16_t kProtocolVersion = 21; // Host poses during support motion as well as settled outcomes.
 constexpr size_t kMaxDisplayNameBytes = 32;
 // Valid UTF-8, no controls or invisible direction/line formatting, bounded at a codepoint.
 // Empty or wholly invalid input becomes "Partner". Never log the input or result.
@@ -63,7 +63,7 @@ struct CollapseState {
 // ordinal/topology, never an activation chosen by the guest.
 struct SupportBodyState {
   uint64_t topology=0;
-  std::array<float,9> pose{}; // World position, forward, up. Settled outcomes only.
+  std::array<float,9> pose{}; // World position, forward, up. State value1 settled,2 moving.
   uint32_t flags=0; // Bounded native visibility/removal flags.
   auto operator<=>(const SupportBodyState&) const = default;
 };
