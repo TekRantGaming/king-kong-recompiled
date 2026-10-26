@@ -1,5 +1,6 @@
 #pragma once
 #include "coop_protocol.h"
+#include "coop_mut.h"
 #include <algorithm>
 #include <cmath>
 #include <map>
@@ -68,6 +69,7 @@ class Guard {
  public:
   Tier Observe(uint32_t generation,uint32_t level,uint32_t checkpoint,const Evidence& e,double now) {
     if (!std::isfinite(now)) return Tier::None;
+    if (COOP_MUT_IF("false_quiet")) return Tier::Quiet;
     if (generation_!=generation || level_!=level) {
       *this={}; generation_=generation; level_=level; checkpoint_=checkpoint;
     }

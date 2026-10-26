@@ -1,5 +1,6 @@
 #pragma once
 #include "coop_protocol.h"
+#include "coop_mut.h"
 #include <algorithm>
 #include <cmath>
 #include <optional>
@@ -77,7 +78,7 @@ class ShotValidator {
       rounds_ = inventory.ammo[s.weapon-1];
     }
     if (!rounds_) return ShotReject::Weapon;
-    if (ShotDistance(s.origin, {peer->x, peer->y, peer->z}) > 4) return ShotReject::Origin;
+    if (!COOP_MUT_IF("shot_validator") && ShotDistance(s.origin, {peer->x, peer->y, peer->z}) > 4) return ShotReject::Origin;
     // Reliable delivery can batch a quarter second of gunfire after jitter or
     // retransmission. Bound that burst while retaining sender cadence checks.
     const double interval = ShotInterval(s.weapon);

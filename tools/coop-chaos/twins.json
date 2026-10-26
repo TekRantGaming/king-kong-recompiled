@@ -1,0 +1,21 @@
+{
+  "label": "KK actual-core guards",
+  "cmd": ["{dir}/../../kk/out/build/kk-dev-vulkan/kk-chaos-tests.exe", "{test}"],
+  "cwd": "../..",
+  "real_regex": "PASS \\[[a-z_]+\\]",
+  "caught_regex": "FAIL \\[[a-z_]+\\]:",
+  "timeout_s": 30,
+  "jobs": 1,
+  "scan": ["../../kk/src/coop_*.h", "../../kk/src/coop_*.cpp"],
+  "twins": {
+    "ownership_generation": "ownership_generation",
+    "udp_duplicate": "udp_duplicate",
+    "udp_order": "udp_order",
+    "digest_compare": "digest_compare",
+    "shot_validator": "shot_validator",
+    "session_epoch": "session_epoch",
+    "story_world": "story_world",
+    "story_duplicate": "story_duplicate",
+    "false_quiet": "false_quiet"
+  }
+}

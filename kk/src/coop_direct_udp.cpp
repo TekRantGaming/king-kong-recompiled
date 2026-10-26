@@ -1,5 +1,6 @@
 #include "coop_direct_udp.h"
 #include "coop_protocol.h"
+#include "coop_mut.h"
 #include <algorithm>
 #include <array>
 #include <cerrno>
@@ -82,11 +83,10 @@ bool SameAddress(const sockaddr_storage& a, const sockaddr_storage& b) {
 class Udp final : public DirectUdpTransport {
  public:
   explicit Udp(DirectUdpOptions options) : options_(std::move(options)) {
-    auto& simulation=options_.simulation;
-    if (!std::isfinite(simulation.delay_ms) || !std::isfinite(simulation.jitter_ms) ||
-        !std::isfinite(simulation.loss_percent) || simulation.delay_ms<0 || simulation.delay_ms>2000 ||
-        simulation.jitter_ms<0 || simulation.jitter_ms>simulation.delay_ms ||
-        simulation.loss_percent<0 || simulation.loss_percent>50) simulation={};
+#if defined(KK_DEV_TOOLS)
+    if (!ValidUdpSimulation(options_.simulation)) options_.simulation={};
+    impairment_.Reset(options_.simulation,options_.host);
+#endif
     if (!network_.ok || !options_.port || !ValidJoinCode(options_.join_code)) return;
     std::random_device random;
     nonce_=(uint64_t(random())<<32)^random(); if (!nonce_) nonce_=1;
@@ -157,6 +157,14 @@ class Udp final : public DirectUdpTransport {
   bool PeerReady() const override { return peer_ready_; }
   bool CodeRejected() const override { return code_rejected_; }
   uint16_t LocalPort() const override { return local_port_; }
+#if defined(KK_DEV_TOOLS)
+  UdpFaultStats SimulationStats() const override { auto s=impairment_.Stats(); s.queue_full=impairment_queue_full_; return s; }
+  void SetSimulation(UdpSimulation simulation) override {
+    options_.simulation=ValidUdpSimulation(simulation) ? simulation : UdpSimulation{};
+    impairment_.Reset(options_.simulation,options_.host);
+    simulation_start_=-1; impairment_queue_full_=0;
+  }
+#endif
   bool Receive(std::vector<uint8_t>& out) override {
     if (ready_.empty()) return false;
     out=std::move(ready_.front()); ready_.pop_front(); return true;
@@ -164,10 +172,13 @@ class Udp final : public DirectUdpTransport {
   void Poll(double now) override {
     if (state_!=TransportState::Ready || !std::isfinite(now)) return;
     now_=now; DrainOrdered();
+#if defined(KK_DEV_TOOLS)
+    if (simulation_start_<0) simulation_start_=now;
     for (auto it=delayed_.begin(); it!=delayed_.end();) {
       if (it->due>now) { ++it; continue; }
       SendDatagram(it->wire,it->address,it->length); it=delayed_.erase(it);
     }
+#endif
     for (int i=0; i<64; ++i) {
       std::array<uint8_t,kMaxPacketBytes+kWireHeader+1> wire{};
       sockaddr_storage from{}; AddressLength length=sizeof(from);
@@ -234,6 +245,8 @@ class Udp final : public DirectUdpTransport {
       } else {
         const int32_t delta=int32_t(seq-next_receive_);
         if (delta>=int32_t(kWindow)) continue;
+        if (COOP_MUT_IF("udp_duplicate") && delta<0 && !control && ready_.size()<kWindow)
+          ready_.emplace_back(payload.begin(),payload.end());
         if (delta>=0) ordered_.try_emplace(seq,Incoming{control,{payload.begin(),payload.end()}});
         auto ack=Wire(2,seq,false,{}); Transmit(ack); DrainOrdered();
       }
@@ -251,7 +264,9 @@ class Udp final : public DirectUdpTransport {
     if (socket_!=kInvalid) { CloseSocket(socket_); socket_=kInvalid; }
     state_=TransportState::Closed; peer_ready_=false;
     ready_.clear(); ordered_.clear(); pending_.clear();
+#if defined(KK_DEV_TOOLS)
     delayed_.clear();
+#endif
   }
  private:
   struct Pending { std::vector<uint8_t> wire; double last=-1; uint32_t attempts=0; };
@@ -278,7 +293,9 @@ class Udp final : public DirectUdpTransport {
   }
   void DrainOrdered() {
     while (ready_.size()<kWindow) {
-      auto it=ordered_.find(next_receive_); if (it==ordered_.end()) break;
+      auto it=ordered_.find(next_receive_);
+      if (COOP_MUT_IF("udp_order") && !ordered_.empty()) it=ordered_.begin();
+      if (it==ordered_.end()) break;
       if (it->second.control) {
         const auto& data=it->second.data; const uint64_t revision=Get(data.data()+1,8);
         if (data[0]==2) {
@@ -297,16 +314,17 @@ class Udp final : public DirectUdpTransport {
   }
   bool TransmitTo(std::span<const uint8_t> wire,const sockaddr_storage& address,AddressLength length) {
     if (!outgoing_.Take(now_)) return false;
-    const auto& sim=options_.simulation;
-    if (sim.delay_ms>0 || sim.jitter_ms>0 || sim.loss_percent>0) {
-      auto random=[&] { simulation_rng_=1664525u*simulation_rng_+1013904223u; return double(simulation_rng_)/4294967296.; };
-      if (random()*100<sim.loss_percent) { ++stats_.sent; return true; }
-      const double delay=std::max(0.,sim.delay_ms+(2*random()-1)*sim.jitter_ms)/1000.;
-      if (delayed_.size()>=512) return false;
-      delayed_.push_back({now_+delay,{wire.begin(),wire.end()},address,length});
-      return true;
-    }
+#if defined(KK_DEV_TOOLS)
+    if (!UdpSimulationEnabled(options_.simulation)) return SendDatagram(wire,address,length);
+    const auto verdict=impairment_.Decide(std::max(0.,now_-simulation_start_),wire.size());
+    if (!verdict.copies) { ++stats_.sent; return true; }
+    if (delayed_.size()+verdict.copies>512) { impairment_queue_full_++; return false; }
+    for (unsigned i=0;i<verdict.copies;++i)
+      delayed_.push_back({now_+verdict.delay[i],{wire.begin(),wire.end()},address,length});
+    return true;
+#else
     return SendDatagram(wire,address,length);
+#endif
   }
   bool SendDatagram(std::span<const uint8_t> wire,const sockaddr_storage& address,AddressLength length) {
     const int n=int(sendto(socket_,reinterpret_cast<const char*>(wire.data()),int(wire.size()),0,
@@ -326,9 +344,13 @@ class Udp final : public DirectUdpTransport {
   std::map<uint32_t,Pending> pending_;
   std::map<uint32_t,Incoming> ordered_;
   std::deque<std::vector<uint8_t>> ready_;
+#if defined(KK_DEV_TOOLS)
   struct Delayed { double due; std::vector<uint8_t> wire; sockaddr_storage address; AddressLength length; };
   std::deque<Delayed> delayed_;
-  uint32_t simulation_rng_=options_.simulation.seed;
+  UdpImpairment impairment_;
+  uint64_t impairment_queue_full_=0;
+  double simulation_start_=-1;
+#endif
 };
 } // namespace
 std::unique_ptr<DirectUdpTransport> CreateDirectUdp(DirectUdpOptions options) { return std::make_unique<Udp>(std::move(options)); }

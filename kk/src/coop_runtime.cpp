@@ -101,6 +101,9 @@ struct View {
   std::optional<CheatSet> host_cheats;
   std::string partner_name;
   uint64_t epoch = 0;
+#if defined(KK_DEV_TOOLS)
+  UdpFaultStats faults;
+#endif
 };
 std::mutex enemy_status_mutex;
 enemies::Counters enemy_status;
@@ -118,6 +121,10 @@ void LogPoses(const View& v, double now, double& next) {
   REXLOG_INFO("KK co-op poses: local={} check={} sent={} received={} remote-level={} distance={:.1f}",
       v.local ? "yes" : "no", v.local_failure, v.poses.sent, v.poses.received,
       v.poses.remote_level ? std::to_string(*v.poses.remote_level) : "none", distance);
+  const auto& f=v.faults;
+  REXLOG_INFO("KK dev UDP faults: seen={} copies={} dropped={} duplicates={} reordered={} bytes={} queue-full={} loss={} burst={} one-way={} disconnect={} bandwidth={}",
+      f.seen,f.forwarded,f.dropped,f.duplicated,f.reordered,f.bytes,f.queue_full,
+      f.reasons[1],f.reasons[2],f.reasons[3],f.reasons[4],f.reasons[5]);
 }
 #endif
 class Service {
@@ -194,6 +201,7 @@ class Service {
         view.partner_name = session.PartnerName();
         view.epoch = session.Epoch();
 #if defined(KK_DEV_TOOLS)
+        view.faults=transport->SimulationStats();
         if ((now-copy_started>.5 || poll_gap>.5) && wait_count_<8) {
           std::lock_guard lock(mutex_);
           wait_events_.push_back({now-copy_started,poll_gap}); ++wait_count_;

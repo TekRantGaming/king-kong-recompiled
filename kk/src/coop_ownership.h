@@ -1,5 +1,6 @@
 #pragma once
 #include "coop_protocol.h"
+#include "coop_mut.h"
 #include <cmath>
 #include <optional>
 
@@ -40,7 +41,7 @@ class Authority {
   bool Frozen() const { return pending.has_value(); }
   bool Runs(EnemyOwner side) const { return !Frozen() && owner == side; }
   bool Accepts(const EnemyState& e) const {
-    return e.owner == owner && e.generation == generation && (!last.id.source || e.id == last.id);
+    return e.owner == owner && (COOP_MUT_IF("ownership_generation") || e.generation == generation) && (!last.id.source || e.id == last.id);
   }
   bool Observe(const EnemyState& e) {
     if (!ValidEnemy(e) || !Accepts(e) || Frozen() || dead) return false;
