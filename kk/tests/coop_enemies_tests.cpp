@@ -792,6 +792,9 @@ void OwnershipSessions() {
 }
 } // namespace
 int main() {
+  Check(CentipedeAuthoredKey(123,1)!=CentipedeAuthoredKey(123,2), "colocated authored centipede kinds are distinct");
+  Check(CentipedeAuthoredKey(123,1)==CentipedeAuthoredKey(123,1), "centipede kind identity stable across heaps");
+  Check(!CentipedeAuthoredKey(0,1) && !CentipedeAuthoredKey(123,6), "unknown centipede provenance refuses");
   Check(NativeFacing(EnemyFamily::Bat,0x82651E60,{0,0,1},{1,0,0}).has_value(), "vertical perched bat retains authority");
   Check(Near(*NativeFacing(EnemyFamily::Bat,0x82651E60,{0,0,1},{1,0,0}),-1.5707963f), "perch yaw from valid right axis");
   Check(!NativeFacing(EnemyFamily::Bat,0x82651E60,{0,0,0},{1,0,0}), "collapsed perch refuses");

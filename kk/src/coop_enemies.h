@@ -143,6 +143,13 @@ inline uint64_t AuthoredKey(uint32_t family, float x, float y, float z) {
   }
   return h ? h : 1;
 }
+// PNJ_Scolo_exec_settings reads the authored kind at V+0 (0..5).
+// Different kinds can share the exact same authored transform, notably 401.
+inline uint64_t CentipedeAuthoredKey(uint64_t position,uint32_t kind) {
+  if (!position || kind>5) return 0;
+  const auto h=Mix(Mix(position,0x53434f4c4f4b494eull),kind);
+  return h ? h:1;
+}
 inline EnemyId SpawnId(uint64_t spawner, uint64_t source, uint32_t sequence, EnemyFamily family) {
   if (!spawner || !source || !sequence || family == EnemyFamily::None) return {};
   const uint64_t h = Mix(Mix(14695981039346656037ull, spawner), source);
@@ -212,7 +219,8 @@ inline const Binding* MatchAuthored(const EnemyState& host, std::span<const Matc
   const MatchCandidate* found = exact;
   if (exact_count > 1) return nullptr;
   if (!exact_count) {
-    if (!tolerance || host.id.sequence) return nullptr;
+      // Centipede keys include an authored kind that position cannot verify.
+      if (!tolerance || host.id.sequence || host.id.family==EnemyFamily::Centipede) return nullptr;
     unsigned count = 0;
     for (const auto& c : candidates) if (!c.binding.id.sequence && c.binding.id.family == host.id.family &&
         std::hypot(c.x-host.spawn_x, c.y-host.spawn_y, c.z-host.spawn_z) <= .25f) { found = &c; ++count; }

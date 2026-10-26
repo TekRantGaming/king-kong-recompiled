@@ -579,7 +579,11 @@ void Capture(const uint8_t* b, uint32_t w, bool initial = true) {
     // Late registration is safe only before the actor's init executes. Never hash
     // a newly noticed moving actor as an authored spawn point.
     if (!initial && !initializing) continue;
-    const auto key = KeyAt(b, actor, spawner ? 0x53504157u : uint32_t(family));
+    auto key = KeyAt(b, actor, spawner ? 0x53504157u : uint32_t(family));
+    if (!spawner && family==EnemyFamily::Centipede) {
+      const auto vars=Ptr(b,ai,64,4);
+      key=vars ? CentipedeAuthoredKey(key,Load32(b,vars)):0;
+    }
     if (!key || s.authored.contains(actor) || s.authored.size() >= kMaxEnemies) continue;
     const auto matrix = Ptr(b, actor, 12, 64);
     s.authored[actor] = {key, ai, matrix, family, LoadF(b, matrix+48), LoadF(b, matrix+52), LoadF(b, matrix+56)};
