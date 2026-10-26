@@ -187,7 +187,21 @@ void SupportTrigger(PPCContext& ctx,uint8_t* b,bool tree) {
   if (state.host) {
     native(ctx,b);
 #if defined(KK_DEV_TOOLS)
-    if (o->support.fixture && !o->support.phase) Store32(b,o->vars+offsets[0],1);
+    if (o->support.fixture && !o->support.phase) {
+      static const unsigned fixture_trigger=[] {
+        const auto value=std::getenv("KK_DEV_OBJECT_COLLAPSE_TRIGGER");
+        return value && (*value=='2' || *value=='4') ? unsigned(*value-'0') : 1u;
+      }();
+      for (unsigned i=0;i<3;++i) Store32(b,o->vars+offsets[i],bool(fixture_trigger&(1u<<i)));
+      if (fixture_trigger==2 && !o->support.parts.empty()) {
+        const auto part=o->support.parts.front(),matrix=Ptr(b,part,12,64);
+        if (matrix) {
+          Store32(b,o->vars+hit,part);
+          StoreF(b,o->vars+vector,0); StoreF(b,o->vars+vector+4,1); StoreF(b,o->vars+vector+8,-.25f);
+          for (unsigned i=0;i<3;++i) StoreF(b,o->vars+vector+12+4*i,LoadF(b,matrix+48+4*i));
+        }
+      }
+    }
 #endif
     if (o->support.phase) return; // Retain the FIRST collapse input for private replay.
     auto& event=o->support.event;
@@ -310,8 +324,9 @@ void PublishBodies(const uint8_t* b) {
     ObjectState s{state.generation,state.level,++state.number,p.source,ObjectKind::SupportBody,1}; s.body=sample;
     state.pending[s.source]=state.outcomes[s.source]=s; p.sent=true; p.final=s;
     p.retired=removed; // Retain values only before native sweep frees the component.
-    if (Trace()) REXLOG_INFO("KK dev object body settled: role=host id={:016X} topology={:016X} aliases={} pos=({:.3f},{:.3f},{:.3f}) flags={:08X}",
-        p.source,p.topology,p.roots.size(),sample.pose[0],sample.pose[1],sample.pose[2],sample.flags);
+    if (Trace()) REXLOG_INFO("KK dev object body settled: role=host id={:016X} topology={:016X} aliases={} pos=({:.3f},{:.3f},{:.3f}) flags={:08X} forward=({:.4f},{:.4f},{:.4f}) up=({:.4f},{:.4f},{:.4f})",
+        p.source,p.topology,p.roots.size(),sample.pose[0],sample.pose[1],sample.pose[2],sample.flags,
+        sample.pose[3],sample.pose[4],sample.pose[5],sample.pose[6],sample.pose[7],sample.pose[8]);
   }
 }
 void ApplyBodies(PPCContext& ctx,uint8_t* b) {
@@ -349,8 +364,9 @@ void ApplyBodies(PPCContext& ctx,uint8_t* b) {
     if (p.body) { ctx.r3.u64=p.body; __imp__sub_82744978(ctx,b); }
     std::memcpy(b+start,scratch,sizeof(scratch)); ctx=saved;
     if (!p.driven || p.final.number!=s->number) {
-      if (Trace()) REXLOG_INFO("KK dev object body applied: role=guest id={:016X} topology={:016X} aliases={} pos=({:.3f},{:.3f},{:.3f}) flags={:08X}",
-          p.source,p.topology,p.roots.size(),LoadF(b,p.matrix+48),LoadF(b,p.matrix+52),LoadF(b,p.matrix+56),Load32(b,actor+4)&0x00620003);
+      if (Trace()) REXLOG_INFO("KK dev object body applied: role=guest id={:016X} topology={:016X} aliases={} pos=({:.3f},{:.3f},{:.3f}) flags={:08X} forward=({:.4f},{:.4f},{:.4f}) up=({:.4f},{:.4f},{:.4f})",
+          p.source,p.topology,p.roots.size(),LoadF(b,p.matrix+48),LoadF(b,p.matrix+52),LoadF(b,p.matrix+56),Load32(b,actor+4)&0x00620003,
+          -LoadF(b,p.matrix+16),-LoadF(b,p.matrix+20),-LoadF(b,p.matrix+24),LoadF(b,p.matrix+32),LoadF(b,p.matrix+36),LoadF(b,p.matrix+40));
       ++state.applied;
     }
     p.driven=true; p.final=*s;
@@ -389,7 +405,7 @@ void ReplaySupports(PPCContext& ctx,uint8_t* b) {
         (!choice || o.source<choice->source)) choice=&o;
     if (choice) {
       choice->support.fixture=true; selected=choice->source;
-      REXLOG_INFO("KK dev object support fixture: role=host id={:016X} mode={} native-trigger=1",choice->source,fixture_mode);
+      REXLOG_INFO("KK dev object support fixture: role=host id={:016X} mode={} native-trigger-fixture=true",choice->source,fixture_mode);
     }
   }
 #endif

@@ -1313,6 +1313,16 @@ void ScanInventory(const uint8_t* b,uint32_t w) {
             v.host ? "host" : "guest",actor,(watch-1700)/184,Load32(b,vars+watch+4),
             Load32(b,payload),target,Load32(b,payload+8),Load32(b,payload+12),Load32(b,payload+16),Load32(b,payload+20),
             Load32(b,payload+84),Load32(b,payload+100),PoseAddress(target,32) ? Load32(b,target) : 0,ext ? Load16(b,ext+40) : 0);
+        const auto target_ai=Ptr(b,ext,4,88);
+        if (target_ai) {
+          const auto first=Load16(b,target_ai+80),last=Load16(b,target_ai+82);
+          if (first<=last && last<=4096 && last-first<=64 && PoseAddress(target_ai,(last+7)*4))
+            for (unsigned slot=first;slot<=last && slot<first+5;++slot) {
+              const auto block=Ptr(b,target_ai,(slot+6)*4,24);
+              if (block) REXLOG_INFO("KK dev object watch target: role={} root={:08X} watch={} target={:08X} ai={:08X} slot={} fn={:08X}",
+                  v.host ? "host" : "guest",actor,(watch-1700)/184,target,target_ai,slot,Load32(b,block+20));
+            }
+        }
       }
       unsigned parts=0; bool terminated=false;
       for (unsigned i=0;i<=32;++i) {
