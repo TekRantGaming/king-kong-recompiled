@@ -285,13 +285,14 @@ std::filesystem::path BrowseForDiscImage() {
 }
 #else
 // Linux: the desktop's own file picker through zenity (GNOME, SteamOS and
-// most others) or kdialog (KDE).
+// most others) or kdialog (KDE). Without the AppImage's library path, as the PS2 movie folder picker
+// (system programs load their own libraries). What it gave is logged: players' reports need it.
 std::filesystem::path BrowseForDiscImage() {
   const char* commands[] = {
-      "zenity --file-selection --title='Select your King Kong Xbox 360 disc image' "
+      "env -u LD_LIBRARY_PATH zenity --file-selection --title='Select your King Kong Xbox 360 disc image' "
       "--file-filter='Xbox 360 disc image (*.iso) | *.iso *.ISO' --file-filter='All files | *' 2>/dev/null",
-      "kdialog --title 'Select your King Kong Xbox 360 disc image' --getopenfilename \"$HOME\" "
-      "'*.iso *.ISO|Xbox 360 disc image' 2>/dev/null",
+      "env -u LD_LIBRARY_PATH kdialog --title 'Select your King Kong Xbox 360 disc image' --getopenfilename "
+      "\"$HOME\" '*.iso *.ISO|Xbox 360 disc image' 2>/dev/null",
   };
   for (const char* cmd : commands) {
     FILE* pipe = popen(cmd, "r");
@@ -301,10 +302,13 @@ std::filesystem::path BrowseForDiscImage() {
     while (fgets(buf, sizeof(buf), pipe)) out += buf;
     const int status = pclose(pipe);
     while (!out.empty() && (out.back() == '\n' || out.back() == '\r')) out.pop_back();
+    const int code = WIFEXITED(status) ? WEXITSTATUS(status) : -1;
+    REXLOG_INFO("KK: disc picker {}: exit {}, gave '{}'", std::strstr(cmd, "zenity") ? "zenity" : "kdialog", code,
+                out);
     if (!out.empty()) return std::filesystem::path(out);
     // 127: the tool isn't installed, so try the next one; anything else means
     // the player cancelled.
-    if (!WIFEXITED(status) || WEXITSTATUS(status) != 127) return {};
+    if (code != 127) return {};
   }
   return {};
 }
@@ -2197,6 +2201,7 @@ class SettingsPages {
         const auto folder = movies::Folder().u8string();
         Item it = ActionItem("PS2 movie folder", "Choose the folder containing BK_xxxx.mp4.", "", [this] {
           const auto path = movies::BrowseFolder();
+          input_.Settle(0.35);  // nothing the picker's confirming press left over presses here (StartInstall)
           if (!path.empty()) {
             Set("kk_ps2_movie_folder", path);
           }
@@ -6768,8 +6773,13 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
   // ------------------------------------------------------------ install ---
   void StartInstall() {
     const auto pkg = BrowseForDiscImage();
+    // The launcher waited while the picker was open: what the controller or keyboard did in the picker (its
+    // confirming press, still held or queued) must not press anything here (Linux, 26 Oct: it opened the picker
+    // again behind the install).
+    input_.Settle(0.35);
     if (pkg.empty()) return;
     const uint32_t title = iso::ReadTitleId(pkg);
+    REXLOG_INFO("KK: install: {} has title {:08X}", pkg.filename().string(), title);
     if (title == 0) {
       OpenModal("Can't install", "That file is not an Xbox 360 disc image.", {"OK"}, 0, nullptr);
       return;
