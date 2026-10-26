@@ -82,6 +82,15 @@ void PrepareSupport(const uint8_t* b,Binding& o) {
   if (s.phase) s.event.trigger=1;
   if (Trace()) REXLOG_INFO("KK dev object support profile: role={} id={:016X} family={} mode={} parts={} members={} eligible={}",
       state.host ? "host" : "guest",o.source,tree ? "tree" : "ode",mode,s.parts.size(),s.all.size(),s.eligible);
+#if defined(KK_DEV_TOOLS)
+  if (Trace()) for (unsigned i=0;i<s.all.size();++i) {
+    const auto actor=s.all[i],matrix=Ptr(b,actor,12,64),physics=Physics(b,actor);
+    REXLOG_INFO("KK dev object support member: role={} root={:016X} actor={:08X} slot={} part={:08X} pos=({:.3f},{:.3f},{:.3f}) physics={:08X} flags={} unit={}",
+        state.host ? "host" : "guest",o.source,o.actor,i,actor,
+        matrix ? LoadF(b,matrix+48) : 0,matrix ? LoadF(b,matrix+52) : 0,matrix ? LoadF(b,matrix+56) : 0,
+        physics,physics ? unsigned(b[physics+14]) : 0,UnitBody(b,actor));
+  }
+#endif
 }
 bool BodyValid(const uint8_t* b,const State::Body& p) {
   return PoseAddress(p.actor,32) && Ptr(b,p.actor,12,64)==p.matrix && Ptr(b,p.actor,20,12)==p.link &&
@@ -252,7 +261,12 @@ void SupportNative(PPCContext& ctx,uint8_t* b,bool tree,unsigned phase) {
     if (!s.topology || !authority || authority->collapse.topology!=s.topology || !authority->value) { ctx.r3.u64=0; return; }
     s.event=authority->collapse;
     if (phase==1 && s.phase==0) {
-      native(ctx,b); s.phase=1;
+      native(ctx,b);
+      // Wait can return before consuming the collapse (ODE's authored partner
+      // handshake is one example). Keep retrying its own native Wait until the
+      // track actually advances. A logged replay must mean native activation.
+      if (!Track(b,o->ai,tree ? 0x826E7BF0 : 0x826F1E08)) return;
+      s.phase=1;
       if (Trace()) REXLOG_INFO("KK dev object collapse replay: role=guest id={:016X} family={} topology={:016X} trigger={} part={}",
           o->source,uint8_t(kind),s.topology,s.event.trigger,s.event.part);
     } else if (authority->value==2 && s.phase<2) {
@@ -265,12 +279,15 @@ void SupportNative(PPCContext& ctx,uint8_t* b,bool tree,unsigned phase) {
     // authoritative pose arrives, and a transform cannot rebuild that mesh.
     return;
   }
+  const auto before=s.phase;
   native(ctx,b);
   if (phase==1 && Track(b,o->ai,tree ? 0x826E7BF0 : 0x826F1E08)) {
     s.phase=1; if (!s.event.trigger) s.event.trigger=1; // Native scene readiness, not an incoming strike.
   }
   if (phase==2 && !s.phase) { s.phase=1; s.event.trigger=1; }
   if (phase==3) { s.phase=2; if (!s.event.trigger) s.event.trigger=1; }
+  if (Trace() && s.phase!=before) REXLOG_INFO("KK dev object collapse native: role=host id={:016X} family={} topology={:016X} phase={} trigger={} part={}",
+      o->source,uint8_t(kind),s.topology,s.phase,s.event.trigger,s.event.part);
   if (s.topology) Observe(b,*o);
 }
 bool ReadBody(const uint8_t* b,const State::Body& p,SupportBodyState& s) {

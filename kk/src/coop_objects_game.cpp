@@ -1618,6 +1618,19 @@ void FloorProbe(PPCContext& ctx,uint8_t* b) {
   float x=0,y=0,z=0; char tail=0;
   if (!text || std::sscanf(text,"%f,%f,%f%c",&x,&y,&z,&tail)!=3 ||
       !std::isfinite(x) || !std::isfinite(y) || !std::isfinite(z) || std::abs(x)>100000 || std::abs(y)>100000 || std::abs(z)>100000) { probe.done=true; return; }
+  // Optional bounded floor search for object evidence. Every candidate still
+  // passes the same native collision, slope and own-Jack placement guards.
+  static const bool scan=[] { const auto value=std::getenv("KK_DEV_OBJECT_FLOOR_SCAN"); return value && *value=='1'; }();
+  static unsigned candidate=0;
+  if (scan) {
+    if (candidate>=25) { probe.done=true; return; }
+    // Search the centre first, then its surrounding authored terrain.
+    if (candidate) {
+      const auto cell=candidate<=12 ? candidate-1 : candidate;
+      x+=4*(int(cell%5)-2); y+=4*(int(cell/5)-2);
+    }
+    ++candidate;
+  }
   const auto hero=Load32(b,0x82CCBF7C),ai=Ptr(b,Ptr(b,hero,24,8),4,88),sp=ctx.r1.u32,w=state.world;
   if (!Track(b,ai,0x826718B8) || !PoseAddress(w,0x16300) || (sp&15) || sp<0x40014000 || sp>=0xA0000000) return;
   const PPCContext saved=ctx; uint8_t scratch[16384],query[0x44],hit[0x40],deferred[0x44];
@@ -1642,10 +1655,10 @@ void FloorProbe(PPCContext& ctx,uint8_t* b) {
       state.host ? "host" : "guest",x,y,z,object,floor.x,floor.y,floor.z,normal);
   std::memcpy(b+0x82977230,query,sizeof(query)); std::memcpy(b+w+0x16268,hit,sizeof(hit)); std::memcpy(b+w+0x294,deferred,sizeof(deferred));
   for (unsigned n=0;n<5;++n) Store32(b,counters[n],values[n]);
-  std::memcpy(b+start,scratch,sizeof(scratch)); ctx=saved; probe.done=true;
+  std::memcpy(b+start,scratch,sizeof(scratch)); ctx=saved; probe.done=!scan;
   if (object && std::isfinite(floor.z) && std::isfinite(normal) && normal>.75f && floor.z<=z && floor.z>z-80 &&
       std::abs(floor.x-x)<.1f && std::abs(floor.y-y)<.1f)
-    kk::DevTeleportJack(ctx,b,hero,{floor.x,floor.y,floor.z+.2f},0,1);
+    if (kk::DevTeleportJack(ctx,b,hero,{floor.x,floor.y,floor.z+.2f},0,1)) probe.done=true;
 }
 void Probes(PPCContext& ctx,uint8_t* b) {
   FloorProbe(ctx,b);
