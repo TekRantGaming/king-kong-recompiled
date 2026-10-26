@@ -8,6 +8,7 @@ param(
     [string[]]$Starts = @(),
     [string]$StoryLayout = '',
     [switch]$Stationary,
+    [switch]$ObjectTrace,
     [ValidateRange(0,180)][int]$RouteSeconds = 32,
     [ValidateRange(15,86400)][int]$Seconds = 150,
     [ValidateRange(70,180)][int]$CheckpointSeconds = 90,
@@ -112,6 +113,7 @@ $manifest = [ordered]@{
     seconds = $Seconds; checkpoint_seconds = $CheckpointSeconds; worktree = $Worktree; face_partner = [bool]$FacePartner; runs = $records
     world_diff = [bool]$WorldDiff; checkpoints = [bool]$Checkpoints; source_commit = $sourceCommit
     stationary = [bool]$Stationary; route_seconds = $RouteSeconds
+    object_trace = [bool]$ObjectTrace
     source_branch = $sourceBranch; source_dirty = $sourceDirty; exe_sha256 = $exeSha
     protocol = 21; snapshot_schema = 1; fault_profile = 'bad_wifi'; fault_seeds = @(86,86)
     scenarios = $rules; resumed_from = $ResumeManifest
@@ -139,6 +141,7 @@ try {
         $envText = "KK_DEV_LAUNCHER_INPUT=wait-home,direct:code:C86ABC,direct:host,session:$($record.entry)|KK_DEV_AUTOSKIP=1|KK_DEV_SCRIPT=0:SKIP/10|KK_DEV_WANDER=1|KK_DEV_CHEATS_ANYWHERE=1|KK_DEV_EMPTY_LOADOUT=1|KK_DEV_TRIG_TRACE=1|KK_DEV_ENEMY_NEAR=1"
         $joinText = 'KK_DEV_LAUNCHER_INPUT=wait-home,direct:code:C86ABC,direct:join,direct:ready|KK_DEV_FACE_ENEMY=16:0.001'
         if ($StoryLayout) { $envText += "|KK_DEV_STORY_LAYOUT=$StoryLayout" }
+        if ($ObjectTrace) { $envText += '|KK_DEV_OBJECTS=1' }
         if ($Stationary) {
             $envText = $envText.Replace('|KK_DEV_WANDER=1','')
             $joinText = $joinText.Replace('|KK_DEV_FACE_ENEMY=16:0.001','')
