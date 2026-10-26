@@ -213,6 +213,23 @@ void Policies() {
   checkpoint[0x44000018]=0; checkpoint[0x45000c20]=0;
   Check(!objects::OdeCheckpointGone(checkpoint_read,0x42001000,0x44000000,ode_parts),
       "ODE cleanup requires the exact local checkpoint bit");
+  std::map<uint32_t,uint32_t> end_track{{0x82CCBF64,0x42000000},{0x82CCBF6C,0x42001000},
+      {0x82CCBF58,1},{0x42000050,1},{0x42000052,1},{0x4200001c,0x43000000},
+      {0x82CCBF5C,0x43000000},{0x43000014,0x826F1E08},{0x82CC8538,0x43001000},
+      {0x43001014,0x826F4948}};
+  const auto end_read=[&](uint32_t a){return end_track[a];};
+  const auto end_program=[&]{return objects::OdeEndProgram(end_read,end_read,0x42000000,0x42001000);};
+  Check(end_program()==0x43001000,"ODE endpoint authorizes the actual loaded End track");
+  end_track[0x82CCBF6C]=0x42002000;
+  Check(!end_program(),"ODE endpoint cannot change another actor's running track");
+  end_track[0x82CCBF6C]=0x42001000; end_track[0x82CCBF58]=2;
+  Check(!end_program(),"ODE endpoint cannot address a track outside the running range");
+  end_track[0x82CCBF58]=1; end_track[0x43000014]=0x826F0E10;
+  Check(!end_program(),"ODE endpoint cannot skip native Wait activation");
+  end_track[0x43000014]=0x826F1E08; end_track[0x43001014]=0x826D0770;
+  Check(!end_program(),"ODE endpoint rejects a different family's loaded End program");
+  end_track[0x43001014]=0x826F4948; end_track[0x82CCBF5C]=0x43002000;
+  Check(!end_program(),"ODE endpoint requires the exact current native callback");
   scheduler[0x42000052]=5;
   Check(objects::DoorSlots(schedule,schedule,0x42000000).empty(),"native stop cannot address a sixth slot");
   scheduler[0x42000052]=0;

@@ -35,6 +35,7 @@ REX_EXTERN(__imp__sub_82543478);
 REX_EXTERN(__imp__sub_82574D80);
 REX_EXTERN(__imp__sub_826F9DC0);
 REX_EXTERN(__imp__sub_826F9E70);
+REX_EXTERN(__imp__sub_826F9F30);
 REX_EXTERN(__imp__sub_82634428);
 REX_EXTERN(__imp__sub_825FAF58);
 REX_EXTERN(__imp__sub_8260F858);

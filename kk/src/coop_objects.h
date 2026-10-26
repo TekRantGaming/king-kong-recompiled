@@ -88,6 +88,17 @@ template<class Read> bool OdeCheckpointGone(Read read,uint32_t actor,uint32_t va
     if (!PoseAddress(parts[i],32) || read(vars+20+4*i)!=parts[i] || (read(parts[i]+4)&0x00600000)!=0x00600000) return false;
   return !read(vars+20+4*parts.size());
 }
+// 826F9F30 replaces the running track, not just its callback's side effects.
+// Only authorize the observed ODE Active -> loaded native End program.
+template<class Read,class ReadHalf> uint32_t OdeEndProgram(Read read,ReadHalf half,uint32_t ai,uint32_t actor) {
+  if (!PoseAddress(ai,88) || !PoseAddress(actor,32) || read(0x82CCBF64)!=ai || read(0x82CCBF6C)!=actor) return 0;
+  const auto slot=read(0x82CCBF58),first=half(ai+80),last=half(ai+82);
+  if (first>last || last>=5 || slot<first || slot>last) return 0;
+  const auto active=read(ai+(slot+6)*4),end=read(0x82CC8538);
+  if (!PoseAddress(active,24) || read(0x82CCBF5C)!=active || read(active+20)!=0x826F1E08 ||
+      !PoseAddress(end,24) || read(end+20)!=0x826F4948) return 0;
+  return end;
+}
 // Native stop 826F9DC0 supports five slots. Never use an outer actor's current
 // index, an unrelated track or a malformed scheduler range for a side call.
 template<class Read,class ReadHalf> std::vector<unsigned> DoorSlots(Read read,ReadHalf half,uint32_t ai) {

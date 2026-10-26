@@ -317,6 +317,16 @@ void SupportNative(PPCContext& ctx,uint8_t* b,bool tree,unsigned phase) {
       if (Trace()) REXLOG_INFO("KK dev object collapse replay: role=guest id={:016X} family={} topology={:016X} trigger={} part={}",
           o->source,uint8_t(kind),s.topology,s.event.trigger,s.event.part);
     } else if (authority->value==2 && s.phase<2) {
+      if (!tree && phase==2) {
+        // Calling End's body while still scheduled as Active leaves the guest
+        // permanently on Active. Native Active uses 826F9F30 with this loaded
+        // End program; retain that scheduler transition before its side effects.
+        const auto end=objects::OdeEndProgram([&](uint32_t a){return Load32(b,a);},
+            [&](uint32_t a){return Load16(b,a);},o->ai,o->actor);
+        if (!end) { ctx.r3.u64=0; return; }
+        ctx.r3.u64=end; __imp__sub_826F9F30(ctx,b);
+        if (!Track(b,o->ai,0x826F4948)) { ctx.r3.u64=0; return; }
+      }
       (tree ? __imp__sub_826D0770 : __imp__sub_826F4948)(ctx,b); s.phase=2;
       if (Trace()) REXLOG_INFO("KK dev object collapse endpoint: role=guest id={:016X} family={} topology={:016X}",o->source,uint8_t(kind),s.topology);
     } else ctx.r3.u64=0;
