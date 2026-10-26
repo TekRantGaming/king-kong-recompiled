@@ -7,6 +7,18 @@
 #include <map>
 
 namespace kk::coop::enemies {
+// BC_ETAT_Wait_Perchee keeps an authored 3D perch basis. Its forward can
+// point straight up, so planar yaw alone must not exclude its health authority.
+inline bool PerchedBat(EnemyFamily family,uint32_t state) {
+  return family==EnemyFamily::Bat && state==0x82651E60;
+}
+inline std::optional<float> NativeFacing(EnemyFamily family,uint32_t state,ShotVector forward,ShotVector right) {
+  if (!std::isfinite(forward.x) || !std::isfinite(forward.y) || !std::isfinite(forward.z)) return {};
+  if (std::hypot(forward.x,forward.y)>=.001f) return std::atan2(-forward.y,-forward.x);
+  if (!PerchedBat(family,state) || !std::isfinite(right.x) || !std::isfinite(right.y) || !std::isfinite(right.z) ||
+      std::abs(std::abs(forward.z)-1)>.01f || std::abs(std::hypot(right.x,right.y)-1)>.01f || std::abs(right.z)>.01f) return {};
+  return std::atan2(-right.x,right.y);
+}
 // Narrow, explicit track-family allowlist. Never classify all PNJ scripts as enemies.
 inline EnemyFamily Family(uint32_t fn) {
   switch (fn) {

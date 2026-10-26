@@ -127,9 +127,11 @@ bool Read(const uint8_t* b, uint32_t actor, Binding& bind, EnemyState& e) {
   if (bind.ai == hero_ai || bind.vars == Ptr(b, hero_ai, 64, 4) || bind.matrix == Ptr(b, hero, 12, 64)) return false;
   bind.id.family = e.id.family = family;
   e.x = LoadF(b, bind.matrix+48); e.y = LoadF(b, bind.matrix+52); e.z = LoadF(b, bind.matrix+56);
-  const float fx = -LoadF(b, bind.matrix+16), fy = -LoadF(b, bind.matrix+20);
-  if (!std::isfinite(fx) || !std::isfinite(fy) || std::hypot(fx, fy) < .001f) return false;
-  e.facing = std::atan2(fy, fx);
+  const auto facing=NativeFacing(family,e.state,
+      {LoadF(b,bind.matrix+16),LoadF(b,bind.matrix+20),LoadF(b,bind.matrix+24)},
+      {LoadF(b,bind.matrix),LoadF(b,bind.matrix+4),LoadF(b,bind.matrix+8)});
+  if (!facing) return false;
+  e.facing=*facing;
   if (StateLife(family)) e.life = ReplicatedLife(family,e.state,0);
   else {
     const auto cell = LifeCell(b,bind); if (!cell) return false;
@@ -612,7 +614,7 @@ void Scan(const uint8_t* b) {
     if (!Read(b, actor, binding, e)) {
 #if defined(KK_DEV_TOOLS)
       const auto authored=s.authored.find(actor);
-      if (authored!=s.authored.end()) {
+      if (authored!=s.authored.end() && authored->second.family!=EnemyFamily::None) {
         bool spawner=false,initializing=false; uint32_t state=0;
         Tracks(b,authored->second.ai,state,spawner,&initializing);
         if (!initializing && s.orphan_logged.insert(actor).second) {
@@ -765,7 +767,9 @@ bool Drive(PPCContext& ctx, uint8_t* b, const Binding& binding, const EnemyState
   auto call = [&](auto fn, uint32_t p) { ctx.r3.u64 = binding.actor; ctx.r4.u64 = p; fn(ctx, b); };
   call(__imp__sub_827117E0, xyz);
   if (!ValidBinding(b, binding)) return false;
-  call(__imp__sub_82711278, forward);
+  // A yaw-only snapshot cannot represent the native vertical perch basis.
+  // Keep that local authored orientation while still applying host life/XYZ.
+  if (!PerchedBat(binding.id.family,e.state)) call(__imp__sub_82711278, forward);
   if (!ValidBinding(b, binding)) return false;
   call(__imp__sub_82401AA8, xyz);
   if (!ValidBinding(b, binding)) return false;

@@ -792,6 +792,12 @@ void OwnershipSessions() {
 }
 } // namespace
 int main() {
+  Check(NativeFacing(EnemyFamily::Bat,0x82651E60,{0,0,1},{1,0,0}).has_value(), "vertical perched bat retains authority");
+  Check(Near(*NativeFacing(EnemyFamily::Bat,0x82651E60,{0,0,1},{1,0,0}),-1.5707963f), "perch yaw from valid right axis");
+  Check(!NativeFacing(EnemyFamily::Bat,0x82651E60,{0,0,0},{1,0,0}), "collapsed perch refuses");
+  Check(!NativeFacing(EnemyFamily::Raptor,0x82651E60,{0,0,1},{1,0,0}), "perch fallback limited to bats");
+  Check(!NativeFacing(EnemyFamily::Bat,0,{0,0,1},{1,0,0}), "perch fallback limited to native state");
+  Check(!NativeFacing(EnemyFamily::Bat,0x82651E60,{0,0,1},{NAN,0,0}), "nonfinite perch refuses");
   ScorpionDamagePools();
   SpiderCopyMatching();
   IdentityAndMatching(); ExpandedFamilies(); Wire(); LifecycleAndInterpolation(); SessionAuthority();
