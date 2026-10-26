@@ -56,6 +56,8 @@ REX_EXTERN(__imp__sub_826627D0);
 REX_EXTERN(__imp__sub_8263F790);
 REX_EXTERN(__imp__sub_82614DC0);
 REX_EXTERN(__imp__sub_8271E760);
+REX_EXTERN(__imp__sub_8271E968);
+REX_EXTERN(__imp__sub_8271EBE8);
 #if defined(KK_DEV_TOOLS)
 REX_EXTERN(__imp__sub_82451A60);
 REX_EXTERN(__imp__sub_82569A70);
@@ -993,6 +995,13 @@ struct PlayerDamageGuard {
 void PlayerDamage(PPCContext& ctx, uint8_t* b, EnemyFamily family, void (*native)(PPCContext&,uint8_t*)) {
   const auto* owner=CombatOwner(b,family);
   const auto hero=Load32(b,0x82CCBF7C),body=kk::PartnerBodyCombatActor(b),offset=PlayerDamageCache(family);
+#if defined(KK_DEV_TOOLS)
+  static unsigned frame_logs=0;
+  if (body && frame_logs++<16)
+    REXLOG_INFO("COOP THREAT consumer-context family={} owner={} actor={:08X} ai={:08X}/{:08X} body={:08X} cached={:08X}",
+        uint16_t(family),bool(owner),Load32(b,0x82CCBF6C),Load32(b,0x82CCBF64),Load32(b,0x82CCBF68),body,
+        owner && offset ? Load32(b,owner->vars+offset) : 0);
+#endif
   if (!owner || !body || !offset) { native(ctx,b); return; }
   const auto binding=*owner;
   const auto original=Load32(b,binding.vars+offset);
@@ -1020,6 +1029,11 @@ void PlayerDamageRecord(uint8_t* b, uint32_t packed, uint32_t returned) {
         uint16_t(frame.binding.id.family),frame.binding.actor,hit.source,player);
 #endif
   Store32(b,frame.binding.vars+frame.offset,player);
+}
+void PlayerDamageHandle(uint8_t* b, uint32_t handle) {
+  if (!player_damage_frame || !PoseAddress(handle,8) || (Load32(b,handle)>>24)!=4) return;
+  const auto record=stimulus_debug::ReadHandle([&](uint32_t p) { return Load32(b,p); },handle);
+  if (record.valid) PlayerDamageRecord(b,record.id,record.address);
 }
 void WriteLife(uint8_t* b, const Binding& binding, const EnemyState& e) {
   if (const auto cell = LifeCell(b,binding)) StoreF(b,cell,NativeLife(binding.id.family,e.life));
@@ -2912,6 +2926,16 @@ REX_HOOK_RAW(sub_8271E760) {
   const auto packed=ctx.r3.u32;
   __imp__sub_8271E760(ctx,base);
   kk::coop::PlayerDamageRecord(base,packed,ctx.r3.u32);
+}
+REX_HOOK_RAW(sub_8271E968) {
+  const auto handle=ctx.r3.u32;
+  __imp__sub_8271E968(ctx,base);
+  kk::coop::PlayerDamageHandle(base,handle);
+}
+REX_HOOK_RAW(sub_8271EBE8) {
+  const auto handle=ctx.r3.u32;
+  __imp__sub_8271EBE8(ctx,base);
+  kk::coop::PlayerDamageHandle(base,handle);
 }
 REX_HOOK_RAW(sub_825CE478) { kk::coop::PlayerDamage(ctx,base,kk::coop::EnemyFamily::Raptor,__imp__sub_825CE478); }
 REX_HOOK_RAW(sub_826627D0) { kk::coop::PlayerDamage(ctx,base,kk::coop::EnemyFamily::Bat,__imp__sub_826627D0); }
