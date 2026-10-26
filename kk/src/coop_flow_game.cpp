@@ -27,6 +27,7 @@
 #include <thread>
 
 REX_EXTERN(__imp__sub_82413190);
+REX_EXTERN(__imp__sub_8241A158);
 namespace kk::coop {
 bool BeginSessionFlow(SessionStart start, std::vector<uint8_t> save);
 namespace {
@@ -163,8 +164,26 @@ FlowView Wait(uint32_t generation, bool load_barrier) {
     std::this_thread::sleep_for(std::chrono::milliseconds(10));
   }
 }
-void AskLoad(uint8_t* base,uint32_t g,const FlowView& v) {
+void AskLoad(PPCContext& ctx,uint8_t* base,uint32_t g,const FlowView& v) {
   using namespace hfr;
+  // ES_enter_map grants the chapter selection's authored equipment only while
+  // G+22120 is set. We clear that practice-mode flag below so the campaign can
+  // continue. Perform its exact inventory initializer once for the initial
+  // chapter selection, before loading, rather than losing the grant entirely.
+  // Story transitions and private checkpoint revives retain their saved stock.
+  if (!loaded_generation && !loading_generation && v.start.chapter_select && v.start.chapter<42) {
+    const auto saved=ctx;
+    const auto bank=Load32(base,0x82CC9C98);
+    Store32(base,0x82CC9C98,g);
+    ctx.r3.u64=v.start.chapter;
+    __imp__sub_8241A158(ctx,base);
+    Store32(base,0x82CC9C98,bank);
+    ctx=saved;
+    REXLOG_INFO("KK co-op equipment: authored chapter={} weapon={} ammo={}/{}/{}/{} reserve={}/{}/{}/{}",
+        v.start.chapter,Load32(base,g+13128),Load32(base,g+13432),Load32(base,g+13504),
+        Load32(base,g+13576),Load32(base,g+13648),Load32(base,g+14880),Load32(base,g+14952),
+        Load32(base,g+15024),Load32(base,g+15096));
+  }
   Store32(base,g+8,v.world.level); Store32(base,g+12,v.world.start); Store32(base,g+4,1);
   Store32(base,0x828E3B48,1); Store32(base,g+0x5F1C,0);
   // Co-op chapter selection continues as a story, not the practice-mode menu route.
@@ -406,14 +425,14 @@ bool SessionBeforeGo(PPCContext& ctx,uint8_t* base,uint32_t g) {
   if (v.world.generation>loaded_generation) {
     private_load=private_request=false;
     independent_load.reset();
-    AskLoad(base,g,v); return false;
+    AskLoad(ctx,base,g,v); return false;
   }
   // A dev finish is submitted directly to the worker, without a native load
   // flag. Hold the first finisher just as for an authored chapter exit.
   if (v.phase==FlowPhase::Waiting) {
     v=Wait(v.world.generation,false);
     RecordProgress(v);
-    if (v.world.generation>loaded_generation) { AskLoad(base,g,v); return false; }
+    if (v.world.generation>loaded_generation) { AskLoad(ctx,base,g,v); return false; }
     return true;
   }
   // An authored transition or the user's Quit request takes precedence over
@@ -471,7 +490,7 @@ bool SessionBeforeGo(PPCContext& ctx,uint8_t* base,uint32_t g) {
     Store32(base,g+4,0);
     v=Wait(v.world.generation,false);
     RecordProgress(v);
-    if (v.world.generation>loaded_generation) { AskLoad(base,g,v); return false; }
+    if (v.world.generation>loaded_generation) { AskLoad(ctx,base,g,v); return false; }
     return true;
   }
   if (!v.host && v.checkpoint!=recorded_checkpoint && v.policy==ChapterPolicy::Together) {
@@ -495,7 +514,7 @@ bool SessionBeforeGo(PPCContext& ctx,uint8_t* base,uint32_t g) {
       Send(MessageType::ChapterFinished,v.world);
     v=Wait(v.world.generation,false);
     RecordProgress(v);
-    if (v.world.generation>loaded_generation) AskLoad(base,g,v);
+    if (v.world.generation>loaded_generation) AskLoad(ctx,base,g,v);
     return false;
   }
   // Offer recovery rather than silently resetting a living partner's world.

@@ -38,6 +38,10 @@ REX_EXTERN(__imp__sub_82634428);
 REX_EXTERN(__imp__sub_82419C38);
 REX_EXTERN(__imp__sub_8261DE68);
 REX_EXTERN(__imp__sub_826A0920);
+REX_EXTERN(__imp__sub_826C12C8);
+#if defined(KK_DEV_TOOLS)
+REX_EXTERN(__imp__sub_826C4E98);
+#endif
 REX_EXTERN(__imp__sub_82548BC0);
 REX_EXTERN(__imp__sub_82538B70);
 REX_EXTERN(__imp__sub_82634978);
@@ -1995,13 +1999,16 @@ void DevRaptorSelection(PPCContext& ctx, uint8_t* b) {
 }
 #endif
 void ObserveHumanConsumption(PPCContext& ctx, uint8_t* b) {
-#if defined(KK_DEV_TOOLS)
   const bool observe = REXCVAR_GET(kk_coop_enabled) && Connected() && Load32(b, 0x82CCBF6C) == Load32(b, 0x82CCBF7C);
   const auto before = observe ? ReadHumanStatus(b) : std::nullopt;
-#endif
   __imp__sub_826A0920(ctx, b);
-#if defined(KK_DEV_TOOLS)
   const auto after = before ? ReadHumanStatus(b) : std::nullopt;
+  if (before && after && before->hero==after->hero && before->vars==after->vars && before->value!=after->value)
+    REXLOG_INFO("COOP HEALTH native-hit role={} level={} condition={}->{} source={:08X} flags={:08X} magnitude={} replay={} pos=({:.3f},{:.3f},{:.3f})",
+        Get().link.role==Role::Host ? "host" : "guest",Get().identity.level,uint8_t(before->condition),uint8_t(after->condition),
+        Load32(b,after->vars+3212),Load32(b,after->vars+3204),LoadF(b,after->vars+3228),Get().damage_replay.Last(),
+        LoadF(b,after->vars+11656),LoadF(b,after->vars+11660),LoadF(b,after->vars+11664));
+#if defined(KK_DEV_TOOLS)
   static unsigned count = 0; static double next = 0;
   if (before && after && before->hero == after->hero && before->vars == after->vars &&
       count < 256 && (before->value != after->value || Now() >= next)) {
@@ -2014,6 +2021,34 @@ void ObserveHumanConsumption(PPCContext& ctx, uint8_t* b) {
 #endif
   PublishPlayerStatus(b);
 }
+void ObserveHumanReflex(PPCContext& ctx,uint8_t* b) {
+  const bool observe=REXCVAR_GET(kk_coop_enabled) && Connected() && Load32(b,0x82CCBF6C)==Load32(b,0x82CCBF7C);
+  const auto before=observe ? ReadHumanStatus(b):std::nullopt;
+  __imp__sub_826C12C8(ctx,b);
+  const auto after=before ? ReadHumanStatus(b):std::nullopt;
+  if (before && after && before->hero==after->hero && before->vars==after->vars && before->value!=after->value)
+    REXLOG_INFO("COOP HEALTH native-reflex role={} level={} condition={}->{} bad-ground-seconds={} off-ground-seconds={} ground={:08X} source={:08X} flags={:08X}",
+        Get().link.role==Role::Host ? "host" : "guest",Get().identity.level,uint8_t(before->condition),uint8_t(after->condition),
+        LoadF(b,after->vars+13432),LoadF(b,after->vars+2892),Load32(b,after->vars+4008),
+        Load32(b,after->vars+3212),Load32(b,after->vars+3204));
+}
+#if defined(KK_DEV_TOOLS)
+void DevEquipmentInput(PPCContext& ctx,uint8_t* b) {
+  __imp__sub_826C4E98(ctx,b);
+  static const bool enabled=std::getenv("KK_DEV_EQUIPMENT")!=nullptr;
+  static double next=0;
+  const auto h=enabled && Connected() && Load32(b,0x82CCBF6C)==Load32(b,0x82CCBF7C) ? ReadHumanStatus(b):std::nullopt;
+  if (!h || Now()<next) return;
+  next=Now()+1;
+  const auto v=h->vars,g=h->bank;
+  REXLOG_INFO("COOP EQUIPMENT input role={} t={:.3f} player={} slot={} bank={:08X} weapon={} rounds={} aim-off={} aiming={} aim-weight={} shoot={}/{} disabled={} loading={}/{} action-wait={} input-disabled={} pad={} pickup={}/{:08X} friend-ahead={:08X}/{:08X}/{:08X}/{:08X}/{:08X}",
+      Get().link.role==Role::Host ? "host":"guest",kk::DevSecondsSinceMenu(),Load32(b,v),Load32(b,v+4),g,
+      Load32(b,g+13128),Load32(b,g+13504),Load32(b,v+2984),Load32(b,v+2988),LoadF(b,v+6192),
+      Load32(b,v+2896),Load32(b,v+2956),Load32(b,v+3060),Load32(b,v+4364),Load32(b,v+4376),
+      LoadF(b,v+3092),Load32(b,0x82CCAE2C),Load32(b,0x82C63704),Load32(b,g+17772),Load32(b,g+17776),
+      Load32(b,g+7328),Load32(b,g+7332),Load32(b,g+7336),Load32(b,g+7340),Load32(b,g+7344));
+}
+#endif
 // A null reason means observation began. Keep every refusal distinguishable in
 // dev diagnostics instead of treating an unobserved callback as a missed shot.
 const char* BeginShot(const uint8_t* b) {
@@ -3122,6 +3157,10 @@ REX_HOOK_RAW(sub_8250EDE8) {
 REX_HOOK_RAW(sub_826A0920) {
   kk::coop::ObserveHumanConsumption(ctx, base);
 }
+REX_HOOK_RAW(sub_826C12C8) { kk::coop::ObserveHumanReflex(ctx,base); }
+#if defined(KK_DEV_TOOLS)
+REX_HOOK_RAW(sub_826C4E98) { kk::coop::DevEquipmentInput(ctx,base); }
+#endif
 REX_HOOK_RAW(sub_82548BC0) {
   if (kk::coop::PartnerBodyGrabRefusal(base, ctx.r3.u32,ctx.r4.u32)) {
 #if defined(KK_DEV_TOOLS)
