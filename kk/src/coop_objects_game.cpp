@@ -1159,10 +1159,11 @@ void ScanInventory(const uint8_t* b,uint32_t w) {
   const auto begin=Load32(b,w+40),end=Load32(b,w+28);
   if (!PoseAddress(begin) || !PoseAddress(end) || end<begin || (end-begin)%8 || end-begin>8*20000) return;
   ++state.scan_pass; state.scan_next=Now()+3;
-  unsigned counts[13]{};
-  constexpr const char* names[]{"unknown","iob","door","ode","tree","bamboo","rack","fire","raft","ammo","javelin","checkpoint","grab"};
-  constexpr uint32_t offsets[13][3]{{},{552,556,560},{0,612,1096},{0,8,2444},{0x52C,0x7C4,0x930},
-      {196,24,32},{192,196,228},{440,444,408},{204,224,644},{0,4,24},{0,232,536},{4,9540,9156},{24,20,84}};
+  unsigned counts[15]{};
+  constexpr const char* names[]{"unknown","iob","door","ode","tree","bamboo","rack","fire","raft","ammo","javelin","checkpoint","grab","benttree","deadtree"};
+  constexpr uint32_t offsets[15][3]{{},{552,556,560},{0,612,1096},{0,8,2444},{0x52C,0x7C4,0x930},
+      {196,24,32},{192,196,228},{440,444,408},{204,224,644},{0,4,24},{0,232,536},{4,9540,9156},{24,20,84},
+      {0,0x400,0x438},{0,4,8}};
   std::set<uint32_t> seen;
   for (auto p=begin;p<end;p+=8) {
     const auto actor=Load32(b,p);
@@ -1183,6 +1184,9 @@ void ScanInventory(const uint8_t* b,uint32_t w) {
         case 0x826D0440: case 0x826D05D8: next=4; break; // ODE_BreakTree binding, separate from IG.
         case 0x826F88F0: case 0x826E58B8: case 0x826EAE60: case 0x826E4330: case 0x826DF6D8:
         case 0x826DE838: case 0x826DF778: case 0x826D59F8: next=12; break;
+        case 0x82690148: case 0x826A7440: case 0x82672D48: case 0x82672FE8:
+        case 0x8268C9A8: case 0x826A7258: next=13; break; // IO_BentTree's own track references.
+        case 0x8249DBB0: case 0x824B4F40: case 0x824A1BD8: next=14; break; // Interactive_arbre_mort / IAM.
         case 0x8264EC58: case 0x8262A7A0: case 0x82644A60: next=5; break;
         case 0x8251C540: case 0x8251BA60: case 0x8251B800: next=6; break;
         case 0x825FAF58: case 0x8260F858: case 0x825F8CE8: next=7; break;
@@ -1214,19 +1218,28 @@ void ScanInventory(const uint8_t* b,uint32_t w) {
         const auto part=Load32(b,vars+20+4*i);
         if (!part) { terminated=true; break; }
         if (i==32 || !PoseAddress(part,32)) break;
+        REXLOG_INFO("KK dev object support part: role={} family=ode root={:08X} index={} actor={:08X} state={} type={:08X} flags={:08X} link={:08X}",
+            v.host ? "host" : "guest",actor,i,part,Load32(b,vars+1208+4*i),Load32(b,part),Load32(b,part+4),Load32(b,part+20));
         ++parts;
       }
       REXLOG_INFO("KK dev object ode contract: role={} actor={:08X} mode={} game-flag={}/{} removal={} parts={} terminated={} bodies={:08X}/{:08X} watches={:08X}/{:08X}/{:08X}/{:08X}",
           v.host ? "host" : "guest",actor,Load32(b,vars),Load32(b,vars+4),Load32(b,vars+8),Load32(b,vars+2496),parts,terminated,
           Load32(b,vars+2500),Load32(b,vars+2504),Load32(b,vars+1704),Load32(b,vars+1888),Load32(b,vars+2072),Load32(b,vars+2256));
     }
-    if (kind==4 && vars && bytes>=0xA20)
+    if (kind==4 && vars && bytes>=0xA20) {
       REXLOG_INFO("KK dev object btode contract: role={} actor={:08X} mode={} body={:08X} fall={} watches={:08X}/{:08X}/{:08X}",
           v.host ? "host" : "guest",actor,Load32(b,vars+0x52C),Load32(b,vars+0x7C4),Load32(b,vars+0x930),
           Load32(b,vars+0x570),Load32(b,vars+0x628),Load32(b,vars+0x6E0));
+      for (unsigned i=0;i<32;++i) {
+        const auto part=Load32(b,vars+4+4*i);
+        if (!part || !PoseAddress(part,32)) break;
+        REXLOG_INFO("KK dev object support part: role={} family=tree root={:08X} index={} actor={:08X} state={} type={:08X} flags={:08X} link={:08X}",
+            v.host ? "host" : "guest",actor,i,part,Load32(b,vars+0x4A8+4*i),Load32(b,part),Load32(b,part+4),Load32(b,part+20));
+      }
+    }
   }
-  REXLOG_INFO("KK dev object inventory totals: role={} level={} pass={} iob={} door={} ode={} tree={} bamboo={} rack={} fire={} raft={} ammo={} javelin={} checkpoint={} grab={} unknown={} bounded-rows={}",
-      v.host ? "host" : "guest",v.world.level,state.scan_pass,counts[1],counts[2],counts[3],counts[4],counts[5],counts[6],counts[7],counts[8],counts[9],counts[10],counts[11],counts[12],counts[0],state.scan_rows);
+  REXLOG_INFO("KK dev object inventory totals: role={} level={} pass={} iob={} door={} ode={} tree={} bamboo={} rack={} fire={} raft={} ammo={} javelin={} checkpoint={} grab={} benttree={} deadtree={} unknown={} bounded-rows={}",
+      v.host ? "host" : "guest",v.world.level,state.scan_pass,counts[1],counts[2],counts[3],counts[4],counts[5],counts[6],counts[7],counts[8],counts[9],counts[10],counts[11],counts[12],counts[13],counts[14],counts[0],state.scan_rows);
 }
 // Explicit native-input fixtures, never a network outcome injector. Selects a
 // real loaded object, moves only this process's Jack, then supplies a native
