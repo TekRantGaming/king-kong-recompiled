@@ -15,6 +15,7 @@
 #include "launcher_text.h"
 #include "platform.h"
 #include "settings_help.h"
+#include "steam_pad.h"
 #include "toast.h"
 
 namespace kk::ui {
@@ -260,6 +261,40 @@ void Input::UpdateGamepads(double now) {
       const bool ps = type == SDL_GAMEPAD_TYPE_PS3 || type == SDL_GAMEPAD_TYPE_PS4 || type == SDL_GAMEPAD_TYPE_PS5;
       pad_device_ = device_ = ps ? Device::kPlayStation : Device::kXbox;
       pad_style_ = PadPromptsFor(type, SDL_GetGamepadName(g));
+    }
+  }
+  // C82: the pad Steam Input holds while Steam runs us as app 480 (steam_pad.h) counts like one more
+  // controller. Steam hides that physical pad from SDL then, so nothing is counted twice.
+  if (steam_pad::State sp; steam_pad::Read(sp, steam_pad::Now())) {
+    const uint16_t b = sp.buttons;
+    const float lx = sp.lx / 32767.0f, ly = -sp.ly / 32767.0f;  // XInput's up is positive, SDL's down
+    const float lt = sp.lt / 255.0f, rt = sp.rt / 255.0f;
+    if (pads_active_) {
+      strongest(sticks_.lx, lx, 0.2f);
+      strongest(sticks_.ly, ly, 0.2f);
+      strongest(sticks_.rx, sp.rx / 32767.0f, 0.2f);
+      strongest(sticks_.ry, -sp.ry / 32767.0f, 0.2f);
+      strongest(sticks_.lt, lt, 0.08f);
+      strongest(sticks_.rt, rt, 0.08f);
+    }
+    auto past = [](float v, bool was) { return v > (was ? 0.35f : 0.55f); };
+    const bool pad_dir[6] = {(b & 0x0001) || past(-ly, dir_[0].held), (b & 0x0002) || past(ly, dir_[1].held),
+                             (b & 0x0004) || past(-lx, dir_[2].held), (b & 0x0008) || past(lx, dir_[3].held),
+                             past(lt, dir_[4].held), past(rt, dir_[5].held)};
+    const bool pad_down[8] = {bool(b & 0x1000), bool(b & 0x2000), bool(b & 0x4000), bool(b & 0x8000),
+                              bool(b & 0x0100), bool(b & 0x0200), bool(b & 0x0010), bool(b & 0x0020)};
+    bool any = false;
+    for (int i = 0; i < 6; ++i) {
+      dir[i] = dir[i] || pad_dir[i];
+      any = any || pad_dir[i];
+    }
+    for (int i = 0; i < 8; ++i) {
+      down[size_t(i)] = down[size_t(i)] || pad_down[i];
+      any = any || (pad_down[i] && !buttons_down_[size_t(i)]);
+    }
+    if (any && pads_active_) {
+      pad_device_ = device_ = Device::kXbox;
+      pad_style_ = "xbox360";
     }
   }
   // Not the active window: the controllers press nothing (another program has them). What they hold then is

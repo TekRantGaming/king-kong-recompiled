@@ -3,6 +3,7 @@
 #include "steam_runtime.h"
 #include "steam_transport.h"
 #include "steam_loopback_test.h"
+#include "steam_pad.h"
 
 #include <algorithm>
 #include <cstdio>
@@ -361,7 +362,70 @@ void SessionOverMessages() {
   Check(guest.State() == SessionState::Ended, "reliable Bye ends partner session");
 }
 }
+// C82: Steam Input actions become one Xbox pad; the manifest names every action the reader asks for.
+void SteamPad() {
+  namespace sp = kk::steam_pad;
+  bool down[sp::kDigitalCount] = {};
+  float axes[sp::kAnalogCount][2] = {};
+  Check(sp::FromActions(down, axes) == sp::State{}, "idle actions give an idle pad");
+  uint16_t all = 0;
+  for (int i = 0; i < sp::kDigitalCount; ++i) {
+    bool one[sp::kDigitalCount] = {}; one[i] = true;
+    const auto s = sp::FromActions(one, axes);
+    Check(s.buttons == sp::kDigitalBits[i] && !(all & s.buttons), "each digital action is its own XInput button");
+    all |= s.buttons;
+  }
+  Check(all == 0xF3FF, "every XInput button except guide and the unused bits");
+  axes[0][0] = 1; axes[0][1] = -1; axes[1][0] = -0.5f; axes[1][1] = 2; axes[2][0] = 1; axes[3][0] = 0.5f;
+  auto s = sp::FromActions(down, axes);
+  Check(s.lx == 32767 && s.ly == -32767 && s.rx == -16384 && s.ry == 32767, "sticks scale and clamp to XInput range");
+  Check(s.lt == 255 && s.rt == 128, "triggers scale to 0..255");
+  axes[0][0] = std::numeric_limits<float>::quiet_NaN();
+  Check(sp::FromActions(down, axes).lx == 0, "a broken value reads as centred");
+  sp::State a, b; a.buttons = 0x1000; a.lx = 100; a.lt = 10; b.buttons = 0x0001; b.lx = -2000; b.lt = 5;
+  sp::Merge(a, b);
+  Check(a.buttons == 0x1001 && a.lx == -2000 && a.lt == 10, "two managed pads merge, stronger axis wins");
+  sp::Merge(a, a);
+  Check(a.buttons == 0x1001 && a.lx == -2000, "merging the same pad twice changes nothing");
+  // Snapshot: only fresh samples with a managed controller count.
+  sp::State out;
+  Check(!sp::Read(out, 1) && sp::Controllers() == 0, "nothing before Steam Input");
+  sp::State held; held.buttons = 0x1000;
+  sp::Publish(1, held, 10);
+  Check(sp::Read(out, 10.1) && out == held && sp::Controllers() == 1, "fresh managed pad reads");
+  Check(!sp::Read(out, 10.5), "stale sample never holds a button");
+  sp::Publish(0, held, 11);
+  Check(!sp::Read(out, 11), "no managed controller gives no pad (SDL keeps the physical one)");
+  sp::Publish(1, held, 12); sp::Stopped();
+  Check(!sp::Read(out, 12) && sp::Controllers() == 0, "Steam shutdown clears the pad");
+  uint16_t l = 0, r = 0;
+  sp::SetVibration(100, 200);
+  Check(sp::TakeVibration(l, r) && l == 100 && r == 200 && !sp::TakeVibration(l, r), "rumble forwarded once");
+  // Manifest and bindings.
+  const auto manifest = sp::ManifestText();
+  Check(manifest.find(sp::kActionSet) != std::string::npos, "manifest has our action set");
+  for (int i = 0; i < sp::kDigitalCount; ++i)
+    Check(manifest.find(std::string("\"") + sp::kDigitalNames[i] + "\"") != std::string::npos, "manifest has every button action");
+  for (int i = 0; i < sp::kAnalogCount; ++i)
+    Check(manifest.find(std::string("\"") + sp::kAnalogNames[i] + "\"") != std::string::npos, "manifest has every analog action");
+  for (const char* type : {"controller_xboxone", "controller_xbox360", "controller_ps5", "controller_switch_pro"})
+    Check(manifest.find(std::string("kk_input_") + type + ".vdf") != std::string::npos, "manifest names each configuration");
+  const auto binding = sp::BindingText("controller_xboxone");
+  for (int i = 0; i < sp::kDigitalCount; ++i)
+    Check(binding.find(std::string("game_action ") + sp::kActionSet + " " + sp::kDigitalNames[i] + "\"") != std::string::npos,
+          "configuration binds every button action");
+  for (int i = 0; i < sp::kAnalogCount; ++i)
+    Check(binding.find(std::string("\"") + sp::kActionSet + "\"\t\t\"" + sp::kAnalogNames[i] + "\"") != std::string::npos,
+          "configuration binds every analog action");
+  int depth = 0; bool balanced = true;
+  for (const auto* text : {&manifest, &binding})
+    for (char c : *text) { depth += c == '{' ? 1 : c == '}' ? -1 : 0; balanced &= depth >= 0; }
+  Check(balanced && depth == 0, "manifest and configuration braces balance");
+  for (const auto* text : {&manifest, &binding})
+    Check(text->find('-') == std::string::npos, "no dashes in text Steam shows");
+}
 int main() {
   Keys(); Invites(); Social(); Messages(); EveryProtocolMessage(); StoryOverMessages(); FullSaveOverMessages(); SessionOverMessages(); Stub();
+  SteamPad();
   std::printf("Steam service tests: %u checks OK\n", checks);
 }

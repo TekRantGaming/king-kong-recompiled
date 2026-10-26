@@ -585,6 +585,7 @@ void Configure(const std::filesystem::path& user_data) {
   options.enabled = REXCVAR_GET(kk_coop_enabled);
   REXLOG_INFO("KK co-op: enabled={} (Social {})", options.enabled, options.enabled ? "available" : "disabled");
   options.executable_folder = rex::filesystem::GetExecutableFolder();
+  options.input_folder = user_data / "steam_input";
   options.startup_lobby = CaptureStartupLobby();
   options.request_ui_paint = [] { RequestUiPaint(); };
   options.read_compatibility = [user_data] {

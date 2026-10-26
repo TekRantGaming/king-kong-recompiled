@@ -12,6 +12,8 @@ namespace kk::coop {
 struct SteamRuntimeOptions {
   bool enabled = false;
   std::filesystem::path executable_folder;
+  // C82: where the Steam Input action manifest is written (user data; see steam_pad.h).
+  std::filesystem::path input_folder;
   Compatibility compatibility;
   // Optional UI-thread refresh before Create/Accept/Ready/Start. Never called by the worker.
   std::function<Compatibility()> read_compatibility;

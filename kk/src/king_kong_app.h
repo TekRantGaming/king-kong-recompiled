@@ -73,6 +73,7 @@ void InstallFpeGuard();  // fpe_guard.cpp
 #include "toast.h"
 #include "startup_recovery.h"
 #include "telemetry.h"
+#include "steam_pad_driver.h"
 #include "hooks/kk_native_ui.h"  // the native renderer's launcher prewarm
 #include "backend/startup_steps.h"  // task 353
 
@@ -522,6 +523,8 @@ class KingKongApp : public rex::ReXApp {
     StartDevFocusCycle();  // task 372
 #endif
     UseOneControllerSlot();
+    // C82: the pad Steam Input holds while Steam runs us as app 480 (steam_pad.h); lists nothing otherwise.
+    kk::steam_pad::InstallDriver(dynamic_cast<rex::input::InputSystem*>(runtime()->input_system()), window());
     if (!kk::menu_scene::Active()) kk::mouse_look::Install(window());  // task 330: the launcher keeps the mouse
     // HDR follows Windows for the screen the game's window is on (hdr_display.h).
     kk::hdr::SetWindowProvider([this]() -> void* { return window() ? window()->GetNativeWindowHandle() : nullptr; });
