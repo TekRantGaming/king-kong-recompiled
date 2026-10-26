@@ -2061,6 +2061,7 @@ world::Json world::EnemySnapshot(const uint8_t* b,world::Capture& capture) {
   auto& s=Get(); std::map<std::string,Json> rows;
   if (!Environment(b,s.world)) capture.Error("enemy-native-world-unavailable");
   uint32_t begin=0,end=0; unsigned unbound=0,initializing_count=0;
+  std::vector<Json> unresolved;
   if (!Table(b,s.world,begin,end,true)) capture.Error("enemy-native-registry-unreadable");
   for (auto p=begin;p<end;p+=8) {
     const auto actor=Load32(b,p);
@@ -2084,7 +2085,15 @@ world::Json world::EnemySnapshot(const uint8_t* b,world::Capture& capture) {
         id={authored->second.key,0,family};
     }
     const auto key=Hex(id.source)+":"+std::to_string(id.sequence)+":"+std::to_string(unsigned(id.family));
-    if (!id.source) { ++unbound; capture.Error("enemy-native-identity-unresolved"); continue; }
+    if (!id.source) {
+      ++unbound; capture.Error("enemy-native-identity-unresolved");
+      const auto authored=s.authored.find(actor);
+      unresolved.push_back(Json::Object({{"family",unsigned(family)},{"initializing",initializing},
+          {"scheduled",scheduled},{"flags",Load32(b,actor+4)},
+          {"reason",authored==s.authored.end() ? "not-captured-before-initialization":authored->second.ambiguous ? "ambiguous-authored-key":"native-binding-changed"},
+          {"position",Json::Array({LoadF(b,matrix+48),LoadF(b,matrix+52),LoadF(b,matrix+56)})}}));
+      continue;
+    }
     const auto authority=s.authority.find(id);
     const auto* a=authority==s.authority.end() ? nullptr:&authority->second;
     // Read just the field's own proven native chain. The replication pose
@@ -2113,7 +2122,8 @@ world::Json world::EnemySnapshot(const uint8_t* b,world::Capture& capture) {
     if (!rows.emplace(key,row).second) capture.Error("enemy-id-collision:"+key);
   }
   if (unbound) capture.Error("unbound-native-enemies:"+std::to_string(unbound));
-  return Json::Object({{"rows",Json::Object(rows)},{"unbound",unbound},{"initializing",initializing_count}});
+  return Json::Object({{"rows",Json::Object(rows)},{"unbound",unbound},{"initializing",initializing_count},
+      {"unresolved",Json::Array(unresolved)}});
 }
 #endif
 void EnemyGuardRecoveryWorld(EnemyWorld world) {

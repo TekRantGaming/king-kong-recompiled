@@ -13,6 +13,7 @@ param(
     [ValidateRange(0,32)][int]$CheckpointLimit = 3,
     [ValidateRange(1,256)][int]$MaxRuns = 64,
     [string]$DeadlineUtc = '',
+    [string]$ResumeManifest = '',
     [ValidateRange(0,60)][int]$RetryBlockedSeconds = 0
 )
 $ErrorActionPreference = 'Stop'
@@ -67,13 +68,22 @@ if ($WorldDiff) {
     if ($LASTEXITCODE -ne 0) { throw 'Could not retain the source dirty diff.' }
 }
 $records = @()
-for ($i = 0; $i -lt $entryList.Count; $i++) {
+$scenariosToRun = @($entryList | ForEach-Object { [pscustomobject]@{entry=$_;start=$null;load_proof='chapter-entry-smoke'} })
+if ($ResumeManifest) {
+    $resumePath=[IO.Path]::GetFullPath($ResumeManifest)
+    if (-not $resumePath.StartsWith("$coopRoot\runs\",[StringComparison]::OrdinalIgnoreCase)) { throw 'Resume manifest must be a private co-op run.' }
+    $prior=Get-Content -LiteralPath $resumePath -Raw | ConvertFrom-Json
+    if ($prior.source_branch -ne 'coop-c86') { throw 'Only a C86 sweep may be resumed.' }
+    $scenariosToRun=@($prior.runs | Where-Object { $_.status -in @('pending','blocked-task-stop','blocked-deadline','blocked-disk-space','waiting-runner','stopped','error') })
+}
+for ($i = 0; $i -lt $scenariosToRun.Count; $i++) {
+    $scenario=$scenariosToRun[$i]; $entry=[int]$scenario.entry
     $records += [ordered]@{
-        entry = $entryList[$i]; name = ('sweep-e{0:D2}-{1:D3}' -f $entryList[$i], $i)
+        entry = $entry; name = ('sweep-e{0:D2}-s{1}-{2:D3}' -f $entry,$scenario.start,$i)
         status = 'pending'; run = $null; runner_output = (Join-Path $sweepDir "runner-$i.log")
         exit_code = $null; started_utc = $null; finished_utc = $null; error = $null
-        start = $null; level = $rules[$entryList[$i]].level; policy = $rules[$entryList[$i]].policy
-        load_proof = 'chapter-entry-smoke'; world_evidence = (Join-Path $sweepDir "world-$i"); world_status = $null
+        start = $scenario.start; level = $rules[$entry].level; policy = $rules[$entry].policy
+        load_proof = $scenario.load_proof; world_evidence = (Join-Path $sweepDir "world-$i"); world_status = $null
     }
 }
 $manifest = [ordered]@{
@@ -82,7 +92,7 @@ $manifest = [ordered]@{
     world_diff = [bool]$WorldDiff; checkpoints = [bool]$Checkpoints; source_commit = $sourceCommit
     source_branch = $sourceBranch; source_dirty = $sourceDirty; exe_sha256 = $exeSha
     protocol = 21; snapshot_schema = 1; fault_profile = 'bad_wifi'; fault_seeds = @(86,86)
-    scenarios = $rules
+    scenarios = $rules; resumed_from = $ResumeManifest
     harness_sha256 = $toolHashes; harness_sources = $harnessDir
 }
 function Save-Manifest { $manifest | ConvertTo-Json -Depth 8 | Set-Content -LiteralPath $manifestPath -Encoding UTF8 }
@@ -120,7 +130,7 @@ try {
                 fault_seeds=@(86,86); port=27080; roles=@('host','guest'); scenario=$scenario; flags=$hostArgs; runner=$runner
                 harness_sha256=$toolHashes; harness_sources=$harnessDir }
             $dirtyText=($sourceDirty -join ';')
-            $envText += "|KK_DEV_WORLD_FAULT_PROFILE=bad_wifi|KK_DEV_WORLD_DUMP=5,2,26|KK_DEV_WORLD_ROUTE=16|KK_DEV_WORLD_DIR=$($record.world_evidence)\host|KK_DEV_WORLD_COMMIT=$sourceCommit|KK_DEV_WORLD_DIRTY=$dirtyText|KK_DEV_WORLD_EXE_SHA256=$exeSha|KK_DEV_WORLD_SCENARIO=$scenario"
+            $envText += "|KK_DEV_WORLD_FAULT_PROFILE=bad_wifi|KK_DEV_WORLD_DUMP=5,2,36|KK_DEV_WORLD_ROUTE=32|KK_DEV_WORLD_DIR=$($record.world_evidence)\host|KK_DEV_WORLD_COMMIT=$sourceCommit|KK_DEV_WORLD_DIRTY=$dirtyText|KK_DEV_WORLD_EXE_SHA256=$exeSha|KK_DEV_WORLD_SCENARIO=$scenario"
             $joinText += "|KK_DEV_WORLD_DIR=$($record.world_evidence)\guest"
             if ($null -ne $record.start) { $envText += "|KK_DEV_START_POINT=$($record.start)" }
             $evidence['env']=$envText; $evidence['join_env']=$joinText

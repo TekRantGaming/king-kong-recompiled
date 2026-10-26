@@ -45,6 +45,11 @@ def score(evidence_dir, run):
     for role, log_role in (("host", "host"), ("guest", "join")):
         paths = list((evidence_dir / role).glob("world-g*.json"))
         dumps = [w.read(p) for p in paths]
+        expected = [d for d in dumps if d.get("identity", {}).get("level") == evidence["level"] and
+                    (evidence["start"] is None or d.get("identity", {}).get("start") == evidence["start"])]
+        if not expected:
+            logs_ok = False
+            result["errors"].append(role + ": requested native level/start never captured")
         ids[role] = sorted({i for d in dumps if d.get("identity", {}).get("level") == evidence["level"]
                             and not any("native-level-mismatch" in e or "native-load-not-ready" in e or "checkpoint-" in e for e in d.get("errors", []))
                             for i in d.get("native_checkpoint_ids", [])})

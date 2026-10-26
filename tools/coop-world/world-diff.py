@@ -142,6 +142,9 @@ def shared(d):
     # native state changes. Pair boundaries must agree, but quiet native
     # windows need not hold an unchanged transport watermark.
     out["story"].pop("watermark", None)
+    # Unbound diagnostics have no immutable identity, and are retained separately.
+    # Their count still invalidates the whole-world oracle.
+    out["enemies"].pop("unresolved", None)
     for row in out["enemies"]["rows"].values():
         for key in IGNORED_ENEMY:
             row.pop(key, None)
