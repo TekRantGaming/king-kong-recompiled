@@ -74,7 +74,7 @@ struct Binding : objects::Binding {
   uint64_t fire_tick=0;
   struct RaftRoute { std::vector<uint32_t> nodes; uint32_t key=0; uint64_t signature=0; } route;
   RaftState raft;
-  bool raft_ready=false,raft_driven=false;
+  bool raft_ready=false,raft_driven=false,raft_classified=false;
   double next_route=0;
 #if defined(KK_DEV_TOOLS)
   uint64_t raft_tick=0;
@@ -289,7 +289,7 @@ ObjectState Sample(const uint8_t* b,const Binding& o) {
     if (s.value==2) s.seconds=0;
   }
   else if (o.kind==ObjectKind::Raft) {
-    if (!o.raft_ready) { s.value=o.sent ? 2 : UINT32_MAX; return s; }
+    if (!o.raft_ready) { s.value=o.sent || o.raft_classified ? 2 : UINT32_MAX; return s; }
     s.value=Load32(b,o.vars+376);
     s.position=LoadF(b,o.vars+420); s.seconds=LoadF(b,o.vars+4); s.raft=o.raft;
   }
@@ -316,8 +316,9 @@ void Observe(const uint8_t* b,Binding& o) {
 #endif
 }
 void WithdrawRaft(const uint8_t* b,Binding& o) {
-  if (!state.host || o.kind!=ObjectKind::Raft || !o.sent) return;
-  o.raft_ready=false; Observe(b,o); // Sample emits canonical withdrawal without reading retired components.
+  if (!state.host || o.kind!=ObjectKind::Raft) return;
+  o.raft_ready=false; o.raft_classified=true;
+  Observe(b,o); // Canonical withdrawal reads no retired components, even before the first pose.
 }
 void Flush() {
   for (unsigned n=0;n<16 && !state.outgoing.empty();++n) {
@@ -966,6 +967,7 @@ bool RaftRoute(PPCContext& ctx,uint8_t* b,Binding& o) {
   return o.route.signature!=0;
 }
 bool ReadRaft(PPCContext& ctx,uint8_t* b,Binding& o) {
+  o.raft_classified=Load32(b,o.vars+204) && Load32(b,o.vars+224) && !Track(b,o.ai,0x825FD388);
   if (!RaftRoute(ctx,b,o)) return false;
   const auto find=[&](uint32_t actor)->uint8_t {
     const auto it=std::find(o.route.nodes.begin(),o.route.nodes.end(),actor);
@@ -976,9 +978,13 @@ bool ReadRaft(PPCContext& ctx,uint8_t* b,Binding& o) {
   const auto position=NativePoint(ctx,b,o.actor),forward=NativePoint(ctx,b,o.actor,__imp__sub_8270FA58),up=NativePoint(ctx,b,o.actor,__imp__sub_8270F918);
   if (!position || !forward || !up) return false;
   const float fl=std::hypot(forward->x,forward->y,forward->z);
-  if (fl<.001f) return false;
+  const float raw_up=std::hypot(up->x,up->y,up->z);
+  // Native82711328 rebuilds unit axes. Do not silently strip an authored
+  // scale/shear from only the guest; normalize numerical drift only.
+  if (std::abs(fl-1)>=.01f || std::abs(raw_up-1)>=.01f) return false;
   const ShotVector f{forward->x/fl,forward->y/fl,forward->z/fl};
   const float dot=f.x*up->x+f.y*up->y+f.z*up->z;
+  if (std::abs(dot)>=.02f) return false;
   const ShotVector un{up->x-dot*f.x,up->y-dot*f.y,up->z-dot*f.z};
   const float ul=std::hypot(un.x,un.y,un.z); if (ul<.001f) return false;
   o.raft.route=o.route.signature; o.raft.current=current; o.raft.next=next;
@@ -1043,6 +1049,15 @@ void UpdateRafts(PPCContext& ctx,uint8_t* b) {
     if (state.host) {
       o.raft_ready=false;
 #if defined(KK_DEV_TOOLS)
+      static const double unavailable_until=[] {
+        const auto value=std::getenv("KK_DEV_OBJECT_RAFT_UNAVAILABLE"); if (!value || !*value) return -1.0;
+        char* end=nullptr; const double t=std::strtod(value,&end);
+        return end!=value && !*end && std::isfinite(t) && t>=0 && t<=300 ? t : -1.0;
+      }();
+      const double elapsed=kk::DevSecondsSinceMenu();
+      if (elapsed>=0 && elapsed<unavailable_until) {
+        o.raft_classified=true; continue; // Explicit initial unsupported-contract fixture, no native writes.
+      }
       if (o.source==state.raft_fixture && Now()<state.raft_withdraw_until) continue;
 #endif
       ReadRaft(ctx,b,o); // Regular10Hz sample publishes the pose.
@@ -1144,10 +1159,10 @@ void ScanInventory(const uint8_t* b,uint32_t w) {
   const auto begin=Load32(b,w+40),end=Load32(b,w+28);
   if (!PoseAddress(begin) || !PoseAddress(end) || end<begin || (end-begin)%8 || end-begin>8*20000) return;
   ++state.scan_pass; state.scan_next=Now()+3;
-  unsigned counts[12]{};
-  constexpr const char* names[]{"unknown","iob","door","ode","tree","bamboo","rack","fire","raft","ammo","javelin","checkpoint"};
-  constexpr uint32_t offsets[12][3]{{},{552,556,560},{0,612,1096},{0,8,2444},{24,20,84},
-      {196,24,32},{192,196,228},{440,444,408},{204,224,644},{0,4,24},{0,232,536},{4,9540,9156}};
+  unsigned counts[13]{};
+  constexpr const char* names[]{"unknown","iob","door","ode","tree","bamboo","rack","fire","raft","ammo","javelin","checkpoint","grab"};
+  constexpr uint32_t offsets[13][3]{{},{552,556,560},{0,612,1096},{0,8,2444},{0x52C,0x7C4,0x930},
+      {196,24,32},{192,196,228},{440,444,408},{204,224,644},{0,4,24},{0,232,536},{4,9540,9156},{24,20,84}};
   std::set<uint32_t> seen;
   for (auto p=begin;p<end;p+=8) {
     const auto actor=Load32(b,p);
@@ -1164,11 +1179,14 @@ void ScanInventory(const uint8_t* b,uint32_t w) {
         case 0x82507798: case 0x82516128: case 0x82515CF0: next=1; break;
         case 0x82551ED8: case 0x82574D80: case 0x8256C3F8: case 0x82543478: next=2; break;
         case 0x826EA1A0: case 0x826F0E10: case 0x826F1E08: case 0x826F4948: next=3; break;
-        case 0x826F88F0: case 0x826E58B8: case 0x826EAE60: case 0x826E4330: case 0x826DF6D8: next=4; break;
+        case 0x826E6390: case 0x826E78F0: case 0x826E7BF0: case 0x826D0770:
+        case 0x826D0440: case 0x826D05D8: next=4; break; // ODE_BreakTree binding, separate from IG.
+        case 0x826F88F0: case 0x826E58B8: case 0x826EAE60: case 0x826E4330: case 0x826DF6D8:
+        case 0x826DE838: case 0x826DF778: case 0x826D59F8: next=12; break;
         case 0x8264EC58: case 0x8262A7A0: case 0x82644A60: next=5; break;
         case 0x8251C540: case 0x8251BA60: case 0x8251B800: next=6; break;
         case 0x825FAF58: case 0x8260F858: case 0x825F8CE8: next=7; break;
-        case 0x825FD388: case 0x825E7348: case 0x8260C988: next=8; break;
+        case 0x825FD388: case 0x825E7348: case 0x8260C988: case 0x82604E68: next=8; break;
         case 0x824F35E0: case 0x824F3820: next=9; break;
         case 0x8257C560: case 0x8258E228: case 0x8258C5F8: case 0x825CE2F0: next=10; break;
         case 0x826437D0: next=11; break;
@@ -1202,9 +1220,13 @@ void ScanInventory(const uint8_t* b,uint32_t w) {
           v.host ? "host" : "guest",actor,Load32(b,vars),Load32(b,vars+4),Load32(b,vars+8),Load32(b,vars+2496),parts,terminated,
           Load32(b,vars+2500),Load32(b,vars+2504),Load32(b,vars+1704),Load32(b,vars+1888),Load32(b,vars+2072),Load32(b,vars+2256));
     }
+    if (kind==4 && vars && bytes>=0xA20)
+      REXLOG_INFO("KK dev object btode contract: role={} actor={:08X} mode={} body={:08X} fall={} watches={:08X}/{:08X}/{:08X}",
+          v.host ? "host" : "guest",actor,Load32(b,vars+0x52C),Load32(b,vars+0x7C4),Load32(b,vars+0x930),
+          Load32(b,vars+0x570),Load32(b,vars+0x628),Load32(b,vars+0x6E0));
   }
-  REXLOG_INFO("KK dev object inventory totals: role={} level={} pass={} iob={} door={} ode={} tree={} bamboo={} rack={} fire={} raft={} ammo={} javelin={} checkpoint={} unknown={} bounded-rows={}",
-      v.host ? "host" : "guest",v.world.level,state.scan_pass,counts[1],counts[2],counts[3],counts[4],counts[5],counts[6],counts[7],counts[8],counts[9],counts[10],counts[11],counts[0],state.scan_rows);
+  REXLOG_INFO("KK dev object inventory totals: role={} level={} pass={} iob={} door={} ode={} tree={} bamboo={} rack={} fire={} raft={} ammo={} javelin={} checkpoint={} grab={} unknown={} bounded-rows={}",
+      v.host ? "host" : "guest",v.world.level,state.scan_pass,counts[1],counts[2],counts[3],counts[4],counts[5],counts[6],counts[7],counts[8],counts[9],counts[10],counts[11],counts[12],counts[0],state.scan_rows);
 }
 // Explicit native-input fixtures, never a network outcome injector. Selects a
 // real loaded object, moves only this process's Jack, then supplies a native

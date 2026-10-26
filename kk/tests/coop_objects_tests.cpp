@@ -265,6 +265,9 @@ void Network() {
   raft.object.number=3; raft.object.raft.route=12; raft.object.raft.pose[0]=37;
   Check(raft_replica.Observe(transfer(raft,.26)) && raft_replica.Find(ObjectKind::Raft,raft.object.source)->raft.route==12,
       "a new supported route replaces withdrawn authority");
+  auto unavailable=withdrawal; unavailable.object.source^=0x1234; unavailable.object.number=1;
+  Check(raft_replica.Observe(transfer(unavailable,.27)) && raft_replica.Find(ObjectKind::Raft,unavailable.object.source)->value==2,
+      "an unsupported initial route needs no earlier pose to release authority");
   Check(!guest.QueueObjects(Packet()),"guest cannot author outcomes");
   Check(!host.QueueObjects(Packet(MessageType::ObjectRequest)),"host cannot impersonate guest intent");
   auto old=Packet(); old.epoch=18; Check(!host.QueueObjects(old),"stale epoch refused");
