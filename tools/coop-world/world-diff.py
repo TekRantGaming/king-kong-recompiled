@@ -150,6 +150,13 @@ def shared(d):
             row.pop(key, None)
     for row in out.get("objects", {}).get("rows", {}).values():
         row.pop("seconds", None)
+    # world_objects.c rebuilds shown/active bits1/2 and range bits per local
+    # view. Keep raw values in captures, compare only removal/held-hidden flags.
+    # Position, topology and authored native controller state remain shared.
+    for category in ("rows", "bodies"):
+        for row in out.get("objects", {}).get(category, {}).values():
+            if "flags" in row:
+                row["flags"] &= 0x00600000
     return out
 
 

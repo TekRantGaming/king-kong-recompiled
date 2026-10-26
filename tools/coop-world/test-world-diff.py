@@ -59,6 +59,22 @@ class Contract(unittest.TestCase):
         self.g["shared"]["objects"]["bodies"][key]["pose"][0] = 1.
         self.assertEqual(self.result()["differences"][0]["key"], "shared.objects.bodies." + key + ".pose.0")
 
+    def test_local_object_culling_does_not_change_shared_lifecycle(self):
+        body_key="0000000000001234"
+        object_key=body_key+":2"
+        for d in (self.h,self.g):
+            d["shared"]["objects"]["rows"][object_key]=dict(kind=2,available=True,flags=3,value=0,position=0,seconds=0)
+            d["shared"]["objects"]["bodies"][body_key]=dict(available=True,retired=False,topology=body_key,flags=3,pose=[0.]*9)
+        self.g["shared"]["objects"]["rows"][object_key]["flags"]=0x20002
+        self.g["shared"]["objects"]["bodies"][body_key]["flags"]=0x20000
+        self.assertEqual(self.result()["status"],"PARTIAL_EQUAL")
+        self.assertEqual(self.g["shared"]["objects"]["bodies"][body_key]["flags"],0x20000)
+        for flag in (0x00200000,0x00400000):
+            self.g["shared"]["objects"]["bodies"][body_key]["flags"]=0x20000|flag
+            result=self.result()
+            self.assertEqual(result["status"],"DIFF")
+            self.assertEqual(result["differences"][0]["key"],"shared.objects.bodies."+body_key+".flags")
+
     def test_unchanged_native_world(self):
         self.assertEqual(self.result()["status"], "PARTIAL_EQUAL")
 
