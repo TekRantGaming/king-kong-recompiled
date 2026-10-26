@@ -6,6 +6,7 @@
 param(
     [Parameter(Mandatory)][string[]]$Entries,
     [ValidateRange(15,86400)][int]$Seconds = 150,
+    [ValidateRange(70,180)][int]$CheckpointSeconds = 90,
     [string]$Worktree = 'F:\kk-native-coop\kk-recomp',
     [switch]$FacePartner,
     [switch]$WorldDiff,
@@ -86,11 +87,12 @@ for ($i = 0; $i -lt $scenariosToRun.Count; $i++) {
         exit_code = $null; started_utc = $null; finished_utc = $null; error = $null
         start = $scenario.start; level = $rules[$entry].level; policy = $rules[$entry].policy
         load_proof = $scenario.load_proof; world_evidence = (Join-Path $sweepDir "world-$i"); world_status = $null
+        seconds = $(if ($scenario.load_proof -eq 'forced-checkpoint-smoke') { $CheckpointSeconds } else { $Seconds })
     }
 }
 $manifest = [ordered]@{
     schema_version = 1; created_utc = [DateTime]::UtcNow.ToString('o')
-    seconds = $Seconds; worktree = $Worktree; face_partner = [bool]$FacePartner; runs = $records
+    seconds = $Seconds; checkpoint_seconds = $CheckpointSeconds; worktree = $Worktree; face_partner = [bool]$FacePartner; runs = $records
     world_diff = [bool]$WorldDiff; checkpoints = [bool]$Checkpoints; source_commit = $sourceCommit
     source_branch = $sourceBranch; source_dirty = $sourceDirty; exe_sha256 = $exeSha
     protocol = 21; snapshot_schema = 1; fault_profile = 'bad_wifi'; fault_seeds = @(86,86)
@@ -113,7 +115,7 @@ try {
         $record=$records[$recordIndex]
         if (Test-Path -LiteralPath (Join-Path $sweepDir 'stop-after-current')) { $record.status='blocked-task-stop'; Save-Manifest; break }
         if ($WorldDiff -and (Get-PSDrive -Name F).Free -lt 8GB) { $record.status='blocked-disk-space'; Save-Manifest; break }
-        if ([DateTime]::UtcNow.AddSeconds($Seconds + 30) -gt $deadline) { $record.status='blocked-deadline'; Save-Manifest; break }
+        if ([DateTime]::UtcNow.AddSeconds($record.seconds + 30) -gt $deadline) { $record.status='blocked-deadline'; Save-Manifest; break }
         $record.status = 'running'; $record.started_utc = [DateTime]::UtcNow.ToString('o'); Save-Manifest
         $runOutput = New-Object 'System.Collections.Generic.List[string]'
         $envText = "KK_DEV_LAUNCHER_INPUT=wait-home,direct:code:C86ABC,direct:host,session:$($record.entry)|KK_DEV_AUTOSKIP=1|KK_DEV_SCRIPT=0:SKIP/10|KK_DEV_WANDER=1|KK_DEV_CHEATS_ANYWHERE=1|KK_DEV_EMPTY_LOADOUT=1|KK_DEV_TRIG_TRACE=1|KK_DEV_ENEMY_NEAR=1"
@@ -128,7 +130,7 @@ try {
             $scenario="entry-$($record.entry)-start-$($record.start)"
             $evidence=[ordered]@{ entry=$record.entry; start=$record.start; level=$record.level; policy=$record.policy
                 load_proof=$record.load_proof; source_commit=$sourceCommit; source_branch=$sourceBranch; source_dirty=$sourceDirty
-                exe_sha256=$exeSha; exe_path=$exePath; protocol=21; snapshot_schema=1; fault_profile='bad_wifi'
+                exe_sha256=$exeSha; exe_path=$exePath; protocol=21; snapshot_schema=1; fault_profile='bad_wifi'; seconds=$record.seconds
                 fault_seeds=@(86,86); port=27080; roles=@('host','guest'); scenario=$scenario; flags=$hostArgs; runner=$runner
                 harness_sha256=$toolHashes; harness_sources=$harnessDir }
             $dirtyText=($sourceDirty -join ';')
@@ -148,7 +150,7 @@ try {
             $attempt++; $runOutput.Clear()
             "runner attempt $attempt" | Add-Content -LiteralPath $record.runner_output -Encoding UTF8
             & $shellExe -NoProfile -ExecutionPolicy Bypass -File $runner -Name $record.name `
-                -Seconds $Seconds -Worktree $Worktree -Two -Launcher -DirectIp -Snap '60' -Env $envText -JoinEnv $joinText `
+                -Seconds $record.seconds -Worktree $Worktree -Two -Launcher -DirectIp -Snap '60' -Env $envText -JoinEnv $joinText `
                 -HostExtra $hostArgs -Extra '--kk_launcher=true|--kk_toggle_aim=false|--kk_coop_udp_profile=bad_wifi|--kk_coop_udp_seed=86' 2>&1 |
                 ForEach-Object {
                     $line = $_.ToString(); $runOutput.Add($line)
@@ -157,7 +159,7 @@ try {
                 }
             $record.exit_code = $LASTEXITCODE
             $blocked=($runOutput -match '^USER:|^QUIET:|^CRAIG:|^BUSY:') -and -not ($runOutput -match '^(host|join|solo) PID ')
-            $retry=$blocked -and $RetryBlockedSeconds -gt 0 -and [DateTime]::UtcNow.AddSeconds($Seconds+30+$RetryBlockedSeconds) -lt $deadline
+            $retry=$blocked -and $RetryBlockedSeconds -gt 0 -and [DateTime]::UtcNow.AddSeconds($record.seconds+30+$RetryBlockedSeconds) -lt $deadline
             if ($retry) {
                 $record.status='waiting-runner'; Save-Manifest
                 Write-Host "Waiting $RetryBlockedSeconds seconds for the approved runner."
@@ -196,7 +198,7 @@ try {
                         $records += [ordered]@{ entry=$record.entry; name=('sweep-e{0:D2}-cp{1}-{2:D3}' -f $record.entry,$cp,$n)
                             status='pending'; run=$null; runner_output=(Join-Path $sweepDir "runner-$n.log"); exit_code=$null
                             started_utc=$null; finished_utc=$null; error=$null; start=$cp; level=$record.level; policy=$record.policy
-                            load_proof='forced-checkpoint-smoke'; world_evidence=(Join-Path $sweepDir "world-$n"); world_status=$null }
+                            load_proof='forced-checkpoint-smoke'; world_evidence=(Join-Path $sweepDir "world-$n"); world_status=$null; seconds=$CheckpointSeconds }
                     }
                     $manifest.runs=$records
                 }
