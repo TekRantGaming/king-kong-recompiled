@@ -525,6 +525,12 @@ void ShotValidation() {
     round=Shot(4,100.1); round.weapon=2;
     Check(jitter.Validate({round,1.1,Inventory(100.1,2)},World(),peer,1.1)==ShotReject::None,
         "normal gun cadence resumes after borrowed scheduling time");
+    ShotValidator switcher;
+    round=Shot(1,100); round.weapon=3;
+    Check(switcher.Validate({round,1,Inventory(100,3)},World(),peer,1)==ShotReject::None,"shotgun round before native weapon change");
+    round=Shot(2,100.2);
+    Check(switcher.Validate({round,1.2,Inventory(100.2)},World(),peer,1.2)==ShotReject::None,
+        "weapon change uses the newly selected gun cadence without a stale shotgun cooldown");
   }
   v = {}; auto burst = in;
   Check(v.Validate(burst, World(), peer, 1) == ShotReject::None, "burst one");
