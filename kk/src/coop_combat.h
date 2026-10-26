@@ -24,6 +24,9 @@ inline bool RaptorHit(uint32_t flags, uint32_t magnitude) {
 // do not create hits or decide contact, range, immunity or the native reaction.
 inline bool NativeHit(EnemyFamily family, uint32_t flags, uint32_t magnitude, bool projectile = false) {
   if (family == EnemyFamily::Raptor && !projectile) return RaptorHit(flags, magnitude);
+  // Marine reflex824B42E4 uses512 with magnitude0 after actual timed contact.
+  // The native reaction is carried by its flags, not a positive scalar.
+  if (family == EnemyFamily::Marine && !projectile && flags == 512 && !magnitude) return true;
   switch (family) {
     case EnemyFamily::Raptor: case EnemyFamily::Crab: case EnemyFamily::Worm: case EnemyFamily::Scorpion:
     case EnemyFamily::Bat: case EnemyFamily::Centipede: case EnemyFamily::Native:

@@ -86,6 +86,14 @@ void Codecs() {
   m.damage.direction = {2, 0, 0}; Check(Encode(m, out), "scaled native forward is retained for Jack's native normalization");
   m.damage.direction = {2001, 0, 0}; Check(!Encode(m, out), "unbounded direction refused");
   m = Damage(); m.damage.enemy.family = EnemyFamily::Prey; Check(!Encode(m, out), "nonattacking family refused");
+  {
+    auto contact=Damage(); contact.damage.enemy.family=EnemyFamily::Marine;
+    contact.damage.flags=512; contact.damage.magnitude=0; contact.damage.part=64;
+    Message decoded;
+    Check(Decode(Packet(contact),decoded) && !decoded.damage.magnitude && decoded.damage.flags==512,
+        "native marine flag driven contact retains its zero scalar");
+    contact.damage.flags=0; Check(!Encode(contact,out),"zero scalar does not admit an empty hit");
+  }
   for (auto family : {EnemyFamily::Crab, EnemyFamily::Worm, EnemyFamily::Scorpion, EnemyFamily::Bat,
        EnemyFamily::Centipede, EnemyFamily::Native, EnemyFamily::Marine, EnemyFamily::VRex,
        EnemyFamily::SwampCrawler, EnemyFamily::SwampCrawlerSmall, EnemyFamily::Spider, EnemyFamily::Pny}) {

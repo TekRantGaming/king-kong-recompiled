@@ -2154,6 +2154,10 @@ void AfterAi(PPCContext& ctx, uint8_t* b, uint32_t w) {
         case EnemyFamily::Crab: handle = 1048; break;
         case EnemyFamily::Bat: target = Load32(b, binding.vars+848); break;
         case EnemyFamily::Native: target = Load32(b, binding.vars+4088); break;
+        case EnemyFamily::SwampCrawler: target = Load32(b,binding.vars+556); break;
+        case EnemyFamily::SwampCrawlerSmall: target = Load32(b,binding.vars+1912); break;
+        case EnemyFamily::Marine: target = Load32(b,binding.vars+348); break;
+        case EnemyFamily::VRex: target = Load32(b,binding.vars+516); break;
         default: continue;
       }
       if (handle && PoseAddress(binding.vars, handle+8)) {
