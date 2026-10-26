@@ -1,0 +1,40 @@
+Subject: [PATCH] SDL input: add the pads that were connected before the driver started
+
+The driver only learnt of pads from SDL_EVENT_GAMEPAD_ADDED, which SDL sends once, to whoever opens the
+gamepad subsystem first. On Linux the launcher does, so a pad connected before the game (Steam Input's
+virtual pad in Game Mode) never worked in game.
+---
+--- a/src/input/sdl/sdl_input_driver.cpp	2026-10-26 03:24:38.671196802 +0000
++++ b/src/input/sdl/sdl_input_driver.cpp	2026-10-26 03:24:38.690207612 +0000
+@@ -95,6 +95,21 @@
+       }
+       SDL_Gamepad_initialized_ = true;
+ 
++      // Pads already connected sent their "added" event to whoever opened the gamepad subsystem
++      // first (the launcher, or Steam's virtual pad before the game started), so add them here.
++      // A second "added" for the same pad is ignored.
++      int count = 0;
++      if (SDL_JoystickID* ids = SDL_GetGamepads(&count)) {
++        std::lock_guard<std::mutex> guard(event_queue_mutex_);
++        for (int i = 0; i < count; ++i) {
++          SDL_Event added = {};
++          added.type = SDL_EVENT_GAMEPAD_ADDED;
++          added.gdevice.which = ids[i];
++          pending_events_.push_back(added);
++        }
++        SDL_free(ids);
++      }
++
+       // Load custom controller mappings if available
+       if (!REXCVAR_GET(hid_mappings_file).empty()) {
+         std::filesystem::path mappings_path(REXCVAR_GET(hid_mappings_file));
+@@ -441,6 +456,9 @@
+ }
+ 
+ void SDLInputDriver::OnControllerDeviceAddedLocked(const SDL_Event& event) {
++  if (GetControllerIndexFromInstanceID(event.gdevice.which)) {
++    return;  // already added
++  }
+   const auto controller = SDL_OpenGamepad(event.gdevice.which);
+   if (!controller) {
+     assert_always();

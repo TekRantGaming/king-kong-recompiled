@@ -34,7 +34,10 @@ DXC_FROM="${KK_DXC_FROM:-$F/downloads/dxc-linux-v1.9.2609/x}"
 JOBS="${KK_JOBS:-$(( $(nproc) > 2 ? $(nproc) - 2 : 1 ))}"
 # The game build (a developer build, KK_DEV_TOOLS=ON, gets its own, so the two never rebuild each other).
 WORKDIR="${KK_BUILD_DIR:-$BASE/work$([ "${KK_DEV_TOOLS:-OFF}" != ON ] || echo -dev)}"
-PATCHES="0039 0040 0041 0043 0044 0045"
+PATCHES="0039 0040 0041 0043 0044 0045 0046 0047"
+# Linux only fixes the Windows SDK source does not have (its files are left out of the step 2 comparison):
+# 0046 joins a finished thread once (threading_posix.cpp; the benchmark start hung).
+LINUX_ONLY="0046 0047"
 mkdir -p "$BASE"
 T0=$(date +%s)
 step() { echo "== [$(( $(date +%s) - T0 )) s] $*"; }
@@ -81,9 +84,14 @@ if [ "$(cat "$SRC/.kk-sdk-stamp" 2>/dev/null)" != "$STAMP" ]; then
   echo "$STAMP" > "$SRC/.kk-sdk-stamp"
 fi
 if [ -d "$SDK_CHECK/src" ]; then
+  : > "$BASE/linux-only-files.txt"
+  for n in $LINUX_ONLY; do
+    tr -d '\r' < "$(ls "$REPO/native-renderer/sdk-patches/$n"-*.patch)" | sed -n 's|^+++ b/||p' >> "$BASE/linux-only-files.txt"
+  done
   # Every file of the Windows SDK's source (its include/ and src/) must be the same here (line ends aside).
   diffs=0
   while IFS= read -r f; do
+    grep -qx "$f" "$BASE/linux-only-files.txt" 2>/dev/null && continue
     if ! diff -q --strip-trailing-cr "$SDK_CHECK/$f" "$SRC/$f" >/dev/null 2>&1; then echo "  differs from Windows: $f"; diffs=$((diffs+1)); fi
   done < <(cd "$SDK_CHECK" && find include src -type f)
   [ $diffs -eq 0 ] || { echo "error: the Linux SDK source differs from $SDK_CHECK in $diffs files" >&2; exit 1; }
