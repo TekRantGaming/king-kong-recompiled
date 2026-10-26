@@ -39,6 +39,7 @@ REX_EXTERN(__imp__sub_82419C38);
 REX_EXTERN(__imp__sub_8261DE68);
 REX_EXTERN(__imp__sub_826A0920);
 REX_EXTERN(__imp__sub_826C12C8);
+REX_EXTERN(__imp__sub_826A1178);
 #if defined(KK_DEV_TOOLS)
 REX_EXTERN(__imp__sub_826C4E98);
 #endif
@@ -2032,6 +2033,16 @@ void ObserveHumanReflex(PPCContext& ctx,uint8_t* b) {
         LoadF(b,after->vars+13432),LoadF(b,after->vars+2892),Load32(b,after->vars+4008),
         Load32(b,after->vars+3212),Load32(b,after->vars+3204));
 }
+void ObserveHumanGround(PPCContext& ctx,uint8_t* b) {
+  const bool observe=REXCVAR_GET(kk_coop_enabled) && Connected() && Load32(b,0x82CCBF6C)==Load32(b,0x82CCBF7C);
+  const auto before=observe ? ReadHumanStatus(b):std::nullopt;
+  __imp__sub_826A1178(ctx,b);
+  const auto after=before ? ReadHumanStatus(b):std::nullopt;
+  if (before && after && before->hero==after->hero && before->vars==after->vars && before->value!=after->value)
+    REXLOG_INFO("COOP HEALTH native-ground role={} level={} condition={}->{} fall={} off-ground-seconds={} ground-kind={} void={} last-floor-z={}",
+        Get().link.role==Role::Host ? "host":"guest",Get().identity.level,uint8_t(before->condition),uint8_t(after->condition),
+        LoadF(b,after->vars+13268),LoadF(b,after->vars+2840),Load32(b,after->vars+2844),Load32(b,after->vars+15440),LoadF(b,after->vars+2872));
+}
 #if defined(KK_DEV_TOOLS)
 void DevEquipmentInput(PPCContext& ctx,uint8_t* b) {
   __imp__sub_826C4E98(ctx,b);
@@ -2041,6 +2052,9 @@ void DevEquipmentInput(PPCContext& ctx,uint8_t* b) {
   if (!h || Now()<next) return;
   next=Now()+1;
   const auto v=h->vars,g=h->bank;
+  REXLOG_INFO("COOP EQUIPMENT gate role={} t={:.3f} view={:08X} aim={:08X} blocked={} target={:08X} proxy={:08X}",
+      Get().link.role==Role::Host ? "host":"guest",kk::DevSecondsSinceMenu(),Ptr(b,Ptr(b,Get().world,112,164),160,32),
+      Load32(b,0x82CC8868),Load32(b,v+2784),Load32(b,v+11520),kk::PartnerBodyCombatActor(b));
   REXLOG_INFO("COOP EQUIPMENT input role={} t={:.3f} player={} slot={} bank={:08X} weapon={} rounds={} aim-off={} aiming={} aim-weight={} shoot={}/{} disabled={} loading={}/{} action-wait={} input-disabled={} pad={} pickup={}/{:08X} friend-ahead={:08X}/{:08X}/{:08X}/{:08X}/{:08X}",
       Get().link.role==Role::Host ? "host":"guest",kk::DevSecondsSinceMenu(),Load32(b,v),Load32(b,v+4),g,
       Load32(b,g+13128),Load32(b,g+13504),Load32(b,v+2984),Load32(b,v+2988),LoadF(b,v+6192),
@@ -2337,6 +2351,14 @@ void OwnerShots(PPCContext& ctx, uint8_t* b) {
       e.id = hit.id; e.owner = a->second.owner; e.generation = a->second.generation;
       if (a->second.dead) e.life = 0;
       reason = s.shot_targets.Validate(shot, hit, e, Now());
+#if defined(KK_DEV_TOOLS)
+      if (reason==ShotReject::Distance && std::getenv("KK_DEV_EQUIPMENT")) {
+        static unsigned logs=0;
+        if (logs++<64) REXLOG_INFO("COOP EQUIPMENT hit-distance number={} family={} ray={} target-error={} hit=({},{},{}) target=({},{},{})",
+            shot.number,uint16_t(e.id.family),ShotDistance(shot.origin,hit.point),ShotDistance(hit.point,{e.x,e.y,e.z}),
+            hit.point.x,hit.point.y,hit.point.z,e.x,e.y,e.z);
+      }
+#endif
       if (reason == ShotReject::Late) { late = true; reason = ShotReject::None; continue; }
       if (reason != ShotReject::None) break;
       targets.push_back({*binding, hit});
@@ -2976,6 +2998,15 @@ bool EnemyDamageEnqueue(PPCContext& ctx, uint8_t* b, uint32_t body) {
   auto& s = Get();
   if (!REXCVAR_GET(kk_coop_enabled) || ctx.r4.u32 != 4 || !PoseAddress(ctx.r6.u32, 108)) return false;
   const auto payload = ctx.r6.u32, source = ctx.r3.u32, victim = Load32(b, payload+4);
+#if defined(KK_DEV_TOOLS)
+  if (s.prepared && Connected() && victim==Load32(b,0x82CCBF7C)) {
+    static unsigned logs=0;
+    const auto binding=s.bindings.find(source);
+    if (logs++<128) REXLOG_INFO("COOP HEALTH enqueue role={} source={:08X} family={} victim={:08X} flags={:08X} magnitude={} caller={:08X} replay={}",
+        s.link.role==Role::Host ? "host":"guest",source,binding==s.bindings.end() ? 0:uint16_t(binding->second.id.family),
+        victim,Load32(b,payload+88),Load32(b,payload+92),uint32_t(ctx.lr),s.injecting_damage);
+  }
+#endif
   bool matched_source = false;
   if (s.prepared && Connected() && Environment(b, s.world) && Now()-s.prepared_at <= .5) {
     const auto it = s.bindings.find(source);
@@ -3158,6 +3189,7 @@ REX_HOOK_RAW(sub_826A0920) {
   kk::coop::ObserveHumanConsumption(ctx, base);
 }
 REX_HOOK_RAW(sub_826C12C8) { kk::coop::ObserveHumanReflex(ctx,base); }
+REX_HOOK_RAW(sub_826A1178) { kk::coop::ObserveHumanGround(ctx,base); }
 #if defined(KK_DEV_TOOLS)
 REX_HOOK_RAW(sub_826C4E98) { kk::coop::DevEquipmentInput(ctx,base); }
 #endif
