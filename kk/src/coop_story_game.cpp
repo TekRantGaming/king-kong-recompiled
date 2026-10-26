@@ -7,6 +7,7 @@
 #include "coop_runtime.h"
 #include "coop_pose.h"
 #include "coop_partner_body.h"
+#include "coop_world_snapshot.h"
 #include "hfr.h"
 #include "settings.h"
 #include <rex/hook.h>
@@ -649,6 +650,27 @@ std::vector<WorldScript> StoryWorldDigest(const uint8_t* b) {
   }
   return out;
 }
+#if defined(KK_DEV_TOOLS)
+world::Json world::StorySnapshot(const uint8_t* b,world::Capture& capture) {
+  std::map<std::string,Json> rows;
+  for (const auto& [actor,s]:scripts) {
+    const auto* bind=story::Match(s.binding.source,s.binding.script,bindings);
+    const auto key=Hex(s.binding.source)+":"+Hex(s.binding.script);
+    if (!bind || bind->actor!=actor || Vars(b,bind->ai,19824)!=bind->vars || Shape(b,bind->vars)!=bind->script) {
+      capture.Error("script-native-binding-unreadable:"+key); continue;
+    }
+    const auto cursor=Load32(b,bind->vars+19812);
+    if (cursor>kStoryRecords) { capture.Error("script-cursor-out-of-range:"+key); continue; }
+    if (!rows.emplace(key,Json::Object({{"cursor",cursor},{"loop",Tracks(b,bind->ai,kLoop)},
+        {"detect",Tracks(b,bind->ai,kDetect)},{"activity",bool(Load32(b,actor+4)&0x400000)},
+        {"run",s.run},{"started",s.started},{"finished",s.finished}})).second)
+      capture.Error("script-id-collision:"+key);
+  }
+  const bool ready=!failed && !snapshot_waiting && !ordered.Behind() && outgoing.empty() && snapshot_out.empty();
+  if (!ready) capture.Error("story-not-settled");
+  return Json::Object({{"rows",Json::Object(rows)},{"watermark",host ? number:ordered.Next()-1},{"ready",ready}});
+}
+#endif
 desync::Evidence StoryCompareDigest(const uint8_t* b,const desync::State& state,bool reconcile) {
   desync::Evidence result; result.progress=14695981039346656037ull;
   const auto mix=[&](uint64_t v) { for (unsigned i=0;i<8;++i) { result.progress^=uint8_t(v>>(i*8)); result.progress*=1099511628211ull; } };

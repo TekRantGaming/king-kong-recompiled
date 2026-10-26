@@ -10,6 +10,7 @@
 #include "play_internal.h"
 #include "photo_mode.h"
 #include "coop_partner_body.h"
+#include "coop_world_snapshot.h"
 #if defined(KK_DEV_TOOLS)
 #include "coop_stimulus_debug.h"
 #endif
@@ -2055,6 +2056,66 @@ void EnemyAfterLoad(const uint8_t* b, uint32_t game) {
   s.capture = ValidEnemyWorld(s.identity);
 }
 EnemyWorld EnemyCurrentWorld() { return Get().identity; }
+#if defined(KK_DEV_TOOLS)
+world::Json world::EnemySnapshot(const uint8_t* b,world::Capture& capture) {
+  auto& s=Get(); std::map<std::string,Json> rows;
+  if (!Environment(b,s.world)) capture.Error("enemy-native-world-unavailable");
+  uint32_t begin=0,end=0; unsigned unbound=0,initializing_count=0;
+  if (!Table(b,s.world,begin,end,true)) capture.Error("enemy-native-registry-unreadable");
+  for (auto p=begin;p<end;p+=8) {
+    const auto actor=Load32(b,p);
+    if (!PoseAddress(actor,32) || (Load32(b,actor)&0x00400001)) continue;
+    const auto ai=Ptr(b,Ptr(b,actor,24,8),4,88),matrix=Ptr(b,actor,12,64);
+    bool spawner=false,initializing=false; uint32_t state=0;
+    const auto family=Tracks(b,ai,state,spawner,&initializing);
+    if (spawner || family==EnemyFamily::None) continue;
+    if (!matrix) { ++unbound; capture.Error("enemy-native-matrix-unreadable"); continue; }
+    const bool scheduled=Member(b,s.world,actor);
+    EnemyId id;
+    const auto binding=s.bindings.find(actor);
+    if (binding!=s.bindings.end() && binding->second.ai==ai && binding->second.matrix==matrix)
+      id=Canonical(binding->second.id);
+    // The engine census already captured this immutable authored transform
+    // before init/motion. This is not a hash of the current moving position.
+    if (!id.source) {
+      const auto authored=s.authored.find(actor);
+      if (authored!=s.authored.end() && !authored->second.ambiguous && authored->second.ai==ai &&
+          authored->second.matrix==matrix && authored->second.family==family)
+        id={authored->second.key,0,family};
+    }
+    const auto key=Hex(id.source)+":"+std::to_string(id.sequence)+":"+std::to_string(unsigned(id.family));
+    if (!id.source) { ++unbound; capture.Error("enemy-native-identity-unresolved"); continue; }
+    const auto authority=s.authority.find(id);
+    const auto* a=authority==s.authority.end() ? nullptr:&authority->second;
+    // Read just the field's own proven native chain. The replication pose
+    // reader also validates facing/animation, which dormant bats need not have.
+    Binding observed; observed.actor=actor; observed.ai=ai; observed.matrix=matrix; observed.id.family=family;
+    observed.vars=Ptr(b,ai,64,LifeBytes(family));
+    if (!initializing && !observed.vars) { capture.Error("enemy-native-vars-unreadable:"+key); continue; }
+    // Missing authority is observable state, not a failed native read. Keep
+    // 'unassigned' so a guest-only activation can produce a named mismatch.
+    const auto cell=initializing ? 0:LifeCell(b,observed);
+    const float native_life=initializing ? 0:StateLife(family) ? ReplicatedLife(family,state,0):cell ? LoadF(b,cell):NAN;
+    if (!std::isfinite(native_life)) capture.Error("enemy-native-health-unreadable:"+key);
+    const auto secondary_offset=SecondaryLifeOffset(family);
+    const float secondary=initializing || !secondary_offset ? 0:LoadF(b,observed.vars+secondary_offset);
+    if (!std::isfinite(secondary)) capture.Error("enemy-native-secondary-health-unreadable:"+key);
+    const bool alive=ReplicatedLife(family,state,native_life)>0 && (!secondary_offset || secondary>0);
+    const float x=LoadF(b,matrix+48),y=LoadF(b,matrix+52),z=LoadF(b,matrix+56);
+    if (!std::isfinite(x) || !std::isfinite(y) || !std::isfinite(z)) capture.Error("enemy-native-position-unreadable:"+key);
+    initializing_count+=initializing;
+    const auto row=Json::Object({{"family",unsigned(family)},{"phase",initializing ? "initializing":"initialized"},
+        {"health_kind",StateLife(family) ? "native-track-lifecycle":"native-scalar"},
+        {"health",initializing ? Json():Json(native_life)},{"secondary_health",initializing ? Json():Json(secondary)},
+        {"alive",initializing ? Json():Json(alive)},{"owner",a ? a->owner==EnemyOwner::Host ? "host":"guest":"unassigned"},
+        {"authority_present",a!=nullptr},{"owner_generation",a ? a->generation:0},{"native_state",state},
+        {"scheduled",scheduled},{"position",Json::Array({x,y,z})}});
+    if (!rows.emplace(key,row).second) capture.Error("enemy-id-collision:"+key);
+  }
+  if (unbound) capture.Error("unbound-native-enemies:"+std::to_string(unbound));
+  return Json::Object({{"rows",Json::Object(rows)},{"unbound",unbound},{"initializing",initializing_count}});
+}
+#endif
 void EnemyGuardRecoveryWorld(EnemyWorld world) {
   guard_world.reset();
   const auto v=SessionFlowSnapshot(); const auto link=EnemyLinkSnapshot();

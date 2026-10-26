@@ -1,0 +1,2 @@
+#pragma once
+#define KK_WORLD_SOURCE_COMMIT "@KK_WORLD_SOURCE_COMMIT@"

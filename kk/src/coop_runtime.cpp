@@ -7,6 +7,7 @@
 #include "coop_observer.h"
 #include "coop_story_game.h"
 #include "coop_desync_game.h"
+#include "coop_world_snapshot.h"
 #include "settings.h"
 #include "steam_runtime.h"
 #include "social_fake.h"
@@ -776,6 +777,9 @@ void GameFrame(uint8_t* base) {
   RefreshSessionCheats();
   kk::PartnerBodyGameFrame(base);
   StoryGameFrame(base);
+#if defined(KK_DEV_TOOLS)
+  world::Frame(base); // Capture before C72 can repair this frame's disagreement.
+#endif
   WorldGuardFrame(base);
   if (!REXCVAR_GET(kk_coop_enabled)) { observer::GameFrame(base); return; }
   SessionReloadFrame(base);
@@ -921,6 +925,9 @@ void PartnerAnimationShot(uint8_t weapon) {
   if (weapon < 1 || weapon > 4) return;
   ++animation_fire; animation_weapon = weapon;
 }
+#if defined(KK_DEV_TOOLS)
+uint32_t world::ConfirmedShots() { return animation_fire; }
+#endif
 void SetPartnerBodyDriven(bool driven) {
   partner_body_driven.store(driven);
   if (!driven) { std::lock_guard lock(head_mutex); head_anchor = {}; }
