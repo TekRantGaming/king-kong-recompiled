@@ -76,6 +76,13 @@ void Policies() {
   Check(objects::BodyHandle(body_read,0x42000000)==0x45000000,"native reactivation can bind a new owned body without retaining a freed handle");
   physics[0x43000010]=0x44000000;
   Check(!objects::BodyHandle(body_read,0x42000000),"mismatching geom and body refuse before native writes");
+  std::map<uint32_t,uint32_t> model{{0x41000000,0x42000000},{0x42000000,0x43000000},
+      {0x4300001C,0x44000000},{0x44000014,0x826E6390}};
+  const auto model_read=[&](uint32_t a){return model[a];};
+  Check(objects::DefaultTrack(model_read,0x41000000,0x826E6390),"a stopped tree retains its native model initial track identity");
+  Check(!objects::DefaultTrack(model_read,0x41000000,0x82690148),"unrelated native initial tracks cannot acquire tree physics ownership");
+  model[0x42000000]=0xFFFFFFF0;
+  Check(!objects::DefaultTrack(model_read,0x41000000,0x826E6390),"invalid model headers refuse before following an initial track");
   const std::vector<objects::PartRoot> aliases{{200,{40,50,40}},{100,{30,40}}};
   const auto canonical=objects::CanonicalParts(aliases);
   Check(canonical.size()==3,"aliases within and across roots produce one physical body each");

@@ -8,6 +8,20 @@ struct PartRoot {
   std::vector<uint32_t> parts;
 };
 struct PartIdentity { uint64_t source=0,topology=0; };
+// uni_reinit8271D698 restores five tracks from the model variables header+20.
+// An ended native tree clears its live tracks, but keeps this model identity.
+template<class Read> bool DefaultTrack(Read read,uint32_t ai,uint32_t native) {
+  if (!PoseAddress(ai,88)) return false;
+  const auto model=read(ai);
+  if (!PoseAddress(model,4)) return false;
+  const auto definition=read(model);
+  if (!PoseAddress(definition,40)) return false;
+  for (unsigned slot=0;slot<5;++slot) {
+    const auto block=read(definition+20+4*slot);
+    if (PoseAddress(block,24) && read(block+20)==native) return true;
+  }
+  return false;
+}
 // The physics RECORD is owned by the actor. Its ODE body is ephemeral: native
 // scene init detaches it and later activation can create another one. Require
 // the same geom/body relationship that the native transform helper consumes.

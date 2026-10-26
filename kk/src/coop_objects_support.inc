@@ -29,6 +29,14 @@ bool UnitBody(const uint8_t* b,uint32_t actor) {
   return true;
 }
 #if defined(KK_DEV_TOOLS)
+uint64_t DevSupportSource() {
+  static const uint64_t source=[] {
+    const auto value=std::getenv("KK_DEV_OBJECT_COLLAPSE_SOURCE"); if (!value || !*value) return uint64_t(0);
+    char* end=nullptr; const auto id=std::strtoull(value,&end,16);
+    return end!=value && !*end && id ? uint64_t(id) : UINT64_MAX;
+  }();
+  return source;
+}
 // Read-only native group relationships. Pickup children2..6 are NOT physical
 // support identities. No relationship is inferred from matching positions.
 void SupportRelations(const uint8_t* b,uint32_t actor,const char* family) {
@@ -75,6 +83,8 @@ void PrepareSupport(const uint8_t* b,Binding& o) {
   // Retain a generic collapse plus the final physical outcome in that case.
   if (Track(b,o.ai,tree ? 0x826E7BF0 : 0x826F1E08)) s.phase=1;
   if (Track(b,o.ai,tree ? 0x826D0770 : 0x826F4948)) s.phase=2;
+  if (tree && Load32(b,o.vars+0x930) && !Track(b,o.ai,0x826E6390) &&
+      !Track(b,o.ai,0x826E78F0) && !Track(b,o.ai,0x826E7BF0)) s.phase=2;
   if (s.phase) s.event.trigger=1;
   if (Trace()) REXLOG_INFO("KK dev object support profile: role={} id={:016X} family={} mode={} parts={} members={} eligible={}",
       state.host ? "host" : "guest",o.source,tree ? "tree" : "ode",mode,s.parts.size(),s.all.size(),s.eligible);
@@ -401,6 +411,7 @@ void ReplaySupports(PPCContext& ctx,uint8_t* b) {
   if (state.host && !selected && fixture_at>=0 && kk::DevSecondsSinceMenu()>=fixture_at) {
     Binding* choice=nullptr;
     for (auto& [actor,o]:state.bindings) if (objects::SupportRoot(o.kind) && o.support.topology &&
+        (!DevSupportSource() || o.source==DevSupportSource()) &&
         Load32(b,o.vars+(o.kind==ObjectKind::Tree ? 0x52C : 0))==fixture_mode && Valid(b,o) &&
         (!choice || o.source<choice->source)) choice=&o;
     if (choice) {

@@ -214,7 +214,8 @@ ObjectKind Family(const uint8_t* b,uint32_t ai) {
   if (Track(b,ai,0x825FD388) || Track(b,ai,0x825E7348) || Track(b,ai,0x8260C988) || Track(b,ai,0x82604E68)) return ObjectKind::Raft;
   if (Track(b,ai,0x826EA1A0) || Track(b,ai,0x826F0E10) || Track(b,ai,0x826F1E08) || Track(b,ai,0x826F4948)) return ObjectKind::Ode;
   if (Track(b,ai,0x826E6390) || Track(b,ai,0x826E78F0) || Track(b,ai,0x826E7BF0) || Track(b,ai,0x826D0770) ||
-      Track(b,ai,0x826D0440) || Track(b,ai,0x826D05D8)) return ObjectKind::Tree;
+      Track(b,ai,0x826D0440) || Track(b,ai,0x826D05D8) ||
+      objects::DefaultTrack([&](uint32_t a){return Load32(b,a);},ai,0x826E6390)) return ObjectKind::Tree;
   return ObjectKind(0);
 }
 bool DoorScheduled(const uint8_t* b,uint32_t ai) {
@@ -1263,9 +1264,8 @@ void ScanInventory(const uint8_t* b,uint32_t w) {
     const auto ai=Ptr(b,Ptr(b,actor,24,8),4,88),matrix=Ptr(b,actor,12,64);
     if (!ai || !matrix) continue;
     const auto first=Load16(b,ai+80),last=Load16(b,ai+82);
-    if (first>last || last>4096 || last-first>64 || !PoseAddress(ai,(last+7)*4)) continue;
     unsigned kind=0; uint32_t selected=0;
-    for (uint32_t t=first;t<=last;++t) {
+    for (uint32_t t=first;t<=last && first<=last && last<=4096 && last-first<=64 && PoseAddress(ai,(last+7)*4);++t) {
       const auto block=Ptr(b,ai,(t+6)*4,24); if (!block) continue;
       const auto fn=Load32(b,block+20); unsigned next=0;
       switch (fn) {
@@ -1289,6 +1289,8 @@ void ScanInventory(const uint8_t* b,uint32_t w) {
       }
       if (next) { kind=next; selected=fn; }
     }
+    if (!kind) for (const auto [native,family]:{std::pair{0x826E6390u,4u},std::pair{0x82690148u,13u},std::pair{0x8249DBB0u,14u}})
+      if (objects::DefaultTrack([&](uint32_t a){return Load32(b,a);},ai,native)) { kind=family; selected=native; break; }
     ++counts[kind];
     if (!kind || state.scan_rows>=96 || !state.scan_seen.insert(actor).second) continue;
     const auto definition=Ptr(b,Ptr(b,ai,0,4),0,8);
@@ -1349,7 +1351,7 @@ void ScanInventory(const uint8_t* b,uint32_t w) {
       }
     }
   }
-  REXLOG_INFO("KK dev object inventory totals: role={} level={} pass={} iob={} door={} ode={} tree={} bamboo={} rack={} fire={} raft={} ammo={} javelin={} checkpoint={} grab={} benttree={} deadtree={} unknown={} bounded-rows={}",
+  REXLOG_INFO("KK dev object inventory totals: role={} level={} pass={} iob={} door={} ode={} tree={} bamboo={} rack={} fire={} raft={} ammo={} javelin={} checkpoint={} grab={} benttree={} deadtree={} unknown={} bounded-rows={} model-defaults=true",
       v.host ? "host" : "guest",v.world.level,state.scan_pass,counts[1],counts[2],counts[3],counts[4],counts[5],counts[6],counts[7],counts[8],counts[9],counts[10],counts[11],counts[12],counts[13],counts[14],counts[0],state.scan_rows);
 }
 // Explicit native-input fixtures, never a network outcome injector. Selects a
@@ -1707,6 +1709,7 @@ void ObjectsDevCamera(PPCContext& ctx,uint8_t* b,uint32_t actor,uint32_t caller)
   if (view.mode && !state.view_ready) {
     const Binding* selected=nullptr;
     for (const auto& [root,o]:state.bindings) if (objects::SupportRoot(o.kind) && o.support.topology && view.part<o.support.parts.size() &&
+        (!DevSupportSource() || o.source==DevSupportSource()) &&
         Valid(b,o) && Load32(b,o.vars+(o.kind==ObjectKind::Tree ? 0x52C : 0))==view.mode &&
         (!selected || o.source<selected->source)) selected=&o;
     if (!selected) return;
