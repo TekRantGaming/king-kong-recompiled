@@ -1244,9 +1244,9 @@ void OwnershipBeforeAi(PPCContext& ctx, uint8_t* b) {
 #if defined(KK_DEV_TOOLS)
     // Exercise the existing real transaction only in an explicit combat fixture.
     // Shipping retains C68's host authority policy, including firearm authority.
-    static const bool dev_proximity=[] {
+    static const int dev_proximity=[] {
       const char* value=std::getenv("KK_DEV_COMBAT_OWNERSHIP");
-      return value && std::strcmp(value,"1")==0;
+      return value && std::strcmp(value,"1")==0 ? 1 : value && std::strcmp(value,"guest")==0 ? 2 : 0;
     }();
     const auto matched=s.matched_at.find(id);
     if (dev_proximity && s.link.role==Role::Host && s.link.partner &&
@@ -1255,7 +1255,10 @@ void OwnershipBeforeAi(PPCContext& ctx, uint8_t* b) {
       const float host=PlayerDistance(b,binding->actor,Load32(b,0x82CCBF7C));
       const auto& peer=*s.link.partner;
       const float guest=std::hypot(a.last.x-peer.x,a.last.y-peer.y,a.last.z-peer.z);
-      if (const auto target=a.proximity.Decide(a.owner,host,guest,now,!a.Frozen() && !a.dead && a.matched)) {
+      // Mode guest keeps a completed grant for a reverse-hit fixture. It still
+      // requires the normal proximity grant and full reliable transaction.
+      if (const auto target=a.proximity.Decide(a.owner,host,guest,now,
+          !a.Frozen() && !a.dead && a.matched && (dev_proximity!=2 || a.owner==EnemyOwner::Host))) {
         auto trial=a;
         if (const auto prepare=trial.Begin(s.identity,*target,a.last))
           if (SeedAuthority(ctx,b,*binding,prepare->enemy)) {
