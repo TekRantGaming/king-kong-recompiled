@@ -70,6 +70,7 @@ REX_EXTERN(__imp__sub_8242AA88);
 REX_EXTERN(__imp__sub_8271A6F8);
 REX_EXTERN(__imp__sub_827128F0);
 REX_EXTERN(__imp__sub_826BB350);
+REX_EXTERN(__imp__sub_828724C0);
 #if defined(KK_DEV_TOOLS)
 namespace kk {
 void DevFishAfterWorld(PPCContext&, uint8_t*);
@@ -826,7 +827,7 @@ void PartnerBodyAim(PPCContext& ctx,uint8_t* b,uint32_t actor,uint32_t ai) {
 #endif
   // H_callback_after_blend uses tags 3 and 2 with 8271A6F8 (inverse
   // orientation) then 827128F0 (weighted local rotation), .22:32690+.
-  // Called in place of this body's native after-blend callback. Scheduled AI
+  // Called at skeleton-blend completion. Scheduled AI
   // quarantine does not hold event callbacks. Applying again at LateWorld
   // would fight the native callback and can accumulate on an unevaluated pose.
   // Each call here belongs to a newly evaluated native pose, including a loop
@@ -2057,6 +2058,27 @@ void PartnerBodyObserveAction(const PPCContext& ctx,const uint8_t* b) {
         ctx.r3.u32,ctx.r4.u32,uint32_t(ctx.lr));
   }
 }
+void PartnerBodyPoseBlended(PPCContext& ctx,uint8_t* b,uint32_t actor) {
+  auto& s=Get();
+  if (!Enabled() || !Opt().partner || !s.driving || actor!=s.selected.actor ||
+      !s.partner.fresh || !s.Environment(b,s.world)) return;
+  Rig rig;
+  if (!s.Validate(b,s.world,rig) || !(b[rig.anim+1]&15) || !Ptr(b,rig.anim,8,4)) return;
+  ++s.pose_blends;
+  PartnerBodyAim(ctx,b,rig.actor,rig.ai);
+#if defined(KK_DEV_TOOLS)
+  static const bool trace=[] { const auto* v=std::getenv("KK_DEV_PARTNER_TRACE"); return v && *v=='1'; }();
+  const auto now=Clock::now();
+  if (trace && now-s.animation_sample_at>=std::chrono::milliseconds(190) && Scratch::CanUse(ctx)) {
+    s.animation_sample_at=now;
+    const auto bone=OwnedAimBone(b,rig,3), matrix=Ptr(b,bone,12,80);
+    REXLOG_INFO("PUPPET animation sample t={:.3f} action={} item={} frame={:.3f} rate={} fire={} use={} gesture={:.3f} aim-axis={}",
+        s.elapsed,rig.action,rig.item,Frame(ctx,b,rig.actor),b[rig.layer+2],
+        s.animation.last_fire,s.animation.use_action,s.animation.GesturePitch(),
+        matrix ? XYZ(ReadVec(b,matrix+16)) : "unavailable");
+  }
+#endif
+}
 }  // namespace kk
 
 REX_HOOK_RAW(sub_826BB350) {
@@ -2064,28 +2086,9 @@ REX_HOOK_RAW(sub_826BB350) {
       kk::hfr::Load32(base,0x82CCBF6C)==kk::Get().selected.actor &&
       kk::hfr::Load32(base,0x82CCBF64)==kk::Get().selected.ai &&
       kk::PartnerBodySuppressShot(base)) {
-    auto& s=kk::Get();
-    // The renderer also calls event 3 for an inactive body with no new pose.
-    // hierarchy_pose brackets freshly blended poses with this native flag.
-    if (kk::hfr::Load32(base,0x82CCABEC)) {
-      ++s.pose_blends;
-      kk::PartnerBodyAim(ctx,base,s.selected.actor,s.selected.ai);
-#if defined(KK_DEV_TOOLS)
-      static const bool trace=[] { const auto* v=std::getenv("KK_DEV_PARTNER_TRACE"); return v && *v=='1'; }();
-      const auto now=kk::Clock::now();
-      if (trace && now-s.animation_sample_at>=std::chrono::milliseconds(190) && kk::Scratch::CanUse(ctx)) {
-        s.animation_sample_at=now;
-        kk::Rig rig;
-        if (kk::ReadRig(base,s.selected.actor,rig)) {
-          const auto bone=kk::OwnedAimBone(base,rig,3), matrix=kk::Ptr(base,bone,12,80);
-          REXLOG_INFO("PUPPET animation sample t={:.3f} action={} item={} frame={:.3f} rate={} fire={} use={} gesture={:.3f} aim-axis={}",
-              s.elapsed,rig.action,rig.item,kk::Frame(ctx,base,rig.actor),base[rig.layer+2],
-              s.animation.last_fire,s.animation.use_action,s.animation.GesturePitch(),
-              matrix ? kk::XYZ(kk::ReadVec(base,matrix+16)) : "unavailable");
-        }
-      }
-#endif
-    }
+    // Native event callbacks are separate from the scheduled AI quarantine.
+    // They must not bend or reposition the driven body's freshly blended pose.
+    // PoseBlended handles copies too, even when their event list is empty.
     ctx.r3.u64=0;
     return;
   }
@@ -2093,6 +2096,11 @@ REX_HOOK_RAW(sub_826BB350) {
 }
 
 #if !defined(KK_DEV_TOOLS)
+REX_HOOK_RAW(sub_828724C0) {
+  const auto actor=ctx.r3.u32;
+  __imp__sub_828724C0(ctx,base);
+  kk::PartnerBodyPoseBlended(ctx,base,actor);
+}
 REX_HOOK_RAW(sub_82850100) {
   kk::PartnerBodyObserveAction(ctx,base);
   __imp__sub_82850100(ctx,base);
