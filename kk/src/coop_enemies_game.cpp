@@ -557,9 +557,9 @@ bool Environment(const uint8_t* b, uint32_t w) {
       !Load32(b, s.game+4) && Load32(b, s.game+0x18) == s.identity.level && !play::StartLevelLoading() && !photo::Active();
 }
 uint64_t KeyAt(const uint8_t* b, uint32_t actor, uint32_t family) {
-  if (PoseAddress(actor,36)) if (const auto key=FileAuthoredKey(family,Load32(b,actor+32))) return key;
   const auto m = Ptr(b, actor, 12, 64);
   if (!m) return 0;
+  if (PoseAddress(actor,36)) if (const auto key=FileAuthoredKey(family,Load32(b,actor+32))) return key;
   return AuthoredKey(family, LoadF(b, m+48), LoadF(b, m+52), LoadF(b, m+56));
 }
 uint64_t TemplateIdentity(const uint8_t* b,uint32_t actor) {
