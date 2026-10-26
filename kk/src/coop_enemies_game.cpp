@@ -1218,6 +1218,31 @@ void OwnershipBeforeAi(PPCContext& ctx, uint8_t* b) {
     // death before the host confirmed it, and moved hit consumption off host.
     // Keep the transaction receiver for private-world restoration, but do not
     // initiate proximity transfers in this protocol/build.
+#if defined(KK_DEV_TOOLS)
+    // Exercise the existing real transaction only in an explicit combat fixture.
+    // Shipping retains C68's host authority policy, including firearm authority.
+    static const bool dev_proximity=[] {
+      const char* value=std::getenv("KK_DEV_COMBAT_OWNERSHIP");
+      return value && std::strcmp(value,"1")==0;
+    }();
+    const auto matched=s.matched_at.find(id);
+    if (dev_proximity && s.link.role==Role::Host && s.link.partner &&
+        now-s.link.remote.time<=.5 && matched!=s.matched_at.end() && now-matched->second<=1.5 &&
+        EnemyPartnerCombatReady() && ValidBinding(b,*binding) && ControllerSafe(b,binding->actor)) {
+      const float host=PlayerDistance(b,binding->actor,Load32(b,0x82CCBF7C));
+      const auto& peer=*s.link.partner;
+      const float guest=std::hypot(a.last.x-peer.x,a.last.y-peer.y,a.last.z-peer.z);
+      if (const auto target=a.proximity.Decide(a.owner,host,guest,now,!a.Frozen() && !a.dead && a.matched)) {
+        auto trial=a;
+        if (const auto prepare=trial.Begin(s.identity,*target,a.last))
+          if (SeedAuthority(ctx,b,*binding,prepare->enemy)) {
+            a=trial; s.ownership_out[id]=*prepare; SendOwnership(*prepare);
+            REXLOG_INFO("COOP combat ownership fixture prepare id={:016X}/{} generation={} host-distance={:.2f} guest-distance={:.2f}",
+                id.source,id.sequence,prepare->generation,host,guest);
+          }
+      }
+    }
+#endif
   }
   if (now < s.next_ownership) return;
   s.next_ownership = now+.5;
@@ -1578,8 +1603,20 @@ void DevBait(PPCContext& ctx, uint8_t* b) {
     bool done = false;
     EnemyFamily family = EnemyFamily::Raptor;
     double repeat = 0;
+    float distance = 3, height = 0;
+    bool keep_height = false;
     unsigned placements = 0;
     Bait() {
+      const auto placement=[](const char* name,float fallback,float low,float high) {
+        if (const char* value=std::getenv(name)) {
+          char* end=nullptr; const auto parsed=std::strtof(value,&end);
+          if (end!=value && !*end && std::isfinite(parsed) && parsed>=low && parsed<=high) return parsed;
+        }
+        return fallback;
+      };
+      distance=placement("KK_DEV_BAIT_DISTANCE",3,.5f,10);
+      height=placement("KK_DEV_BAIT_HEIGHT",0,-1,5);
+      if (const char* value=std::getenv("KK_DEV_BAIT_KEEP_HEIGHT")) keep_height=std::strcmp(value,"1")==0;
       if (const char* value=std::getenv("KK_DEV_BAIT_REPEAT")) {
         char* end=nullptr; const auto parsed=std::strtod(value,&end);
         if (end!=value && !*end && std::isfinite(parsed) && parsed>=3 && parsed<=30) repeat=parsed;
@@ -1622,12 +1659,12 @@ void DevBait(PPCContext& ctx, uint8_t* b) {
   const float dx = e.x-origin.x, dy = e.y-origin.y, length = std::hypot(dx, dy);
   const float fx = length > .001f ? dx/length : std::cos(e.facing);
   const float fy = length > .001f ? dy/length : std::sin(e.facing);
-  const ShotVector target{e.x-3*fx, e.y-3*fy, e.z};
+  const ShotVector target{e.x-bait.distance*fx, e.y-bait.distance*fy, (bait.keep_height ? origin.z : e.z)+bait.height};
   if (!kk::DevTeleportJack(ctx, b, Load32(b, 0x82CCBF7C), target, fx, fy)) return;
   bait.done = !bait.repeat || ++bait.placements>=12;
   if (!bait.done) bait.due=t+bait.repeat;
-  REXLOG_INFO("KK dev bait: at {:.2f} guest teleported by native 82538B70 family={} enemy={:016X}/{} from=({:.3f},{:.3f},{:.3f}) to=({:.3f},{:.3f},{:.3f}) stand-off=3 collision-unverified=true",
-      t, uint16_t(e.id.family), e.id.source, e.id.sequence, origin.x, origin.y, origin.z, target.x, target.y, target.z);
+  REXLOG_INFO("KK dev bait: at {:.2f} guest teleported by native 82538B70 family={} enemy={:016X}/{} from=({:.3f},{:.3f},{:.3f}) to=({:.3f},{:.3f},{:.3f}) stand-off={:.2f} height={:.2f} collision-unverified=true",
+      t, uint16_t(e.id.family), e.id.source, e.id.sequence, origin.x, origin.y, origin.z, target.x, target.y, target.z,bait.distance,bait.height);
 }
 // Diagnostics are per validated host raptor, bounded and reset on load. The old
 // process-wide timer hid other raptors; a handle alone did not identify a victim.
