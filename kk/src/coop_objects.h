@@ -75,6 +75,19 @@ template<class Read> bool BreakableCheckpointGone(Read read,uint32_t actor,uint3
       !PoseAddress(bank,(771+(cap>>5))*4)) return false;
   return (read(bank+(770+(cap>>5))*4)&(1u<<(cap&31)))!=0;
 }
+// ODE Init826EA1A0 can finish a retained collapse through native checkpoint
+// cleanup instead of advancing to Wait. Certify the root AND every authored
+// part as removed; a checkpoint bit alone does not prove geometry cleanup.
+template<class Read> bool OdeCheckpointGone(Read read,uint32_t actor,uint32_t vars,
+                                           std::span<const uint32_t> parts) {
+  if (!PoseAddress(actor,32) || !PoseAddress(vars,3376) || parts.empty() || parts.size()>32 || !read(vars+4)) return false;
+  const auto cap=read(vars+8),bank=read(0x82CC92F8);
+  if (cap<201 || cap>=1500 || (read(actor+4)&0x00600000)!=0x00600000 ||
+      !PoseAddress(bank,(771+(cap>>5))*4) || !(read(bank+(770+(cap>>5))*4)&(1u<<(cap&31)))) return false;
+  for (unsigned i=0;i<parts.size();++i)
+    if (!PoseAddress(parts[i],32) || read(vars+20+4*i)!=parts[i] || (read(parts[i]+4)&0x00600000)!=0x00600000) return false;
+  return !read(vars+20+4*parts.size());
+}
 // Native stop 826F9DC0 supports five slots. Never use an outer actor's current
 // index, an unrelated track or a malformed scheduler range for a side call.
 template<class Read,class ReadHalf> std::vector<unsigned> DoorSlots(Read read,ReadHalf half,uint32_t ai) {

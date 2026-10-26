@@ -47,15 +47,15 @@ void SupportRelations(const uint8_t* b,uint32_t actor,const char* family) {
   const auto list=Ptr(b,Ptr(b,group,8,4),0,28);
   const auto begin=list ? Load32(b,list+16) : 0,end=list ? Load32(b,list+4) : 0;
   const auto swap=Ptr(b,group,0x54,0x84);
-  REXLOG_INFO("KK dev object support relation: role={} family={} root={:08X} type={:08X} parent={:08X} group={:08X} physics={:08X}",
-      host ? "host" : "guest",family,actor,Load32(b,actor),pose ? Load32(b,pose+80) : 0,group,Physics(b,actor));
+  REXLOG_INFO("KK dev object support relation: role={} family={} root={:08X} type={:08X} parent={:08X} group={:08X} physics={:08X} native-owner={:08X}",
+      host ? "host" : "guest",family,actor,Load32(b,actor),pose ? Load32(b,pose+80) : 0,group,Physics(b,actor),PoseAddress(actor,36) ? Load32(b,actor+32) : 0);
   if (!list || b[list+20]!=0x1E || !PoseAddress(begin) || end<begin || end-begin>64*8 || (end-begin)%8 || !PoseAddress(begin,end-begin)) return;
   for (unsigned n=0;n<(end-begin)/8;++n) {
     const auto child=Load32(b,begin+8*n); if (!PoseAddress(child,32)) continue;
     const auto child_pose=Ptr(b,Ptr(b,child,20,16),12,88);
-    REXLOG_INFO("KK dev object support relation: role={} family={} root={:08X} slot={} child={:08X} type={:08X} flags={:08X} parent={:08X} physics={:08X}",
+    REXLOG_INFO("KK dev object support relation: role={} family={} root={:08X} slot={} child={:08X} type={:08X} flags={:08X} parent={:08X} physics={:08X} native-owner={:08X}",
         host ? "host" : "guest",family,actor,swap ? unsigned(b[swap+4+n]) : n,child,Load32(b,child),Load32(b,child+4),
-        child_pose ? Load32(b,child_pose+80) : 0,Physics(b,child));
+        child_pose ? Load32(b,child_pose+80) : 0,Physics(b,child),PoseAddress(child,36) ? Load32(b,child+32) : 0);
   }
 }
 #endif
@@ -266,7 +266,41 @@ void SupportNative(PPCContext& ctx,uint8_t* b,bool tree,unsigned phase) {
     InvalidateSupport(b,o->actor); native(ctx,b); return;
   }
   auto& s=o->support; s.tick=state.ai_tick;
-  if (!phase) { native(ctx,b); s.initialized=true; return; }
+  if (!phase) {
+    native(ctx,b); s.initialized=true;
+    const auto* terminal=state.host ? nullptr : state.replica.Find(kind,o->source);
+    if (!tree && ctx.r3.u32==1 && terminal && terminal->value==2 && terminal->collapse.topology==s.topology &&
+        objects::OdeCheckpointGone([&](uint32_t a){return Load32(b,a);},o->actor,o->vars,s.parts)) {
+      // The native initializer already removed this checkpoint's geometry.
+      // Do not replay Wait or apply a retained live pose that would unhide it.
+      const bool first=s.phase!=2;
+      s.phase=2; s.event=terminal->collapse;
+      for (const auto part:s.parts) if (auto it=state.bodies.find(part); it!=state.bodies.end()) {
+        it->second.retired=true; it->second.driven=it->second.saved_body=false;
+      }
+      if (first) {
+        ++state.applied;
+        if (Trace()) REXLOG_INFO("KK dev object collapse checkpoint endpoint: role=guest id={:016X} topology={:016X} parts={} native-removed=true",
+            o->source,s.topology,s.parts.size());
+#if defined(KK_DEV_TOOLS)
+        state.observed_change=true;
+#endif
+      }
+    }
+#if defined(KK_DEV_TOOLS)
+    if (Trace() && !state.host && s.phase!=2 && Track(b,o->ai,tree ? 0x826E6390 : 0x826EA1A0)) {
+      static double next_trace=0;
+      if (Now()>=next_trace) {
+        next_trace=Now()+5;
+        const auto ext=Ptr(b,o->actor,24,42);
+        REXLOG_INFO("KK dev object support init waiting: id={:016X} result={} capability={}/{} flags={:08X} ext={:04X} parts={}",
+            o->source,ctx.r3.u32,Load32(b,o->vars+(tree ? 0x530 : 4)),Load32(b,o->vars+(tree ? 0x534 : 8)),
+            Load32(b,o->actor+4),ext ? Load16(b,ext+40) : 0,s.parts.size());
+      }
+    }
+#endif
+    return;
+  }
   const auto* authority=state.host ? nullptr : state.replica.Find(kind,o->source);
   if (!state.host) {
     if (authority && authority->value==3) { native(ctx,b); return; }

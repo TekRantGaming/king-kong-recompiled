@@ -1267,6 +1267,11 @@ void ScanInventory(PPCContext& ctx,uint8_t* b,uint32_t w) {
         v.host ? "host" : "guest",v.world.level,cache,block,block ? Load32(b,block+20) : 0);
   }
   unsigned counts[15]{};
+  if (state.scan_pass==1 && PoseAddress(0x828C8CC8,2101*12)) for (unsigned i=0;i<2101;++i) {
+    const auto row=0x828C8CC8+12*i,binder=Load32(b,row+4);
+    if (binder==0x826D3850 || binder==0x8266EF98 || binder==0x8249EFC0 || binder==0x826D5A90)
+      REXLOG_INFO("KK dev object tree registry: stream={:08X} binder={:08X} metadata={:08X}",Load32(b,row),binder,Load32(b,row+8));
+  }
   struct TreeReference { uint32_t key,address; unsigned family; };
   std::array<TreeReference,12> tree_refs{{{0x4D000113,0,4},{0x4D000116,0,4},{0x4D000114,0,4},
       {0x4D00011A,0,4},{0x4D00012E,0,4},{0x4D00165A,0,13},{0x4D00015D,0,13},
@@ -1386,6 +1391,18 @@ void ScanInventory(PPCContext& ctx,uint8_t* b,uint32_t w) {
         if (family) { kind=family; selected=native; selected_block=block; break; }
       }
     }
+    // The model's native binder is independent of its current/default methods.
+    // Keep this as census evidence only, including stopped/interpreted models.
+    const auto model=Ptr(b,ai,0,32);
+    const auto binder=model ? Load32(b,model+28) : 0;
+    const auto stream=model ? Load32(b,model+24) : 0;
+    const unsigned binder_family=binder==0x826D3850 ? 4u : binder==0x8266EF98 ? 13u :
+        binder==0x8249EFC0 ? 14u : binder==0x826D5A90 ? 12u : 0u;
+    if (binder_family) {
+      REXLOG_INFO("KK dev object tree model candidate: role={} actor={:08X} family={} stream={:08X} binder={:08X} production-by-binder=false",
+          v.host ? "host" : "guest",actor,names[binder_family],stream,binder);
+      if (!kind) { kind=binder_family; selected=binder; }
+    }
     ++counts[kind];
     if (!kind || state.scan_rows>=96 || !state.scan_seen.insert(actor).second) continue;
     const auto definition=Ptr(b,Ptr(b,ai,0,4),0,8);
@@ -1400,10 +1417,21 @@ void ScanInventory(PPCContext& ctx,uint8_t* b,uint32_t w) {
         Load32(b,selected_block),Load32(b,selected_block+20));
     if (kind==4 || kind==13 || kind==14) REXLOG_INFO("KK dev object tree method candidate: role={} actor={:08X} family={} resource={:08X} native={:08X} production-by-key=false",
         v.host ? "host" : "guest",actor,names[kind],method_key==state.file_keys.end() ? 0 : method_key->second,selected);
-    REXLOG_INFO("KK dev object inventory: role={} level={} family={} fn={:08X} actor={:08X} vars={:08X} bytes={} pos=({:.3f},{:.3f},{:.3f}) word+{}={:08X} word+{}={:08X} word+{}={:08X} asset={:08X} matrix-present={}",
+    REXLOG_INFO("KK dev object inventory: role={} level={} family={} fn={:08X} actor={:08X} vars={:08X} bytes={} pos=({:.3f},{:.3f},{:.3f}) word+{}={:08X} word+{}={:08X} word+{}={:08X} asset={:08X} matrix-present={} native-owner={:08X}",
         v.host ? "host" : "guest",v.world.level,names[kind],selected,actor,vars,bytes,
         matrix ? LoadF(b,matrix+48) : 0,matrix ? LoadF(b,matrix+52) : 0,matrix ? LoadF(b,matrix+56) : 0,
-        offsets[kind][0],word(0),offsets[kind][1],word(1),offsets[kind][2],word(2),key==state.file_keys.end() ? 0 : key->second,matrix!=0);
+        offsets[kind][0],word(0),offsets[kind][1],word(1),offsets[kind][2],word(2),key==state.file_keys.end() ? 0 : key->second,matrix!=0,
+        PoseAddress(actor,36) ? Load32(b,actor+32) : 0);
+    // Native8287B4D8 stores its current resource key at actor+32. This is
+    // read-only provenance for identifying physical barricade assets; it never
+    // grants an identity or treats a personal pickup as shared geometry.
+    if (kind==1 && vars && bytes>=580) for (unsigned i=0;i<10;++i) {
+      const auto part=Load32(b,vars+20+4*i);
+      if (!part) break;
+      if (!PoseAddress(part,36)) break;
+      REXLOG_INFO("KK dev object obstacle member: role={} root={:08X} slot={} actor={:08X} native-owner={:08X} type={:08X} physics={:08X}",
+          v.host ? "host" : "guest",actor,i,part,Load32(b,part+32),Load32(b,part),Physics(b,part));
+    }
     if (kind==7 && vars && bytes>=884)
       REXLOG_INFO("KK dev object fire contract: role={} actor={:08X} supported={} mode={} repeat={} completion={:08X} timer={} spread={} total={}",
           v.host ? "host" : "guest",actor,FireContract(b,vars),Load32(b,vars+364),Load32(b,vars+372),
@@ -1481,6 +1509,9 @@ void DevProbe(PPCContext& ctx,uint8_t* b,Probe& probe,ObjectKind kind) {
     for (auto& [actor,o] : state.bindings) {
       if (o.kind!=kind || !Valid(b,o) || Match(o.source,kind)!=&o) continue;
       if (kind==ObjectKind::Breakable && (!Load32(b,o.vars+556) || Load32(b,o.vars+552)>=Load32(b,o.vars+556))) continue;
+      // A model can retain Go while its native actor is inactive. Fixture
+      // input must select a consumer that actually ran in the previous pass.
+      if (kind==ObjectKind::Breakable && state.ai_tick>o.damage_tick+1) continue;
       unsigned slot=0;
       if (kind==ObjectKind::Door) {
         if (Load32(b,o.vars)!=2 || LoadF(b,o.vars+1084)>=1) continue;
@@ -1622,13 +1653,18 @@ void FloorProbe(PPCContext& ctx,uint8_t* b) {
   // Optional bounded floor search for object evidence. Every candidate still
   // passes the same native collision, slope and own-Jack placement guards.
   static const bool scan=[] { const auto value=std::getenv("KK_DEV_OBJECT_FLOOR_SCAN"); return value && *value=='1'; }();
+  static const float step=[] {
+    const auto value=std::getenv("KK_DEV_OBJECT_FLOOR_STEP"); if (!value || !*value) return 4.f;
+    char* end=nullptr; const auto n=std::strtof(value,&end);
+    return end!=value && !*end && std::isfinite(n) && n>=.25f && n<=8 ? n : 4.f;
+  }();
   static unsigned candidate=0;
   if (scan) {
     if (candidate>=25) { probe.done=true; return; }
     // Search the centre first, then its surrounding authored terrain.
     if (candidate) {
       const auto cell=candidate<=12 ? candidate-1 : candidate;
-      x+=4*(int(cell%5)-2); y+=4*(int(cell/5)-2);
+      x+=step*(int(cell%5)-2); y+=step*(int(cell/5)-2);
     }
     ++candidate;
   }
@@ -2070,6 +2106,13 @@ void ObjectsAfterAi(PPCContext& ctx,uint8_t* b,uint32_t w) {
       }
       if (o.kind==ObjectKind::Breakable) REXLOG_INFO("KK dev object breakable consumer: role={} id={:016X} maximum={} init={} go={} consumed={}",
           state.host ? "host" : "guest",o.source,Load32(b,o.vars+556),Track(b,o.ai,0x82516128),Track(b,o.ai,0x82515CF0),o.damage_tick==state.ai_tick);
+      if (objects::SupportRoot(o.kind)) REXLOG_INFO("KK dev object support consumer: role={} id={:016X} initialized={} phase={} init={} wait={} active={} end={} range={}/{} eligible={} topology={:016X}",
+          state.host ? "host" : "guest",o.source,o.support.initialized,o.support.phase,
+          Track(b,o.ai,o.kind==ObjectKind::Tree ? 0x826E6390 : 0x826EA1A0),
+          Track(b,o.ai,o.kind==ObjectKind::Tree ? 0x826E78F0 : 0x826F0E10),
+          Track(b,o.ai,o.kind==ObjectKind::Tree ? 0x826E7BF0 : 0x826F1E08),
+          Track(b,o.ai,o.kind==ObjectKind::Tree ? 0x826D0770 : 0x826F4948),
+          Load16(b,o.ai+80),Load16(b,o.ai+82),o.support.eligible,o.support.topology);
       if (o.kind==ObjectKind::Raft) {
         const auto p=NativePoint(ctx,b,o.actor);
         REXLOG_INFO("KK dev object raft state: role={} id={:016X} ready={} driven={} nodes={} route={:016X} current={}/{} native-source={:08X} native-key={:08X} native-current={:08X}/{:08X} pos=({:.3f},{:.3f},{:.3f}) host=({:.3f},{:.3f},{:.3f}) speed={} time={} stop={}",

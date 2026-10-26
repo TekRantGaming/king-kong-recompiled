@@ -199,6 +199,20 @@ void Policies() {
   Check(!objects::BreakableCheckpointGone(checkpoint_read,0x42001000,0x44000000),"one removal flag alone cannot certify native terminal cleanup");
   checkpoint[0x42001004]=0x00600000; checkpoint[0x45000c20]=0;
   Check(!objects::BreakableCheckpointGone(checkpoint_read,0x42001000,0x44000000),"terminal replay requires this object's exact native checkpoint bit");
+  checkpoint[0x45000c20]=1u<<9; checkpoint[0x44000004]=1; checkpoint[0x44000008]=201;
+  checkpoint[0x44000014]=0x42002000; checkpoint[0x42002004]=0x00600000;
+  const std::array<uint32_t,1> ode_parts{0x42002000};
+  Check(objects::OdeCheckpointGone(checkpoint_read,0x42001000,0x44000000,ode_parts),
+      "ODE private init recognizes native checkpoint root and part cleanup");
+  checkpoint[0x42002004]=0;
+  Check(!objects::OdeCheckpointGone(checkpoint_read,0x42001000,0x44000000,ode_parts),
+      "a removed ODE root cannot certify an intact physical part");
+  checkpoint[0x42002004]=0x00600000; checkpoint[0x44000018]=0x42003000;
+  Check(!objects::OdeCheckpointGone(checkpoint_read,0x42001000,0x44000000,ode_parts),
+      "ODE cleanup cannot omit a remaining authored member");
+  checkpoint[0x44000018]=0; checkpoint[0x45000c20]=0;
+  Check(!objects::OdeCheckpointGone(checkpoint_read,0x42001000,0x44000000,ode_parts),
+      "ODE cleanup requires the exact local checkpoint bit");
   scheduler[0x42000052]=5;
   Check(objects::DoorSlots(schedule,schedule,0x42000000).empty(),"native stop cannot address a sixth slot");
   scheduler[0x42000052]=0;
