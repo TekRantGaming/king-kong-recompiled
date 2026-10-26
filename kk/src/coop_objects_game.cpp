@@ -1273,9 +1273,10 @@ void ScanInventory(PPCContext& ctx,uint8_t* b,uint32_t w) {
       REXLOG_INFO("KK dev object tree registry: stream={:08X} binder={:08X} metadata={:08X}",Load32(b,row),binder,Load32(b,row+8));
   }
   struct TreeReference { uint32_t key,address; unsigned family; };
-  std::array<TreeReference,12> tree_refs{{{0x4D000113,0,4},{0x4D000116,0,4},{0x4D000114,0,4},
+  std::array<TreeReference,15> tree_refs{{{0x4D000115,0,4},{0x4D000113,0,4},{0x4D000116,0,4},{0x4D000114,0,4},
       {0x4D00011A,0,4},{0x4D00012E,0,4},{0x4D00165A,0,13},{0x4D00015D,0,13},
-      {0x4D000065,0,13},{0x4D000066,0,13},{0x4D000068,0,13},{0x9E007F24,0,14},{0x9E007B6A,0,0}}};
+      {0x4D000067,0,13},{0x4D000065,0,13},{0x4D000066,0,13},{0x4D000068,0,13},
+      {0x9E007F23,0,14},{0x9E007F24,0,14},{0x9E007B6A,0,0}}};
   // 827061B0 performs two read-only registry lookups. Unlike FileKeys it does
   // not discard aliases, and can resolve the real method behind a copied
   // descriptor. Last entry is the known live bamboo Wait control.
@@ -1304,9 +1305,9 @@ void ScanInventory(PPCContext& ctx,uint8_t* b,uint32_t w) {
       return ref.family;
     const auto it=state.file_keys.find(block); if (it==state.file_keys.end()) return 0;
     switch (it->second) {
-      case 0x4D000113: case 0x4D000116: case 0x4D000114: case 0x4D00011A: case 0x4D00012E: return 4;
-      case 0x4D00165A: case 0x4D00015D: case 0x4D000065: case 0x4D000066: case 0x4D000068: return 13;
-      case 0x9E007F24: return 14;
+      case 0x4D000115: case 0x4D000113: case 0x4D000116: case 0x4D000114: case 0x4D00011A: case 0x4D00012E: return 4;
+      case 0x4D000067: case 0x4D00165A: case 0x4D00015D: case 0x4D000065: case 0x4D000066: case 0x4D000068: return 13;
+      case 0x9E007F23: case 0x9E007F24: return 14;
     }
     return 0;
   };

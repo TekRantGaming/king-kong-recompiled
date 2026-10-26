@@ -288,13 +288,13 @@ void SupportNative(PPCContext& ctx,uint8_t* b,bool tree,unsigned phase) {
       }
     }
 #if defined(KK_DEV_TOOLS)
-    if (Trace() && !state.host && s.phase!=2 && Track(b,o->ai,tree ? 0x826E6390 : 0x826EA1A0)) {
+    if (Trace() && !tree && !state.host && s.phase!=2 && Track(b,o->ai,0x826EA1A0)) {
       static double next_trace=0;
       if (Now()>=next_trace) {
         next_trace=Now()+5;
         const auto ext=Ptr(b,o->actor,24,42);
         REXLOG_INFO("KK dev object support init waiting: id={:016X} result={} capability={}/{} flags={:08X} ext={:04X} parts={}",
-            o->source,ctx.r3.u32,Load32(b,o->vars+(tree ? 0x530 : 4)),Load32(b,o->vars+(tree ? 0x534 : 8)),
+            o->source,ctx.r3.u32,Load32(b,o->vars+4),Load32(b,o->vars+8),
             Load32(b,o->actor+4),ext ? Load16(b,ext+40) : 0,s.parts.size());
       }
     }
