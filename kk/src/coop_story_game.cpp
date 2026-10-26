@@ -1032,9 +1032,19 @@ bool ConvergeFlagWait(uint8_t* b,uint32_t payload) {
       "host passed same activation; single-target read-only 0x100 wait stalled >20 seconds");
   return true;
 }
-Script* CinematicRecord(uint8_t* b,uint32_t payload,uint32_t fn) {
+Script* CinematicRecord(const PPCContext& ctx,uint8_t* b,uint32_t payload,uint32_t fn) {
   if (!Ensure(b) || host || failed || snapshot_waiting) return nullptr;
-  auto* s=Current(b);
+  // SSLoop caches its vars in nonvolatile r31 and writes this record's owner.
+  // NPC message callbacks may change the global target AI within that loop.
+  // Validate the actual native call frame and immutable binding instead.
+  if (uint32_t(ctx.lr)!=0x82454774 || !PoseAddress(payload,108)) return nullptr;
+  const auto it=scripts.find(Load32(b,payload));
+  if (it==scripts.end()) return nullptr;
+  auto* s=&it->second;
+  const auto& binding=s->binding;
+  const auto* match=story::Match(binding.source,binding.script,bindings);
+  if (!match || match->actor!=binding.actor || ctx.r31.u32!=binding.vars ||
+      Vars(b,binding.ai,19824)!=binding.vars || Shape(b,binding.vars)!=binding.script) return nullptr;
   // Run 1 may have begun before the shared baseline. Do not infer an unseen
   // host activation or apply this to another native caller's payload.
   if (!s || s->exact || !s->saw_loop || s->run<=1) return nullptr;
@@ -1044,7 +1054,7 @@ Script* CinematicRecord(uint8_t* b,uint32_t payload,uint32_t fn) {
 }
 bool HostCinematicWait(PPCContext& ctx,uint8_t* b) {
   const auto payload=ctx.r3.u32;
-  auto* s=CinematicRecord(b,payload,0x8250B9D8);
+  auto* s=CinematicRecord(ctx,b,payload,0x8250B9D8);
   if (!s) return false;
   const auto index=Load32(b,s->binding.vars+19812);
   // WaitScript consumes the NPC-ready flags when it succeeds. Keep that native
@@ -1062,7 +1072,7 @@ bool HostCinematicWait(PPCContext& ctx,uint8_t* b) {
 }
 bool HostCinematicSpeech(PPCContext& ctx,uint8_t* b) {
   const auto payload=ctx.r3.u32;
-  auto* s=CinematicRecord(b,payload,0x8250BED8);
+  auto* s=CinematicRecord(ctx,b,payload,0x8250BED8);
   if (!s) return false;
   const auto index=Load32(b,s->binding.vars+19812);
   // Speech queues its local sound/NPC message once (state 0), then only polls
