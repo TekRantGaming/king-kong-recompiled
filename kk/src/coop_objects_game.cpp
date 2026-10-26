@@ -1244,9 +1244,12 @@ void DoorInit(PPCContext& ctx,uint8_t* b) {
   static std::map<std::pair<uint32_t,uint32_t>,unsigned> init_trace;
   const auto actor=Load32(b,0x82CCBF6C),ai=Load32(b,0x82CCBF64);
   const auto vars=Vars(b,ai,ObjectKind::Door),matrix=Ptr(b,actor,12,64);
-  if (Trace() && state.epoch && vars && matrix && init_trace.size()<objects::kCensus && init_trace[{state.level,actor}]++<2) {
+  const bool trace_init=Trace() && state.epoch && vars && matrix && init_trace.size()<objects::kCensus && init_trace[{state.level,actor}]++<2;
+  uint64_t trace_source=0;
+  if (trace_init) {
     const auto asset=state.file_keys.find(actor);
     const auto source=asset==state.file_keys.end() ? objects::Source(ObjectKind::Door,LoadF(b,matrix+48),LoadF(b,matrix+52),LoadF(b,matrix+56),2):objects::AssetSource(ObjectKind::Door,asset->second);
+    trace_source=source;
     REXLOG_INFO("KK dev door init census: role={} level={} id={:016X} actor={:08X} ready={} shared={} flags={:08X} persistent={} capability={} progress={} node={:08X} bound={}",
         state.host ? "host":"guest",state.level,source,actor,state.ready,Shared(),Load32(b,actor+4),Load32(b,vars+584),Load32(b,vars+588),LoadF(b,vars+1084),
         PoseAddress(Load32(b,0x82CCBF60)) ? Load32(b,Load32(b,0x82CCBF60)):0,state.bindings.contains(actor));
@@ -1254,6 +1257,12 @@ void DoorInit(PPCContext& ctx,uint8_t* b) {
   if (auto* o=state.ready && Shared() ? Current(b,ObjectKind::Door) : nullptr) ++o->init_calls;
 #endif
   __imp__sub_82574D80(ctx,b);
+#if defined(KK_DEV_TOOLS)
+  if (trace_init && Ptr(b,Ptr(b,actor,24,8),4,88)==ai && Vars(b,ai,ObjectKind::Door)==vars && Ptr(b,actor,12,64)==matrix)
+    REXLOG_INFO("KK dev door init outcome: role={} level={} id={:016X} flags={:08X} capability={} progress={} loop={} scheduled={} native-result={}",
+        state.host ? "host":"guest",state.level,trace_source,Load32(b,actor+4),Load32(b,vars+588),LoadF(b,vars+1084),
+        Track(b,ai,0x8256C3F8),DoorScheduled(b,ai),ctx.r3.u32);
+#endif
 }
 #if defined(KK_DEV_TOOLS)
 void ScanInventory(PPCContext& ctx,uint8_t* b,uint32_t w) {
