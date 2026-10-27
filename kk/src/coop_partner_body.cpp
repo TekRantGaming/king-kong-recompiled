@@ -887,8 +887,8 @@ void PartnerWeapon(PPCContext& ctx,uint8_t* b,const Rig& rig,const coop::PlayerP
   // An unarmed H bank can contain these numbers as unrelated story gestures.
   // Only a naturally armed donor proves that its gun channels have this ABI.
   const bool gun_clips=gun && BodyWeapon(b,rig)!=0;
-  s.flash_left=gun ? std::max(0.f,s.flash_left-s.dt) : 0;
-  if (s.animation.new_shot && gun) s.flash_left=.075f;
+  s.flash_left=gun_clips ? std::max(0.f,s.flash_left-s.dt) : 0;
+  if (s.animation.new_shot && gun_clips) s.flash_left=.075f;
   if (!s.flash_left && s.weapon_flash>=0) {
     Scratch scratch(ctx,b);
     EffectSelection selection(b);
