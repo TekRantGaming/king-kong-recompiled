@@ -83,6 +83,29 @@ PoseRead ReadJack(const uint8_t* base) {
   if (!read.pose) { velocity.Clear(); return read; }
   auto& p = *read.pose;
   velocity.Apply(p);
+#if defined(KK_DEV_TOOLS)
+  static const bool trace_use=[] { const auto* v=std::getenv("KK_DEV_PARTNER_TRACE"); return v && *v=='1'; }();
+  if (trace_use) {
+    const auto actor=hfr::Load32(base,0x82CCBF7C);
+    const auto ai=hfr::Load32(base,hfr::Load32(base,actor+24)+4);
+    const auto vars=hfr::Load32(base,ai+64);
+    const auto rig=hfr::Load32(base,actor+20);
+    const auto anim=PoseAddress(rig) ? hfr::Load32(base,rig) : 0;
+    if (PoseAddress(anim,164)) {
+      const auto child=hfr::Load32(base,anim+0x60);
+      const auto flags=PoseAddress(child,2) ? hfr::Load16(base,child) : 0xFFFF;
+      const auto id=hfr::Load16(base,anim+0x7C);
+      const auto loading=hfr::Load32(base,vars+0x110C);
+      const uint64_t signature=(uint64_t(id)<<32)|(uint64_t(flags)<<16)|bool(loading);
+      static uint64_t previous=UINT64_MAX;
+      if (signature!=previous) {
+        previous=signature;
+        REXLOG_INFO("PUPPET local use weapon={} published={} main={} child={} flags={:04X} loading={}",
+            p.weapon,p.action,hfr::Load16(base,anim+156),id,flags,loading);
+      }
+    }
+  }
+#endif
   if (const auto pitch = nametag::ViewPitch(base,p.level)) p.pitch = *pitch;
   p.fire = animation_fire; p.fire_weapon = animation_weapon;
   return read;

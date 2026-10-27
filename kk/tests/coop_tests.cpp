@@ -3,6 +3,7 @@
 #include "coop_session.h"
 #include "coop_pose.h"
 #include "coop_puppet.h"
+#include "coop_animation_fire.h"
 #include "cheat_rules.h"
 #include "coop_partner_selection.h"
 #include "coop_nametag.h"
@@ -547,6 +548,20 @@ void PuppetPolicies() {
   Check(FilterActors(all_hidden, hidden) == 0, "volume query can exclude every spawned result");
   const Action observed[] = {{41, 3, 0}, {22, 3, 1}, {35, 4, 4}};
   AnimationDrive drive;
+  {
+    FireCapture fire(true);
+    FireCapture::Ray(0x11111111);
+    Check(!fire.Fired(true,false),"an unrelated ray cannot manufacture a partner shot");
+    {
+      FireCapture npc(false); FireCapture::Ray(0x8269727C);
+      Check(!npc.Fired(true,true),"NPC ammo consumption never becomes the player's visual shot");
+    }
+    Check(!fire.Fired(true,false),"nested NPC fire does not mark the surrounding player callback");
+    FireCapture::Ray(0x8269727C);
+    Check(fire.Fired(true,false),"confirmed native ray animates even without enemy forwarding or ammo delta");
+    Check(!fire.Fired(false,true),"world changes discard old native firing evidence");
+  }
+  { FireCapture fire(true); Check(fire.Fired(true,true),"spent native ammo also confirms pellet weapons"); }
   PlayerPose motion; motion.vx=4; motion.fire=10; motion.fire_weapon=2;
   drive.Update(motion,.05f);
   Check(drive.moving && !drive.new_shot, "late binding never replays old shots");
