@@ -136,6 +136,7 @@ bool HandoverPending();
 std::wstring HandoverArg();
 // Resumed host: the existing SessionStart for the plan's chapter or save, without the lobby.
 bool BeginResumedStart(const play::StartRequest& request);
+bool PrepareMenuRejoin(const std::filesystem::path& root);
 void Shutdown();
 // Only caller: the existing per-frame game-thread hook in hfr_frame_time.cpp.
 void GameFrame(uint8_t* base);

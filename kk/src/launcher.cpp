@@ -17,6 +17,7 @@
 #include "social_panel.h"
 #include "input_diag.h"
 #include "coop_runtime.h"
+#include "coop_resume.h"
 #include "easter_egg.h"
 #include "easter_egg_logic.h"
 #include "countdown.h"

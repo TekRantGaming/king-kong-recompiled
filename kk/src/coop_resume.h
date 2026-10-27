@@ -23,6 +23,9 @@ bool ResumeRequested(const std::filesystem::path& user_dir = {});
 void UpdateRejoinCheckpoint(const SessionStart& checkpoint);
 bool RejoinCheckpoint(SessionStart& checkpoint);
 void ForgetRejoin();
+namespace handover { struct File; }
+bool ReadRejoinRecord(const std::filesystem::path& root, handover::File& record);
+bool RejoinAvailable(const std::filesystem::path& root);
 // Reads and consumes the hand over file in user_dir. A missing, malformed or stale file goes straight
 // back to the menu. Otherwise shows the connecting screen and starts the link.
 void BeginResume(rex::ui::ImGuiDrawer* drawer, const std::filesystem::path& user_dir, ResumeCallbacks callbacks);

@@ -366,6 +366,13 @@ bool RequestSessionStart() {
   }
 }
 bool HandoverPending() { return handover_taken; }
+bool PrepareMenuRejoin(const std::filesystem::path& root) {
+  handover::File record;
+  if (handover_taken || !ReadRejoinRecord(root,record)) return false;
+  handover_name="coop-rejoin.txt"; handover_taken=true;
+  REXLOG_INFO("KK co-op rejoin: menu selected the previous campaign");
+  return true;
+}
 std::wstring HandoverArg() {
   return handover_taken ? L"--kk_coop_resume=" + std::wstring(handover_name.begin(),handover_name.end()) : std::wstring();
 }
@@ -657,7 +664,7 @@ void SessionReloadFrame(uint8_t* base) {
   }
   const auto v=SessionFlowSnapshot();
   if (rejoin_cancel.exchange(false)) {
-    ForgetRejoin(); stopping=true;
+    stopping=true;
     play::ReturnToLauncher("co-op reconnect cancelled","play"); return;
   }
   if (v.active && !v.host && (v.reconnecting || v.reconnect_expired)) {
@@ -666,7 +673,7 @@ void SessionReloadFrame(uint8_t* base) {
       const auto wait=SessionFlowSnapshot();
       if (!wait.reconnecting && !wait.reconnect_expired && wait.start_ready && wait.phase!=FlowPhase::Failed) break;
       if (rejoin_cancel.exchange(false)) {
-        ForgetRejoin(); stopping=true; play::ReturnToLauncher("co-op reconnect cancelled","play"); return;
+        stopping=true; play::ReturnToLauncher("co-op reconnect cancelled","play"); return;
       }
       RequestUiPaint(); std::this_thread::sleep_for(std::chrono::milliseconds(10));
     }

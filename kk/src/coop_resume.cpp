@@ -152,7 +152,6 @@ class ResumeDialog final : public rex::ui::ImGuiDialog {
   void BackToMenu() {
     if (leaving_) return;
     leaving_ = true;
-    ForgetRejoin();
     REXLOG_INFO("KK co-op hand over: Back to menu (the launcher with the scene)");
     StopResumeLink();
     cb_.back_to_menu();
@@ -222,11 +221,10 @@ bool ResumeRequested(const std::filesystem::path& user_dir) {
     requested_read = true;
     requested_name = REXCVAR_GET(kk_coop_resume);
     rex::cvar::ResetToDefault("kk_coop_resume");  // never saved
-    if (requested_name.empty() && !user_dir.empty()) {
-      std::ifstream in(user_dir/kRejoinFile,std::ios::binary);
-      std::string record((std::istreambuf_iterator<char>(in)),{});
+    if (requested_name.empty() && !user_dir.empty() &&
+        rex::cvar::GetFlagByName("kk_launcher_open").empty() && rex::cvar::GetFlagByName("kk_start").empty()) {
       handover::File file;
-      if (record.size()<=4096 && handover::Parse(record,UnixMs(),KK_VERSION,file)==handover::ParseResult::Ok && file.checkpoint.rejoin)
+      if (ReadRejoinRecord(user_dir,file))
         requested_name=kRejoinFile;
     }
   }
@@ -292,5 +290,18 @@ void ForgetRejoin() {
   std::lock_guard lock(rejoin_mutex);
   if (!rejoin_root.empty()) { std::ofstream out(rejoin_root/kRejoinFile,std::ios::trunc); }
   rejoin_file.reset();
+}
+bool ReadRejoinRecord(const std::filesystem::path& root, handover::File& record) {
+  std::ifstream in(root/kRejoinFile,std::ios::binary);
+  char bytes[4097]; in.read(bytes,sizeof(bytes));
+  const auto count=in.gcount();
+  return count>0 && count<=4096 && handover::Parse(std::string_view(bytes,size_t(count)),UnixMs(),KK_VERSION,record)==handover::ParseResult::Ok && record.checkpoint.rejoin;
+}
+bool RejoinAvailable(const std::filesystem::path& root) {
+  static std::filesystem::path checked_root; static double until=0; static bool available=false;
+  if (root!=checked_root || Now()>=until) {
+    handover::File record; available=ReadRejoinRecord(root,record); checked_root=root; until=Now()+.5;
+  }
+  return available;
 }
 }  // namespace kk::coop

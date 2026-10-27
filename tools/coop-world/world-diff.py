@@ -82,7 +82,7 @@ def validate(d, role=None):
             errors.append("empty shared native world")
         for key, row in enemies["rows"].items():
             source, sequence, family = key.split(":")
-            if not int(source, 16) or int(sequence) < 0 or not 1 <= int(family) <= 14 or row["family"] != int(family):
+            if not int(source, 16) or int(sequence) < 0 or not 1 <= int(family) <= 15 or row["family"] != int(family):
                 errors.append("invalid enemy id " + key)
             initializing = row.get("phase") == "initializing"
             for field in ("health", "secondary_health"):
