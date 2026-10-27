@@ -40,6 +40,10 @@ REX_EXTERN(__imp__sub_8261DE68);
 REX_EXTERN(__imp__sub_826A0920);
 REX_EXTERN(__imp__sub_826C12C8);
 REX_EXTERN(__imp__sub_826A1178);
+REX_EXTERN(__imp__sub_820D2298);
+REX_EXTERN(__imp__sub_82403E38);
+REX_EXTERN(__imp__sub_82404490);
+REX_EXTERN(__imp__sub_82425038);
 #if defined(KK_DEV_TOOLS)
 REX_EXTERN(__imp__sub_826C4E98);
 #endif
@@ -2043,6 +2047,21 @@ void ObserveHumanGround(PPCContext& ctx,uint8_t* b) {
         Get().link.role==Role::Host ? "host":"guest",Get().identity.level,uint8_t(before->condition),uint8_t(after->condition),
         LoadF(b,after->vars+13268),LoadF(b,after->vars+2840),Load32(b,after->vars+2844),Load32(b,after->vars+15440),LoadF(b,after->vars+2872));
 }
+// The remote body cannot take part in native NPC weapon exchanges. When it
+// overlaps Jack, the interaction ray otherwise selects it in every direction
+// and H_exec_read_joy clears both firing wishes. Let only Jack's interaction
+// and firearm queries look through the validated body. Native NPCs, terrain,
+// ground checks, enemy perception and all other queries keep their filters.
+thread_local uint32_t equipment_query_partner=0;
+struct EquipmentQueryScope {
+  uint32_t previous=equipment_query_partner;
+  EquipmentQueryScope(const uint8_t* b,bool enabled) {
+    if (enabled && REXCVAR_GET(kk_coop_enabled) && Connected() &&
+        Load32(b,0x82CCBF6C)==Load32(b,0x82CCBF7C))
+      if (const auto body=kk::PartnerBodyCombatActor(b)) equipment_query_partner=body;
+  }
+  ~EquipmentQueryScope() { equipment_query_partner=previous; }
+};
 #if defined(KK_DEV_TOOLS)
 void DevEquipmentInput(PPCContext& ctx,uint8_t* b) {
   __imp__sub_826C4E98(ctx,b);
@@ -3197,6 +3216,29 @@ REX_HOOK_RAW(sub_826A0920) {
 }
 REX_HOOK_RAW(sub_826C12C8) { kk::coop::ObserveHumanReflex(ctx,base); }
 REX_HOOK_RAW(sub_826A1178) { kk::coop::ObserveHumanGround(ctx,base); }
+REX_HOOK_RAW(sub_820D2298) {
+  if (kk::coop::equipment_query_partner && ctx.r3.u32==kk::coop::equipment_query_partner) {
+#if defined(KK_DEV_TOOLS)
+    static unsigned count=0;
+    if (count++<16) REXLOG_INFO("COOP EQUIPMENT proxy-filter body={:08X} caller={:08X}",ctx.r3.u32,uint32_t(ctx.lr));
+#endif
+    ctx.r3.u64=0;
+    return;
+  }
+  __imp__sub_820D2298(ctx,base);
+}
+REX_HOOK_RAW(sub_82403E38) {
+  const kk::coop::EquipmentQueryScope scope(base,(ctx.r9.u32&0x7FFFFFFF)==0xB && ctx.r3.u32==kk::hfr::Load32(base,0x82CCBF7C));
+  __imp__sub_82403E38(ctx,base);
+}
+REX_HOOK_RAW(sub_82404490) {
+  const kk::coop::EquipmentQueryScope scope(base,(ctx.r10.u32&0x7FFFFFFF)==0xB && ctx.r3.u32==kk::hfr::Load32(base,0x82CCBF7C));
+  __imp__sub_82404490(ctx,base);
+}
+REX_HOOK_RAW(sub_82425038) {
+  const kk::coop::EquipmentQueryScope scope(base,true);
+  __imp__sub_82425038(ctx,base);
+}
 #if defined(KK_DEV_TOOLS)
 REX_HOOK_RAW(sub_826C4E98) { kk::coop::DevEquipmentInput(ctx,base); }
 #endif
@@ -3427,7 +3469,10 @@ REX_HOOK_RAW(sub_82696A28) {
       kk::hfr::Load32(base,0x82CCBF6C) == hero;
   const auto caller = uint32_t(ctx.lr);
 #endif
-  __imp__sub_82696A28(ctx, base);
+  {
+    const kk::coop::EquipmentQueryScope query_scope(base,true);
+    __imp__sub_82696A28(ctx, base);
+  }
   const bool same = game == kk::hfr::Load32(base, 0x82CC97C0);
   const auto after = same && armed ? kk::hfr::Load32(base, game+ammo[weapon-1]) : before;
   if (observe) {
