@@ -53,12 +53,13 @@ void FlowRejoin(bool fresh_guest) {
   Check(g.View().phase==FlowPhase::Failed && g.View().reconnect_expired,"guest gets clean failure");
 }
 struct Backend final : ISteamMessagesBackend {
-  Backend* other=nullptr; uint64_t self=0; bool cut=false;
+  Backend* other=nullptr; uint64_t self=0; bool cut=false, drop_pong=false;
   uint64_t packet_epoch=0;
   std::deque<SteamBackendMessage> incoming[2];
   SteamSendResult Send(uint64_t,int channel,std::span<const uint8_t> bytes,bool reliable) override {
     if (cut) return SteamSendResult::Failed;
     Message m; if (Decode(bytes,m) && m.type!=MessageType::Hello && m.type!=MessageType::Reject) packet_epoch=m.epoch;
+    if (drop_pong && m.type==MessageType::Pong) return SteamSendResult::Sent;
     other->incoming[channel].push_back({self,channel,reliable,false,{bytes.begin(),bytes.end()}});
     return SteamSendResult::Sent;
   }
@@ -135,6 +136,16 @@ void UdpRestart(bool host_crash) {
     std::fprintf(stderr,"UDP restart host-crash=%d host=%s guest=%s\n",host_crash,StateName(h->State()),StateName(g->State()));
   Check(h->State()==SessionState::Connected && g->State()==SessionState::Connected,"UDP process restart replaces nonce and endpoint");
 }
+void LostProbes() {
+  Backend a,b; a.self=1; b.self=2; a.other=&b; b.other=&a;
+  SteamMessagesTransport at(a,2,true),bt(b,1,true);
+  CoopSession h(Config(true,11),at),g(Config(false,22),bt);
+  for (double t=0;t<2;t+=.02) { h.Tick(t); g.Tick(t); }
+  a.drop_pong=b.drop_pong=true;
+  for (double t=2;t<6;t+=.02) { h.Tick(t); g.Tick(t); }
+  Check(h.State()==SessionState::Connected && g.State()==SessionState::Connected,
+      "a short run of lost unreliable probes cannot reload an otherwise live world");
+}
 void Record() {
   handover::File f; f.host=true; f.plan={9600,StartTransport::Direct,7,0,0,0,27196};
   f.address="127.0.0.1"; f.code="ABC234"; f.version="v"; f.written_ms=1000;
@@ -149,5 +160,6 @@ int main() {
   Record(); FlowRejoin(false); FlowRejoin(true);
   for (auto seconds : {10.,60.}) for (bool one_way : {false,true}) SteamOutage(seconds,one_way);
   UdpRestart(false); UdpRestart(true);
+  LostProbes();
   std::printf("coop rejoin: %d checks passed\n",checks);
 }

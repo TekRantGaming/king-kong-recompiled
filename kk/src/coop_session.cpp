@@ -7,6 +7,9 @@
 
 namespace kk::coop {
 namespace {
+// Inbound traffic still proves the peer is running. Allow several lost
+// unreliable Pong probes before treating a one way path as interrupted.
+constexpr double kRoundTripLossSeconds=6;
 uint64_t PacketEpoch(uint64_t token,uint64_t host,uint64_t guest) {
   auto n=token^(host*0x9e3779b97f4a7c15ull)^std::rotl(guest,23);
   n=(n^(n>>30))*0xbf58476d1ce4e5b9ull;
@@ -267,7 +270,7 @@ void CoopSession::Receive(const Message& packet, double now) {
     last_receive_ = now;
   }
   if (state_ == SessionState::Connecting && hello_seen_ && ack_seen_) Transition(SessionState::Connected);
-  else if (state_ == SessionState::Lost && (!config_.resume_token || now-last_pong_<3)) Transition(SessionState::Connected);
+  else if (state_ == SessionState::Lost && (!config_.resume_token || now-last_pong_<kRoundTripLossSeconds)) Transition(SessionState::Connected);
 }
 void CoopSession::Tick(double now, const std::optional<PlayerPose>& local, const enemies::Frame* frame, const CheatSet* cheats) {
   // Disabled is inert, including callbacks, polling, reads, writes and transport state queries.
@@ -307,7 +310,7 @@ void CoopSession::Tick(double now, const std::optional<PlayerPose>& local, const
     }
     return;
   }
-  if (now-last_receive_>=3 || (config_.resume_token && now-last_pong_>=3)) Transition(SessionState::Lost);
+  if (now-last_receive_>=3 || (config_.resume_token && now-last_pong_>=kRoundTripLossSeconds)) Transition(SessionState::Lost);
   if (state_==SessionState::Connected && config_.role==Role::Host && local_camera_ &&
       now>=local_camera_->time && now-local_camera_->time<=.25 && ValidCameraPose(*local_camera_)) {
     const auto& p=*local_camera_;
