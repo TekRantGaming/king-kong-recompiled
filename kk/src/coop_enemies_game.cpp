@@ -2048,13 +2048,20 @@ void DevEquipmentInput(PPCContext& ctx,uint8_t* b) {
   __imp__sub_826C4E98(ctx,b);
   static const bool enabled=std::getenv("KK_DEV_EQUIPMENT")!=nullptr;
   static double next=0;
+  static bool last_rt=false;
   const auto h=enabled && Connected() && Load32(b,0x82CCBF6C)==Load32(b,0x82CCBF7C) ? ReadHumanStatus(b):std::nullopt;
-  if (!h || Now()<next) return;
+  if (!h) return;
+  const auto pad=Load32(b,0x82C63704);
+  const bool rt=pad<4 && b[0x82C63858+16*pad+7]!=0;
+  const bool lt=pad<4 && b[0x82C63858+16*pad+6]!=0;
+  if (Now()<next && rt==last_rt) return;
+  last_rt=rt;
   next=Now()+1;
   const auto v=h->vars,g=h->bank;
-  REXLOG_INFO("COOP EQUIPMENT gate role={} t={:.3f} view={:08X} aim={:08X} blocked={} target={:08X} proxy={:08X}",
+  REXLOG_INFO("COOP EQUIPMENT gate role={} t={:.3f} view={:08X} aim={:08X} blocked={} target={:08X} proxy={:08X} rt={} lt={} wish={}/{} draw-wait={}",
       Get().link.role==Role::Host ? "host":"guest",kk::DevSecondsSinceMenu(),Ptr(b,Ptr(b,Get().world,112,164),160,32),
-      Load32(b,0x82CC8868),Load32(b,v+2784),Load32(b,v+11520),kk::PartnerBodyCombatActor(b));
+      Load32(b,0x82CC8868),Load32(b,v+2784),Load32(b,v+11520),kk::PartnerBodyCombatActor(b),rt,lt,
+      Load32(b,v+12336),Load32(b,v+12340),LoadF(b,v+3084));
   REXLOG_INFO("COOP EQUIPMENT input role={} t={:.3f} player={} slot={} bank={:08X} weapon={} rounds={} aim-off={} aiming={} aim-weight={} shoot={}/{} disabled={} loading={}/{} action-wait={} input-disabled={} pad={} pickup={}/{:08X} friend-ahead={:08X}/{:08X}/{:08X}/{:08X}/{:08X}",
       Get().link.role==Role::Host ? "host":"guest",kk::DevSecondsSinceMenu(),Load32(b,v),Load32(b,v+4),g,
       Load32(b,g+13128),Load32(b,g+13504),Load32(b,v+2984),Load32(b,v+2988),LoadF(b,v+6192),
