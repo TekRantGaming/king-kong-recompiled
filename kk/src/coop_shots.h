@@ -82,19 +82,28 @@ class ShotValidator {
     // Reliable delivery can batch a quarter second of gunfire after jitter or
     // retransmission. Bound that burst while retaining sender cadence checks.
     const double interval = ShotInterval(s.weapon);
-    if (fired_ && (s.time < last_time_ || s.time-last_time_ < interval-.005)) return ShotReject::Rate;
+    // Animation callbacks follow simulation time, while these timestamps use
+    // the sender's wall clock. A slow frame can put two legitimate callbacks
+    // close together. Allow 50 ms of scheduling jitter against a cumulative
+    // deadline, so that an early round borrows time from the next one instead
+    // of permanently relaxing the gun's rate. The arrival bucket below also
+    // bounds a reliable retransmission burst.
+    const double due = next_fire_ - ShotInterval(last_weapon_) + interval;
+    if (fired_ && (s.time < last_time_ || s.time < due-.05)) return ShotReject::Rate;
     const double capacity = std::ceil(.5/interval)+2;
     if (!fired_) tokens_ = capacity;
     tokens_ = std::min(capacity, tokens_ + std::max(0., now-last_arrival_)/interval);
     last_arrival_ = now;
     if (tokens_ < 1) return ShotReject::Rate;
-    tokens_ -= 1; last_time_ = s.time; fired_ = true; --rounds_;
+    tokens_ -= 1; next_fire_ = (fired_ ? std::max(due,s.time) : s.time)+interval;
+    last_time_ = s.time; last_weapon_ = s.weapon; fired_ = true; --rounds_;
     return ShotReject::None;
   }
  private:
   bool seen_ = false, fired_ = false;
   uint32_t number_ = 0;
-  double last_time_ = 0, last_arrival_ = 0, tokens_ = 2;
+  uint8_t last_weapon_ = 0;
+  double last_time_ = 0, next_fire_ = 0, last_arrival_ = 0, tokens_ = 2;
   bool inventory_seen_ = false;
   double inventory_time_ = 0;
   uint8_t inventory_weapon_ = 0;

@@ -6,6 +6,7 @@
 #include "coop_runtime.h"
 #include "coop_pose.h"
 #include "coop_enemies_game.h"
+#include "coop_partner_body.h"
 #include "coop_observer.h"
 #include "coop_world_snapshot.h"
 #include "hfr.h"
@@ -148,9 +149,9 @@ struct State {
 #if defined(KK_DEV_TOOLS)
   bool view_ready=false;
   std::array<float,6> view_home{};
-  struct Plane { float x,y,z,nx,ny,nz; double next=0; };
+  struct Plane { float x,y,z,nx,ny,nz; double next=0; ObjectKind kind=ObjectKind::Door; };
   std::map<uint64_t,Plane> planes; // Immutable values survive native door retirement.
-  struct Pickup { uint32_t actor=0,ai=0,vars=0,matrix=0; uint64_t source=0; bool rack=false; };
+  struct Pickup { uint32_t actor=0,ai=0,vars=0,matrix=0; uint64_t source=0; bool rack=false,equipment=false; };
   std::map<uint32_t,Pickup> pickups;
   std::set<uint64_t> debug_sources;
   unsigned scan_pass=0,scan_rows=0;
@@ -286,11 +287,12 @@ void Census(const uint8_t* b) {
     if (Trace() || std::getenv("KK_DEV_OBJECT_PICKUP")) {
       const auto ai=Ptr(b,Ptr(b,actor,24,8),4,88),matrix=Ptr(b,actor,12,64);
       const bool rack=Track(b,ai,0x8251C540) || Track(b,ai,0x8251BA60) || Track(b,ai,0x8251B800);
-      const auto vars=Ptr(b,ai,64,rack ? 256 : 32);
-      if (matrix && vars && (rack || Track(b,ai,0x824F35E0) || Track(b,ai,0x824F3820))) {
-        const auto source=enemies::AuthoredKey(rack ? 0x5241434b : 0x414d4d4f,LoadF(b,matrix+48),LoadF(b,matrix+52),LoadF(b,matrix+56));
+      const bool equipment=Track(b,ai,0x8268E948);
+      const auto vars=Ptr(b,ai,64,equipment ? 1284 : rack ? 256 : 32);
+      if (matrix && vars && (rack || equipment || Track(b,ai,0x824F35E0) || Track(b,ai,0x824F3820))) {
+        const auto source=enemies::AuthoredKey(equipment ? 0x45515549 : rack ? 0x5241434b : 0x414d4d4f,LoadF(b,matrix+48),LoadF(b,matrix+52),LoadF(b,matrix+56));
         if (source && !state.pickups.contains(actor) && state.pickups.size()<objects::kCensus)
-          state.pickups[actor]={actor,ai,vars,matrix,source,rack};
+          state.pickups[actor]={actor,ai,vars,matrix,source,rack,equipment};
       }
     }
 #endif
@@ -326,8 +328,8 @@ void Census(const uint8_t* b) {
       state.identities.Record(o);
       state.bindings.emplace(actor,o);
 #if defined(KK_DEV_TOOLS)
-      if (kind==ObjectKind::Door && state.planes.size()<objects::kCensus)
-        state.planes.try_emplace(o.source,State::Plane{o.x,o.y,o.z,-LoadF(b,matrix+16),-LoadF(b,matrix+20),-LoadF(b,matrix+24)});
+      if ((kind==ObjectKind::Door || kind==ObjectKind::Breakable) && state.planes.size()<objects::kCensus)
+        state.planes.try_emplace(o.source,State::Plane{o.x,o.y,o.z,-LoadF(b,matrix+16),-LoadF(b,matrix+20),-LoadF(b,matrix+24),0,kind});
 #endif
       if (Trace()) REXLOG_INFO("KK dev object: role={} kind={} id={:016X} actor={:08X} vars={:08X} pos=({:.3f},{:.3f},{:.3f}) damage={} maximum={} levers={} type={} asset={:08X}",
           state.host ? "host" : "guest",uint8_t(kind),o.source,actor,vars,o.x,o.y,o.z,
@@ -1527,7 +1529,7 @@ struct Probe {
   }
 };
 
-void DevProbe(PPCContext& ctx,uint8_t* b,Probe& probe,ObjectKind kind) {
+void DevProbe(PPCContext& ctx,uint8_t* b,Probe& probe,ObjectKind kind,bool strike=true) {
   const auto t=kk::DevSecondsSinceMenu();
   if (probe.done || probe.due<0 || t<probe.due) return;
   if (t>probe.due+20) { probe.done=true; REXLOG_WARN("KK dev object probe: expired kind={} no eligible object/native player",uint8_t(kind)); return; }
@@ -1567,9 +1569,10 @@ void DevProbe(PPCContext& ctx,uint8_t* b,Probe& probe,ObjectKind kind) {
     const ShotVector position{LoadF(b,matrix+48)-gap*fx,LoadF(b,matrix+52)-gap*fy,LoadF(b,hm+56)};
     if (!kk::DevTeleportJack(ctx,b,hero,position,fx,fy)) return;
     probe.source=best->source; probe.act=t+1; probe.slot=best_slot;
+    probe.done=!strike;
     if (state.debug_sources.size()<8) state.debug_sources.insert(probe.source);
-    REXLOG_INFO("KK dev object probe: placed role={} kind={} id={:016X} at=({:.3f},{:.3f},{:.3f}) native-input-in=1s collision-unverified=true",
-        state.host ? "host" : "guest",uint8_t(kind),best->source,position.x,position.y,position.z);
+    REXLOG_INFO("KK dev object probe: placed role={} kind={} id={:016X} at=({:.3f},{:.3f},{:.3f}) native-input={} collision-unverified=true",
+        state.host ? "host" : "guest",uint8_t(kind),best->source,position.x,position.y,position.z,strike);
     return;
   }
   if (t<probe.act) return;
@@ -1730,6 +1733,8 @@ void Probes(PPCContext& ctx,uint8_t* b) {
   FloorProbe(ctx,b);
   ThrowProbe(ctx,b);
   static Probe hit("KK_DEV_OBJECT_HIT"),lever("KK_DEV_OBJECT_LEVER");
+  static Probe stage("KK_DEV_OBJECT_STAGE");
+  DevProbe(ctx,b,stage,ObjectKind::Breakable,false);
   DevProbe(ctx,b,hit,ObjectKind::Breakable); DevProbe(ctx,b,lever,ObjectKind::Door);
   static Probe fire("KK_DEV_OBJECT_FIRE"),off("KK_DEV_OBJECT_EXTINGUISH");
   const auto t=kk::DevSecondsSinceMenu();
@@ -1831,6 +1836,43 @@ void ReloadProbe(uint8_t* b) {
   if (!state.observed_change) return;
   if (SessionDevObjectReload(b)) probe.done=true;
 }
+void NpcPickupStage(PPCContext& ctx,uint8_t* b) {
+  static Probe probe("KK_DEV_OBJECT_NPC_PICKUP");
+  const auto t=kk::DevSecondsSinceMenu();
+  if (probe.done || probe.due<0 || t<probe.due) return;
+  if (t>probe.due+20) { probe.done=true; REXLOG_WARN("KK dev NPC pickup: no eligible armed native human"); return; }
+  const auto hero=Load32(b,0x82CCBF7C),hm=Ptr(b,hero,12,64),g=Load32(b,0x82CC97C0);
+  if (!hm || !PoseAddress(g,15000)) return;
+  const auto proxy=kk::PartnerBodyCombatActor(b);
+  static bool listed=false;
+  uint32_t best=0,slot=0,weapon=0; float distance=1000000;
+  for (unsigned off=7328;off<=7344;off+=4) {
+    const auto actor=Load32(b,g+off),ai=Ptr(b,Ptr(b,actor,24,8),4,88),vars=Ptr(b,ai,64,8),matrix=Ptr(b,actor,12,64);
+    if (!listed && vars && matrix) {
+      const auto k=Load32(b,vars+4);
+      REXLOG_INFO("KK dev NPC pickup candidate: role={} actor={:08X} slot={} weapon={} human={} height-difference={} position=({:.3f},{:.3f},{:.3f})",
+          state.host ? "host":"guest",actor,k,k<=12 ? Load32(b,g+13124+4*k):0,Load32(b,ai)==Load32(b,0x82CC87BC),
+          LoadF(b,matrix+56)-LoadF(b,hm+56),LoadF(b,matrix+48),LoadF(b,matrix+52),LoadF(b,matrix+56));
+    }
+    if (!vars || !matrix || actor==hero || actor==proxy || (Load32(b,actor)&0x00400001) ||
+        Load32(b,ai)!=Load32(b,0x82CC87BC) || std::abs(LoadF(b,matrix+56)-LoadF(b,hm+56))>2) continue;
+    const auto k=Load32(b,vars+4);
+    if (k<2 || k>7) continue;
+    const auto w=Load32(b,g+13124+4*k);
+    if (w<1 || w>4) continue;
+    const auto d=std::hypot(LoadF(b,matrix+48)-LoadF(b,hm+48),LoadF(b,matrix+52)-LoadF(b,hm+52));
+    if (d<distance) { best=matrix; slot=k; weapon=w; distance=d; probe.source=actor; }
+  }
+  listed=true;
+  if (!best) return;
+  float fx=LoadF(b,best+48)-LoadF(b,hm+48),fy=LoadF(b,best+52)-LoadF(b,hm+52);
+  const auto length=std::hypot(fx,fy); fx=length>.01f ? fx/length:0; fy=length>.01f ? fy/length:1;
+  const ShotVector position{LoadF(b,best+48)-1.2f*fx,LoadF(b,best+52)-1.2f*fy,LoadF(b,hm+56)};
+  if (!kk::DevTeleportJack(ctx,b,hero,position,fx,fy)) return;
+  probe.done=true;
+  REXLOG_INFO("KK dev NPC pickup: staged role={} actor={:08X} slot={} weapon={} player-weapon={} position=({:.3f},{:.3f},{:.3f}) native-input=false",
+      state.host ? "host":"guest",uint32_t(probe.source),slot,weapon,Load32(b,g+13128),position.x,position.y,position.z);
+}
 void PickupProbe(PPCContext& ctx,uint8_t* b) {
   static Probe probe("KK_DEV_OBJECT_PICKUP");
   const auto t=kk::DevSecondsSinceMenu();
@@ -1839,10 +1881,16 @@ void PickupProbe(PPCContext& ctx,uint8_t* b) {
   const auto hero=Load32(b,0x82CCBF7C),ai=Ptr(b,Ptr(b,hero,24,8),4,88),hm=Ptr(b,hero,12,64);
   if (!hm || !Track(b,ai,0x826718B8)) return;
   State::Pickup* best=nullptr; float distance=1000000;
+  const auto count=[](const State::Pickup& p){return p.vars+(p.equipment ? 732 : p.rack ? 196 : 4);};
+  const auto type=[](const State::Pickup& p){return p.vars+(p.equipment ? 728 : p.rack ? 192 : 0);};
+  const auto wanted=std::getenv("KK_DEV_OBJECT_PICKUP_FAMILY");
   for (auto& [actor,p] : state.pickups) {
     if (probe.source && p.source!=probe.source) continue;
-    if (Ptr(b,Ptr(b,actor,24,8),4,88)!=p.ai || Ptr(b,p.ai,64,p.rack ? 256 : 32)!=p.vars || Ptr(b,actor,12,64)!=p.matrix ||
-        !Track(b,p.ai,p.rack ? 0x8251BA60 : 0x824F3820) || !Load32(b,p.vars+(p.rack ? 196 : 4))) continue;
+    if (wanted && ((std::strcmp(wanted,"equipment")==0 && !p.equipment) ||
+        (std::strcmp(wanted,"rack")==0 && !p.rack) || (std::strcmp(wanted,"ammo")==0 && (p.rack || p.equipment)))) continue;
+    if (Ptr(b,Ptr(b,actor,24,8),4,88)!=p.ai || Ptr(b,p.ai,64,p.equipment ? 1284 : p.rack ? 256 : 32)!=p.vars || Ptr(b,actor,12,64)!=p.matrix ||
+        !Track(b,p.ai,p.equipment ? 0x8268E948 : p.rack ? 0x8251BA60 : 0x824F3820) || !Load32(b,count(p))) continue;
+    if (std::abs(LoadF(b,p.matrix+56)-LoadF(b,hm+56))>2) continue;
     unsigned matches=0; for (const auto& [other,q] : state.pickups) matches+=q.source==p.source;
     if (matches!=1) continue;
     const auto d=std::hypot(std::hypot(LoadF(b,p.matrix+48)-LoadF(b,hm+48),LoadF(b,p.matrix+52)-LoadF(b,hm+52)),LoadF(b,p.matrix+56)-LoadF(b,hm+56));
@@ -1855,16 +1903,17 @@ void PickupProbe(PPCContext& ctx,uint8_t* b) {
         std::abs(LoadF(b,best->matrix+56)-position.z)>2) return;
     if (!kk::DevTeleportJack(ctx,b,hero,position,0,1)) return;
     probe.source=best->source; probe.act=t+1; state.debug_sources.insert(probe.source);
+    probe.done=std::getenv("KK_DEV_OBJECT_PICKUP_STAGE_ONLY")!=nullptr;
     REXLOG_INFO("KK dev object pickup: placed role={} id={:016X} pos=({:.3f},{:.3f},{:.3f}) count={} type={} family={}",
         state.host ? "host" : "guest",best->source,position.x,position.y,position.z,
-        Load32(b,best->vars+(best->rack ? 196 : 4)),Load32(b,best->vars+(best->rack ? 192 : 0)),best->rack ? "rack" : "ammo");
+        Load32(b,count(*best)),Load32(b,type(*best)),best->equipment ? "equipment" : best->rack ? "rack" : "ammo");
     return;
   }
   if (t<probe.act) return;
   const auto ext=Ptr(b,best->actor,24,42); if (!ext) return;
   Store16(b,ext+40,Load16(b,ext+40)|0x8000); probe.done=true;
   REXLOG_INFO("KK dev object pickup: native interaction tag role={} id={:016X} count={} inventory-result-awaiting=true",
-      state.host ? "host" : "guest",best->source,Load32(b,best->vars+(best->rack ? 196 : 4)));
+      state.host ? "host" : "guest",best->source,Load32(b,count(*best)));
 }
 #endif
 } // namespace
@@ -2072,6 +2121,7 @@ void ObjectsBeforeAi(PPCContext& ctx,uint8_t* b,uint32_t w) {
 #if defined(KK_DEV_TOOLS)
   Probes(ctx,b);
   PickupProbe(ctx,b);
+  NpcPickupStage(ctx,b);
 #endif
 }
 void ObjectsAfterAi(PPCContext& ctx,uint8_t* b,uint32_t w) {
@@ -2093,12 +2143,12 @@ void ObjectsAfterAi(PPCContext& ctx,uint8_t* b,uint32_t w) {
   if (Trace() && std::getenv("KK_DEV_OBJECT_PASSAGE")) {
     const auto matrix=Ptr(b,Load32(b,0x82CCBF7C),12,64);
     if (matrix) for (auto& [source,p] : state.planes) {
-      if (!state.identities.Allows(ObjectKind::Door,source) || now<p.next) continue;
+      if (!state.identities.Allows(p.kind,source) || now<p.next) continue;
       const float x=LoadF(b,matrix+48),y=LoadF(b,matrix+52),z=LoadF(b,matrix+56);
       if (std::hypot(x-p.x,y-p.y,z-p.z)>20) continue;
       p.next=now+.1;
       const auto it=state.outcomes.find(source);
-      const auto* s=state.host ? (it==state.outcomes.end() ? nullptr : &it->second) : state.replica.Find(ObjectKind::Door,source);
+      const auto* s=state.host ? (it==state.outcomes.end() ? nullptr : &it->second) : state.replica.Find(p.kind,source);
       REXLOG_INFO("KK dev object passage: role={} id={:016X} pos=({:.3f},{:.3f},{:.3f}) plane=({:.3f},{:.3f},{:.3f}) normal=({:.3f},{:.3f},{:.3f}) signed={:.3f} authority-fraction={} condition={}",
           state.host ? "host" : "guest",source,x,y,z,p.x,p.y,p.z,p.nx,p.ny,p.nz,
           (x-p.x)*p.nx+(y-p.y)*p.ny+(z-p.z)*p.nz,s ? s->position : -1,int(LocalPlayerCondition(b).value_or(PlayerCondition::Dead)));
@@ -2217,10 +2267,10 @@ void ObjectsAfterAi(PPCContext& ctx,uint8_t* b,uint32_t w) {
     details=0;
     if (Trace()) for (const auto& [actor,p] : state.pickups) {
       if (details++>=16 && !state.debug_sources.contains(p.source)) continue;
-      if (Ptr(b,Ptr(b,actor,24,8),4,88)!=p.ai || Ptr(b,p.ai,64,p.rack ? 256 : 32)!=p.vars) continue;
+      if (Ptr(b,Ptr(b,actor,24,8),4,88)!=p.ai || Ptr(b,p.ai,64,p.equipment ? 1284 : p.rack ? 256 : 32)!=p.vars) continue;
       REXLOG_INFO("KK dev object pickup state: role={} id={:016X} count={} pending={} type={} family={}",
-          state.host ? "host" : "guest",p.source,Load32(b,p.vars+(p.rack ? 196 : 4)),
-          Load32(b,p.vars+(p.rack ? 228 : 24)),Load32(b,p.vars+(p.rack ? 192 : 0)),p.rack ? "rack" : "ammo");
+          state.host ? "host" : "guest",p.source,Load32(b,p.vars+(p.equipment ? 732 : p.rack ? 196 : 4)),
+          Load32(b,p.vars+(p.equipment ? 964 : p.rack ? 228 : 24)),Load32(b,p.vars+(p.equipment ? 728 : p.rack ? 192 : 0)),p.equipment ? "equipment" : p.rack ? "rack" : "ammo");
     }
 #endif
   }

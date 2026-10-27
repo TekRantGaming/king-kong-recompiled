@@ -38,6 +38,15 @@ REX_EXTERN(__imp__sub_82634428);
 REX_EXTERN(__imp__sub_82419C38);
 REX_EXTERN(__imp__sub_8261DE68);
 REX_EXTERN(__imp__sub_826A0920);
+REX_EXTERN(__imp__sub_826C12C8);
+REX_EXTERN(__imp__sub_826A1178);
+REX_EXTERN(__imp__sub_820D2298);
+REX_EXTERN(__imp__sub_82403E38);
+REX_EXTERN(__imp__sub_82404490);
+REX_EXTERN(__imp__sub_82425038);
+#if defined(KK_DEV_TOOLS)
+REX_EXTERN(__imp__sub_826C4E98);
+#endif
 REX_EXTERN(__imp__sub_82548BC0);
 REX_EXTERN(__imp__sub_82538B70);
 REX_EXTERN(__imp__sub_82634978);
@@ -1995,13 +2004,16 @@ void DevRaptorSelection(PPCContext& ctx, uint8_t* b) {
 }
 #endif
 void ObserveHumanConsumption(PPCContext& ctx, uint8_t* b) {
-#if defined(KK_DEV_TOOLS)
   const bool observe = REXCVAR_GET(kk_coop_enabled) && Connected() && Load32(b, 0x82CCBF6C) == Load32(b, 0x82CCBF7C);
   const auto before = observe ? ReadHumanStatus(b) : std::nullopt;
-#endif
   __imp__sub_826A0920(ctx, b);
-#if defined(KK_DEV_TOOLS)
   const auto after = before ? ReadHumanStatus(b) : std::nullopt;
+  if (before && after && before->hero==after->hero && before->vars==after->vars && before->value!=after->value)
+    REXLOG_INFO("COOP HEALTH native-hit role={} level={} condition={}->{} source={:08X} flags={:08X} magnitude={} replay={} pos=({:.3f},{:.3f},{:.3f})",
+        Get().link.role==Role::Host ? "host" : "guest",Get().identity.level,uint8_t(before->condition),uint8_t(after->condition),
+        Load32(b,after->vars+3212),Load32(b,after->vars+3204),LoadF(b,after->vars+3228),Get().damage_replay.Last(),
+        LoadF(b,after->vars+11656),LoadF(b,after->vars+11660),LoadF(b,after->vars+11664));
+#if defined(KK_DEV_TOOLS)
   static unsigned count = 0; static double next = 0;
   if (before && after && before->hero == after->hero && before->vars == after->vars &&
       count < 256 && (before->value != after->value || Now() >= next)) {
@@ -2014,6 +2026,69 @@ void ObserveHumanConsumption(PPCContext& ctx, uint8_t* b) {
 #endif
   PublishPlayerStatus(b);
 }
+void ObserveHumanReflex(PPCContext& ctx,uint8_t* b) {
+  const bool observe=REXCVAR_GET(kk_coop_enabled) && Connected() && Load32(b,0x82CCBF6C)==Load32(b,0x82CCBF7C);
+  const auto before=observe ? ReadHumanStatus(b):std::nullopt;
+  __imp__sub_826C12C8(ctx,b);
+  const auto after=before ? ReadHumanStatus(b):std::nullopt;
+  if (before && after && before->hero==after->hero && before->vars==after->vars && before->value!=after->value)
+    REXLOG_INFO("COOP HEALTH native-reflex role={} level={} condition={}->{} bad-ground-seconds={} off-ground-seconds={} ground={:08X} source={:08X} flags={:08X}",
+        Get().link.role==Role::Host ? "host" : "guest",Get().identity.level,uint8_t(before->condition),uint8_t(after->condition),
+        LoadF(b,after->vars+13432),LoadF(b,after->vars+2892),Load32(b,after->vars+4008),
+        Load32(b,after->vars+3212),Load32(b,after->vars+3204));
+}
+void ObserveHumanGround(PPCContext& ctx,uint8_t* b) {
+  const bool observe=REXCVAR_GET(kk_coop_enabled) && Connected() && Load32(b,0x82CCBF6C)==Load32(b,0x82CCBF7C);
+  const auto before=observe ? ReadHumanStatus(b):std::nullopt;
+  __imp__sub_826A1178(ctx,b);
+  const auto after=before ? ReadHumanStatus(b):std::nullopt;
+  if (before && after && before->hero==after->hero && before->vars==after->vars && before->value!=after->value)
+    REXLOG_INFO("COOP HEALTH native-ground role={} level={} condition={}->{} fall={} off-ground-seconds={} ground-kind={} void={} last-floor-z={}",
+        Get().link.role==Role::Host ? "host":"guest",Get().identity.level,uint8_t(before->condition),uint8_t(after->condition),
+        LoadF(b,after->vars+13268),LoadF(b,after->vars+2840),Load32(b,after->vars+2844),Load32(b,after->vars+15440),LoadF(b,after->vars+2872));
+}
+// The remote body cannot take part in native NPC weapon exchanges. When it
+// overlaps Jack, the interaction ray otherwise selects it in every direction
+// and H_exec_read_joy clears both firing wishes. Let only Jack's interaction
+// and firearm queries look through the validated body. Native NPCs, terrain,
+// ground checks, enemy perception and all other queries keep their filters.
+thread_local uint32_t equipment_query_partner=0;
+struct EquipmentQueryScope {
+  uint32_t previous=equipment_query_partner;
+  EquipmentQueryScope(const uint8_t* b,bool enabled) {
+    if (enabled && REXCVAR_GET(kk_coop_enabled) && Connected() &&
+        Load32(b,0x82CCBF6C)==Load32(b,0x82CCBF7C))
+      if (const auto body=kk::PartnerBodyCombatActor(b)) equipment_query_partner=body;
+  }
+  ~EquipmentQueryScope() { equipment_query_partner=previous; }
+};
+#if defined(KK_DEV_TOOLS)
+void DevEquipmentInput(PPCContext& ctx,uint8_t* b) {
+  __imp__sub_826C4E98(ctx,b);
+  static const bool enabled=std::getenv("KK_DEV_EQUIPMENT")!=nullptr;
+  static double next=0;
+  static bool last_rt=false;
+  const auto h=enabled && Connected() && Load32(b,0x82CCBF6C)==Load32(b,0x82CCBF7C) ? ReadHumanStatus(b):std::nullopt;
+  if (!h) return;
+  const auto pad=Load32(b,0x82C63704);
+  const bool rt=pad<4 && b[0x82C63858+16*pad+7]!=0;
+  const bool lt=pad<4 && b[0x82C63858+16*pad+6]!=0;
+  if (Now()<next && rt==last_rt) return;
+  last_rt=rt;
+  next=Now()+1;
+  const auto v=h->vars,g=h->bank;
+  REXLOG_INFO("COOP EQUIPMENT gate role={} t={:.3f} view={:08X} aim={:08X} blocked={} target={:08X} proxy={:08X} rt={} lt={} wish={}/{} draw-wait={}",
+      Get().link.role==Role::Host ? "host":"guest",kk::DevSecondsSinceMenu(),Ptr(b,Ptr(b,Get().world,112,164),160,32),
+      Load32(b,0x82CC8868),Load32(b,v+2784),Load32(b,v+11520),kk::PartnerBodyCombatActor(b),rt,lt,
+      Load32(b,v+12336),Load32(b,v+12340),LoadF(b,v+3084));
+  REXLOG_INFO("COOP EQUIPMENT input role={} t={:.3f} player={} slot={} bank={:08X} weapon={} rounds={} aim-off={} aiming={} aim-weight={} shoot={}/{} disabled={} loading={}/{} action-wait={} input-disabled={} pad={} pickup={}/{:08X} friend-ahead={:08X}/{:08X}/{:08X}/{:08X}/{:08X}",
+      Get().link.role==Role::Host ? "host":"guest",kk::DevSecondsSinceMenu(),Load32(b,v),Load32(b,v+4),g,
+      Load32(b,g+13128),Load32(b,g+13504),Load32(b,v+2984),Load32(b,v+2988),LoadF(b,v+6192),
+      Load32(b,v+2896),Load32(b,v+2956),Load32(b,v+3060),Load32(b,v+4364),Load32(b,v+4376),
+      LoadF(b,v+3092),Load32(b,0x82CCAE2C),Load32(b,0x82C63704),Load32(b,g+17772),Load32(b,g+17776),
+      Load32(b,g+7328),Load32(b,g+7332),Load32(b,g+7336),Load32(b,g+7340),Load32(b,g+7344));
+}
+#endif
 // A null reason means observation began. Keep every refusal distinguishable in
 // dev diagnostics instead of treating an unobserved callback as a missed shot.
 const char* BeginShot(const uint8_t* b) {
@@ -2302,6 +2377,14 @@ void OwnerShots(PPCContext& ctx, uint8_t* b) {
       e.id = hit.id; e.owner = a->second.owner; e.generation = a->second.generation;
       if (a->second.dead) e.life = 0;
       reason = s.shot_targets.Validate(shot, hit, e, Now());
+#if defined(KK_DEV_TOOLS)
+      if (reason==ShotReject::Distance && std::getenv("KK_DEV_EQUIPMENT")) {
+        static unsigned logs=0;
+        if (logs++<64) REXLOG_INFO("COOP EQUIPMENT hit-distance number={} family={} ray={} target-error={} hit=({},{},{}) target=({},{},{})",
+            shot.number,uint16_t(e.id.family),ShotDistance(shot.origin,hit.point),ShotDistance(hit.point,{e.x,e.y,e.z}),
+            hit.point.x,hit.point.y,hit.point.z,e.x,e.y,e.z);
+      }
+#endif
       if (reason == ShotReject::Late) { late = true; reason = ShotReject::None; continue; }
       if (reason != ShotReject::None) break;
       targets.push_back({*binding, hit});
@@ -2941,6 +3024,15 @@ bool EnemyDamageEnqueue(PPCContext& ctx, uint8_t* b, uint32_t body) {
   auto& s = Get();
   if (!REXCVAR_GET(kk_coop_enabled) || ctx.r4.u32 != 4 || !PoseAddress(ctx.r6.u32, 108)) return false;
   const auto payload = ctx.r6.u32, source = ctx.r3.u32, victim = Load32(b, payload+4);
+#if defined(KK_DEV_TOOLS)
+  if (s.prepared && Connected() && victim==Load32(b,0x82CCBF7C)) {
+    static unsigned logs=0;
+    const auto binding=s.bindings.find(source);
+    if (logs++<128) REXLOG_INFO("COOP HEALTH enqueue role={} source={:08X} family={} victim={:08X} flags={:08X} magnitude={} caller={:08X} replay={}",
+        s.link.role==Role::Host ? "host":"guest",source,binding==s.bindings.end() ? 0:uint16_t(binding->second.id.family),
+        victim,Load32(b,payload+88),Load32(b,payload+92),uint32_t(ctx.lr),s.injecting_damage);
+  }
+#endif
   bool matched_source = false;
   if (s.prepared && Connected() && Environment(b, s.world) && Now()-s.prepared_at <= .5) {
     const auto it = s.bindings.find(source);
@@ -3122,6 +3214,34 @@ REX_HOOK_RAW(sub_8250EDE8) {
 REX_HOOK_RAW(sub_826A0920) {
   kk::coop::ObserveHumanConsumption(ctx, base);
 }
+REX_HOOK_RAW(sub_826C12C8) { kk::coop::ObserveHumanReflex(ctx,base); }
+REX_HOOK_RAW(sub_826A1178) { kk::coop::ObserveHumanGround(ctx,base); }
+REX_HOOK_RAW(sub_820D2298) {
+  if (kk::coop::equipment_query_partner && ctx.r3.u32==kk::coop::equipment_query_partner) {
+#if defined(KK_DEV_TOOLS)
+    static unsigned count=0;
+    if (count++<16) REXLOG_INFO("COOP EQUIPMENT proxy-filter body={:08X} caller={:08X}",ctx.r3.u32,uint32_t(ctx.lr));
+#endif
+    ctx.r3.u64=0;
+    return;
+  }
+  __imp__sub_820D2298(ctx,base);
+}
+REX_HOOK_RAW(sub_82403E38) {
+  const kk::coop::EquipmentQueryScope scope(base,(ctx.r9.u32&0x7FFFFFFF)==0xB && ctx.r3.u32==kk::hfr::Load32(base,0x82CCBF7C));
+  __imp__sub_82403E38(ctx,base);
+}
+REX_HOOK_RAW(sub_82404490) {
+  const kk::coop::EquipmentQueryScope scope(base,(ctx.r10.u32&0x7FFFFFFF)==0xB && ctx.r3.u32==kk::hfr::Load32(base,0x82CCBF7C));
+  __imp__sub_82404490(ctx,base);
+}
+REX_HOOK_RAW(sub_82425038) {
+  const kk::coop::EquipmentQueryScope scope(base,true);
+  __imp__sub_82425038(ctx,base);
+}
+#if defined(KK_DEV_TOOLS)
+REX_HOOK_RAW(sub_826C4E98) { kk::coop::DevEquipmentInput(ctx,base); }
+#endif
 REX_HOOK_RAW(sub_82548BC0) {
   if (kk::coop::PartnerBodyGrabRefusal(base, ctx.r3.u32,ctx.r4.u32)) {
 #if defined(KK_DEV_TOOLS)
@@ -3349,7 +3469,10 @@ REX_HOOK_RAW(sub_82696A28) {
       kk::hfr::Load32(base,0x82CCBF6C) == hero;
   const auto caller = uint32_t(ctx.lr);
 #endif
-  __imp__sub_82696A28(ctx, base);
+  {
+    const kk::coop::EquipmentQueryScope query_scope(base,true);
+    __imp__sub_82696A28(ctx, base);
+  }
   const bool same = game == kk::hfr::Load32(base, 0x82CC97C0);
   const auto after = same && armed ? kk::hfr::Load32(base, game+ammo[weapon-1]) : before;
   if (observe) {
