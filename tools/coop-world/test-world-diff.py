@@ -16,7 +16,7 @@ S = "0000000000005678:0000000000009abc"
 
 
 def fixture(role="host"):
-    return {"schema": 1, "protocol": 26, "role": role, "sample": 1, "captured_utc": 1000., "playing_seconds": 25.,
+    return {"schema": 1, "protocol": 27, "role": role, "sample": 1, "captured_utc": 1000., "playing_seconds": 25.,
             "identity": {"session": "0000000000000001", "generation": 1, "level": 303, "start": 3,
                          "enemy_visit": 1, "checkpoint": 3, "shared_checkpoint": 3, "completed": "0000000000000000", "policy": "together"},
             "evidence": {"source_commit": "a"*40, "build_commit": "a"*40, "source_dirty": "", "exe_sha256": "b"*64,
