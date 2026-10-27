@@ -1854,11 +1854,14 @@ void LocalNativeGrabTick(PPCContext& ctx,uint8_t* b) {
   if (Load32(b,0x82CCBF7C)!=g.hero || Ptr(b,Ptr(b,g.hero,24,8),4,88)!=g.ai ||
       Ptr(b,g.ai,64,15688)!=g.vars || s.incarnation!=g.incarnation) { g={}; return; }
   const auto* authority=AuthorityFor(g.source.id);
-  if (!g.ended && (!LocalNativeGrabEnabled() || !Connected() || !combat::Fresh(s.partner_status_time,Now()) ||
-      combat::NativeGrabOwnerReleased(s.status_replay.Status(),s.identity,g.incarnation,Canonical(g.source.id),g.ownership_generation,g.first_damage) ||
-      !RetainedDamageSource(b,g.source) || !authority || authority->dead || authority->last.life<=0 ||
-      !combat::RemoteOwner(authority->owner,Side(),authority->generation,g.ownership_generation,authority->Frozen())))
-    LocalNativeGrabRelease(ctx,b,"source-or-session-unavailable");
+  const char* release=nullptr;
+  if (!LocalNativeGrabEnabled() || !Connected()) release="session-unavailable";
+  else if (!combat::Fresh(s.partner_status_time,Now())) release="owner-status-stale";
+  else if (combat::NativeGrabOwnerReleased(s.status_replay.Status(),s.identity,g.incarnation,Canonical(g.source.id),g.ownership_generation,g.first_damage)) release="owner-ended";
+  else if (!RetainedDamageSource(b,g.source)) release="source-changed";
+  else if (!authority || authority->dead || authority->last.life<=0) release="source-dead";
+  else if (!combat::RemoteOwner(authority->owner,Side(),authority->generation,g.ownership_generation,authority->Frozen())) release="authority-changed";
+  if (!g.ended && release) LocalNativeGrabRelease(ctx,b,release);
   if (!g.ended && !LocalNativeGrabRecord(b).valid) {
     g.ended=true;
     REXLOG_INFO("COOP GRAB guest ended-by-native-controller source={:08X} hero={:08X} bridge=scorpion",g.source.actor,g.hero);
@@ -3106,6 +3109,9 @@ void PeerGrabTick(PPCContext& ctx,uint8_t* b) {
   if (!grab.client_ready && !experimental) return;
   auto prior=PeerGrabRecord(b);
   if (!experimental && !prior.target && s.status_replay.Status().grab_enemy.source) {
+#if defined(KK_DEV_TOOLS)
+    if (s.sent_grab.active) REXLOG_INFO("COOP GRAB owner-native-ended stage=before-poll actor={:08X} valid={} handle={:08X}/{} first-damage={}",body,prior.valid,grab.id,grab.generation,grab.first_damage);
+#endif
     s.sent_grab.active=false; grab.source={}; grab.first_damage=0; return;
   }
   Scratch scratch(ctx,b);
@@ -3123,6 +3129,9 @@ void PeerGrabTick(PPCContext& ctx,uint8_t* b) {
     grab.id=record.id; grab.generation=record.generation;
   }
   if (!record.valid || record.source!=body || (record.id>>24)!=65 || !record.target) {
+#if defined(KK_DEV_TOOLS)
+    if (s.sent_grab.active) REXLOG_INFO("COOP GRAB owner-native-ended stage=after-poll actor={:08X} valid={} owner={:08X} target={:08X} first-damage={}",body,record.valid,record.source,record.target,grab.first_damage);
+#endif
     s.sent_grab.active=false; grab.source={}; grab.first_damage=0; return;
   }
   const auto source=s.bindings.find(record.target);
