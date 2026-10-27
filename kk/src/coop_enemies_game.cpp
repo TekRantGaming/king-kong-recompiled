@@ -77,6 +77,7 @@ REX_EXTERN(__imp__sub_82572E40);
 REX_EXTERN(__imp__sub_8255C9D8);
 REX_EXTERN(__imp__sub_825CE478);
 REX_EXTERN(__imp__sub_826627D0);
+REX_EXTERN(__imp__sub_82626618);
 REX_EXTERN(__imp__sub_8263F790);
 REX_EXTERN(__imp__sub_82614DC0);
 REX_EXTERN(__imp__sub_8271E760);
@@ -1207,7 +1208,7 @@ uint32_t PlayerDamageCache(EnemyFamily family) {
     default: return 0;
   }
 }
-struct PlayerDamageFrame { Binding binding; uint32_t offset=0, hero=0, body=0; };
+struct PlayerDamageFrame { Binding binding; uint32_t offset=0, hero=0, body=0, pool=4; };
 thread_local std::optional<PlayerDamageFrame> player_damage_frame;
 struct PlayerDamageGuard {
   uint8_t* base; PlayerDamageFrame frame; uint32_t original;
@@ -1218,7 +1219,7 @@ struct PlayerDamageGuard {
     player_damage_frame=previous;
   }
 };
-void PlayerDamage(PPCContext& ctx, uint8_t* b, EnemyFamily family, void (*native)(PPCContext&,uint8_t*)) {
+void PlayerDamage(PPCContext& ctx, uint8_t* b, EnemyFamily family, void (*native)(PPCContext&,uint8_t*), uint32_t pool=4) {
   const auto* owner=CombatOwner(b,family);
   const auto hero=Load32(b,0x82CCBF7C),body=kk::PartnerBodyCombatActor(b),offset=PlayerDamageCache(family);
 #if defined(KK_DEV_TOOLS)
@@ -1232,32 +1233,45 @@ void PlayerDamage(PPCContext& ctx, uint8_t* b, EnemyFamily family, void (*native
   const auto binding=*owner;
   const auto original=Load32(b,binding.vars+offset);
   if (original!=hero && original!=body) { native(ctx,b); return; }
-  PlayerDamageGuard guard{b,{binding,offset,hero,body},original,player_damage_frame};
+  PlayerDamageGuard guard{b,{binding,offset,hero,body,pool},original,player_damage_frame};
   player_damage_frame=guard.frame;
-  // Attack aiming can use the selected partner. Health consumption instead
-  // treats each real player's own hit as a player hit, including mixed volleys.
+  // Each native hit follows its real player source, including mixed volleys.
+  // BC sound scan82626618 likewise assigns its cached player to848 only after
+  // the actual sound passes its native flag/radius checks. Scope that cache per
+  // sound owner too, rather than attributing a peer's shot noise to Jack.
   Store32(b,binding.vars+offset,hero);
+#if defined(KK_DEV_TOOLS)
+  const auto target_before=pool==2 ? Load32(b,binding.vars+848):0;
+#endif
   native(ctx,b);
+#if defined(KK_DEV_TOOLS)
+  static unsigned sound_targets=0;
+  if (pool==2 && target_before!=body && RetainedDamageSource(b,binding) &&
+      Load32(b,binding.vars+848)==body && sound_targets++<64)
+    REXLOG_INFO("COOP BAT peer-sound-target actor={:08X} from={:08X} target={:08X}",
+        binding.actor,target_before,body);
+#endif
 }
 void PlayerDamageRecord(uint8_t* b, uint32_t packed, uint32_t returned) {
-  if (!player_damage_frame || (packed>>24)!=4) return;
+  if (!player_damage_frame || (packed>>24)!=player_damage_frame->pool) return;
   const auto& frame=*player_damage_frame;
-  const auto pool=stimulus_debug::ReadPool([&](uint32_t p) { return Load32(b,p); },4);
+  const auto pool=stimulus_debug::ReadPool([&](uint32_t p) { return Load32(b,p); },frame.pool);
   if (!pool.valid || pool.capacity>4096) return;
   const auto hit=stimulus_debug::ReadSlot([&](uint32_t p) { return Load32(b,p); },pool,packed&0xFFFFFF);
-  if (!hit.valid || hit.address!=returned || hit.target!=frame.binding.actor ||
+  if (!hit.valid || hit.address!=returned || (frame.pool==4 && hit.target!=frame.binding.actor) ||
       Ptr(b,frame.binding.ai,64,frame.offset+4)!=frame.binding.vars) return;
   const auto player=hit.source==frame.body && kk::PartnerBodyCombatActor(b)==frame.body ? frame.body : frame.hero;
 #if defined(KK_DEV_TOOLS)
   static unsigned logged=0;
   if (player==frame.body && Load32(b,frame.binding.vars+frame.offset)!=player && logged++<64)
-    REXLOG_INFO("COOP THREAT player-hit-class family={} actor={:08X} source={:08X} cached-player={:08X}",
+    REXLOG_INFO("COOP THREAT {} family={} actor={:08X} source={:08X} cached-player={:08X}",
+        frame.pool==4 ? "player-hit-class":"player-sound-class",
         uint16_t(frame.binding.id.family),frame.binding.actor,hit.source,player);
 #endif
   Store32(b,frame.binding.vars+frame.offset,player);
 }
 void PlayerDamageHandle(uint8_t* b, uint32_t handle) {
-  if (!player_damage_frame || !PoseAddress(handle,8) || (Load32(b,handle)>>24)!=4) return;
+  if (!player_damage_frame || !PoseAddress(handle,8) || (Load32(b,handle)>>24)!=player_damage_frame->pool) return;
   const auto record=stimulus_debug::ReadHandle([&](uint32_t p) { return Load32(b,p); },handle);
   if (record.valid) PlayerDamageRecord(b,record.id,record.address);
 }
@@ -3470,6 +3484,7 @@ REX_HOOK_RAW(sub_8271EBE8) {
 }
 REX_HOOK_RAW(sub_825CE478) { kk::coop::PlayerDamage(ctx,base,kk::coop::EnemyFamily::Raptor,__imp__sub_825CE478); }
 REX_HOOK_RAW(sub_826627D0) { kk::coop::PlayerDamage(ctx,base,kk::coop::EnemyFamily::Bat,__imp__sub_826627D0); }
+REX_HOOK_RAW(sub_82626618) { kk::coop::PlayerDamage(ctx,base,kk::coop::EnemyFamily::Bat,__imp__sub_82626618,2); }
 REX_HOOK_RAW(sub_8263F790) { kk::coop::PlayerDamage(ctx,base,kk::coop::EnemyFamily::Crab,__imp__sub_8263F790); }
 #if defined(KK_DEV_TOOLS)
 REX_HOOK_RAW(sub_82569A70) {
