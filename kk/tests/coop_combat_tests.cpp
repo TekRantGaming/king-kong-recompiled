@@ -19,7 +19,7 @@ Message Damage(uint32_t number = 1, uint64_t life = 11) {
 }
 Message Status(uint32_t number = 1, uint64_t life = 11, PlayerCondition condition = PlayerCondition::Alive) {
   Message m; m.type = MessageType::PlayerStatus; m.epoch = 90;
-  m.player_status = {World(), life, number, 0, condition}; return m;
+  m.player_status = {World(), life, number, 0, condition,0x1234}; return m;
 }
 std::vector<uint8_t> Packet(const Message& m) {
   std::vector<uint8_t> out; Check(Encode(m, out), "fixture encodes"); return out;
@@ -56,7 +56,7 @@ void Codecs() {
   static_assert(kProtocolVersion == 27);
   for (const auto& m : {Damage(), Status()}) {
     const auto bytes = Packet(m); Message out;
-    Check(bytes.size() == (m.type == MessageType::DamageEvent ? 119u : 53u), "fixed bounded wire length");
+    Check(bytes.size() == (m.type == MessageType::DamageEvent ? 119u : 55u), "fixed bounded wire length");
     Check(bytes[4] == 0 && bytes[5] == kProtocolVersion && bytes[7] == uint16_t(m.type), "protocol 25 byte order");
     Check(Decode(bytes, out) && Packet(out) == bytes, "canonical combat round trip");
     for (size_t n = 0; n < bytes.size(); ++n) {

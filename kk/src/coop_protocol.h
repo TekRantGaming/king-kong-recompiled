@@ -31,6 +31,7 @@ enum class MessageType : uint16_t {
 
 enum class ObjectKind : uint8_t { Breakable=1, Door=2, Fire=3, Raft=4, Ode=5, Tree=6, SupportBody=7 };
 constexpr uint32_t kDoorScheduled=0x100;
+constexpr uint32_t kDoorRetired=0x200;
 constexpr uint32_t kObjectHitFlags=0x00FFFFFF;
 constexpr size_t kObjectQueue=256,kObjectCensus=2048;
 // source hashes immutable authored position and native family. Scope is
@@ -268,6 +269,7 @@ struct PlayerStatus {
   uint64_t incarnation = 0;
   uint32_t number = 0, last_damage = 0; // processed, not necessarily injured
   PlayerCondition condition = PlayerCondition::Alive;
+  uint16_t capabilities = 0; // Own Jack's native extension flags, scoped by world and incarnation.
 };
 bool ValidDamageEvent(const DamageEvent& damage);
 bool ValidPlayerStatus(const PlayerStatus& status);

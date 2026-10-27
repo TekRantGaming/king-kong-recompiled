@@ -18,4 +18,5 @@ std::vector<WorldScript> StoryWorldDigest(const uint8_t* base);
 desync::Evidence StoryCompareDigest(const uint8_t* base,const desync::State& state,bool reconcile);
 // The existing partner-body PRG hook remains the sole owner of this entry point.
 bool StoryLoop(PPCContext& ctx, uint8_t* base);
+void StoryCapability(PPCContext& ctx,uint8_t* base,uint32_t payload,bool any=false);
 }

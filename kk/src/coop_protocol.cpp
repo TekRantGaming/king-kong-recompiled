@@ -169,7 +169,7 @@ bool ValidObjectState(const ObjectState& s) {
       ((s.value==0 && s.position==0 && s.seconds==0) ||
        (s.value==1 && (s.seconds==-1 || (s.seconds>0 && s.seconds<=3600))) ||
        (s.value==2 && s.seconds==0));
-  return s.kind==ObjectKind::Door && s.value<=511 && s.position>=0 && s.position<=1 &&
+  return s.kind==ObjectKind::Door && s.value<=1023 && s.position>=0 && s.position<=1 &&
       s.seconds>=0 && s.seconds<=3600;
 }
 bool ValidObjectRequest(const ObjectState& s) {
@@ -386,7 +386,7 @@ bool Encode(const Message& m, std::vector<uint8_t>& out) {
       if (!ValidPlayerStatus(m.player_status)) return false;
       WriteWorld(payload, m.player_status.world); payload.U(m.player_status.incarnation, 8);
       payload.U(m.player_status.number, 4); payload.U(m.player_status.last_damage, 4);
-      payload.U(uint8_t(m.player_status.condition), 1); break;
+      payload.U(uint8_t(m.player_status.condition), 1); payload.U(m.player_status.capabilities,2); break;
     case MessageType::Cheats:
       if (!ValidCheatSet(m.cheats)) return false;
       payload.U(m.cheats.bits, 2); break;
@@ -601,6 +601,7 @@ bool Decode(std::span<const uint8_t> bytes, Message& out) {
       m.player_status.world = ReadWorld(r); m.player_status.incarnation = r.U(8);
       m.player_status.number = uint32_t(r.U(4)); m.player_status.last_damage = uint32_t(r.U(4));
       m.player_status.condition = PlayerCondition(r.U(1));
+      m.player_status.capabilities=uint16_t(r.U(2));
       if (!ValidPlayerStatus(m.player_status)) return false;
       break;
     case MessageType::Cheats:

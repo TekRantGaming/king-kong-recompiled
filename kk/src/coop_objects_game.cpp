@@ -28,6 +28,7 @@ REX_EXTERN(__imp__sub_82552200);
 REX_EXTERN(__imp__sub_82515CF0);
 REX_EXTERN(__imp__sub_82516128);
 REX_EXTERN(__imp__sub_8271CCB8);
+REX_EXTERN(__imp__sub_82714E40);
 REX_EXTERN(__imp__sub_8270FA58);
 REX_EXTERN(__imp__sub_8270F918);
 REX_EXTERN(__imp__sub_8270FCE0);
@@ -216,7 +217,8 @@ bool Track(const uint8_t* b,uint32_t ai,uint32_t fn) {
 }
 ObjectKind Family(const uint8_t* b,uint32_t ai) {
   if (Track(b,ai,0x82507798) || Track(b,ai,0x82516128) || Track(b,ai,0x82515CF0)) return ObjectKind::Breakable;
-  if (Track(b,ai,0x82551ED8) || Track(b,ai,0x82574D80) || Track(b,ai,0x8256C3F8) || Track(b,ai,0x82543478)) return ObjectKind::Door;
+  if (Track(b,ai,0x82551ED8) || Track(b,ai,0x82574D80) || Track(b,ai,0x8256C3F8) || Track(b,ai,0x82543478) ||
+      objects::DefaultTrack([&](uint32_t a){return Load32(b,a);},ai,0x82574D80)) return ObjectKind::Door;
   if (Track(b,ai,0x825FAF58) || Track(b,ai,0x8260F858)) return ObjectKind::Fire;
   if (Track(b,ai,0x825FD388) || Track(b,ai,0x825E7348) || Track(b,ai,0x8260C988) || Track(b,ai,0x82604E68)) return ObjectKind::Raft;
   if (Track(b,ai,0x826EA1A0) || Track(b,ai,0x826F0E10) || Track(b,ai,0x826F1E08) || Track(b,ai,0x826F4948)) return ObjectKind::Ode;
@@ -386,6 +388,7 @@ ObjectState Sample(const uint8_t* b,const Binding& o) {
     }
     s.position=LoadF(b,o.vars+1084); s.seconds=LoadF(b,o.vars+552);
     if (DoorScheduled(b,o.ai)) s.value|=kDoorScheduled;
+    if ((Load32(b,o.actor+4)&0x00600000)==0x00600000) s.value|=kDoorRetired;
   }
   return s;
 }
@@ -697,6 +700,7 @@ bool PrepareDoorGeometry(PPCContext& ctx,uint8_t* b,const Binding& o) {
 }
 void RefreshDoor(PPCContext& ctx,uint8_t* b,Binding& o,const ObjectState& s,bool own_track=true) {
   if (Load32(b,0x82CCBF64)!=o.ai || Load32(b,0x82CCBF6C)!=o.actor) return;
+  if ((Load32(b,o.actor+4)&0x00600000)==0x00600000) return;
   const bool ended=!(s.value&kDoorScheduled) && DoorScheduled(b,o.ai);
   if (!ended && LoadF(b,o.vars+1084)==s.position && o.driven_position==s.position &&
       (s.position!=1 || Load32(b,o.vars+1096)==1)) return;
@@ -805,6 +809,29 @@ void IdleDoors(PPCContext& ctx,uint8_t* b) {
     if (state.host) OpenHeldDoor(ctx,b,o,false);
     else RefreshDoor(ctx,b,o,*authority,false);
     Store32(b,0x82CCBF64,ai); Store32(b,0x82CCBF6C,current_actor);
+  }
+}
+void RetireDoors(PPCContext& ctx,uint8_t* b) {
+  if (state.host) return;
+  for (auto& [actor,o]:state.bindings) {
+    if (o.kind!=ObjectKind::Door || !Valid(b,o) || Match(o.source,o.kind)!=&o ||
+        (Load32(b,actor+4)&0x00600000)==0x00600000) continue;
+    const auto* authority=state.replica.Find(o.kind,o.source);
+    if (!authority || !(authority->value&kDoorRetired)) continue;
+    const auto sp=ctx.r1.u32;
+    if ((sp&15) || sp<0x40014000 || sp>=0xA0000000) continue;
+    const PPCContext saved=ctx; uint8_t scratch[16384]; const auto start=sp-sizeof(scratch);
+    std::memcpy(scratch,b+start,sizeof(scratch)); ctx.r1.u64=start+12288;
+    std::memset(b+ctx.r1.u32,0,4096); Store32(b,ctx.r1.u32,sp);
+    constexpr uint32_t globals[]{0x82CCBF58,0x82CCBF5C,0x82CCBF60,0x82CCBF64,0x82CCBF68,0x82CCBF6C,0x82CCBF70};
+    uint32_t values[7]; for (unsigned i=0;i<7;++i) values[i]=Load32(b,globals[i]);
+    Store32(b,0x82CCBF64,o.ai); Store32(b,0x82CCBF68,o.ai);
+    Store32(b,0x82CCBF6C,actor); Store32(b,0x82CCBF70,actor);
+    RefreshDoor(ctx,b,o,*authority,false);
+    ctx.r3.u32=actor; __imp__sub_82714E40(ctx,b);
+    for (unsigned i=0;i<7;++i) Store32(b,globals[i],values[i]);
+    std::memcpy(b+start,scratch,sizeof(scratch)); ctx=saved;
+    REXLOG_INFO("KK co-op door retirement: id={:016X} native=true",o.source);
   }
 }
 void Door(PPCContext& ctx,uint8_t* b) {
@@ -2079,6 +2106,34 @@ void ObjectsEnqueued(const ObjectEnqueue& input,const uint8_t* b) {
       state.host ? "host" : "guest",o.source,Load32(b,input.output),Load32(b,input.output+4),flags,magnitude,input.seconds,input.caller);
 }
 
+void ObjectsDestroy(PPCContext& ctx,uint8_t* b) {
+  if (EnemyHoldDestroy(ctx,b)) return;
+  const auto actor=ctx.r3.u32;
+  if (state.ready && Shared()) {
+    const auto it=state.bindings.find(actor);
+    if (it!=state.bindings.end() && it->second.kind==ObjectKind::Door &&
+        Valid(b,it->second) && Match(it->second.source,it->second.kind)==&it->second) {
+      auto& o=it->second;
+      if (!state.host) {
+        const auto* authority=state.replica.Find(o.kind,o.source);
+        if (authority && !(authority->value&kDoorRetired)) {
+          ctx.r3.u32=actor==Load32(b,0x82CCBF6C) ? 1:0;
+          return;
+        }
+      } else if (state.number!=UINT32_MAX) {
+        // Snapshot before the native destroy callback can retire components.
+        // This is an explicit native removal, not an inferred closed track.
+        auto terminal=Sample(b,o); terminal.value|=kDoorRetired;
+        if (ValidObjectState(terminal)) {
+          o.last=terminal; o.sent=true; terminal.number=++state.number;
+          state.pending[o.source]=state.outcomes[o.source]=terminal;
+        }
+      }
+    }
+  }
+  __imp__sub_82714E40(ctx,b);
+}
+
 void ObjectsLoaded(uint8_t* b) {
   if (!REXCVAR_GET(kk_coop_enabled) || !SessionInProcess()) { state={}; return; }
   const auto v=SessionFlowSnapshot(); const auto epoch=StorySessionEpoch();
@@ -2133,6 +2188,7 @@ void ObjectsBeforeAi(PPCContext& ctx,uint8_t* b,uint32_t w) {
 void ObjectsAfterAi(PPCContext& ctx,uint8_t* b,uint32_t w) {
   if (!state.ready || w!=state.world || !Shared()) return;
   ReplayBreakables(ctx,b);
+  RetireDoors(ctx,b);
   IdleDoors(ctx,b);
   ReplayFires(ctx,b);
 #if defined(KK_DEV_TOOLS)
@@ -2282,6 +2338,9 @@ void ObjectsAfterAi(PPCContext& ctx,uint8_t* b,uint32_t w) {
   }
 }
 } // namespace kk::coop
+#if !defined(KK_DEV_TOOLS)
+REX_HOOK_RAW(sub_82714E40) { kk::coop::ObjectsDestroy(ctx,base); }
+#endif
 REX_HOOK_RAW(sub_824ADD48) { kk::coop::Damage(ctx,base); }
 REX_HOOK_RAW(sub_8256C3F8) { kk::coop::Door(ctx,base); }
 REX_HOOK_RAW(sub_82552200) { kk::coop::DoorUpdate(ctx,base); }

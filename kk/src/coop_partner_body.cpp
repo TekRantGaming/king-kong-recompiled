@@ -2588,6 +2588,7 @@ REX_HOOK_RAW(sub_82449F18) {
 #endif
   kk::PartnerBodyTriggerReference(base, record);
   __imp__sub_82449F18(ctx, base);
+  kk::coop::StoryCapability(ctx,base,record);
 #if defined(KK_DEV_TOOLS)
   kk::DevTrigCapaResult(base, record, caller, ctx.r3.u32);
 #endif

@@ -466,10 +466,15 @@ bool SharedSpawner(const uint8_t* b,uint32_t vars) {
   bool any=false,centipede=false;
   for (unsigned slot=0;slot<19;++slot) {
     const auto source=Load32(b,vars+(slot<2 ? 1592+184*slot : 1972+4*(slot-2)));
-    if (!source) continue;
+    if (!source) { if (slot>=2) break; else continue; }
     bool nested=false; uint32_t fn=0;
     const auto family=Tracks(b,Ptr(b,Ptr(b,source,24,8),4,88),fn,nested);
-    if (nested || family==EnemyFamily::None) return false;
+    if (nested || family==EnemyFamily::None) {
+#if defined(KK_DEV_TOOLS)
+      REXLOG_INFO("ENEMIES birth admission refused vars={:08X} slot={} template={:08X} state={:08X} nested={}",vars,slot,source,fn,nested);
+#endif
+      return false;
+    }
     any=true; centipede|=family==EnemyFamily::Centipede;
   }
   return any && centipede;
@@ -723,6 +728,9 @@ void Capture(const uint8_t* b, uint32_t w, bool initial = true) {
     if (!spawner || !vars) continue;
     Spawner sp{key, ai, vars, 0};
     sp.shared_births=SharedSpawner(b,vars);
+#if defined(KK_DEV_TOOLS)
+    if (initial) REXLOG_INFO("ENEMIES birth admission spawner={:016X} shared={}",key,sp.shared_births);
+#endif
     if (const auto old=private_spawner_sequences.find(key); old!=private_spawner_sequences.end()) sp.sequence=old->second;
     if (sp.shared_births && !SessionFlowSnapshot().host) sp.sequence=0;
     s.spawners[actor] = std::move(sp);
@@ -838,11 +846,16 @@ void Scan(const uint8_t* b) {
   for (auto p = full_begin; p < full_end; p += 8) registered.insert(Load32(b, p));
   for (auto binding_it = s.bindings.begin(); binding_it != s.bindings.end();) {
     const auto& [actor, binding] = *binding_it;
-    if (present.contains(binding.id)) { ++binding_it; continue; }
     const bool same = registered.contains(actor) &&
         Ptr(b, Ptr(b, actor, 24, 8), 4, 88) == binding.ai &&
         Ptr(b, binding.ai, 64, LifeBytes(binding.id.family)) == binding.vars &&
         Ptr(b, actor, 12, 64) == binding.matrix;
+    // Native destruction can leave an inactive queued root in the full table
+    // for many seconds. Publish removal at that real lifecycle boundary, not
+    // only when the later registry sweep finally frees its allocation.
+    if (same && (Load32(b,actor+4)&0x00600000)==0x00600000)
+      if (auto it=s.records.find(binding.id);it!=s.records.end()) it->second.kind=EnemyEventKind::Removed;
+    if (present.contains(binding.id)) { ++binding_it; continue; }
     if (!same) {
       if (auto it = s.records.find(binding.id); it != s.records.end()) it->second.kind = EnemyEventKind::Removed;
       s.native_player_switch.erase(binding.actor);
@@ -1762,7 +1775,11 @@ void PublishPlayerStatus(const uint8_t* b) {
       !s.combat_epoch || s.combat_epoch != s.link.epoch || !s.incarnation) return;
   const auto h = ReadHumanStatus(b); if (!h || h->hero != s.combat_hero || h->ai != s.combat_ai || h->vars != s.combat_vars) return;
   PlayerStatus p{s.identity, s.incarnation, s.next_status+1, s.damage_replay.Last(), h->condition};
-  const bool changed = !s.sent_status || p.condition != s.sent_status->condition || p.last_damage != s.sent_status->last_damage;
+  const auto extension=Ptr(b,h->hero,24,42);
+  if (!extension) return;
+  p.capabilities=Load16(b,extension+40);
+  const bool changed = !s.sent_status || p.condition != s.sent_status->condition || p.last_damage != s.sent_status->last_damage ||
+      p.capabilities!=s.sent_status->capabilities;
   if (!changed && Now() < s.next_status_time) return;
   if (!p.number) return; // Do not wrap a replay sequence.
   Message m; m.type = MessageType::PlayerStatus; m.epoch = s.combat_epoch; m.player_status = p;
@@ -3400,6 +3417,11 @@ bool EnemyPartnerCombatReady() {
       p.world == s.identity && p.incarnation && p.condition != PlayerCondition::Dead &&
       combat::Fresh(s.partner_status_time, Now()) && s.link.partner && s.link.partner->level == s.identity.level;
 }
+std::optional<uint16_t> EnemyPartnerCapabilities() {
+  const auto& s=Get();
+  if (!EnemyPartnerCombatReady()) return {};
+  return s.status_replay.Status().capabilities;
+}
 bool EnemyDamageEnqueue(PPCContext& ctx, uint8_t* b, uint32_t body) {
   auto& s = Get();
   if (!REXCVAR_GET(kk_coop_enabled) || ctx.r4.u32 != 4 || !PoseAddress(ctx.r6.u32, 108)) return false;
@@ -3554,6 +3576,23 @@ std::optional<ShotVector> EnemyAimTarget(const uint8_t* b, ShotVector origin) {
 } // namespace kk::coop
 
 namespace kk::coop { bool EnemySpawnerStep(PPCContext& ctx,uint8_t* base) { return SpawnerStep(ctx,base); } }
+namespace kk::coop {
+bool EnemyHoldDestroy(PPCContext& ctx,uint8_t* base) {
+  auto& s=Get();
+  if (!REXCVAR_GET(kk_coop_enabled) || !Connected() || !s.prepared ||
+      Now()-s.prepared_at>.5 || !Environment(base,s.world)) return false;
+  const auto it=s.bindings.find(ctx.r3.u32);
+  if (it==s.bindings.end() || !ValidBinding(base,it->second)) return false;
+  const auto* authority=AuthorityFor(it->second.id);
+  if (!authority || authority->owner==Side() || authority->Frozen()) return false;
+  for (const auto& r:s.link.remote.records) if (r.enemy.id==Canonical(it->second.id) &&
+      authority->Accepts(r.enemy) && r.kind==EnemyEventKind::Removed) return false;
+  // Native corpse timers vary with local visibility. Keep this replica until
+  // the owner's explicit removal, while preserving the caller's stop result.
+  ctx.r3.u32=it->first==Load32(base,0x82CCBF6C) ? 1:0;
+  return true;
+}
+}
 #if !defined(KK_DEV_TOOLS)
 REX_HOOK_RAW(sub_826E1EE8) {
   if (!kk::coop::SpawnerStep(ctx,base)) __imp__sub_826E1EE8(ctx,base);

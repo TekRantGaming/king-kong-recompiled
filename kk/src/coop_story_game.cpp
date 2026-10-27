@@ -2,6 +2,7 @@
 // with bounded host volume activation and cinematic completion gates.
 #include "coop_story_game.h"
 #include "coop_objects_game.h"
+#include "coop_enemies_game.h"
 #include "coop_story.h"
 #include "coop_desync_game.h"
 #include "coop_runtime.h"
@@ -30,6 +31,8 @@ REX_EXTERN(__imp__sub_82543CA0);
 REX_EXTERN(__imp__sub_826F9E70);
 REX_EXTERN(__imp__sub_82847478);
 REX_EXTERN(__imp__sub_82501A30);
+REX_EXTERN(__imp__sub_82501D50);
+REX_EXTERN(__imp__sub_82449EB0);
 REX_EXTERN(__imp__sub_8250B9D8);
 REX_EXTERN(__imp__sub_8250BED8);
 #if defined(KK_DEV_TOOLS)
@@ -1055,7 +1058,7 @@ bool ConvergeFlagWait(uint8_t* b,uint32_t payload) {
       "host passed same activation; single-target read-only 0x100 wait stalled >20 seconds");
   return true;
 }
-Script* CinematicRecord(const PPCContext& ctx,uint8_t* b,uint32_t payload,uint32_t fn) {
+Script* CinematicRecord(const PPCContext& ctx,uint8_t* b,uint32_t payload,uint32_t fn,bool initial=false) {
   if (!Ensure(b) || host || failed || snapshot_waiting) return nullptr;
   // SSLoop caches its vars in nonvolatile r31 and writes this record's owner.
   // NPC message callbacks may change the global target AI within that loop.
@@ -1070,10 +1073,38 @@ Script* CinematicRecord(const PPCContext& ctx,uint8_t* b,uint32_t payload,uint32
       Vars(b,binding.ai,19824)!=binding.vars || Shape(b,binding.vars)!=binding.script) return nullptr;
   // Run 1 may have begun before the shared baseline. Do not infer an unseen
   // host activation or apply this to another native caller's payload.
-  if (!s || s->exact || !s->saw_loop || s->run<=1) return nullptr;
+  if (!s || s->exact || !s->saw_loop || !s->run || (!initial && s->run<=1)) return nullptr;
   const auto index=Load32(b,s->binding.vars+19812);
   return index<kStoryRecords && payload==s->binding.vars+992+180*index &&
       Load32(b,payload-68)==fn ? s:nullptr;
+}
+bool HostNpcWait(PPCContext& ctx,uint8_t* b,uint32_t fn) {
+  const auto payload=ctx.r3.u32;
+  auto* s=CinematicRecord(ctx,b,payload,fn,true);
+  if (!s) return false;
+  const auto index=Load32(b,s->binding.vars+19812);
+  if (!s->hints.Passed(s->run,index)) { ctx.r3.u32=0; return true; }
+  std::vector<uint32_t> extensions;
+  const bool capability=fn==0x82501A30;
+  if (capability && !Ptr(b,Load32(b,payload+4),24,42)) return false;
+  for (unsigned off=capability ? 8:4;off<=20;off+=4) {
+    const auto actor=Load32(b,payload+off);
+    if (!actor) continue;
+    const auto ext=Ptr(b,actor,24,42);
+    if (!ext || !Ptr(b,ext,4,88)) return false;
+    extensions.push_back(ext);
+  }
+  // The host passed this exact authored record in this activation. Reproduce
+  // its native success acknowledgement on local NPCs, without manufacturing
+  // a ready bit, copying a cursor, moving an NPC or issuing its order twice.
+  for (const auto ext:extensions) {
+    const auto flags=Load16(b,ext+40);
+    b[ext+40]=uint8_t(((flags|0x1000)&~0x2000u)>>8);
+    b[ext+41]=uint8_t(flags);
+  }
+  ctx.r3.u32=1;
+  Note("host NPC wait",Event(*s,StoryPhase::Advance,index),"same host activation completed; native local acknowledgement retained");
+  return true;
 }
 bool HostCinematicWait(PPCContext& ctx,uint8_t* b) {
   const auto payload=ctx.r3.u32;
@@ -1109,13 +1140,44 @@ bool HostCinematicSpeech(PPCContext& ctx,uint8_t* b) {
 }
 } // namespace kk::coop
 
+namespace kk::coop {
+void StoryCapability(PPCContext& ctx,uint8_t* b,uint32_t payload,bool any) {
+  if (!Ensure(b) || failed || snapshot_waiting || !PoseAddress(payload,108) || Load32(b,payload+100)) return;
+  auto* s=Current(b);
+  const auto fn=any ? 0x82449EB0u:0x82449F18u;
+  if (!s || payload!=s->binding.vars+88 || Load32(b,s->binding.vars+20)!=fn) return;
+  const auto target=Load32(b,payload+4),hero=Load32(b,0x82CCBF7C);
+  if (host) {
+    if (ctx.r3.u32 || (target && target!=hero)) return;
+    const auto caps=EnemyPartnerCapabilities();
+    const auto mask=Load32(b,payload+84);
+    if (!caps || !mask || mask>0xffff || !(any ? (*caps&mask)!=0 : (*caps&mask)==mask)) return;
+    Store32(b,payload+20,hero); ctx.r3.u32=1;
+  } else {
+    // Host Arms this same script before the native persistent detector starts
+    // it. An idle checksum alone never authorizes capability completion.
+    const bool arm=s->activation.CanArm(s->run);
+    Store32(b,payload+20,arm ? (target ? target:hero):0); ctx.r3.u32=arm ? 1:0;
+  }
+}
+}
+
 REX_HOOK_RAW(sub_82476848) {
   if (!kk::coop::StoryDetect(ctx,base)) __imp__sub_82476848(ctx,base);
 }
 REX_HOOK_RAW(sub_82501A30) {
+  if (kk::coop::HostNpcWait(ctx,base,0x82501A30)) return;
   const auto payload=ctx.r3.u32;
   __imp__sub_82501A30(ctx,base);
   if (!ctx.r3.u32 && kk::coop::ConvergeFlagWait(base,payload)) ctx.r3.u32=1;
+}
+REX_HOOK_RAW(sub_82501D50) {
+  if (!kk::coop::HostNpcWait(ctx,base,0x82501D50)) __imp__sub_82501D50(ctx,base);
+}
+REX_HOOK_RAW(sub_82449EB0) {
+  const auto payload=ctx.r3.u32;
+  __imp__sub_82449EB0(ctx,base);
+  kk::coop::StoryCapability(ctx,base,payload,true);
 }
 REX_HOOK_RAW(sub_8250B9D8) {
   if (!kk::coop::HostCinematicWait(ctx,base)) __imp__sub_8250B9D8(ctx,base);

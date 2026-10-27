@@ -16,7 +16,7 @@ void Codec() {
     if (type==MessageType::ObjectRequest && (kind==ObjectKind::Raft || kind==ObjectKind::SupportBody)) continue;
     auto m=Packet(type,kind);
     if (type==MessageType::ObjectRequest && kind==ObjectKind::Breakable) { m.object.value=0x800010; m.object.position=42; m.object.seconds=.125f; }
-    if (type==MessageType::ObjectState && kind==ObjectKind::Door) { m.object.position=.375f; m.object.seconds=2.5f; m.object.value=511; }
+    if (type==MessageType::ObjectState && kind==ObjectKind::Door) { m.object.position=.375f; m.object.seconds=2.5f; m.object.value=1023; }
     if (type==MessageType::ObjectState && kind==ObjectKind::Fire) { m.object.position=37.5f; m.object.seconds=-1; }
     if (kind==ObjectKind::Raft) { m.object.raft.route=123; m.object.raft.pose[3]=m.object.raft.pose[8]=1; }
     if (objects::SupportRoot(kind)) {
