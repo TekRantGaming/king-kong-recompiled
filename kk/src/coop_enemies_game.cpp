@@ -60,6 +60,11 @@ REX_EXTERN(__imp__sub_825F2890);
 REX_EXTERN(__imp__sub_82617858);
 REX_EXTERN(__imp__sub_82456778);
 REX_EXTERN(__imp__sub_8241A648);
+REX_EXTERN(__imp__sub_824EF8A0);
+REX_EXTERN(__imp__sub_824EF5B8);
+REX_EXTERN(__imp__sub_82658ED8);
+REX_EXTERN(__imp__sub_82652FF8);
+REX_EXTERN(__imp__sub_824ECBC0);
 REX_EXTERN(__imp__sub_8254A8F8);
 REX_EXTERN(__imp__sub_825ED648);
 REX_EXTERN(__imp__sub_825EDC70);
@@ -955,6 +960,63 @@ void NativePlayerTarget(PPCContext& ctx, uint8_t* b) {
   __imp__sub_8266F740(ctx,b);
   const auto* owner = CombatOwner(b,EnemyFamily::Native);
   if (owner) ctx.r3.u64 = NearestPlayer(ctx,b,*owner,ctx.r3.u32,false);
+}
+void BatPlayerTarget(PPCContext& ctx, uint8_t* b) {
+  __imp__sub_824EF8A0(ctx,b);
+  const auto* owner=CombatOwner(b,EnemyFamily::Bat);
+  const auto hero=Load32(b,0x82CCBF7C),body=kk::PartnerBodyCombatActor(b);
+  if (!ctx.r3.u32 || !owner || !body || !Scratch::CanUse(ctx)) return;
+  const auto selected=Load32(b,owner->vars+848);
+  if (selected!=hero && selected!=body) return;
+  const auto other=selected==hero ? body:hero;
+  if (!(PlayerDistance(b,owner->actor,other)<PlayerDistance(b,owner->actor,selected))) return;
+  // Preserve the selector's activation, authored conditions and cooldowns.
+  // Only replace an accepted player with the nearer player if the same native
+  // life, exclusion and territory predicate accepts that player too.
+  Scratch scratch(ctx,b);
+  ctx.r3.u64=other; __imp__sub_824EF5B8(ctx,b);
+  if (ctx.r3.u32) Store32(b,owner->vars+848,other);
+}
+void BatPlayerFight(PPCContext& ctx, uint8_t* b, void (*native)(PPCContext&,uint8_t*)) {
+  const auto* owner=CombatOwner(b,EnemyFamily::Bat);
+  const auto hero=Load32(b,0x82CCBF7C),body=kk::PartnerBodyCombatActor(b);
+  if (!owner || !body || Load32(b,owner->vars+848)!=body || Load32(b,owner->vars+3108)!=hero) {
+    native(ctx,b); return;
+  }
+  const auto binding=*owner;
+  // Approach chooses strike880=1 for its cached player. Contact's aim helper
+  // uses the same equality. Scope the cache to these calls for a selected peer. Native
+  // contact, animation, flags and damage stay unchanged.
+  struct Restore {
+    uint8_t* base; Binding binding; uint32_t hero;
+    ~Restore() {
+      if (Ptr(base,binding.ai,64,3112)==binding.vars && RetainedDamageSource(base,binding))
+        Store32(base,binding.vars+3108,hero);
+    }
+  } restore{b,binding,hero};
+  Store32(b,binding.vars+3108,body);
+#if defined(KK_DEV_TOOLS)
+  const bool entry=native==__imp__sub_82658ED8 && Load32(b,binding.vars+3084)!=17;
+#endif
+  native(ctx,b);
+#if defined(KK_DEV_TOOLS)
+  static unsigned lines=0;
+  if (entry && lines++<64 && RetainedDamageSource(b,binding))
+    REXLOG_INFO("COOP BAT player-approach actor={:08X} target={:08X} attack={} flags={:08X}",
+        binding.actor,Load32(b,binding.vars+848),Load32(b,binding.vars+880),Load32(b,binding.vars+928));
+#endif
+}
+void BatNpcLink(PPCContext& ctx,uint8_t* b) {
+  // TAG_On deliberately excludes Jack from its NPC bookkeeping. Apply that
+  // same exclusion to the validated peer at its held/selected-target calls,
+  // leaving the separate carried-prey call and all other users unchanged.
+  const auto caller=uint32_t(ctx.lr);
+  if (caller==0x8263D6C0 || caller==0x8263D708) {
+    const auto* owner=CombatOwner(b,EnemyFamily::Bat);
+    const auto body=kk::PartnerBodyCombatActor(b);
+    if (owner && body && ctx.r3.u32==body) return;
+  }
+  __imp__sub_824ECBC0(ctx,b);
 }
 void NativePlayerReflex(PPCContext& ctx, uint8_t* b) {
   __imp__sub_8260EB68(ctx,b);
@@ -3021,7 +3083,7 @@ bool EnemyCombatReference(const uint8_t* b, uint32_t owner, uint32_t ai, uint32_
   if (binding->second.id.family==EnemyFamily::Crab && PoseAddress(vars,1708) &&
       combat::CandidateReference(combat::CandidateTable{1536,1544,20},offset,Load32(b,vars+1536))) return true;
   if ((binding->second.id.family == EnemyFamily::Crab && offset == 1056) ||
-      (binding->second.id.family == EnemyFamily::Bat && offset == 848) ||
+      (binding->second.id.family == EnemyFamily::Bat && (offset == 848 || offset == 852)) ||
       (binding->second.id.family == EnemyFamily::Native && offset == 4088)) return true;
   return table.limit && PoseAddress(vars, table.actors+4*table.limit) &&
       combat::CandidateReference(table, offset, Load32(b, vars+table.count));
@@ -3382,6 +3444,10 @@ REX_HOOK_RAW(sub_825043E0) {
 REX_HOOK_RAW(sub_82634978) { kk::coop::CrabPlayerTarget(ctx,base); }
 REX_HOOK_RAW(sub_8265BF60) { kk::coop::CrabFight(ctx,base); }
 REX_HOOK_RAW(sub_8266F740) { kk::coop::NativePlayerTarget(ctx,base); }
+REX_HOOK_RAW(sub_824EF8A0) { kk::coop::BatPlayerTarget(ctx,base); }
+REX_HOOK_RAW(sub_82658ED8) { kk::coop::BatPlayerFight(ctx,base,__imp__sub_82658ED8); }
+REX_HOOK_RAW(sub_82652FF8) { kk::coop::BatPlayerFight(ctx,base,__imp__sub_82652FF8); }
+REX_HOOK_RAW(sub_824ECBC0) { kk::coop::BatNpcLink(ctx,base); }
 REX_HOOK_RAW(sub_8260EB68) { kk::coop::NativePlayerReflex(ctx,base); }
 REX_HOOK_RAW(sub_82617858) { kk::coop::NativePlayerLaunch(ctx,base); }
 REX_HOOK_RAW(sub_82456778) { kk::coop::VRexPlayerTarget(ctx,base); }
