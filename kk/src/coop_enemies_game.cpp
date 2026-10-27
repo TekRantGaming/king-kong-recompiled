@@ -2702,6 +2702,7 @@ void EnemyThrowProbe(PPCContext& ctx,uint8_t* b) {
   }();
   static double next=due;
   static unsigned count=0;
+  static const bool controller=std::getenv("KK_DEV_ENEMY_THROW_CONTROLLER")!=nullptr;
   static const float advance=[] {
     const auto* text=std::getenv("KK_DEV_ENEMY_THROW_ADVANCE");
     const auto value=text ? std::strtof(text,nullptr):0.f;
@@ -2753,6 +2754,26 @@ void EnemyThrowProbe(PPCContext& ctx,uint8_t* b) {
   } restore{b,binding,{},Load32(b,binding.vars+target_offset),target_offset,launcher_offset,
       kna ? ShotVector{}:Vector(b,binding.vars+4472)};
   for (unsigned i=0;i<7;++i) restore.globals[i]=Load32(b,globals[i]);
+  if (controller) {
+    const auto block=Load32(b,kna ? 0x82CC9B5C:0x82CC8D00);
+    if (!PoseAddress(block,24) || Load32(b,block+20)!=(kna ? 0x82443F10u:0x82617858u)) return;
+    Store32(b,0x82CCBF64,binding.ai); Store32(b,0x82CCBF68,binding.ai);
+    Store32(b,0x82CCBF6C,binding.actor); Store32(b,0x82CCBF70,binding.actor);
+    // Controlled encounter setup, not a generated hit. Run the actual native
+    // launch state on subsequent AI frames, including animation readiness,
+    // its own spear creation, player selection, aim error and ballistics.
+    Store32(b,binding.vars+(kna ? 380:384),3);
+    Store32(b,binding.vars+(kna ? 384:388),0);
+    Store32(b,binding.vars+292,0);
+    const auto activation=scratch.Vec(0,0,0,0x200);
+    std::memset(b+activation,0,108); Store32(b,activation+4,binding.actor);
+    ctx.r3.u64=activation; __imp__sub_8250EE50(ctx,b);
+    ctx.r3.u64=2; ctx.r4.u64=block; __imp__sub_826FA3B0(ctx,b);
+    count=12;
+    REXLOG_INFO("COOP PROJECTILE fixture-native-controller actor={:08X} family={} block={:08X} native={:08X} volley=3 synthetic-activation=true native-animation-and-attacks=true normal-traversal-unverified=true",
+        binding.actor,uint16_t(binding.id.family),block,Load32(b,block+20));
+    return;
+  }
   const auto bm=Ptr(b,body,12,64); if (!bm) return;
   const float dx=LoadF(b,bm+48)-LoadF(b,binding.matrix+48),dy=LoadF(b,bm+52)-LoadF(b,binding.matrix+52);
   const auto length=std::hypot(dx,dy);
@@ -3416,7 +3437,7 @@ bool EnemyDamageEnqueue(PPCContext& ctx, uint8_t* b, uint32_t body) {
     damage.projectile=uint32_t(ctx.lr)==0x826345F8 || direct_impact;
     if (damage.projectile) {
       damage.point={LoadF(b,payload+48),LoadF(b,payload+52),LoadF(b,payload+56)};
-      damage.surface=Load32(b,payload+96);
+      damage.surface=combat::ImpactChild(Load32(b,payload+96));
     }
     if (binding != s.bindings.end() && AuthorityFor(binding->second.id))
       damage.generation = AuthorityFor(binding->second.id)->generation;
@@ -3429,6 +3450,14 @@ bool EnemyDamageEnqueue(PPCContext& ctx, uint8_t* b, uint32_t body) {
     const bool ready=EnemyPartnerCombatReady(), wire_valid=ValidDamageEvent(damage);
     const bool qualified = audited && ready && wire_valid;
 #if defined(KK_DEV_TOOLS)
+    if (audited && damage.projectile && Load32(b,payload+96)!=damage.surface) {
+      static unsigned selectors=0;
+      if (selectors++<64) {
+        auto original=damage; original.surface=Load32(b,payload+96);
+        REXLOG_INFO("COOP PROJECTILE native-selector family={} native={:08X} child={} original-wire={} canonical-wire={} native-low-byte-lookup=true",
+            uint16_t(damage.enemy.family),original.surface,damage.surface,ValidDamageEvent(original),wire_valid);
+      }
+    }
     if (audited && ready && !wire_valid) {
       static unsigned refusals=0;
       if (refusals++<64)

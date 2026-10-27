@@ -17,6 +17,7 @@
     "story_world": "story_world",
     "story_duplicate": "story_duplicate",
     "false_quiet": "false_quiet",
-    "projectile_source": "projectile_source"
+    "projectile_source": "projectile_source",
+    "impact_selector": "impact_selector"
   }
 }

@@ -86,6 +86,29 @@ void ProjectileSource() {
   words[block+20]=0x8258C5F8; words[ai+82]=4097;
   Check(!check(264),"out of range track table is refused before any extra read");
 }
+void ImpactSelector() {
+  Message m; m.type=MessageType::DamageEvent; m.epoch=1;
+  m.damage.world={204,3,1}; m.damage.incarnation=1; m.damage.number=1;
+  m.damage.enemy={0x1234567812345678ull,0,EnemyFamily::Native};
+  m.damage.flags=0x400400; m.damage.magnitude=11; m.damage.direction={1,0,0};
+  m.damage.projectile=true; m.damage.point={28,70,24};
+  std::vector<uint8_t> bytes;
+  // Native Javelin launch seeds this integer word with float tolerance bits
+  // on its H collision path. The native impact builder uses its low byte.
+  for (const auto word : {0x3A83126Fu,0x3DCCCCCDu,0x40000000u,0xFFFFFFFEu,0x0000FFFFu}) {
+    m.damage.surface=word;
+    if (word>65535 && word!=UINT32_MAX)
+      Check(!Encode(m,bytes),"raw native high bits cannot be accepted as a wire selector");
+    m.damage.surface=combat::ImpactChild(word);
+    Check(Encode(m,bytes),"effective native projectile child selector permits the real hit to be encoded");
+    Message out;
+    Check(Decode(bytes,out) && out.damage.surface==(word&255) && out.damage.flags==0x400400 &&
+        out.damage.magnitude==11 && out.damage.point.z==24,
+        "selector normalization preserves impact and damage while discarding unused high bits");
+  }
+  Check(combat::ImpactChild(UINT32_MAX)==UINT32_MAX && combat::ImpactChild(0)==0 && combat::ImpactChild(255)==255,
+      "native no-child sentinel and actual byte selectors are retained");
+}
 
 void Model() {
   for (const auto name:{"lan","home","bad_wifi","mobile","hell"}) {
@@ -349,6 +372,7 @@ int main(int argc,char** argv) {
   else if(name=="shot_validator") ShotValidation();
   else if(name=="session_epoch") SessionEpoch();
   else if(name=="projectile_source") ProjectileSource();
+  else if(name=="impact_selector") ImpactSelector();
   else if(name=="udp_duplicate" || name=="udp_order") Reliable();
   else { std::fprintf(stderr,"unknown test\n"); return 2; }
   std::printf("PASS [%s]\n",test_name); return 0;

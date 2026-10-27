@@ -73,6 +73,13 @@ inline ProjectileLayout NativeProjectile(uint32_t track) {
   if (track == 0x824DF570) return {44, 384};
   return {};
 }
+inline uint32_t ImpactChild(uint32_t native) {
+  // 82634428 tests -1, then uses only the low byte for group_instance_find.
+  // Javelin_launch can leave float tolerance bits in this native word when
+  // the collision is with an H model. Carry the effective child selector,
+  // rather than rejecting that real hit or transporting unrelated high bits.
+  return native==UINT32_MAX || COOP_MUT_IF("impact_selector") ? native : native&0xFF;
+}
 template <class U32, class U16, class Address, class Source>
 bool ProjectileReference(uint32_t actor, uint32_t ai, uint32_t vars, uint32_t offset,
                          U32 u32, U16 u16, Address address, Source source_ready) {
