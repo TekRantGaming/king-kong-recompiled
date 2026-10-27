@@ -505,6 +505,9 @@ bool SessionBeforeGo(PPCContext& ctx,uint8_t* base,uint32_t g) {
         v.host ? "host":"guest",v.world.level,local_checkpoint,level,start,
         int(LocalPlayerCondition(base).value_or(PlayerCondition::Dead)),Load32(base,0x82CCAA80),Load32(base,0x82CCBFD4),
         Load32(base,g+13128),Load32(base,g+13432),Load32(base,g+13504),Load32(base,g+13576),Load32(base,g+13648));
+    REXLOG_INFO("KK co-op native load human status: role={} slots2-7={}/{}/{}/{}/{}/{}",
+        v.host ? "host":"guest",LoadF(base,g+7100),LoadF(base,g+7104),LoadF(base,g+7108),
+        LoadF(base,g+7112),LoadF(base,g+7116),LoadF(base,g+7120));
     if (level==3) {
       const int next=FlowChapter(v.world.level)+1;
       if (next<=0 || next>=42) { Send(MessageType::FlowAbort,v.world); return false; }

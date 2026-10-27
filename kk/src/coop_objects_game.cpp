@@ -6,6 +6,7 @@
 #include "coop_runtime.h"
 #include "coop_pose.h"
 #include "coop_enemies_game.h"
+#include "coop_partner_body.h"
 #include "coop_observer.h"
 #include "coop_world_snapshot.h"
 #include "hfr.h"
@@ -1835,6 +1836,43 @@ void ReloadProbe(uint8_t* b) {
   if (!state.observed_change) return;
   if (SessionDevObjectReload(b)) probe.done=true;
 }
+void NpcPickupStage(PPCContext& ctx,uint8_t* b) {
+  static Probe probe("KK_DEV_OBJECT_NPC_PICKUP");
+  const auto t=kk::DevSecondsSinceMenu();
+  if (probe.done || probe.due<0 || t<probe.due) return;
+  if (t>probe.due+20) { probe.done=true; REXLOG_WARN("KK dev NPC pickup: no eligible armed native human"); return; }
+  const auto hero=Load32(b,0x82CCBF7C),hm=Ptr(b,hero,12,64),g=Load32(b,0x82CC97C0);
+  if (!hm || !PoseAddress(g,15000)) return;
+  const auto proxy=kk::PartnerBodyCombatActor(b);
+  static bool listed=false;
+  uint32_t best=0,slot=0,weapon=0; float distance=1000000;
+  for (unsigned off=7328;off<=7344;off+=4) {
+    const auto actor=Load32(b,g+off),ai=Ptr(b,Ptr(b,actor,24,8),4,88),vars=Ptr(b,ai,64,8),matrix=Ptr(b,actor,12,64);
+    if (!listed && vars && matrix) {
+      const auto k=Load32(b,vars+4);
+      REXLOG_INFO("KK dev NPC pickup candidate: role={} actor={:08X} slot={} weapon={} human={} height-difference={} position=({:.3f},{:.3f},{:.3f})",
+          state.host ? "host":"guest",actor,k,k<=12 ? Load32(b,g+13124+4*k):0,Load32(b,ai)==Load32(b,0x82CC87BC),
+          LoadF(b,matrix+56)-LoadF(b,hm+56),LoadF(b,matrix+48),LoadF(b,matrix+52),LoadF(b,matrix+56));
+    }
+    if (!vars || !matrix || actor==hero || actor==proxy || (Load32(b,actor)&0x00400001) ||
+        Load32(b,ai)!=Load32(b,0x82CC87BC) || std::abs(LoadF(b,matrix+56)-LoadF(b,hm+56))>2) continue;
+    const auto k=Load32(b,vars+4);
+    if (k<2 || k>7) continue;
+    const auto w=Load32(b,g+13124+4*k);
+    if (w<1 || w>4) continue;
+    const auto d=std::hypot(LoadF(b,matrix+48)-LoadF(b,hm+48),LoadF(b,matrix+52)-LoadF(b,hm+52));
+    if (d<distance) { best=matrix; slot=k; weapon=w; distance=d; probe.source=actor; }
+  }
+  listed=true;
+  if (!best) return;
+  float fx=LoadF(b,best+48)-LoadF(b,hm+48),fy=LoadF(b,best+52)-LoadF(b,hm+52);
+  const auto length=std::hypot(fx,fy); fx=length>.01f ? fx/length:0; fy=length>.01f ? fy/length:1;
+  const ShotVector position{LoadF(b,best+48)-1.2f*fx,LoadF(b,best+52)-1.2f*fy,LoadF(b,hm+56)};
+  if (!kk::DevTeleportJack(ctx,b,hero,position,fx,fy)) return;
+  probe.done=true;
+  REXLOG_INFO("KK dev NPC pickup: staged role={} actor={:08X} slot={} weapon={} player-weapon={} position=({:.3f},{:.3f},{:.3f}) native-input=false",
+      state.host ? "host":"guest",uint32_t(probe.source),slot,weapon,Load32(b,g+13128),position.x,position.y,position.z);
+}
 void PickupProbe(PPCContext& ctx,uint8_t* b) {
   static Probe probe("KK_DEV_OBJECT_PICKUP");
   const auto t=kk::DevSecondsSinceMenu();
@@ -2083,6 +2121,7 @@ void ObjectsBeforeAi(PPCContext& ctx,uint8_t* b,uint32_t w) {
 #if defined(KK_DEV_TOOLS)
   Probes(ctx,b);
   PickupProbe(ctx,b);
+  NpcPickupStage(ctx,b);
 #endif
 }
 void ObjectsAfterAi(PPCContext& ctx,uint8_t* b,uint32_t w) {
