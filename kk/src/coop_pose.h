@@ -68,7 +68,7 @@ PoseRead ReadJackPose(U32 load32, U16 load16, F32 loadf, double now) {
   const uint32_t weapon=slot<=12 && PoseAddress(weapons,13176) ? load32(weapons+0x3344+4*slot) : 0;
   p.weapon = weapon <= 10 ? uint8_t(weapon) : 0;
   p.crouched = load32(vars + 2912) != 0;
-  p.aiming = load32(vars + 0xB94) != 0;
+  p.aiming = load32(vars + 0xBAC) != 0; // Raised weapon, not the separate B94 zoom flag.
   // H's contact update retains last-ground-Z minus current-Z at +13268
   // (826A159C), and clears it on a floor contact (826A1214). Its NPC airborne
   // clip uses the one-unit threshold (826A80B4). The contact list itself is

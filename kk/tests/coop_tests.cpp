@@ -446,8 +446,11 @@ void PoseReadingAndDisplay() {
   words[0x82CC8848]=weapons; words[vars+4]=1; words[weapons+0x3348]=2;
   words[g+13128]=4;
   Check(read().pose->weapon==2,"native H inventory wins over the universe request block");
-  words[vars+0xB94]=1;
+  words[vars+0xBAC]=1;
   Check(read().pose->aiming==1,"real native aim flag is published");
+  words[vars+0xBAC]=0;
+  words[vars+0xB94]=1;
+  Check(read().pose->aiming==0,"zoom alone does not publish a raised weapon");
   words[vars+0xB94]=0;
   words[weapons+0x3348]=6;
   Check(read().pose->weapon==6,"spear equipment is not published as empty hands");

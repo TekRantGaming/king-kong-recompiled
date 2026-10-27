@@ -86,7 +86,7 @@ REX_EXTERN(__imp__sub_826FC010);
 REX_EXTERN(__imp__sub_826FC0D8);
 REX_EXTERN(__imp__sub_826FC178);
 REX_EXTERN(__imp__sub_826FE840);
-REX_EXTERN(__imp__sub_826FE8B0);
+REX_EXTERN(__imp__sub_827FA0B8);
 REX_EXTERN(__imp__sub_827F8E38);
 REX_EXTERN(__imp__sub_823F6EA0);
 REX_EXTERN(__imp__sub_823F6EF0);
@@ -464,7 +464,7 @@ struct State {
   uint8_t displayed_weapon = 255;
   int32_t weapon_sound = -1;
   uint32_t sound_actor = 0;
-  struct WeaponPart { uint32_t actor=0, hidden=0; uint8_t variant=255; };
+  struct WeaponPart { uint32_t actor=0, hidden=0, visibility=0; uint8_t variant=255; };
   std::array<WeaponPart,3> weapon_parts{};
   Rig weapon_rig;
   uint64_t weapon_generation=0;
@@ -472,6 +472,7 @@ struct State {
   std::array<uint32_t,2> weapon_masks{};
   std::array<uint8_t,2> weapon_selectors{};
   int32_t weapon_flash=-1;
+  uint32_t weapon_flash_node=0;
   float flash_left=0;
   uint32_t action_changes = 0, action_restarts = 0, native_sets = 0, pose_blends = 0;
   uint32_t logged_changes = 0, logged_restarts = 0, logged_native_sets = 0, logged_blends = 0;
@@ -806,19 +807,40 @@ uint8_t PartnerPartVariant(PPCContext& ctx,uint8_t* b,const Rig& rig,uint8_t tag
   __imp__sub_823F90B0(ctx,b);
   return uint8_t(ctx.r3.u32);
 }
+struct EffectSelection {
+  uint8_t* base;
+  uint32_t saved;
+  explicit EffectSelection(uint8_t* b):base(b),saved(Load32(b,0x82CCAC34)) {}
+  ~EffectSelection() { Store32(base,0x82CCAC34,saved); }
+};
+void RemovePartnerFlash(PPCContext& ctx,uint8_t* b,uint32_t world) {
+  auto& s=Get();
+  if (s.weapon_flash<0 || !Range(world,0x162b8) || !Scratch::CanUse(ctx)) return;
+  EffectSelection selection(b);
+  auto node=Load32(b,world+0x162b0);
+  for (unsigned count=0;Range(node,24) && count<8192;++count) {
+    if (node==s.weapon_flash_node && Load16(b,node+2)==s.weapon_flash &&
+        b[node]==21 && Load32(b,node+12)==s.weapon_rig.actor) {
+      Scratch scratch(ctx,b);
+      ctx.r3.u64=world+0x162b0; ctx.r4.u64=uint32_t(s.weapon_flash);
+      __imp__sub_827FA0B8(ctx,b);
+      if (selection.saved==node) selection.saved=0;
+      break;
+    }
+    node=Load32(b,node+16);
+  }
+  s.weapon_flash=-1; s.weapon_flash_node=0;
+}
 void RestorePartnerEquipment(PPCContext& ctx,uint8_t* b,uint32_t world) {
   auto& s=Get();
   if (!s.weapon_restore || !Scratch::CanUse(ctx)) return;
   StopPartnerWeaponSound(ctx,b);
+  if (world==s.world && s.Environment(b,world)) RemovePartnerFlash(ctx,b,world);
   Rig rig;
   const auto observed=s.humans.find(s.weapon_rig.actor);
   if (world==s.world && s.Environment(b,world) && observed!=s.humans.end() &&
       observed->second.generation==s.weapon_generation && ReadRig(b,s.weapon_rig.actor,rig) && Same(rig,s.weapon_rig)) {
     Scratch scratch(ctx,b);
-    if (s.weapon_flash>=0) {
-      ctx.r3.u64=rig.actor; ctx.r4.s64=s.weapon_flash;
-      __imp__sub_826FE8B0(ctx,b);
-    }
     for (unsigned i=0;i<s.weapon_parts.size();++i) {
       const auto& part=s.weapon_parts[i]; const auto tag=uint8_t(125+i);
       if (!part.actor || part.variant>=253 || OwnedAimBone(b,rig,tag)!=part.actor) continue;
@@ -826,6 +848,7 @@ void RestorePartnerEquipment(PPCContext& ctx,uint8_t* b,uint32_t world) {
       __imp__sub_8286ADA0(ctx,b);
       ctx.r3.u64=part.actor; ctx.r4.u64=part.hidden; ctx.r5.u64=part.hidden ? 0 : 8;
       __imp__sub_8270B008(ctx,b);
+      Store32(b,part.actor+4,(Load32(b,part.actor+4)&~0x20200000u)|part.visibility);
     }
     if (s.weapon_child && Load16(b,rig.anim+0x7C)==s.weapon_child) {
       ctx.r3.u64=rig.actor; ctx.r4.u64=0; ctx.r5.u64=0;
@@ -836,7 +859,7 @@ void RestorePartnerEquipment(PPCContext& ctx,uint8_t* b,uint32_t world) {
     REXLOG_INFO("PUPPET weapon restored actor={:08X} generation={}",rig.actor,s.weapon_generation);
   }
   s.weapon_restore=false; s.weapon_rig={}; s.weapon_parts={}; s.weapon_child=0;
-  s.weapon_flash=-1; s.flash_left=0;
+  s.weapon_flash=-1; s.weapon_flash_node=0; s.flash_left=0;
 }
 void PartnerWeapon(PPCContext& ctx,uint8_t* b,const Rig& rig,const coop::PlayerPose& p) {
   auto& s=Get();
@@ -849,7 +872,8 @@ void PartnerWeapon(PPCContext& ctx,uint8_t* b,const Rig& rig,const coop::PlayerP
       const auto part=OwnedAimBone(b,rig,uint8_t(125+i));
       if (!part) continue;
       const auto mesh=Ptr(b,Ptr(b,part,20,4),0,12);
-      s.weapon_parts[i]={part,mesh ? Load32(b,mesh+8)&8u : 0,PartnerPartVariant(ctx,b,rig,uint8_t(125+i))};
+      s.weapon_parts[i]={part,mesh ? Load32(b,mesh+8)&8u : 0,
+          Load32(b,part+4)&0x20200000u,PartnerPartVariant(ctx,b,rig,uint8_t(125+i))};
     }
   }
   const auto weapon=p.weapon;
@@ -858,11 +882,12 @@ void PartnerWeapon(PPCContext& ctx,uint8_t* b,const Rig& rig,const coop::PlayerP
   if (s.animation.new_shot && gun) s.flash_left=.075f;
   if (!s.flash_left && s.weapon_flash>=0) {
     Scratch scratch(ctx,b);
-    ctx.r3.u64=rig.actor; ctx.r4.s64=s.weapon_flash;
-    __imp__sub_826FE8B0(ctx,b); s.weapon_flash=-1;
+    EffectSelection selection(b);
+    ctx.r3.u64=Load32(b,s.world+0x162b0); ctx.r4.s64=s.weapon_flash; ctx.r5.u64=21004; ctx.f1.f64=0;
+    __imp__sub_827F8E38(ctx,b);
   }
   if (s.weapon_sound>=0 && (weapon!=2 || s.animation.fire_left<=0)) StopPartnerWeaponSound(ctx,b);
-  const bool reload=gun && s.animation.use_left>0 && s.animation.use_action==weapon+0x72;
+  const bool reload=gun && s.animation.last_action==weapon+0x72;
   // Native H uses a child channel for reload, fire and aiming, while the
   // full-body idle/walk continues. Never rewind a playing burst per packet.
   const uint16_t child=reload ? uint16_t(weapon+0x72) :
@@ -907,6 +932,10 @@ void PartnerWeapon(PPCContext& ctx,uint8_t* b,const Rig& rig,const coop::PlayerP
       ctx.r3.u64=rig.actor; ctx.r4.u64=tag; ctx.r5.u64=variant; ctx.r6.u64=1;
       __imp__sub_8286ADA0(ctx,b);
     }
+    // A main/child action swap can hide an already matching model. The native
+    // installer returns early for that model, so explicitly show its slot.
+    ctx.r3.u64=rig.actor; ctx.r4.u64=tag; ctx.r5.u64=254; ctx.r6.u64=1;
+    __imp__sub_8286ADA0(ctx,b);
     // Native H clears the geometry flag 8 when the weapon is in hand.
     const auto mesh=Ptr(b,Ptr(b,part,20,4),0,12);
     ctx.r3.u64=part; ctx.r4.u64=0; ctx.r5.u64=8;
@@ -1066,6 +1095,10 @@ void PartnerBodyAim(PPCContext& ctx,uint8_t* b,uint32_t actor,uint32_t ai) {
 }
 
 void PartnerWeaponFlash(PPCContext& ctx,uint8_t* b,const Rig& rig) {
+#if defined(KK_DEV_TOOLS)
+  static const bool off=[] { const auto* v=std::getenv("KK_DEV_PARTNER_FLASH"); return v && *v=='0'; }();
+  if (off) return;
+#endif
   auto& s=Get();
   if (s.flash_left<=0 || !s.partner.partner || !Scratch::CanUse(ctx)) return;
   const auto gun=OwnedAimBone(b,rig,125);
@@ -1078,10 +1111,12 @@ void PartnerWeaponFlash(PPCContext& ctx,uint8_t* b,const Rig& rig) {
   const auto list=Ptr(b,s.world,0x162b0,24), resource=Load32(b,0x82CC877C);
   if (!list || !Ptr(b,Ptr(b,resource,20,4),0,12)) return;
   Scratch scratch(ctx,b);
+  EffectSelection selection(b);
   if (s.weapon_flash<0) {
     ctx.r3.u64=s.world+0x162b0; ctx.r4.u64=21; ctx.r5.u64=rig.actor;
     __imp__sub_827F9978(ctx,b); s.weapon_flash=ctx.r3.s32;
     if (s.weapon_flash<0) return;
+    s.weapon_flash_node=Load32(b,0x82CCAC34);
     ctx.r3.u64=rig.actor; ctx.r4.s64=s.weapon_flash; ctx.r5.u64=resource; ctx.r6.u64=0;
     __imp__sub_826FC010(ctx,b);
     ctx.r3.u64=rig.actor; ctx.r4.s64=s.weapon_flash; ctx.r5.u64=4; ctx.r6.u64=1;
@@ -1099,6 +1134,10 @@ void PartnerWeaponFlash(PPCContext& ctx,uint8_t* b,const Rig& rig) {
     if (s.animation_shots<=4) REXLOG_INFO("PUPPET weapon flash actor={:08X} handle={} equipment={} muzzle={}",
         rig.actor,s.weapon_flash,p.weapon,XYZ(muzzle));
   }
+  // Reuse one glow for the entire lease. Native gfx_expire leaves glows
+  // fading for ten seconds; expiring one per round piles up query work.
+  ctx.r3.u64=list; ctx.r4.s64=s.weapon_flash; ctx.r5.u64=21004; ctx.f1.f64=.45;
+  __imp__sub_827F8E38(ctx,b);
   ctx.r3.u64=rig.actor; ctx.r4.s64=s.weapon_flash; ctx.r5.u64=21200; ctx.r6.u64=scratch.Vector(muzzle,0x100);
   __imp__sub_826FC178(ctx,b);
   ctx.r3.u64=rig.actor; ctx.r4.s64=s.weapon_flash; ctx.r5.u64=21201; ctx.r6.u64=scratch.Vector(aim,0x110);
@@ -1791,7 +1830,7 @@ void PartnerBodyBeforeLoad() {
   s.world = s.hero = s.game = 0; s.loading = true; s.ready = false;
   s.weapon_sound=-1; s.sound_actor=0; // Native scene unload owns these handles.
   s.weapon_restore=false; s.weapon_rig={}; s.weapon_parts={}; s.weapon_child=0;
-  s.weapon_flash=-1; s.flash_left=0;
+  s.weapon_flash=-1; s.weapon_flash_node=0; s.flash_left=0;
   s.census_at = {}; s.tick_at = {};
   s.env_fail_logs = 0;
   if (Opt().partner) {

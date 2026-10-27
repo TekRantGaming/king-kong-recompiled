@@ -428,7 +428,7 @@ void DevWeaponSequence(uint8_t* base) {
   const auto ai=Load32(base,ext+4);
   if (!coop::PoseAddress(ai,68)) return;
   const auto vars=Load32(base,ai+64), bank=Load32(base,0x82CC8848);
-  if (!coop::PoseAddress(vars,8) || !coop::PoseAddress(bank,13176)) return;
+  if (!coop::PoseAddress(vars,8) || !coop::PoseAddress(bank,0x476C)) return;
   const auto slot=Load32(base,vars+4);
   if (slot>12) return;
   static uint32_t previous_actor=0;
@@ -445,7 +445,14 @@ void DevWeaponSequence(uint8_t* base) {
   if (end==separator+1 || (*end && *end!=',') || weapon>10) return;
   const auto elapsed=std::chrono::duration<double>(now-start).count();
   if (elapsed<at) return;
-  if (weapon>=1 && weapon<=4) GiveWeapon(base,g,int(weapon),80);
+  if (weapon>=1 && weapon<=4) {
+    GiveWeapon(base,g,int(weapon),0);
+    const auto capacity=Load32(base,bank+0x4758+4*uint32_t(weapon));
+    if (capacity>=1 && capacity<=1000) {
+      Store32(base,bank+0x342C+4*(18*uint32_t(weapon)+slot),capacity);
+      Store32(base,bank+0x39D4+4*(18*uint32_t(weapon)+slot),80);
+    }
+  }
   else { SetFlags(base,g,kCheatsUsed); Store32(base,g+kWeapon,uint32_t(weapon)); }
   Store32(base,bank+0x3344+4*slot,uint32_t(weapon));
   REXLOG_INFO("KK dev weapon sequence: t={:.3f} level={} actor={:08X} slot={} actual-equipment={}",
