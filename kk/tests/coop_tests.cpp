@@ -632,6 +632,15 @@ void PuppetPolicies() {
       "native armed stationary clips differ from walking clips");
   Check(HumanAction(6,false,false,false)==96 && HumanAction(6,false,false,false,true)==75 &&
       HumanAction(7,true,false,false,true)==11,"native spear and bone aim preserves the moving gait");
+  AnimationDrive aimed; PlayerPose aim_pose; aim_pose.time=1; aim_pose.weapon=2; aim_pose.aiming=1;
+  aimed.Update(aim_pose,.05f);
+  const auto first_aim=aimed.aim_weight;
+  Check(first_aim>0 && first_aim<1,"armed aim enters smoothly without restarting its native clip");
+  aim_pose.time=.5; aim_pose.weapon=0; aim_pose.aiming=0; aimed.Update(aim_pose,.05f);
+  Check(aimed.weapon==2 && aimed.aim_weight>first_aim,"rewound pose does not lower the armed aim");
+  const auto before_reload=aimed.aim_weight;
+  aim_pose.time=2; aim_pose.weapon=2; aim_pose.aiming=1; aim_pose.action=0x74; aimed.Update(aim_pose,.05f);
+  Check(aimed.aim_weight<before_reload,"native reload takes precedence over arm aiming");
   Check(WeaponVariant(2,true)==2 && WeaponVariant(4,true)==5 && WeaponVariant(0,true)==0 &&
       WeaponVariant(6,true)==10 && WeaponVariant(7,true)==7 && WeaponVariant(6,false)==3,
       "native hand variants distinguish guns, spear, bone and empty hands");

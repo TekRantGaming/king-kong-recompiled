@@ -1098,9 +1098,46 @@ void PartnerBodyAim(PPCContext& ctx,uint8_t* b,uint32_t actor,uint32_t ai) {
 #endif
     ++applied;
   }
+  const auto weapon=s.animation.weapon;
+  const auto gun=OwnedAimBone(b,rig,125), hand=OwnedAimBone(b,rig,20);
+  if (weapon>=1 && weapon<=4 && s.animation.last_action!=weapon+0x72 &&
+      s.animation.aim_weight>.001f && gun && hand && BodyWeapon(b,rig)) {
+    Scratch scratch(ctx,b);
+    ctx.r3.u64=rig.actor; ctx.r4.u64=125; __imp__sub_823F8FB0(ctx,b);
+    const bool tracked=ctx.r3.u32!=0;
+    // H's aim_part chain (43,23,42,22) uses the held gun's rest axis,
+    // including the native 0.4/0.5 rise for long guns. A hand-followed gun's
+    // forward is hand 20's up axis. Read it again after each arm correction.
+    for (const uint8_t tag:{43,23,42,22}) {
+      const auto bone=OwnedAimBone(b,rig,tag);
+      if (!bone) continue;
+      const auto reference=scratch.Vector({},0x100), target=scratch.Vector(aim,0x110);
+      const auto local_reference=scratch.Vector({},0x120), local_target=scratch.Vector({},0x130);
+      ctx.r3.u64=tracked ? gun : hand; ctx.r4.u64=reference;
+      if (tracked) __imp__sub_8270FA58(ctx,b); else __imp__sub_8270F918(ctx,b);
+      auto rest=ReadVec(b,reference);
+      rest.z+=weapon==2 || weapon==4 ? .4f : weapon==3 ? .5f : 0.f;
+      const auto length=std::hypot(rest.x,rest.y,rest.z);
+      if (!Finite(rest) || length<.01f) continue;
+      StoreF(b,reference,rest.x/length); StoreF(b,reference+4,rest.y/length); StoreF(b,reference+8,rest.z/length);
+      ctx.r3.u64=bone; ctx.r4.u64=reference; ctx.r5.u64=local_reference; __imp__sub_8271A6F8(ctx,b);
+      ctx.r3.u64=bone; ctx.r4.u64=target; ctx.r5.u64=local_target; __imp__sub_8271A6F8(ctx,b);
+      if (!Finite(ReadVec(b,local_reference)) || !Finite(ReadVec(b,local_target))) continue;
+      ctx.r3.u64=bone; ctx.r4.u64=local_reference; ctx.r5.u64=local_target; ctx.f1.f64=s.animation.aim_weight;
+      __imp__sub_827128F0(ctx,b);
+      ++applied;
+    }
+  }
 #if defined(KK_DEV_TOOLS)
-  if (s.updates%120==0) REXLOG_INFO("PUPPET aim actor={:08X} bones={} yaw-offset={:.3f} pitch={:.3f} matrix-delta={:.5f} native-world-pose=1",
-      actor,applied,yaw-body_yaw,pitch,matrix_delta);
+  if (s.updates%120==0) {
+    const auto gun_matrix=Ptr(b,gun,12,80);
+    auto gun_axis=gun_matrix ? ReadVec(b,gun_matrix+16) : Vec{};
+    gun_axis={-gun_axis.x,-gun_axis.y,-gun_axis.z};
+    const auto magnitude=std::hypot(gun_axis.x,gun_axis.y,gun_axis.z);
+    const auto alignment=magnitude>.01f ? (gun_axis.x*aim.x+gun_axis.y*aim.y+gun_axis.z*aim.z)/magnitude : 0.f;
+    REXLOG_INFO("PUPPET aim actor={:08X} bones={} yaw-offset={:.3f} pitch={:.3f} matrix-delta={:.5f} native-world-pose=1 weight={:.3f} weapon={} cached-gun-axis={} target={} alignment={:.3f}",
+        actor,applied,yaw-body_yaw,pitch,matrix_delta,s.animation.aim_weight,weapon,XYZ(gun_axis),XYZ(aim),alignment);
+  }
 #endif
 }
 
@@ -1141,12 +1178,20 @@ void PartnerWeaponFlash(PPCContext& ctx,uint8_t* b,const Rig& rig) {
   Vec origin;
   if (!gun || !BoneWorldPosition(b,gun,origin) || Distance(origin,rig.pos)>3) return;
   const auto& p=*s.partner.partner;
-  const Vec aim{std::cos(p.facing)*std::cos(p.pitch),std::sin(p.facing)*std::cos(p.pitch),std::sin(p.pitch)};
-  const float length=p.weapon==1 ? .22f : p.weapon==2 ? .47f : .65f;
-  const Vec muzzle{origin.x+aim.x*length,origin.y+aim.y*length,origin.z+aim.z*length+.03f};
   const auto list=Ptr(b,s.world,0x162b0,24), resource=Load32(b,0x82CC877C);
   if (!list || !Ptr(b,Ptr(b,resource,20,4),0,12)) return;
   Scratch scratch(ctx,b);
+  const auto forward=scratch.Vector({},0x140), upward=scratch.Vector({},0x150);
+  ctx.r3.u64=gun; ctx.r4.u64=forward; __imp__sub_8270FA58(ctx,b);
+  ctx.r3.u64=gun; ctx.r4.u64=upward; __imp__sub_8270F918(ctx,b);
+  const auto aim=ReadVec(b,forward), up=ReadVec(b,upward);
+  if (!Finite(aim) || !Finite(up)) return;
+  const float length=p.weapon==1 ? .22f : p.weapon==2 ? .47f : .65f;
+  const float height=p.weapon==2 ? .11f : .03f;
+  // H's flash follows the actual barrel axes, including its native aim rise,
+  // rather than the remote camera ray above a carried long gun.
+  const Vec muzzle{origin.x+aim.x*length+up.x*height,origin.y+aim.y*length+up.y*height,
+      origin.z+aim.z*length+up.z*height};
   EffectSelection selection(b);
   if (s.weapon_flash<0) {
     ctx.r3.u64=s.world+0x162b0; ctx.r4.u64=21; ctx.r5.u64=rig.actor;

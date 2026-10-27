@@ -154,7 +154,7 @@ inline std::optional<GaitChoice> ChooseGait(float vx, float vy, float view, bool
   return best;
 }
 struct AnimationDrive {
-  float speed = 0, vx = 0, vy = 0, stop_left = 0, fire_left = 0, recoil_left = 0, land_left = 0, use_left = 0;
+  float speed = 0, vx = 0, vy = 0, stop_left = 0, fire_left = 0, recoil_left = 0, land_left = 0, use_left = 0, aim_weight = 0;
   bool moving = false, have_fire = false, new_shot = false, new_use = false, was_airborne = false, have_airborne = false;
   uint32_t last_fire = 0;
   uint16_t last_action = 0, use_action = 0;
@@ -205,6 +205,10 @@ struct AnimationDrive {
     }
     if (!have_fire) last_fire = p.fire;
     have_fire = true;
+    const bool gun=weapon>=1 && weapon<=4;
+    const bool reload=gun && last_action==weapon+0x72;
+    const float aim_target=gun && !reload && (aiming || fire_left>0) ? 1.f : 0.f;
+    aim_weight+=(aim_target-aim_weight)*(1-std::exp(-dt*15.f));
   }
 };
 struct Point { float x = 0, y = 0, z = 0; };
