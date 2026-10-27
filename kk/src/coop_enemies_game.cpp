@@ -2703,6 +2703,11 @@ void EnemyThrowProbe(PPCContext& ctx,uint8_t* b) {
   static double next=due;
   static unsigned count=0;
   static const bool controller=std::getenv("KK_DEV_ENEMY_THROW_CONTROLLER")!=nullptr;
+  static const uint32_t stop_hits=[] {
+    const auto* text=std::getenv("KK_DEV_ENEMY_THROW_STOP_HITS");
+    const auto value=text ? std::strtoul(text,nullptr,10):0ul;
+    return value<=32 ? uint32_t(value):0u;
+  }();
   static const float advance=[] {
     const auto* text=std::getenv("KK_DEV_ENEMY_THROW_ADVANCE");
     const auto value=text ? std::strtof(text,nullptr):0.f;
@@ -2712,6 +2717,7 @@ void EnemyThrowProbe(PPCContext& ctx,uint8_t* b) {
   if (due<0 || count>=12 || time<next || time>due+90 || !EnemyPartnerCombatReady() ||
       !Scratch::CanUse(ctx)) return;
   auto& s=Get();
+  if (stop_hits && s.hits_queued>=stop_hits) return;
   const auto body=kk::PartnerBodyCombatActor(b);
   if (!body) return;
   const Binding* source=nullptr;
