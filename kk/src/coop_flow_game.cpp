@@ -501,6 +501,10 @@ bool SessionBeforeGo(PPCContext& ctx,uint8_t* base,uint32_t g) {
   if (Load32(base,g+4)!=0) {
     uint32_t level=Load32(base,g+8),start=Load32(base,g+12);
     if (level==3 && play::LeftByQuit()) { Send(MessageType::FlowAbort,v.world); return false; }
+    REXLOG_INFO("KK co-op native load request: role={} from={}/{} to={}/{} condition={} reset={}/{} weapon={} ammo={}/{}/{}/{}",
+        v.host ? "host":"guest",v.world.level,local_checkpoint,level,start,
+        int(LocalPlayerCondition(base).value_or(PlayerCondition::Dead)),Load32(base,0x82CCAA80),Load32(base,0x82CCBFD4),
+        Load32(base,g+13128),Load32(base,g+13432),Load32(base,g+13504),Load32(base,g+13576),Load32(base,g+13648));
     if (level==3) {
       const int next=FlowChapter(v.world.level)+1;
       if (next<=0 || next>=42) { Send(MessageType::FlowAbort,v.world); return false; }
