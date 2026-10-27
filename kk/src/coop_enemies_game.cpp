@@ -95,8 +95,7 @@ REX_EXTERN(__imp__sub_826F9C60);
 REX_EXTERN(__imp__sub_8271E450);
 REX_EXTERN(__imp__sub_8271E290);
 #if defined(KK_DEV_TOOLS)
-REX_EXTERN(__imp__sub_825491B0);
-REX_EXTERN(__imp__sub_8271ECF8);
+REX_EXTERN(__imp__sub_8284D638);
 REX_EXTERN(__imp__sub_82663550);
 REX_EXTERN(__imp__sub_8241F0A8);
 REX_EXTERN(__imp__sub_8266D880);
@@ -2186,7 +2185,7 @@ void DevBait(PPCContext& ctx, uint8_t* b) {
     EnemyFamily family = EnemyFamily::Raptor;
     double repeat = 0;
     float distance = 3, height = 0, max_height = 1000000;
-    bool keep_height = false, ground = false;
+    bool keep_height = false, ground = false, grab_floor = false;
     unsigned placements = 0;
     Bait() {
       const auto placement=[](const char* name,float fallback,float low,float high) {
@@ -2201,6 +2200,7 @@ void DevBait(PPCContext& ctx, uint8_t* b) {
       max_height=placement("KK_DEV_BAIT_MAX_HEIGHT",1000000,0,100);
       if (const char* value=std::getenv("KK_DEV_BAIT_KEEP_HEIGHT")) keep_height=std::strcmp(value,"1")==0;
       if (const char* value=std::getenv("KK_DEV_BAIT_GROUND")) ground=std::strcmp(value,"1")==0;
+      if (const char* value=std::getenv("KK_DEV_BAIT_GRAB_FLOOR")) grab_floor=std::strcmp(value,"1")==0;
       if (const char* value=std::getenv("KK_DEV_BAIT_REPEAT")) {
         char* end=nullptr; const auto parsed=std::strtod(value,&end);
         if (end!=value && !*end && std::isfinite(parsed) && parsed>=3 && parsed<=30) repeat=parsed;
@@ -2256,14 +2256,23 @@ void DevBait(PPCContext& ctx, uint8_t* b) {
       const float a=angle+float(i)*.785398163f;
       const ShotVector candidate{e.x-bait.distance*std::cos(a),e.y-bait.distance*std::sin(a),target.z};
       const auto found=DevBaitFloor(ctx,b,s.world,candidate);
+      // Scorpion82616490 frees a real grab at navigation code5. Keep this
+      // optional fixture on normal native cells instead of changing that rule.
+      if (found && bait.grab_floor && bait.family==EnemyFamily::Scorpion) {
+        const auto grid=Ptr(b,s.world,Load32(b,0x82CCBFC0) ? 560:556,64);
+        if (!grid || !Scratch::CanUse(ctx)) continue;
+        Scratch query(ctx,b); const auto position=query.Vec(found->x,found->y,found->z,0x100);
+        ctx.r3.u64=grid; ctx.r4.u64=position; __imp__sub_8284D638(ctx,b);
+        if ((ctx.r3.u32&15)!=1) continue;
+      }
       if (found && ShotDistance(origin,*found)<closest) { floor=found; closest=ShotDistance(origin,*found); }
     }
     if (!floor) {
       static double next_floor_log=0;
       if (t>=next_floor_log) {
         next_floor_log=t+2;
-        REXLOG_INFO("KK dev bait: native floor/headroom rays refused family={} enemy=({:.3f},{:.3f},{:.3f}) desired-z={:.3f} radius={:.2f}; no teleport",
-            uint16_t(e.id.family),e.x,e.y,e.z,target.z,bait.distance);
+        REXLOG_INFO("KK dev bait: native floor/headroom/navigation refused family={} enemy=({:.3f},{:.3f},{:.3f}) desired-z={:.3f} radius={:.2f} grab-floor={}; no teleport",
+            uint16_t(e.id.family),e.x,e.y,e.z,target.z,bait.distance,bait.grab_floor);
       }
       return;
     }
@@ -2273,8 +2282,8 @@ void DevBait(PPCContext& ctx, uint8_t* b) {
   if (!kk::DevTeleportJack(ctx, b, Load32(b, 0x82CCBF7C), target, fx, fy)) return;
   bait.done = !bait.repeat || ++bait.placements>=12;
   if (!bait.done) bait.due=t+bait.repeat;
-  REXLOG_INFO("KK dev bait: at {:.2f} guest teleported by native 82538B70 family={} enemy={:016X}/{} from=({:.3f},{:.3f},{:.3f}) to=({:.3f},{:.3f},{:.3f}) stand-off={:.2f} height={:.2f} floor-rays={} collision-unverified=true",
-      t, uint16_t(e.id.family), e.id.source, e.id.sequence, origin.x, origin.y, origin.z, target.x, target.y, target.z,bait.distance,bait.height,bait.ground);
+  REXLOG_INFO("KK dev bait: at {:.2f} guest teleported by native 82538B70 family={} enemy={:016X}/{} from=({:.3f},{:.3f},{:.3f}) to=({:.3f},{:.3f},{:.3f}) stand-off={:.2f} height={:.2f} floor-rays={} grab-floor={} collision-unverified=true",
+      t, uint16_t(e.id.family), e.id.source, e.id.sequence, origin.x, origin.y, origin.z, target.x, target.y, target.z,bait.distance,bait.height,bait.ground,bait.grab_floor);
 }
 // Diagnostics are per validated host raptor, bounded and reset on load. The old
 // process-wide timer hid other raptors; a handle alone did not identify a victim.
