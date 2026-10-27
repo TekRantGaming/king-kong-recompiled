@@ -29,6 +29,8 @@ REX_EXTERN(__imp__sub_8271D498);
 REX_EXTERN(__imp__sub_8271CCB8);
 REX_EXTERN(__imp__sub_82715AC8);
 REX_EXTERN(__imp__sub_82714E40);
+REX_EXTERN(__imp__sub_826E1EE8);
+REX_EXTERN(__imp__sub_826F8BC8);
 REX_EXTERN(__imp__sub_827117E0);
 REX_EXTERN(__imp__sub_82711278);
 REX_EXTERN(__imp__sub_82401AA8);
@@ -453,8 +455,25 @@ struct Authored {
   float x, y, z; bool ambiguous = false;
   uint32_t file_key = 0;
 };
-struct Pending { EnemyId id; uint32_t ai, matrix; float x, y, z; };
-struct Spawner { uint64_t key; uint32_t ai, vars, sequence = 0; };
+struct Pending {
+  EnemyId id; uint32_t ai, matrix; float x, y, z;
+  uint64_t birth_spawner=0; uint8_t birth_template=0,birth_point=0;
+};
+struct Spawner { uint64_t key; uint32_t ai, vars, sequence = 0; bool shared_births=false; };
+const EnemyState* replay_birth=nullptr;
+bool SharedSpawner(const uint8_t* b,uint32_t vars) {
+  if (!PoseAddress(vars,0x2094)) return false;
+  bool any=false,centipede=false;
+  for (unsigned slot=0;slot<19;++slot) {
+    const auto source=Load32(b,vars+(slot<2 ? 1592+184*slot : 1972+4*(slot-2)));
+    if (!source) continue;
+    bool nested=false; uint32_t fn=0;
+    const auto family=Tracks(b,Ptr(b,Ptr(b,source,24,8),4,88),fn,nested);
+    if (nested || family==EnemyFamily::None) return false;
+    any=true; centipede|=family==EnemyFamily::Centipede;
+  }
+  return any && centipede;
+}
 struct RaptorPlayerCache { Binding binding; uint32_t hero = 0, reference = 0; };
 #if defined(KK_DEV_TOOLS)
 struct DevRaptorLog {
@@ -703,7 +722,9 @@ void Capture(const uint8_t* b, uint32_t w, bool initial = true) {
     const auto vars = Ptr(b, ai, 64, 7808);
     if (!spawner || !vars) continue;
     Spawner sp{key, ai, vars, 0};
+    sp.shared_births=SharedSpawner(b,vars);
     if (const auto old=private_spawner_sequences.find(key); old!=private_spawner_sequences.end()) sp.sequence=old->second;
+    if (sp.shared_births && !SessionFlowSnapshot().host) sp.sequence=0;
     s.spawners[actor] = std::move(sp);
   }
   // Co-located same-family actors or hash collisions are ambiguous. Refuse all
@@ -772,6 +793,8 @@ void Scan(const uint8_t* b) {
         }
         binding.id = spawned->second.id;
         e.spawn_x = spawned->second.x; e.spawn_y = spawned->second.y; e.spawn_z = spawned->second.z;
+        e.birth_spawner=spawned->second.birth_spawner;
+        e.birth_template=spawned->second.birth_template; e.birth_point=spawned->second.birth_point;
       } else {
         const auto it = s.authored.find(actor);
         if (it == s.authored.end() || it->second.ambiguous || it->second.ai != binding.ai || it->second.matrix != binding.matrix) {
@@ -791,6 +814,8 @@ void Scan(const uint8_t* b) {
     if (it != s.records.end() && it->second.kind == EnemyEventKind::Removed) continue;
     if (it != s.records.end()) {
       e.spawn_x = it->second.enemy.spawn_x; e.spawn_y = it->second.enemy.spawn_y; e.spawn_z = it->second.enemy.spawn_z;
+      e.birth_spawner=it->second.enemy.birth_spawner;
+      e.birth_template=it->second.enemy.birth_template; e.birth_point=it->second.enemy.birth_point;
     }
     if (s.link.role == Role::Host) {
       s.aliases[e.id] = e.id;
@@ -1523,6 +1548,7 @@ bool OwnedSample(const uint8_t* b, const Binding& binding, EnemyState& e) {
   if (!a || !Read(b, binding.actor, observed, e) || !ValidBinding(b, binding)) return false;
   e.id = Canonical(binding.id); e.owner = a->owner; e.generation = a->generation;
   e.spawn_x = a->last.spawn_x; e.spawn_y = a->last.spawn_y; e.spawn_z = a->last.spawn_z;
+  e.birth_spawner=a->last.birth_spawner; e.birth_template=a->last.birth_template; e.birth_point=a->last.birth_point;
   if (a->dead) e.life = 0;
   return ValidEnemy(e);
 }
@@ -2913,7 +2939,8 @@ void Spawned(const uint8_t* b, uint32_t spawner, uint32_t source, uint32_t actor
   ++sp.sequence;
   bool is_spawner = false; uint32_t state = 0;
   const auto family = Tracks(b, Ptr(b, Ptr(b, source, 24, 8), 4, 88), state, is_spawner);
-  const auto id = SpawnId(sp.key, template_key, sp.sequence, family);
+  const auto id = replay_birth ? replay_birth->id : SpawnId(sp.key, template_key, sp.sequence, family);
+  if (replay_birth && (replay_birth->birth_spawner!=sp.key || id.sequence!=sp.sequence || id.family!=family)) return;
   const auto ai = Ptr(b, Ptr(b, actor, 24, 8), 4, 88), matrix = Ptr(b, actor, 12, 64);
   if (!id.source || !ai || !matrix || s.records.size()+s.pending.size() >= kMaxEnemies || s.records.contains(id)) return;
   // A pooled pointer is a new generation. Preserve a tombstone for its previous ID.
@@ -2925,6 +2952,88 @@ void Spawned(const uint8_t* b, uint32_t spawner, uint32_t source, uint32_t actor
   // The new copy may join the scheduled AI table on a later pass. Bind only
   // once that exact AI/matrix is observed there, after its normal init.
   s.pending[actor] = {id, ai, matrix, LoadF(b, matrix+48), LoadF(b, matrix+52), LoadF(b, matrix+56)};
+  if (sp.shared_births) {
+    const auto slot=replay_birth ? replay_birth->birth_template : wave_index<17 ? wave_index+2 : source==Load32(b,sp.vars+1592) ? 0u:1u;
+    const auto point=replay_birth ? replay_birth->birth_point : Load32(b,sp.vars+0x1FC0);
+    if (point<16) {
+      auto& pending=s.pending[actor]; pending.birth_spawner=sp.key;
+      pending.birth_template=uint8_t(slot); pending.birth_point=uint8_t(point);
+      REXLOG_INFO("ENEMIES native birth role={} spawner={:016X} sequence={} template={} point={} family={}",
+          SessionFlowSnapshot().host ? "host":"guest",sp.key,sp.sequence,slot,point,uint16_t(family));
+    }
+  }
+}
+bool SpawnerStep(PPCContext& ctx,uint8_t* b) {
+  const auto view=SessionFlowSnapshot();
+  if (!REXCVAR_GET(kk_coop_enabled) || !view.active || view.host || view.policy!=ChapterPolicy::Together) return false;
+  auto& s=Get();
+  const auto actor=Load32(b,0x82CCBF6C),ai=Load32(b,0x82CCBF64);
+  const auto it=s.spawners.find(actor);
+  if (it==s.spawners.end() || !it->second.shared_births || !Environment(b,s.world)) return false;
+  auto& sp=it->second;
+  const auto ext=Ptr(b,actor,24,42);
+  if (sp.ai!=ai || Ptr(b,ext,4,88)!=ai || Ptr(b,ai,64,0x2094)!=sp.vars ||
+      !Member(b,s.world,actor,true) || (Load32(b,actor+4)&0x00600000)) return false;
+  ctx.r3.u32=0;
+  if (!Connected() || s.link.remote.world!=s.identity) return true;
+  // Preserve native post-birth visibility, wave limits and callbacks. Only the
+  // choice to create a new root comes from the host's reliable lifecycle.
+  if (Load16(b,ext+40)&4) { __imp__sub_826F8BC8(ctx,b); return true; }
+  const Record* next=nullptr;
+  for (const auto& record:s.link.remote.records) {
+    const auto& e=record.enemy;
+    if (e.birth_spawner!=sp.key || sp.sequence==UINT32_MAX || e.id.sequence!=sp.sequence+1) continue;
+    if (next) return true; // A sequence cannot select competing templates.
+    next=&record;
+  }
+  if (!next) return true;
+  const auto e=next->enemy;
+  if (!ValidEnemy(e) || e.birth_template>=19 || e.birth_point>=16) return true;
+  const auto offset=e.birth_template<2 ? 1592+184*e.birth_template : 1972+4*(e.birth_template-2);
+  const auto source=Ptr(b,sp.vars,offset,32);
+  bool nested=false; uint32_t fn=0;
+  const auto family=Tracks(b,Ptr(b,Ptr(b,source,24,8),4,88),fn,nested);
+  const auto expected=SpawnId(sp.key,Mix(sp.key,offset),e.id.sequence,family);
+  const auto point_count=Load32(b,sp.vars+0x1FBC);
+  const auto point=Ptr(b,sp.vars,0x1ED0+4*e.birth_point,32);
+  const auto matrix=Ptr(b,point,12,64);
+  if (!source || nested || expected!=e.id || point_count>16 || !point || !matrix ||
+      (point_count ? e.birth_point>=point_count : e.birth_point!=0)) return true;
+  // A private reload restores its checkpoint effects natively. Retired roots
+  // consume their ordinal without resurrecting a corpse or its birth callback.
+  if (next->kind==EnemyEventKind::Removed) { sp.sequence=e.id.sequence; return true; }
+  unsigned free=0;
+  while (free<16 && Load32(b,sp.vars+0x1E84+4*free)) ++free;
+  if (free==16 || !Scratch::CanUse(ctx) || s.records.size()+s.pending.size()>=kMaxEnemies) return true;
+  // All addresses below are recovered from this local authored spawner. No
+  // function, pointer or arbitrary state value is accepted from the packet.
+  struct RestoreWords {
+    uint8_t* b; std::vector<std::pair<uint32_t,uint32_t>> words;
+    void Set(uint32_t address,uint32_t value) { words.emplace_back(address,Load32(b,address)); Store32(b,address,value); }
+    ~RestoreWords() { for (auto it=words.rbegin();it!=words.rend();++it) Store32(b,it->first,it->second); }
+  } restore{b};
+  restore.Set(sp.vars+0x1FD4,0); // Host has already passed its timer/point watch.
+  if (e.birth_template>=2) {
+    Store32(b,sp.vars+0x1E7C,e.birth_template-2);
+    restore.Set(sp.vars+0x1340+0xB4*(e.birth_template-2),0);
+  } else {
+    if (Load32(b,sp.vars+1972)) return true;
+    restore.Set(sp.vars+1592,source); restore.Set(sp.vars+0x640,0);
+  }
+  Store32(b,sp.vars+0x1FC0,e.birth_point); Store32(b,sp.vars+0x1EC8,free);
+  Store32(b,sp.vars+0x2088,1); StoreF(b,sp.vars+0x2090,-1);
+  // Reenter the complete native generate function. It registers the local
+  // child, applies authored colors/visibility and runs its own birth record.
+  const auto saved=ctx;
+  constexpr uint32_t globals[]{0x82CCBF58,0x82CCBF5C,0x82CCBF60,0x82CCBF64,0x82CCBF68,0x82CCBF6C,0x82CCBF70};
+  uint32_t values[7]; for (unsigned i=0;i<7;++i) values[i]=Load32(b,globals[i]);
+  replay_birth=&e;
+  __imp__sub_826F8BC8(ctx,b);
+  replay_birth=nullptr;
+  const auto result=ctx.r3.u32;
+  for (unsigned i=0;i<7;++i) Store32(b,globals[i],values[i]);
+  ctx=saved; ctx.r3.u32=result;
+  return true;
 }
 void SpiderCopied(const uint8_t* b,uint32_t parent,uint32_t ordinal,uint32_t actor) {
   auto& s=Get();
@@ -3443,6 +3552,13 @@ std::optional<ShotVector> EnemyAimTarget(const uint8_t* b, ShotVector origin) {
 }
 #endif
 } // namespace kk::coop
+
+REX_HOOK_RAW(sub_826E1EE8) {
+  if (!kk::coop::SpawnerStep(ctx,base)) __imp__sub_826E1EE8(ctx,base);
+}
+REX_HOOK_RAW(sub_826F8BC8) {
+  if (!kk::coop::SpawnerStep(ctx,base)) __imp__sub_826F8BC8(ctx,base);
+}
 
 #if defined(KK_DEV_TOOLS)
 REX_HOOK_RAW(sub_8241F0A8) {

@@ -58,6 +58,7 @@ void WriteEnemy(Writer& w, const EnemyState& e) {
   for (float v : {e.spawn_x, e.spawn_y, e.spawn_z}) w.U(std::bit_cast<uint32_t>(v), 4);
   w.U(uint8_t(e.owner), 1); w.U(e.generation, 4);
   w.U(std::bit_cast<uint32_t>(e.secondary_life), 4);
+  w.U(e.birth_spawner,8); w.U(e.birth_template,1); w.U(e.birth_point,1);
 }
 EnemyState ReadEnemy(Reader& r) {
   EnemyState e;
@@ -71,6 +72,7 @@ EnemyState ReadEnemy(Reader& r) {
   e.spawn_z = std::bit_cast<float>(uint32_t(r.U(4)));
   e.owner = EnemyOwner(r.U(1)); e.generation = uint32_t(r.U(4));
   e.secondary_life = std::bit_cast<float>(uint32_t(r.U(4)));
+  e.birth_spawner=r.U(8); e.birth_template=uint8_t(r.U(1)); e.birth_point=uint8_t(r.U(1));
   return e;
 }
 bool Point(ShotVector p) {
@@ -237,7 +239,9 @@ bool ValidEnemy(const EnemyState& e) {
       std::abs(e.z) < 1000000 && std::abs(e.facing) <= 3.1416f && std::abs(e.life) < 1000000 &&
       Point({e.spawn_x, e.spawn_y, e.spawn_z}) && e.owner <= EnemyOwner::Guest &&
       std::isfinite(e.secondary_life) && e.secondary_life >= 0 && e.secondary_life < 1000000 &&
-      (e.id.family == EnemyFamily::Scorpion || e.secondary_life == 0);
+      (e.id.family == EnemyFamily::Scorpion || e.secondary_life == 0) &&
+      (e.birth_spawner ? e.id.sequence && e.birth_template<19 && e.birth_point<16 :
+          !e.birth_template && !e.birth_point);
 }
 bool ValidOwnershipChange(const OwnershipChange& c) {
   if (!ValidEnemyWorld(c.world) || !ValidEnemy(c.enemy) || c.owner > EnemyOwner::Guest ||

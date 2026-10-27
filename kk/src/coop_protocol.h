@@ -12,7 +12,7 @@
 
 namespace kk::coop {
 constexpr uint32_t kMagic = 0x4B4B4331;  // KKC1, network byte order throughout
-constexpr uint16_t kProtocolVersion = 26; // Authenticated process reconnect and host checkpoint rejoin.
+constexpr uint16_t kProtocolVersion = 27; // Native authored birth provenance.
 constexpr size_t kMaxDisplayNameBytes = 32;
 // Valid UTF-8, no controls or invisible direction/line formatting, bounded at a codepoint.
 // Empty or wholly invalid input becomes "Partner". Never log the input or result.
@@ -228,6 +228,8 @@ struct EnemyState {
   EnemyOwner owner = EnemyOwner::Host;
   uint32_t generation = 0; // Authority generation, independent of actor/spawn sequence.
   float secondary_life = 0; // Scorpion type-2048 pool; firearm life is at V+5444.
+  uint64_t birth_spawner = 0; // Authored identity, never an address. Zero for authored roots.
+  uint8_t birth_template = 0, birth_point = 0; // Two fallback / 17 wave slots and 16 local points.
 };
 // Prepare freezes both copies; Ready returns the old owner's final pose. Only
 // the host's Commit changes authority. Matched confirms a usable guest binding.
@@ -240,7 +242,7 @@ struct OwnershipChange {
   EnemyState enemy; // last state, tagged with the OLD owner/generation until Commit
 };
 bool ValidOwnershipChange(const OwnershipChange& change);
-constexpr size_t kEnemyStateBytes = 62, kMaxEnemyBatch = 15, kMaxEnemies = 512;
+constexpr size_t kEnemyStateBytes = 72, kMaxEnemyBatch = 13, kMaxEnemies = 512;
 
 struct ShotVector { float x = 0, y = 0, z = 0; };
 enum class PlayerCondition : uint8_t { Alive = 1, Hurt, Dead };

@@ -166,6 +166,19 @@ void ExpandedFamilies() {
 }
 void Wire() {
   Message out;
+  auto birth=Enemy(321,7); birth.birth_spawner=12345; birth.birth_template=18; birth.birth_point=15;
+  auto birth_packet=Packet(Event(birth,EnemyEventKind::Spawned));
+  Check(Decode(birth_packet,out) && out.enemy_event.enemy.birth_spawner==12345 &&
+      out.enemy_event.enemy.birth_template==18 && out.enemy_event.enemy.birth_point==15,
+      "birth round trip keeps authored numeric provenance");
+  auto invalid_birth=birth; invalid_birth.birth_template=19;
+  Check(!ValidEnemy(invalid_birth),"birth template cannot escape the authored 19 slots");
+  invalid_birth=birth; invalid_birth.birth_point=16;
+  Check(!ValidEnemy(invalid_birth),"birth point cannot escape the local 16 slots");
+  invalid_birth=birth; invalid_birth.id.sequence=0;
+  Check(!ValidEnemy(invalid_birth),"authored root cannot masquerade as a generated birth");
+  invalid_birth=birth; invalid_birth.birth_spawner=0;
+  Check(!ValidEnemy(invalid_birth),"birth metadata needs an authored spawner");
   for (bool event : {false, true}) {
     auto m = event ? Event(Enemy(), EnemyEventKind::Died) : Snapshot(Enemy());
     auto bytes = Packet(m);
