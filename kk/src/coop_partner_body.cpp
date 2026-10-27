@@ -4,6 +4,7 @@
 // borrow:index:<zero-based active-table index>[:<action>:<item>], or the legacy
 // borrow:<hex key>:<ordinal>[:<action>:<item>]. Indices belong to the current epoch.
 // partner:index:<n> or partner:nearest[:<max>] follows the copied partner pose.
+// partner:slot:<1..12> selects a stable native H slot for weapon proof runs.
 // partner:spawn:<n> creates an independent engine copy of that loaded human.
 // KK_DEV_PUPPET_SPAWN_MODE=drive (default), hold, or free (UNSAFE story scripts).
 // KK_DEV_PUPPET_SPAWN_OFFSET=x,y,z uses source+offset, permits solo diagnosis,
@@ -51,6 +52,10 @@
 REX_EXTERN(__imp__sub_8268D8E8);
 REX_EXTERN(__imp__sub_827117E0);
 REX_EXTERN(__imp__sub_82711278);
+REX_EXTERN(__imp__sub_8270FCE0);
+REX_EXTERN(__imp__sub_8270FA58);
+REX_EXTERN(__imp__sub_8270F918);
+REX_EXTERN(__imp__sub_82710E20);
 REX_EXTERN(__imp__sub_82401AA8);
 REX_EXTERN(__imp__sub_82850100);
 REX_EXTERN(__imp__sub_823F8AF0);
@@ -1097,6 +1102,32 @@ void PartnerBodyAim(PPCContext& ctx,uint8_t* b,uint32_t actor,uint32_t ai) {
 #endif
 }
 
+void PartnerWeaponAttach(PPCContext& ctx,uint8_t* b,const Rig& rig) {
+  // H_callback_after_blend's timers section (826BFxxx): without a weapon
+  // track, tag 125 follows hand 20 with its up/forward axes exchanged. Tags
+  // 126/127 follow that weapon. Keep this inside the one fresh-pose writer.
+  if (!Get().weapon_rig.actor || !Same(rig,Get().weapon_rig) || !Scratch::CanUse(ctx)) return;
+  const auto gun=OwnedAimBone(b,rig,125), hand=OwnedAimBone(b,rig,20);
+  if (!gun || !hand) return;
+  auto follows=[&](uint32_t target,uint32_t source,uint8_t tag,bool exchange) {
+    if (!target) return;
+    Scratch scratch(ctx,b);
+    ctx.r3.u64=rig.actor; ctx.r4.u64=tag;
+    __imp__sub_823F8FB0(ctx,b);
+    if (ctx.r3.u32) return; // The authored animation already owns this part.
+    const auto position=scratch.Vector({},0x100), forward=scratch.Vector({},0x110), up=scratch.Vector({},0x120);
+    ctx.r3.u64=source; ctx.r4.u64=position; __imp__sub_8270FCE0(ctx,b);
+    ctx.r3.u64=target; ctx.r4.u64=position; __imp__sub_827117E0(ctx,b);
+    ctx.r3.u64=source; ctx.r4.u64=forward; __imp__sub_8270FA58(ctx,b);
+    ctx.r3.u64=source; ctx.r4.u64=up; __imp__sub_8270F918(ctx,b);
+    ctx.r3.u64=target; ctx.r4.u64=exchange ? up : forward; ctx.r5.u64=exchange ? forward : up;
+    __imp__sub_82710E20(ctx,b);
+  };
+  follows(gun,hand,125,true);
+  follows(OwnedAimBone(b,rig,126),gun,126,false);
+  follows(OwnedAimBone(b,rig,127),gun,127,false);
+}
+
 void PartnerWeaponFlash(PPCContext& ctx,uint8_t* b,const Rig& rig) {
 #if defined(KK_DEV_TOOLS)
   static const bool off=[] { const auto* v=std::getenv("KK_DEV_PARTNER_FLASH"); return v && *v=='0'; }();
@@ -1932,7 +1963,7 @@ void PartnerBodyAfterAi(PPCContext& ctx, uint8_t* b, uint32_t w) {
     const auto held=human ? BodyWeapon(b,rig) : 0;
     const auto weapon=p.weapon;
     const bool firing=s.animation.fire_left>0;
-    const auto native = coop::puppet::HumanAction(weapon,s.animation.moving,s.animation.crouched,firing);
+    const auto native = coop::puppet::HumanAction(weapon,s.animation.moving,s.animation.crouched,firing,p.aiming);
     if (human) {
       if (const auto item=LoadedItem(b,rig,native)) {
         float speed=choice && choice->action==native && choice->item==*item ? choice->speed : 0;
@@ -2379,6 +2410,7 @@ void PartnerBodyPoseBlended(PPCContext& ctx,uint8_t* b,uint32_t actor) {
   if (!s.Validate(b,s.world,rig) || !(b[rig.anim+1]&15) || !Ptr(b,rig.anim,8,4)) return;
   ++s.pose_blends;
   PartnerBodyAim(ctx,b,rig.actor,rig.ai);
+  PartnerWeaponAttach(ctx,b,rig);
   PartnerWeaponFlash(ctx,b,rig);
 #if defined(KK_DEV_TOOLS)
   static const bool trace=[] { const auto* v=std::getenv("KK_DEV_PARTNER_TRACE"); return v && *v=='1'; }();

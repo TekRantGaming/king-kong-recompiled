@@ -630,6 +630,8 @@ void PuppetPolicies() {
   Check(HumanAction(2,true,true,false)!=HumanAction(2,true,true,true),"crouched motion and fire use separate native actions");
   Check(HumanAction(2,false,false,true)==146 && HumanAction(1,false,false,true)==145,
       "native armed stationary clips differ from walking clips");
+  Check(HumanAction(6,false,false,false)==96 && HumanAction(6,false,false,false,true)==75 &&
+      HumanAction(7,true,false,false,true)==11,"native spear and bone aim preserves the moving gait");
   Check(WeaponVariant(2,true)==2 && WeaponVariant(4,true)==5 && WeaponVariant(0,true)==0 &&
       WeaponVariant(6,true)==10 && WeaponVariant(7,true)==7 && WeaponVariant(6,false)==3,
       "native hand variants distinguish guns, spear, bone and empty hands");
