@@ -2716,6 +2716,11 @@ void EnemyThrowProbe(PPCContext& ctx,uint8_t* b) {
   static double next=due;
   static unsigned count=0;
   static const bool controller=std::getenv("KK_DEV_ENEMY_THROW_CONTROLLER")!=nullptr;
+  static const uint32_t volley=[] {
+    const auto* text=std::getenv("KK_DEV_ENEMY_THROW_VOLLEY");
+    const auto value=text ? std::strtoul(text,nullptr,10):3ul;
+    return value>=1 && value<=8 ? uint32_t(value):3u;
+  }();
   static const uint32_t stop_hits=[] {
     const auto* text=std::getenv("KK_DEV_ENEMY_THROW_STOP_HITS");
     const auto value=text ? std::strtoul(text,nullptr,10):0ul;
@@ -2781,7 +2786,7 @@ void EnemyThrowProbe(PPCContext& ctx,uint8_t* b) {
     // Controlled encounter setup, not a generated hit. Run the actual native
     // launch state on subsequent AI frames, including animation readiness,
     // its own spear creation, player selection, aim error and ballistics.
-    Store32(b,binding.vars+(kna ? 380:384),3);
+    Store32(b,binding.vars+(kna ? 380:384),volley);
     Store32(b,binding.vars+(kna ? 384:388),0);
     Store32(b,binding.vars+292,0);
     const auto activation=scratch.Vec(0,0,0,0x200);
@@ -2791,8 +2796,8 @@ void EnemyThrowProbe(PPCContext& ctx,uint8_t* b) {
     Store32(b,0x82CCBF6C,binding.actor); Store32(b,0x82CCBF70,binding.actor);
     ctx.r3.u64=2; ctx.r4.u64=block; __imp__sub_826FA3B0(ctx,b);
     count=12;
-    REXLOG_INFO("COOP PROJECTILE fixture-native-controller actor={:08X} family={} block={:08X} native={:08X} volley=3 synthetic-activation=true native-state-dispatch=true observe-native-animation-and-attacks=true normal-traversal-unverified=true",
-        binding.actor,uint16_t(binding.id.family),block,Load32(b,block+20));
+    REXLOG_INFO("COOP PROJECTILE fixture-native-controller actor={:08X} family={} block={:08X} native={:08X} volley={} synthetic-activation=true native-state-dispatch=true observe-native-animation-and-attacks=true normal-traversal-unverified=true",
+        binding.actor,uint16_t(binding.id.family),block,Load32(b,block+20),volley);
     return;
   }
   const auto bm=Ptr(b,body,12,64); if (!bm) return;
