@@ -94,6 +94,7 @@ REX_EXTERN(__imp__sub_826FB0A0);
 REX_EXTERN(__imp__sub_826F9C60);
 REX_EXTERN(__imp__sub_8271E450);
 REX_EXTERN(__imp__sub_8271E290);
+REX_EXTERN(__imp__sub_823FCF58);
 #if defined(KK_DEV_TOOLS)
 REX_EXTERN(__imp__sub_8284D638);
 REX_EXTERN(__imp__sub_82663550);
@@ -548,6 +549,8 @@ struct State {
     EnemyId enemy{}; uint64_t incarnation=0;
     uint32_t number=0,generation=0; bool active=false;
   } sent_grab;
+  struct StingSound { uint32_t generation=0; double time=0; bool consumed=false; };
+  std::map<EnemyId,StingSound> sting_sounds;
 #if defined(KK_DEV_TOOLS)
   uint32_t shot_hit_object = 0;
   bool shot_matched = false;
@@ -588,6 +591,7 @@ struct State {
     peer_grab={};
     local_native_grab={};
     sent_grab={};
+    sting_sounds.clear();
 #if defined(KK_DEV_TOOLS)
     raptor_logs.clear(); raptor_candidate_lines = 0;
     combat_targets.clear(); targets_host = targets_guest = hits_host = 0; next_targets = 0;
@@ -1952,8 +1956,14 @@ bool NativeDamage(PPCContext& ctx, uint8_t* b, const DamageEvent& d) {
     __imp__sub_8261DE68(ctx,b);
   }
   s.injecting_damage = false;
+  const bool queued=Load32(b,result)!=UINT32_MAX && Load32(b,result+4)!=0;
+  if (queued && d.attack_sound && combat::NativeAttackSound(d)) {
+    ctx.r3.u64=source->actor; ctx.r4.u64=8; __imp__sub_823FCF58(ctx,b);
+    REXLOG_INFO("COOP SOUND guest native-sting source={:08X} number={} code=8 created={} native-hit-queued=true",
+        source->actor,d.number,ctx.r3.s32!=-1);
+  }
   for (unsigned i = 0; i < 4; ++i) Store32(b, globals[i], saved[i]);
-  return Load32(b, result) != UINT32_MAX && Load32(b, result+4) != 0;
+  return queued;
 }
 void CombatBeforeAi(PPCContext& ctx, uint8_t* b) {
   auto& s = Get();
@@ -3784,6 +3794,9 @@ bool EnemyDamageEnqueue(PPCContext& ctx, uint8_t* b, uint32_t body) {
     if (binding != s.bindings.end() && AuthorityFor(binding->second.id))
       damage.generation = AuthorityFor(binding->second.id)->generation;
     if (binding != s.bindings.end()) damage.enemy = Canonical(binding->second.id);
+    const auto sound=s.sting_sounds.find(damage.enemy);
+    if (sound!=s.sting_sounds.end()) damage.attack_sound=combat::AttackSoundObserved(damage,sound->first,
+        sound->second.generation,sound->second.time,damage.time,sound->second.consumed);
     const bool audited = binding != s.bindings.end() &&
         AuthorityFor(binding->second.id) && AuthorityFor(binding->second.id)->Runs(Side()) &&
         RetainedDamageSource(b, binding->second) &&
@@ -3815,6 +3828,7 @@ bool EnemyDamageEnqueue(PPCContext& ctx, uint8_t* b, uint32_t body) {
       if (s.outgoing_damage.empty() && SubmitCombat(m, Now())) { queued = true; ++s.hits_queued; }
       else if (s.outgoing_damage.size() < combat::kQueueLimit) { s.outgoing_damage.push_back({m, Now()}); queued = true; }
       if (queued) ++s.next_damage;
+      if (queued && damage.attack_sound) sound->second.consumed=true;
       if (queued && binding->second.id.family==EnemyFamily::Scorpion && damage.flags==3 && damage.magnitude==10 && !damage.projectile) {
         auto& grab=s.peer_grab;
         const auto offer=PeerGrabRecord(b);
@@ -4087,6 +4101,20 @@ REX_HOOK_RAW(sub_82548BC0) {
 }
 REX_HOOK_RAW(sub_8271E450) { kk::coop::FilterPeerGrabQuery(ctx,base,false); }
 REX_HOOK_RAW(sub_8271E290) { kk::coop::FilterPeerGrabQuery(ctx,base,true); }
+REX_HOOK_RAW(sub_823FCF58) {
+  const auto actor=ctx.r3.u32,resource=ctx.r4.u32;
+  __imp__sub_823FCF58(ctx,base);
+  if (resource!=8 || ctx.r3.s32==-1) return;
+  const auto* owner=kk::coop::CombatOwner(base,kk::coop::EnemyFamily::Scorpion);
+  if (!owner || owner->actor!=actor) return;
+  const auto* authority=kk::coop::AuthorityFor(owner->id);
+  auto& s=kk::coop::Get();
+  s.sting_sounds[kk::coop::Canonical(owner->id)]={authority->generation,kk::coop::Now(),false};
+#if defined(KK_DEV_TOOLS)
+  static unsigned lines=0;
+  if (lines++<64) REXLOG_INFO("COOP SOUND owner native-sting source={:08X} generation={} code=8 created=true",actor,authority->generation);
+#endif
+}
 #if defined(KK_DEV_TOOLS)
 REX_HOOK_RAW(sub_8271ECF8) {
   const auto& g=kk::coop::Get().peer_grab;

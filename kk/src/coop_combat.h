@@ -16,6 +16,16 @@ inline bool DamageClock(double hit_time, double host_pose_time) {
       hit_time >= host_pose_time-kMaxAge && hit_time <= host_pose_time+.5;
 }
 enum class GrabFeedback { Pending, Accepted, Release };
+inline bool NativeAttackSound(const DamageEvent& d) {
+  if (COOP_MUT_IF("attack_sound")) return true;
+  // Scorpion82616490 plays sound8 immediately before producing5/10.
+  return d.enemy.family==EnemyFamily::Scorpion && !d.projectile && d.flags==5 && d.magnitude==10;
+}
+inline bool AttackSoundObserved(const DamageEvent& d,EnemyId source,uint32_t generation,
+                                double observed,double now,bool consumed) {
+  return NativeAttackSound(d) && d.enemy==source && d.generation==generation && !consumed &&
+      Fresh(observed,now) && now-observed<=.1;
+}
 inline bool NativeGrabOwnerReleased(const PlayerStatus& p,EnemyWorld world,uint64_t incarnation,
                                    EnemyId enemy,uint32_t generation,uint32_t first_damage) {
   return ValidPlayerStatus(p) && p.world==world && p.peer_grab_incarnation==incarnation &&

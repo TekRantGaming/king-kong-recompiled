@@ -19,6 +19,7 @@
     "false_quiet": "false_quiet",
     "projectile_source": "projectile_source",
     "impact_selector": "impact_selector",
-    "grab_feedback": "grab_feedback"
+    "grab_feedback": "grab_feedback",
+    "attack_sound": "attack_sound"
   }
 }

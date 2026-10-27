@@ -335,6 +335,22 @@ void ProfileScenario(const char* name,uint32_t seed) {
   std::printf("actual-core profile=%s seed=%u story=%u poses=%llu/%llu converged=yes native-hooks=absent\n",name,seed,applied,
       (unsigned long long)p.host.Poses().received,(unsigned long long)p.guest.Poses().received);
 }
+void AttackSound() {
+  DamageEvent d{{204,3,5},9,7,{123,4,EnemyFamily::Scorpion},5,10,{1,0,0}};
+  d.attack_sound=true;
+  Check(ValidDamageEvent(d),"audited sting sound tuple accepted");
+  Check(combat::AttackSoundObserved(d,d.enemy,2,9.95,10,false)==false,"cue ownership generation must match");
+  d.generation=2;
+  Check(combat::AttackSoundObserved(d,d.enemy,2,9.95,10,false),"actual recent cue belongs to exact hit source");
+  auto other=d.enemy; ++other.source;
+  Check(!combat::AttackSoundObserved(d,other,2,9.95,10,false),"other source cannot lend a cue");
+  Check(!combat::AttackSoundObserved(d,d.enemy,2,9.8,10,false),"old sting is not replayed by a later attack");
+  Check(!combat::AttackSoundObserved(d,d.enemy,2,10.1,10,false),"future cue refused");
+  Check(!combat::AttackSoundObserved(d,d.enemy,2,9.95,10,true),"one observation is consumed once");
+  d.flags=3; Check(!ValidDamageEvent(d),"grab start has no sting cue");
+  d.flags=5; d.enemy.family=EnemyFamily::Native;
+  Check(!ValidDamageEvent(d),"native cannot request a scorpion resource");
+}
 void GrabFeedback() {
   using F=combat::GrabFeedback;
   const EnemyWorld world{204,3,5}; const EnemyId source{123,4,EnemyFamily::Scorpion};
@@ -411,6 +427,7 @@ int main(int argc,char** argv) {
   else if(name=="projectile_source") ProjectileSource();
   else if(name=="impact_selector") ImpactSelector();
   else if(name=="grab_feedback") GrabFeedback();
+  else if(name=="attack_sound") AttackSound();
   else if(name=="udp_duplicate" || name=="udp_order") Reliable();
   else { std::fprintf(stderr,"unknown test\n"); return 2; }
   std::printf("PASS [%s]\n",test_name); return 0;

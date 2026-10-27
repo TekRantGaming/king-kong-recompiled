@@ -273,6 +273,7 @@ bool ValidInventory(const InventoryState& i) {
 bool ValidDamageEvent(const DamageEvent& d) {
   const float length = std::hypot(d.direction.x, d.direction.y, d.direction.z);
   return ValidEnemyWorld(d.world) && d.incarnation && d.number && d.enemy.source &&
+      (!d.attack_sound || combat::NativeAttackSound(d)) &&
       combat::NativeHit(d.enemy.family, d.flags, d.magnitude, d.projectile) &&
       Point(d.direction) && length <= 2000 &&
       (d.part == UINT32_MAX || d.part <= 1024) &&
@@ -386,6 +387,7 @@ bool Encode(const Message& m, std::vector<uint8_t>& out) {
       payload.U(m.damage.part, 4); payload.U(std::bit_cast<uint32_t>(m.damage.duration), 4);
       payload.U(m.damage.generation, 4);
       WriteVector(payload,m.damage.point); payload.U(m.damage.surface,4); payload.U(m.damage.projectile,1);
+      payload.U(m.damage.attack_sound,1);
       break;
     case MessageType::PlayerStatus:
       if (!ValidPlayerStatus(m.player_status)) return false;
@@ -607,6 +609,7 @@ bool Decode(std::span<const uint8_t> bytes, Message& out) {
       m.damage.generation = uint32_t(r.U(4));
       m.damage.point=ReadVector(r); m.damage.surface=uint32_t(r.U(4));
       { const auto projectile=r.U(1); if (projectile>1) return false; m.damage.projectile=projectile!=0; }
+      { const auto sound=r.U(1); if (sound>1) return false; m.damage.attack_sound=sound!=0; }
       if (!ValidDamageEvent(m.damage)) return false;
       break;
     case MessageType::PlayerStatus:

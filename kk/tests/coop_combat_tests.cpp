@@ -53,10 +53,10 @@ void StimulusDiagnostics() {
   Check(!ReadPool(u32, 1).valid, "record span overflow refused");
 }
 void Codecs() {
-  static_assert(kProtocolVersion == 27);
+  static_assert(kProtocolVersion == 28);
   for (const auto& m : {Damage(), Status()}) {
     const auto bytes = Packet(m); Message out;
-    Check(bytes.size() == (m.type == MessageType::DamageEvent ? 119u : 103u), "fixed bounded wire length");
+    Check(bytes.size() == (m.type == MessageType::DamageEvent ? 120u : 103u), "fixed bounded wire length");
     Check(bytes[4] == 0 && bytes[5] == kProtocolVersion && bytes[7] == uint16_t(m.type), "current protocol byte order");
     Check(Decode(bytes, out) && Packet(out) == bytes, "canonical combat round trip");
     for (size_t n = 0; n < bytes.size(); ++n) {
@@ -176,9 +176,20 @@ void Codecs() {
     hit.damage.flags=0x400400; hit.damage.magnitude=10; hit.damage.surface=19; hit.damage.point={12,34,56};
     Message decoded; Check(Decode(Packet(hit),decoded) && decoded.damage.projectile && decoded.damage.point.z==56 &&
         decoded.damage.surface==19 && decoded.damage.generation==0,"native projectile retains impact and initial owner generation");
-    auto bytes=Packet(hit); bytes.back()=2; Check(!Decode(bytes,decoded),"malformed projectile discriminator refused");
+    auto bytes=Packet(hit); bytes[bytes.size()-2]=2; Check(!Decode(bytes,decoded),"malformed projectile discriminator refused");
     hit.damage.surface=0x40000000; Check(!Encode(hit,out),"projectile selector cannot carry a native pointer");
     hit.damage.surface=19; hit.damage.projectile=false; Check(!Encode(hit,out),"melee cannot smuggle unused impact data");
+  }
+  {
+    auto sting=Damage(); sting.damage.enemy.family=EnemyFamily::Scorpion;
+    sting.damage.flags=5; sting.damage.magnitude=10; sting.damage.attack_sound=true;
+    Message decoded; Check(Decode(Packet(sting),decoded) && decoded.damage.attack_sound,"observed sting cue retained");
+    auto bytes=Packet(sting); bytes.back()=2; Check(!Decode(bytes,decoded),"malformed sound cue refused");
+    sting.damage.flags=3; Check(!Encode(sting,out),"grab start cannot invent a sting sound");
+    sting.damage.flags=5; sting.damage.enemy.family=EnemyFamily::Native;
+    Check(!Encode(sting,out),"other families cannot request scorpion sound");
+    sting.damage.enemy.family=EnemyFamily::Scorpion; sting.damage.projectile=true;
+    Check(!Encode(sting,out),"projectiles cannot request scorpion sting sound");
   }
   m = Damage(); m.damage.incarnation = 0; Check(!Encode(m, out), "missing life refused");
   m = Damage(); m.damage.number = 0; Check(!Encode(m, out), "zero damage sequence refused");
