@@ -193,6 +193,8 @@ bool ValidStartPlan(const StartPlan& p) {
   return false;
 }
 bool ValidStoryEvent(const StoryEvent& e) {
+  if (e.phase==StoryPhase::Stopped)
+    return e.generation && e.level && e.level<=100000 && e.number && e.source && e.script && e.run && e.record<kStoryRecords;
   if (e.phase>=StoryPhase::SnapshotRequest && e.phase<=StoryPhase::SnapshotEnd) {
     if (!e.generation || !e.level || e.level>100000 || !e.number || !e.source || !e.script ||
         !e.run || e.record>kStoryRecords) return false;

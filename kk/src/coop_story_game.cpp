@@ -34,6 +34,8 @@ REX_EXTERN(__imp__sub_82501A30);
 REX_EXTERN(__imp__sub_82501D50);
 REX_EXTERN(__imp__sub_82449EB0);
 REX_EXTERN(__imp__sub_82449CD0);
+REX_EXTERN(__imp__sub_826F9DC0);
+REX_EXTERN(__imp__sub_82713A58);
 REX_EXTERN(__imp__sub_8250B9D8);
 REX_EXTERN(__imp__sub_8250BED8);
 #if defined(KK_DEV_TOOLS)
@@ -54,6 +56,8 @@ struct Script : story::Progress {
   std::optional<StoryEvent> request;
   double request_until=0;
   story::Hints hints;
+  std::optional<StoryEvent> native_stop;
+  double next_native_stop=0;
   story::Lag lag;
   bool exact=false;
   bool saw_detect=false, saw_loop=false;
@@ -595,6 +599,13 @@ void ChecksumFrame(uint8_t* b,double now) {
       }
       auto& s=scripts.at(bind->actor);
       s.activation.Observe(e);
+      if (e.phase==StoryPhase::Stopped) {
+        // A real native host retirement is separate from successful callback
+        // completion. Keep it pending until this guest reaches that same wait.
+        if (e.run>=s.run) s.native_stop=e;
+        Note("native retirement recorded",e);
+        ordered.Applied(now); continue;
+      }
       if (e.phase==StoryPhase::Recovery) {
         Note("legacy recovery hint ignored",e,"only persistent checksum lag requests recovery");
         ordered.Applied(now); continue;
@@ -641,12 +652,22 @@ void ChecksumFrame(uint8_t* b,double now) {
   auto it=scripts.upper_bound(checksum_actor);
   for (unsigned budget=0;it!=scripts.end() && budget<16;++it,++budget) {
     if (outgoing.size()>=kStoryQueue/2 || number==UINT32_MAX) break;
-    const auto& s=it->second;
+    auto& s=it->second;
     const auto* bind=story::Match(s.binding.source,s.binding.script,bindings);
     if (!bind || bind->actor!=it->first || Vars(b,bind->ai,19824)!=bind->vars || Shape(b,bind->vars)!=bind->script) {
       checksum_actor=it->first; continue;
     }
-    auto e=Event(s,StoryPhase::Checksum,Load32(b,bind->vars+19812)); e.number=number+1;
+    const auto index=Load32(b,bind->vars+19812);
+    // NPC callbacks can clear/disable this loop externally while leaving its
+    // cursor on an unfinished read-only wait. Observe that actual transition
+    // and retain it reliably, without inventing a successful NPC order.
+    if (!s.exact && s.saw_loop && s.started==s.run && index<kStoryRecords &&
+        (Load32(b,bind->actor+4)&0x400000) && !Tracks(b,bind->ai,kLoop) &&
+        story::RetirableWait(Load32(b,bind->vars+924+180*index)) && now>=s.next_native_stop) {
+      auto stopped=Event(s,StoryPhase::Stopped,index);
+      if (Emit(stopped)) { s.next_native_stop=now+3; Note("native retirement observed",stopped,"own loop cleared and inactive at the same native wait"); }
+    }
+    auto e=Event(s,StoryPhase::Checksum,index); e.number=number+1;
     if (!ValidStoryEvent(e)) { checksum_actor=it->first; continue; }
     if (!checksums.Remember(e,now)) break;
     if (!Emit(e)) break;
@@ -979,6 +1000,22 @@ bool StoryLoop(PPCContext& ctx,uint8_t* b) {
   s->checkpoint_omitted=false; s->checkpoint_covered.reset(); s->checkpoint_finished.reset();
   if (!s->saw_loop) { s->saw_loop=true; Note("native loop scheduled",Event(*s,StoryPhase::Advance,Load32(b,s->binding.vars+19812))); }
   const auto vars=s->binding.vars,before=Load32(b,vars+19812);
+  if (!host && s->native_stop) {
+    const auto stop=*s->native_stop;
+    if (stop.run<s->run) s->native_stop.reset();
+    else if (story::NativeStopMatches(stop,generation,level,s->binding.source,s->binding.script,s->run,before,
+        before<kStoryRecords ? Load32(b,vars+924+180*before):0)) {
+      // This is the actual local SSLoop dispatcher context. Clear its own
+      // track and use the native activity API. Leave cursor, NPC flags and
+      // completion counters untouched, just as on the stopped host.
+      const auto saved=ctx;
+      __imp__sub_826F9DC0(ctx,b);
+      ctx.r3.u32=s->binding.actor; ctx.r4.u32=1; __imp__sub_82713A58(ctx,b);
+      ctx=saved; ctx.r3.u32=0;
+      s->native_stop.reset(); Note("native retirement applied",stop,"same native wait; local track and activity retired");
+      return true;
+    }
+  }
   if (host || !s->exact) {
     __imp__sub_82454690(ctx,b);
     if (failed) return true;

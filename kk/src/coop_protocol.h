@@ -93,7 +93,7 @@ inline bool IsObjectMessage(MessageType t) {
 // It never executes a native callback. Recovery is retained for old v11 codecs;
 // C46 uses persistent local checksum evidence and soft catch-up instead.
 enum class StoryPhase : uint8_t { Armed = 1, Started, Advance, Finished, Recovery, Checksum,
-  SnapshotRequest, SnapshotBegin, SnapshotIdle, SnapshotLoop, SnapshotFinished, SnapshotEnd };
+    SnapshotRequest, SnapshotBegin, SnapshotIdle, SnapshotLoop, SnapshotFinished, SnapshotEnd, Stopped };
 // Snapshot markers reuse source as a private-load token and script as count+1
 // (Request uses script=1). Entries use the existing script identity/run/cursor.
 // Begin/entries/End share the host's ordered reliable stream, including any
