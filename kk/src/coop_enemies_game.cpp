@@ -28,6 +28,7 @@
 REX_EXTERN(__imp__sub_8271D498);
 REX_EXTERN(__imp__sub_8271CCB8);
 REX_EXTERN(__imp__sub_82715AC8);
+REX_EXTERN(__imp__sub_82714E40);
 REX_EXTERN(__imp__sub_827117E0);
 REX_EXTERN(__imp__sub_82711278);
 REX_EXTERN(__imp__sub_82401AA8);
@@ -1451,6 +1452,25 @@ void Replicas(PPCContext& ctx, uint8_t* b, bool drive) {
     if (!authority.Accepts(r.enemy) || authority.owner == Side() || authority.Frozen()) continue;
     authority.Observe(r.latest.id.source ? r.latest : r.enemy);
     if (authority.dead && r.enemy.life > 0) continue;
+    if (r.kind == EnemyEventKind::Removed) {
+      // Death and retirement are separate reliable boundaries. A zero-life
+      // replica still runs its corpse script until its owner removes the root.
+      // Use native destruction so collision, relations and event 4 are retired
+      // together. Never infer removal from age, distance or a missing packet.
+      if (!Scratch::CanUse(ctx) || !ControllerSafe(b,binding->actor) ||
+          (Load32(b,binding->actor+4)&0x00600000)==0x00600000) continue;
+      const auto actor=binding->actor;
+      Scratch scratch(ctx,b);
+      constexpr uint32_t globals[]{0x82CCBF58,0x82CCBF5C,0x82CCBF60,0x82CCBF64,0x82CCBF68,0x82CCBF6C,0x82CCBF70};
+      uint32_t saved[7];
+      for (unsigned i=0;i<7;++i) saved[i]=Load32(b,globals[i]);
+      ctx.r3.u64=actor; __imp__sub_82714E40(ctx,b);
+      for (unsigned i=0;i<7;++i) Store32(b,globals[i],saved[i]);
+      if (auto local=s.records.find(binding->id);local!=s.records.end()) local->second.kind=EnemyEventKind::Removed;
+      REXLOG_INFO("ENEMIES retirement owner={} id={:016X}/{}/{} native=true",
+          authority.owner==EnemyOwner::Host ? "host":"guest",r.enemy.id.source,r.enemy.id.sequence,uint16_t(r.enemy.id.family));
+      continue;
+    }
     const bool dead = r.kind != EnemyEventKind::Spawned || r.enemy.life <= 0;
     if (!dead && (!ControllerSafe(b, binding->actor) || !Scratch::CanUse(ctx))) continue;
     // Only the nonowner receives raw life. Corpses run native death dispatches.
