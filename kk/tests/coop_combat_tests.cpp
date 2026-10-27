@@ -53,11 +53,11 @@ void StimulusDiagnostics() {
   Check(!ReadPool(u32, 1).valid, "record span overflow refused");
 }
 void Codecs() {
-  static_assert(kProtocolVersion == 23);
+  static_assert(kProtocolVersion == 24);
   for (const auto& m : {Damage(), Status()}) {
     const auto bytes = Packet(m); Message out;
     Check(bytes.size() == (m.type == MessageType::DamageEvent ? 119u : 53u), "fixed bounded wire length");
-    Check(bytes[4] == 0 && bytes[5] == kProtocolVersion && bytes[7] == uint16_t(m.type), "protocol 23 byte order");
+    Check(bytes[4] == 0 && bytes[5] == kProtocolVersion && bytes[7] == uint16_t(m.type), "protocol 24 byte order");
     Check(Decode(bytes, out) && Packet(out) == bytes, "canonical combat round trip");
     for (size_t n = 0; n < bytes.size(); ++n) {
       out.type = MessageType::Bye;
@@ -65,6 +65,12 @@ void Codecs() {
     }
     auto extra = bytes; extra.push_back(0); extra[23]++;
     Check(!Decode(extra, out), "trailing combat payload refused");
+  }
+  {
+    auto previous=Packet(Damage()); previous[5]=23;
+    Message decoded;
+    Check(Decode(previous,decoded) && decoded.protocol==23,
+        "decoder preserves protocol23 for the session version gate");
   }
   auto m = Damage(); std::vector<uint8_t> out{9};
   for (auto flags : {0u, 1u, 3u, 0xFFFFFFFFu, 0x4005u}) {
@@ -110,7 +116,7 @@ void Codecs() {
     Check(!Encode(impulse,out),"neighbor impulse cannot borrow another family");
   }
   for (auto family : {EnemyFamily::Crab, EnemyFamily::Worm, EnemyFamily::Scorpion, EnemyFamily::Bat,
-       EnemyFamily::Centipede, EnemyFamily::Native, EnemyFamily::Marine, EnemyFamily::VRex,
+       EnemyFamily::Centipede, EnemyFamily::Native, EnemyFamily::NativeKna, EnemyFamily::Marine, EnemyFamily::VRex,
        EnemyFamily::SwampCrawler, EnemyFamily::SwampCrawlerSmall, EnemyFamily::Spider, EnemyFamily::Pny}) {
     auto hit = Damage(); hit.damage.enemy.family = family; hit.damage.flags = 4096;
     hit.damage.magnitude = 10; hit.damage.direction = {3, 4, 0}; hit.damage.part = 64; hit.damage.duration = .025f;

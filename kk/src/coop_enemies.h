@@ -29,6 +29,7 @@ inline EnemyFamily Family(uint32_t fn) {
     case 0x82626AD8: case 0x82664B10: case 0x82663550: return EnemyFamily::Bat;
     case 0x8258F3B0: case 0x825D2AC0: return EnemyFamily::Centipede;
     case 0x82606700: case 0x8260EB68: return EnemyFamily::Native;
+    case 0x82444620: case 0x8242DB60: return EnemyFamily::NativeKna;
     case 0x824DD4C0: case 0x824B3AD8: return EnemyFamily::Marine;
     case 0x824635B8: case 0x82490B50: case 0x82476D38: return EnemyFamily::VRex;
     case 0x8241E660: case 0x8242E0F8: case 0x824290E0: return EnemyFamily::SwampCrawler;
@@ -44,7 +45,7 @@ inline bool Initializer(uint32_t fn) {
     case 0x825B9020: case 0x82516820: case 0x826055F0: case 0x8264DA70:
     case 0x82664B10: case 0x8258F3B0: case 0x82606700: case 0x824DD4C0:
     case 0x82490B50: case 0x8242E0F8: case 0x82609BC0: case 0x82617130:
-    case 0x82498C40: case 0x8243C568: return true;
+    case 0x82498C40: case 0x8243C568: case 0x82444620: return true;
     default: return false;
   }
 }
@@ -87,6 +88,7 @@ inline uint32_t LifeOffset(EnemyFamily f) {
     case EnemyFamily::Bat: return 56;          // 826627D0 -> 824E3238 firearm pool; V+64 is separate.
     case EnemyFamily::Centipede: return 6296;  // PNJ_Scolo_exec_check_paf 8258E6E0.
     case EnemyFamily::Native: return 4376;     // Na_Exec_CheckPaf 825F2698.
+    case EnemyFamily::NativeKna: return 4380;  // KNa8241ED88;4376 is hit strength, not life.
     case EnemyFamily::Marine: return 6128;     // MM_Exec_CHECK_Paf 824B33F0.
     case EnemyFamily::VRex: return 2176;       // Native health stimulus HANDLE, not float.
     case EnemyFamily::SwampCrawler: return 32; // SC_ETAT_paf 82440948.
@@ -123,6 +125,7 @@ inline DeathBlock NativeDeath(EnemyFamily f) {
     case EnemyFamily::Bat: return {0x82CC89C0,0x82659E98};
     case EnemyFamily::Centipede: return {0x82CC9038,0x825E3A88};
     case EnemyFamily::Native: return {0x82CC8D10,0x82600CC8};
+    case EnemyFamily::NativeKna: return {0x82CC9B68,0x8243E370};
     case EnemyFamily::VRex: return {0x82CC98D4,0x8248FEC0};
     case EnemyFamily::SwampCrawler: return {0x82CC9BA0,0x82440B20};
     case EnemyFamily::SwampCrawlerSmall: return {0x82CC8C1C,0x82614328};

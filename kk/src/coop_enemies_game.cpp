@@ -56,6 +56,10 @@ REX_EXTERN(__imp__sub_82463A58);
 REX_EXTERN(__imp__sub_8266F740);
 REX_EXTERN(__imp__sub_8266ACC8);
 REX_EXTERN(__imp__sub_8260EB68);
+REX_EXTERN(__imp__sub_8242DB60);
+REX_EXTERN(__imp__sub_824509E0);
+REX_EXTERN(__imp__sub_8244B9A0);
+REX_EXTERN(__imp__sub_82443F10);
 REX_EXTERN(__imp__sub_825F2890);
 REX_EXTERN(__imp__sub_82617858);
 REX_EXTERN(__imp__sub_82456778);
@@ -83,6 +87,7 @@ REX_EXTERN(__imp__sub_8271E4E8);
 REX_EXTERN(__imp__sub_825491B0);
 REX_EXTERN(__imp__sub_8271ECF8);
 REX_EXTERN(__imp__sub_82663550);
+REX_EXTERN(__imp__sub_8241F0A8);
 #endif
 #if defined(KK_DEV_TOOLS)
 REX_EXTERN(__imp__sub_82451A60);
@@ -209,6 +214,7 @@ const char* DevFamilyName(EnemyFamily family) {
     case EnemyFamily::Bat: return "bat";
     case EnemyFamily::Centipede: return "centipede";
     case EnemyFamily::Native: return "native";
+    case EnemyFamily::NativeKna: return "native-kna";
     case EnemyFamily::Marine: return "marine";
     case EnemyFamily::VRex: return "v-rex";
     case EnemyFamily::SwampCrawler: return "swamp-crawler";
@@ -399,7 +405,7 @@ void DevEnemyNear(const uint8_t* b, uint32_t w) {
     const auto* value=std::getenv("KK_DEV_ENEMY_NEAR_FAMILY");
     char* end=nullptr;
     const auto parsed=value ? std::strtoul(value,&end,10):0;
-    return value && end!=value && !*end && parsed>=1 && parsed<=14 ? uint32_t(parsed):0u;
+    return value && end!=value && !*end && parsed>=1 && parsed<=unsigned(EnemyFamily::NativeKna) ? uint32_t(parsed):0u;
   }();
   static double next = 0;
   const auto now = Now();
@@ -807,7 +813,7 @@ void Scan(const uint8_t* b) {
         Ptr(b, actor, 12, 64) == binding.matrix;
     if (!same) {
       if (auto it = s.records.find(binding.id); it != s.records.end()) it->second.kind = EnemyEventKind::Removed;
-        s.native_player_switch.erase(binding.actor);
+      s.native_player_switch.erase(binding.actor);
       binding_it = s.bindings.erase(binding_it);
     } else ++binding_it;
   }
@@ -863,7 +869,9 @@ uint32_t NearestPlayer(PPCContext& ctx, uint8_t* b, const Binding& owner, uint32
   if (!(PlayerDistance(b,owner.actor,other) < PlayerDistance(b,owner.actor,original))) return original;
   Scratch scratch(ctx,b);
   ctx.r3.u64 = other;
-  if (crab) __imp__sub_82463A58(ctx,b); else __imp__sub_8266ACC8(ctx,b);
+  if (crab) __imp__sub_82463A58(ctx,b);
+  else if (owner.id.family==EnemyFamily::NativeKna) __imp__sub_8244B9A0(ctx,b);
+  else __imp__sub_8266ACC8(ctx,b);
   return ctx.r3.u32 ? other : original;
 }
 // Refresh only the singular preferred-player index in the native selector.
@@ -959,9 +967,9 @@ void CrabPlayerTarget(PPCContext& ctx, uint8_t* b) {
     Store32(b,binding.vars+2040,crab_player_scope==binding.actor ?
         CrabSelectedPlayer(b,binding,Load32(b,0x82CCBF7C)) : original);
 }
-void NativePlayerTarget(PPCContext& ctx, uint8_t* b) {
-  __imp__sub_8266F740(ctx,b);
-  const auto* owner = CombatOwner(b,EnemyFamily::Native);
+void NativePlayerTarget(PPCContext& ctx, uint8_t* b, bool kna=false) {
+  if (kna) __imp__sub_824509E0(ctx,b); else __imp__sub_8266F740(ctx,b);
+  const auto* owner = CombatOwner(b,kna ? EnemyFamily::NativeKna:EnemyFamily::Native);
   if (owner) ctx.r3.u64 = NearestPlayer(ctx,b,*owner,ctx.r3.u32,false);
 }
 void BatPlayerTarget(PPCContext& ctx, uint8_t* b) {
@@ -1021,9 +1029,10 @@ void BatNpcLink(PPCContext& ctx,uint8_t* b) {
   }
   __imp__sub_824ECBC0(ctx,b);
 }
-void NativePlayerReflex(PPCContext& ctx, uint8_t* b) {
-  __imp__sub_8260EB68(ctx,b);
-  const auto* owner=CombatOwner(b,EnemyFamily::Native);
+void NativePlayerReflex(PPCContext& ctx, uint8_t* b, bool kna=false) {
+  if (kna) __imp__sub_8242DB60(ctx,b); else __imp__sub_8260EB68(ctx,b);
+  const auto* owner=CombatOwner(b,kna ? EnemyFamily::NativeKna:EnemyFamily::Native);
+  const uint32_t target=kna ? 4084:4088,scripted_target=kna ? 304:308;
 #if defined(KK_DEV_TOOLS)
   if (owner) {
     static std::map<uint32_t,std::pair<double,unsigned>> logs;
@@ -1031,28 +1040,29 @@ void NativePlayerReflex(PPCContext& ctx, uint8_t* b) {
       auto& log=logs[owner->actor];
       if (Now()>=log.first && log.second++<40) {
         log.first=Now()+2;
-        REXLOG_INFO("COOP PROJECTILE native-reflex actor={:08X} target={:08X} body={:08X} scripted={:08X} required={:08X} excluded={:08X} state={} phase={} script-step={} launcher={:08X} distance-host={:.3f} distance-guest={:.3f}",
-            owner->actor,Load32(b,owner->vars+4088),kk::PartnerBodyCombatActor(b),Load32(b,owner->vars+308),
+        REXLOG_INFO("COOP PROJECTILE native-reflex actor={:08X} target={:08X} body={:08X} scripted={:08X} required={:08X} excluded={:08X} state={} phase={} script-step={} launcher={:08X} distance-host={:.3f} distance-guest={:.3f} variant={}",
+            owner->actor,Load32(b,owner->vars+target),kk::PartnerBodyCombatActor(b),Load32(b,owner->vars+scripted_target),
             Load32(b,owner->vars+204),Load32(b,owner->vars+212),Load32(b,owner->vars+252),Load32(b,owner->vars+264),
-            Load32(b,owner->vars+404),Load32(b,owner->vars+4096),
-            PlayerDistance(b,owner->actor,Load32(b,0x82CCBF7C)),PlayerDistance(b,owner->actor,kk::PartnerBodyCombatActor(b)));
+            Load32(b,owner->vars+(kna ? 400:404)),Load32(b,owner->vars+(kna ? 4092:4096)),
+            PlayerDistance(b,owner->actor,Load32(b,0x82CCBF7C)),PlayerDistance(b,owner->actor,kk::PartnerBodyCombatActor(b)),kna ? "KNa":"Na");
       }
     }
   }
 #endif
   if (!owner) return;
-  const auto hero=Load32(b,0x82CCBF7C),body=kk::PartnerBodyCombatActor(b),scripted=Load32(b,owner->vars+308);
+  const auto hero=Load32(b,0x82CCBF7C),body=kk::PartnerBodyCombatActor(b),scripted=Load32(b,owner->vars+scripted_target);
   if (!body || (scripted && scripted!=hero && scripted!=body)) return;
   auto& choice=Get().native_player_switch[owner->actor];
-  const auto original=Load32(b,owner->vars+4088);
+  const auto original=Load32(b,owner->vars+target);
   if (original!=hero && original!=body) return;
   uint32_t selected=original;
   if (Now()<choice.until && (choice.player==hero || choice.player==body) && Scratch::CanUse(ctx)) {
-    Scratch scratch(ctx,b); ctx.r3.u64=choice.player; __imp__sub_8266ACC8(ctx,b);
+    Scratch scratch(ctx,b); ctx.r3.u64=choice.player;
+    if (kna) __imp__sub_8244B9A0(ctx,b); else __imp__sub_8266ACC8(ctx,b);
     if (ctx.r3.u32) selected=choice.player;
   } else selected=NearestPlayer(ctx,b,*owner,original,false);
   if (selected!=original) {
-    Store32(b,owner->vars+4088,selected);
+    Store32(b,owner->vars+target,selected);
 #if defined(KK_DEV_TOOLS)
     static unsigned switches=0;
     if (switches++<128) REXLOG_INFO("COOP PROJECTILE player-switch actor={:08X} from={:08X} to={:08X} partner={}",
@@ -1062,6 +1072,28 @@ void NativePlayerReflex(PPCContext& ctx, uint8_t* b) {
     // running again. Keep four seconds of aggro and the native volume test.
     if (choice.player!=selected) { choice.player=selected; choice.until=Now()+4; }
   }
+}
+void KnaPlayerLaunch(PPCContext& ctx,uint8_t* b) {
+  const auto* owner=CombatOwner(b,EnemyFamily::NativeKna);
+  const auto hero=Load32(b,0x82CCBF7C),body=kk::PartnerBodyCombatActor(b);
+  const auto scripted=owner ? Load32(b,owner->vars+304):0;
+  const auto selected=owner ? Load32(b,owner->vars+4084):0;
+  if (!owner || !body || (scripted!=hero && scripted!=body) || (selected!=hero && selected!=body)) {
+    __imp__sub_82443F10(ctx,b); return;
+  }
+  const auto binding=*owner;
+  // KNa has no Na4472 leading cache. Only its temporary authored target is
+  // aligned with the already selected player during the native throw state.
+  struct Restore {
+    uint8_t* base; Binding binding; uint32_t original,alias;
+    ~Restore() {
+      if (Ptr(base,binding.ai,64,4532)==binding.vars && RetainedDamageSource(base,binding) &&
+          Load32(base,binding.vars+304)==alias)
+        Store32(base,binding.vars+304,original);
+    }
+  } restore{b,binding,scripted,selected};
+  Store32(b,binding.vars+304,selected);
+  __imp__sub_82443F10(ctx,b);
 }
 void NativePlayerLaunch(PPCContext& ctx,uint8_t* b) {
   const auto* owner=CombatOwner(b,EnemyFamily::Native);
@@ -1092,7 +1124,8 @@ void NativePlayerLaunch(PPCContext& ctx,uint8_t* b) {
   // caches agree. The authored record is restored before any other script runs.
   Store32(b,binding.vars+308,selected);
   __imp__sub_82617858(ctx,b);
-  if (Ptr(b,binding.ai,64,4492)==binding.vars && RetainedDamageSource(b,binding))
+  if (Ptr(b,binding.ai,64,4492)==binding.vars && RetainedDamageSource(b,binding) &&
+      Load32(b,binding.vars+308)==selected)
     Store32(b,binding.vars+308,scripted);
 }
 void VRexPlayerTarget(PPCContext& ctx,uint8_t* b) {
@@ -1922,7 +1955,8 @@ void DevBait(PPCContext& ctx, uint8_t* b) {
       }
       if (const char* value=std::getenv("KK_DEV_BAIT_FAMILY")) {
         char* end=nullptr; const auto parsed=std::strtoul(value,&end,10);
-        if (end!=value && !*end && parsed>=unsigned(EnemyFamily::Raptor) && parsed<unsigned(EnemyFamily::Prey))
+        if (end!=value && !*end && parsed>=unsigned(EnemyFamily::Raptor) &&
+            parsed<=unsigned(EnemyFamily::NativeKna) && parsed!=unsigned(EnemyFamily::Prey))
           family=EnemyFamily(parsed);
       }
       const char* value = std::getenv("KK_DEV_BAIT");
@@ -2630,6 +2664,7 @@ void AfterAi(PPCContext& ctx, uint8_t* b, uint32_t w) {
         case EnemyFamily::Crab: handle = 1048; break;
         case EnemyFamily::Bat: target = Load32(b, binding.vars+848); break;
         case EnemyFamily::Native: target = Load32(b, binding.vars+4088); break;
+        case EnemyFamily::NativeKna: target = Load32(b,binding.vars+4084); break;
         case EnemyFamily::SwampCrawler: target = Load32(b,binding.vars+556); break;
         case EnemyFamily::SwampCrawlerSmall: target = Load32(b,binding.vars+1912); break;
         case EnemyFamily::Marine: target = Load32(b,binding.vars+348); break;
@@ -2712,7 +2747,7 @@ bool Hold(PPCContext& ctx, uint8_t* b) {
     const auto* v=std::getenv("KK_DEV_ENEMY_ONLY_FAMILY");
     return v ? std::strtoul(v,nullptr,10):0ul;
   }();
-  if (only_family>=1 && only_family<=13 && s.prepared && Connected() &&
+  if (only_family>=1 && only_family<=unsigned(EnemyFamily::NativeKna) && s.prepared && Connected() &&
       uint32_t(ctx.lr)==0x8271D304 && Now()-s.prepared_at<=.5 && Environment(b,s.world)) {
     const auto actor=Load32(b,0x82CCBF6C);
     const auto found=s.bindings.find(actor);
@@ -3093,6 +3128,7 @@ bool EnemyCombatReference(const uint8_t* b, uint32_t owner, uint32_t ai, uint32_
   if ((binding->second.id.family == EnemyFamily::Crab && offset == 1056) ||
       (binding->second.id.family == EnemyFamily::Bat && (offset == 848 || offset == 852)) ||
       (binding->second.id.family == EnemyFamily::Native && offset == 4088) ||
+      (binding->second.id.family == EnemyFamily::NativeKna && offset == 4084) ||
       (binding->second.id.family == EnemyFamily::VRex && offset == 516)) return true;
   // KT_exec_zdf_zdc records actual native contacts at824, count904. These
   // are combat references, like its selected target516, rather than a story
@@ -3281,6 +3317,18 @@ std::optional<ShotVector> EnemyAimTarget(const uint8_t* b, ShotVector origin) {
 } // namespace kk::coop
 
 #if defined(KK_DEV_TOOLS)
+REX_HOOK_RAW(sub_8241F0A8) {
+  const auto* owner=kk::coop::CombatOwner(base,kk::coop::EnemyFamily::NativeKna);
+  const auto binding=owner ? *owner:kk::coop::enemies::Binding{};
+  const auto target=owner ? kk::hfr::Load32(base,binding.vars+4084):0;
+  const auto launcher=owner ? kk::hfr::Load32(base,binding.vars+4092):0;
+  __imp__sub_8241F0A8(ctx,base);
+  static unsigned lines=0;
+  if (binding.actor && lines++<128 && kk::coop::RetainedDamageSource(base,binding))
+    REXLOG_INFO("COOP PROJECTILE native-throw actor={:08X} target={:08X} partner={} launcher={:08X} native-posted={} variant=KNa",
+        binding.actor,target,target==kk::PartnerBodyCombatActor(base),launcher,
+        launcher && !kk::hfr::Load32(base,binding.vars+4092));
+}
 REX_HOOK_RAW(sub_82663550) {
   __imp__sub_82663550(ctx,base);
   const auto* owner=kk::coop::CombatOwner(base,kk::coop::EnemyFamily::Bat);
@@ -3458,6 +3506,9 @@ REX_HOOK_RAW(sub_825043E0) {
 REX_HOOK_RAW(sub_82634978) { kk::coop::CrabPlayerTarget(ctx,base); }
 REX_HOOK_RAW(sub_8265BF60) { kk::coop::CrabFight(ctx,base); }
 REX_HOOK_RAW(sub_8266F740) { kk::coop::NativePlayerTarget(ctx,base); }
+REX_HOOK_RAW(sub_824509E0) { kk::coop::NativePlayerTarget(ctx,base,true); }
+REX_HOOK_RAW(sub_8242DB60) { kk::coop::NativePlayerReflex(ctx,base,true); }
+REX_HOOK_RAW(sub_82443F10) { kk::coop::KnaPlayerLaunch(ctx,base); }
 REX_HOOK_RAW(sub_824EF8A0) { kk::coop::BatPlayerTarget(ctx,base); }
 REX_HOOK_RAW(sub_82658ED8) { kk::coop::BatPlayerFight(ctx,base,__imp__sub_82658ED8); }
 REX_HOOK_RAW(sub_82652FF8) { kk::coop::BatPlayerFight(ctx,base,__imp__sub_82652FF8); }

@@ -69,6 +69,17 @@ void IdentityAndMatching() {
   Check(Family(0x82623058) == EnemyFamily::Crab && Family(0x8264DA70) == EnemyFamily::Crab &&
       Family(0x82641928) == EnemyFamily::Crab && LifeOffset(EnemyFamily::Crab) == 760,
       "chapter two crab tag/init/reflex and native firearm life are supported");
+  Check(Family(0x82444620)==EnemyFamily::NativeKna && Family(0x8242DB60)==EnemyFamily::NativeKna &&
+      Family(0x82606700)==EnemyFamily::Native && Initializer(0x82444620),
+      "KNa and Na retain separate native model identities");
+  Check(LifeOffset(EnemyFamily::NativeKna)==4380 && LifeOffset(EnemyFamily::Native)==4376 &&
+      LifeBytes(EnemyFamily::NativeKna)==4384 && NativeDeath(EnemyFamily::NativeKna).slot==0x82CC9B68 &&
+      NativeDeath(EnemyFamily::NativeKna).function==0x8243E370 &&
+      NativeDeath(EnemyFamily::Native).function==0x82600CC8,
+      "KNa health and death cannot use the Na hit accumulator or death block");
+  const auto kna_key=AuthoredKey(uint32_t(EnemyFamily::NativeKna),1,2,3);
+  Check(kna_key && kna_key!=AuthoredKey(uint32_t(EnemyFamily::Native),1,2,3),
+      "colocated native variants have different authored identities");
   auto crab = Enemy(); crab.id.family = EnemyFamily::Crab;
   Message decoded;
   Check(Decode(Packet(Snapshot(crab)), decoded) && decoded.enemies.enemies[0].id.family == EnemyFamily::Crab,
@@ -97,7 +108,7 @@ void SpiderCopyMatching() {
       "missing parent, invalid native ordinal and unbounded copy count refuse");
 }
 void ExpandedFamilies() {
-  for (uint16_t raw=uint16_t(EnemyFamily::Bat); raw<=uint16_t(EnemyFamily::Prey); ++raw) {
+  for (uint16_t raw=uint16_t(EnemyFamily::Bat); raw<=uint16_t(EnemyFamily::NativeKna); ++raw) {
     auto e=Enemy(); e.id.family=EnemyFamily(raw);
     Message decoded;
     Check(Decode(Packet(Snapshot(e)),decoded) && decoded.enemies.enemies[0].id==e.id,
@@ -116,7 +127,7 @@ void ExpandedFamilies() {
     Check(frame.records.size()==1 && frame.records[0].enemy.life==0,
         "expanded family death wins over a delayed live snapshot");
   }
-  auto invalid=Enemy(); invalid.id.family=EnemyFamily(uint16_t(EnemyFamily::Prey)+1);
+  auto invalid=Enemy(); invalid.id.family=EnemyFamily(uint16_t(EnemyFamily::NativeKna)+1);
   Check(!ValidEnemy(invalid),"unrecognized families still refuse");
   Check(StateLife(EnemyFamily::SwampCrawlerSmall) && StateLife(EnemyFamily::Pny) &&
       !LifeOffset(EnemyFamily::SwampCrawlerSmall) && !LifeOffset(EnemyFamily::Pny),
