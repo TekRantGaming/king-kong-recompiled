@@ -269,6 +269,39 @@ class Contract(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "duplicate JSON key valid"):
             w.read(path)
 
+    def boundary_tail(self, mutate=None, age=1.):
+        root = self.retained_series()
+        for role in ("host", "guest"):
+            d = fixture(role)
+            d.update(sample=4, captured_utc=1004.+age, playing_seconds=29.+age)
+            d["shared"]["story"]["watermark"] += 1 if role=="host" else 0
+            if mutate:
+                mutate(d, role)
+            (root / role / "world-g1-4.json").write_text(json.dumps(d), encoding="utf-8")
+        return w.series(root / "host", root / "guest")
+
+    def test_fresh_agreed_boundary_accepts_only_unchanged_native_tail(self):
+        result = self.boundary_tail()
+        self.assertEqual(result["status"], "PARTIAL_EQUAL")
+        self.assertIn("final_boundary", result)
+
+    def test_unagreed_tail_cannot_hide_native_mutation(self):
+        result = self.boundary_tail(lambda d, role: d["shared"]["enemies"]["rows"][E].update(health=40.) if role=="host" else None)
+        self.assertEqual(result["status"], "INVALID")
+
+    def test_unagreed_tail_cannot_hide_read_failure(self):
+        result = self.boundary_tail(lambda d, role: d.update(valid=False,errors=["native-player-dead"]) if role=="guest" else None)
+        self.assertEqual(result["status"], "INVALID")
+
+    def test_unagreed_tail_cannot_hide_new_checkpoint(self):
+        result = self.boundary_tail(lambda d, role: d["identity"].update(checkpoint=4))
+        self.assertEqual(result["status"], "INVALID")
+
+    def test_unagreed_tail_cannot_reuse_stale_boundary(self):
+        result = self.boundary_tail(age=10.)
+        self.assertEqual(result["status"], "INVALID")
+        self.assertIn("final quiet native comparison is stale", result["errors"])
+
     def test_earlier_desync_retained_after_healing(self):
         root = self.retained_series(lambda d: d["shared"]["enemies"]["rows"][E].update(health=40.))
         for role in ("host", "guest"):

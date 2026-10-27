@@ -280,6 +280,26 @@ def series(host_dir, guest_dir, count=3, health_tol=0.01, max_skew=3.0):
         if any(read(last[role])["captured_utc"] < rows[-1][1]["captured_utc"] - max_skew
                for role, rows in (("host", h), ("guest", g))):
             tail_errors.append("final quiet native comparison is stale")
+        if tail_errors == ["story watermark not agreed"]:
+            # Independently timed final captures can straddle a checksum event.
+            # Keep the last AGREED boundary only if it is fresh on both peers
+            # and every later native capture is valid and unchanged. A later
+            # checkpoint, native mutation, unreadable frame or stale window
+            # must still invalidate equality; known differences remain above.
+            unchanged = True
+            for role, rows in (("host", h), ("guest", g)):
+                anchor = read(last[role])
+                for _, sample in rows:
+                    if sample["captured_utc"] <= anchor["captured_utc"]:
+                        continue
+                    if (validate(sample, role) or sample["identity"] != anchor["identity"] or
+                            sample["evidence"] != anchor["evidence"] or sample["coverage"] != anchor["coverage"] or
+                            differences(shared(anchor), shared(sample), health_tol)):
+                        unchanged = False
+            if unchanged:
+                tail_errors = []
+                selected["final_boundary"] = {role: last[role] for role in ("host", "guest")}
+                selected["tail_validation"] = "fresh agreed boundary; all later native captures valid and unchanged"
         if tail_errors:
             selected["errors"] = sorted(set(tail_errors))
             selected["final_status"] = "INVALID"
