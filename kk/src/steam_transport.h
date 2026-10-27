@@ -4,6 +4,7 @@
 #include <deque>
 
 namespace kk::coop {
+enum class SteamSendResult { Sent, Ignored, Retry, Failed };
 // SDK adapter copies at most kMaxPacketBytes and releases every SDK message before returning.
 struct SteamBackendMessage {
   uint64_t peer = 0;
@@ -14,7 +15,7 @@ struct SteamBackendMessage {
 class ISteamMessagesBackend {
  public:
   virtual ~ISteamMessagesBackend() = default;
-  virtual bool Send(uint64_t peer, int channel, std::span<const uint8_t> bytes, bool reliable) = 0;
+  virtual SteamSendResult Send(uint64_t peer, int channel, std::span<const uint8_t> bytes, bool reliable) = 0;
   virtual bool Receive(int channel, SteamBackendMessage& out) = 0;
   virtual bool Accept(uint64_t peer) = 0;
   virtual void Close(uint64_t peer) = 0;

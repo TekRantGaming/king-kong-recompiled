@@ -20,7 +20,13 @@ SteamMessagesTransport::SteamMessagesTransport(ISteamMessagesBackend& backend, u
 SteamMessagesTransport::~SteamMessagesTransport() { Close(); }
 bool SteamMessagesTransport::Send(std::span<const uint8_t> bytes, bool reliable) {
   if (state_ != TransportState::Ready || !Valid(bytes, reliable)) return false;
-  if (!backend_.Send(partner_, reliable ? 0 : 1, bytes, reliable)) { state_ = TransportState::Failed; return false; }
+  const auto result = backend_.Send(partner_, reliable ? 0 : 1, bytes, reliable);
+  // A full Steam send buffer is temporary. The session retains reliable
+  // control messages until Send succeeds. Unreliable snapshots can be dropped.
+  if (result == SteamSendResult::Retry) return false;
+  if (result == SteamSendResult::Failed || (reliable && result == SteamSendResult::Ignored)) {
+    state_ = TransportState::Failed; return false;
+  }
   ++stats_.sent; return true;
 }
 bool SteamMessagesTransport::Receive(std::vector<uint8_t>& bytes) {

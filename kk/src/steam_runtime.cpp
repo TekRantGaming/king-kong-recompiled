@@ -67,6 +67,29 @@ constexpr size_t kMaxCommands = 64;
 double Now() {
   return std::chrono::duration<double>(std::chrono::steady_clock::now().time_since_epoch()).count();
 }
+void TraceSteamControl(std::span<const uint8_t> bytes, const char* direction) {
+  Message m;
+  if (!Decode(bytes,m)) return;
+  switch (m.type) {
+    case MessageType::StartPlan:
+      REXLOG_INFO("KK co-op Steam control: {} StartPlan chapter={} continue={}",direction,m.plan.chapter,m.plan.continue_game); break;
+    case MessageType::StartPlanAck:
+      REXLOG_INFO("KK co-op Steam control: {} StartPlanAck",direction); break;
+    case MessageType::SessionStart:
+      REXLOG_INFO("KK co-op Steam control: {} SessionStart chapter={} level={} start={} save-bytes={} chunks={} hash={:016X}",
+          direction,m.start.chapter,m.start.level,m.start.start,m.start.save_bytes,
+          (m.start.save_bytes+kSaveChunkBytes-1)/kSaveChunkBytes,m.start.save_hash); break;
+    case MessageType::SaveChunk:
+      if (m.save_chunk.offset==0 || m.save_chunk.offset+m.save_chunk.bytes.size()==kSessionSaveBytes)
+        REXLOG_INFO("KK co-op Steam control: {} SaveChunk offset={} bytes={} end={}",direction,
+            m.save_chunk.offset,m.save_chunk.bytes.size(),m.save_chunk.offset+m.save_chunk.bytes.size());
+      break;
+    case MessageType::Loaded: case MessageType::LoadRelease: case MessageType::LevelChange: case MessageType::FlowAbort:
+      REXLOG_INFO("KK co-op Steam control: {} type={} generation={} level={} start={}",
+          direction,unsigned(m.type),m.flow.generation,m.flow.level,m.flow.start); break;
+    default: break;
+  }
+}
 constexpr size_t kMaxInvites = 16, kMaxFriends = 256;
 // Declarations/types come from SDK 1.65. Every invocation goes through a resolved pointer.
 #define KK_STEAM_EXPORTS(X) \
@@ -234,7 +257,7 @@ struct SteamRuntime::Impl
   uint64_t epoch = 0, generation = 1, recorded_owner = 0, joining = 0, joining_owner = 0, validating = 0, partner = 0;
   SteamAPICall_t create_call = 0, join_call = 0;
   std::map<SteamAPICall_t, int> abandoned;
-  double operation_deadline = 0, next_friends = 0, next_lobby = 0, next_invite = 0;
+  double operation_deadline = 0, next_friends = 0, next_lobby = 0, next_invite = 0, next_send_warning = 0;
   int logged_friend_count = -1;
   std::string ready_token;
   LobbyStartReadiness start_readiness;
@@ -794,7 +817,11 @@ struct SteamRuntime::Impl
       return;
     }
     SteamNetworkingMessagesSessionFailed_t failure{};
-    if (Callback(m, failure)) { if (transport) transport->SessionFailed(failure.m_info.m_identityRemote.GetSteamID64()); return; }
+    if (Callback(m, failure)) {
+      REXLOG_WARN("KK co-op Steam session failed: state={} end={} detail={}",
+          int(failure.m_info.m_eState),failure.m_info.m_eEndReason,failure.m_info.m_szEndDebug);
+      if (transport) transport->SessionFailed(failure.m_info.m_identityRemote.GetSteamID64()); return;
+    }
     if (m.m_iCallback == SteamServersDisconnected_t::k_iCallback || m.m_iCallback == SteamShutdown_t::k_iCallback) {
       stop = true; Leave("Steam is needed for co-op");
       Status(SocialStatus::Unavailable, "Steam is needed for co-op");
@@ -854,6 +881,9 @@ struct SteamRuntime::Impl
     }
     if (session->State() != last_session_state) {
       last_session_state = session->State();
+      REXLOG_INFO("KK co-op Steam link: role={} state={} resumed={} rejection={}",
+          session->SessionRole()==Role::Host ? "host":"guest",StateName(last_session_state),resume_partner!=0,
+          RejectName(session->Rejection()));
       if (last_session_state == SessionState::Connected && presence_wanted && !model.lobby && !create_call) {
         presence_wanted = false; presence_lobby = true;
         create_call = api.SteamAPI_ISteamMatchmaking_CreateLobby(matchmaking, k_ELobbyTypeFriendsOnly, 2);
@@ -966,11 +996,23 @@ struct SteamRuntime::Impl
     api.SteamAPI_Shutdown(); initialized = false;
     if (self_test) test_log(test_result == 0 ? "Steam self-test: shutdown OK" : "Steam self-test: failed; shutdown OK");
   }
-  bool Send(uint64_t peer, int channel, std::span<const uint8_t> bytes, bool reliable) override {
+  SteamSendResult Send(uint64_t peer, int channel, std::span<const uint8_t> bytes, bool reliable) override {
     SteamNetworkingIdentity id{}; id.SetSteamID64(peer);
     const auto result = api.SteamAPI_ISteamNetworkingMessages_SendMessageToUser(messages, id, bytes.data(), uint32(bytes.size()),
         reliable ? k_nSteamNetworkingSend_ReliableNoNagle : k_nSteamNetworkingSend_UnreliableNoDelay, channel);
-    return result == k_EResultOK || (!reliable && result == k_EResultIgnored);
+    if (result == k_EResultOK) { TraceSteamControl(bytes,"sent"); return SteamSendResult::Sent; }
+    if (!reliable && result == k_EResultIgnored) return SteamSendResult::Ignored;
+    if (result != k_EResultLimitExceeded || Now() >= next_send_warning) {
+      next_send_warning = Now() + 2;
+      SteamNetConnectionInfo_t info{}; SteamNetConnectionRealTimeStatus_t quick{};
+      const auto state = api.SteamAPI_ISteamNetworkingMessages_GetSessionConnectionInfo(messages,id,&info,&quick);
+      Message decoded; Decode(bytes,decoded);
+      REXLOG_WARN("KK co-op Steam send: type={} channel={} bytes={} reliable={} result={} state={} end={} pending-reliable={} pending-unreliable={} unacked={} queue-us={}; {}",
+          unsigned(decoded.type),channel,bytes.size(),reliable,int(result),int(state),info.m_eEndReason,
+          quick.m_cbPendingReliable,quick.m_cbPendingUnreliable,quick.m_cbSentUnackedReliable,quick.m_usecQueueTime,
+          result==k_EResultLimitExceeded ? "buffer full, retry retained control" : "transport failed");
+    }
+    return result == k_EResultLimitExceeded ? SteamSendResult::Retry : SteamSendResult::Failed;
   }
   bool Receive(int channel, SteamBackendMessage& out) override {
     SteamNetworkingMessage_t* msg = nullptr;
@@ -978,7 +1020,10 @@ struct SteamRuntime::Impl
     out.peer = msg->m_identityPeer.GetSteamID64(); out.channel = msg->m_nChannel;
     out.reliable = (msg->m_nFlags & k_nSteamNetworkingSend_Reliable) != 0;
     out.oversized = msg->m_cbSize <= 0 || msg->m_cbSize > int(kMaxPacketBytes) || !msg->m_pData;
-    if (!out.oversized) { const auto* p = static_cast<const uint8_t*>(msg->m_pData); out.bytes.assign(p, p + msg->m_cbSize); }
+    if (!out.oversized) {
+      const auto* p = static_cast<const uint8_t*>(msg->m_pData); out.bytes.assign(p, p + msg->m_cbSize);
+      if (out.peer==partner && channel==0 && out.reliable) TraceSteamControl(out.bytes,"received");
+    }
     msg->Release(); return true;
   }
   bool Accept(uint64_t peer) override {
