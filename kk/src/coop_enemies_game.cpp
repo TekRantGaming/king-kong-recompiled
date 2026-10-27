@@ -880,6 +880,19 @@ uint32_t NearestPlayer(PPCContext& ctx, uint8_t* b, const Binding& owner, uint32
   if (crab) __imp__sub_82463A58(ctx,b);
   else if (owner.id.family==EnemyFamily::NativeKna) __imp__sub_8244B9A0(ctx,b);
   else __imp__sub_8266ACC8(ctx,b);
+#if defined(KK_DEV_TOOLS)
+  static const bool trace=std::getenv("KK_DEV_PROJECTILE_TRACE")!=nullptr;
+  static double next=0; static unsigned lines=0;
+  if (trace && !crab && (owner.id.family==EnemyFamily::Native || owner.id.family==EnemyFamily::NativeKna) &&
+      Now()>=next && lines++<64) {
+    next=Now()+1;
+    const auto matrix=Ptr(b,other,12,64);
+    REXLOG_INFO("COOP PROJECTILE native-player-candidate actor={:08X} family={} candidate={:08X} partner={} accepted={} excluded={:08X} required={:08X} first-rejected={:08X} object-flags={:08X} pos=({:.3f},{:.3f},{:.3f})",
+        owner.actor,uint16_t(owner.id.family),other,other==body,ctx.r3.u32,Load32(b,owner.vars+200),
+        Load32(b,owner.vars+204),Load32(b,owner.vars+212),Load32(b,other+4),
+        matrix ? LoadF(b,matrix+48):0,matrix ? LoadF(b,matrix+52):0,matrix ? LoadF(b,matrix+56):0);
+  }
+#endif
   return ctx.r3.u32 ? other : original;
 }
 // Refresh only the singular preferred-player index in the native selector.
@@ -2778,7 +2791,7 @@ void EnemyThrowProbe(PPCContext& ctx,uint8_t* b) {
     Store32(b,0x82CCBF6C,binding.actor); Store32(b,0x82CCBF70,binding.actor);
     ctx.r3.u64=2; ctx.r4.u64=block; __imp__sub_826FA3B0(ctx,b);
     count=12;
-    REXLOG_INFO("COOP PROJECTILE fixture-native-controller actor={:08X} family={} block={:08X} native={:08X} volley=3 synthetic-activation=true native-animation-and-attacks=true normal-traversal-unverified=true",
+    REXLOG_INFO("COOP PROJECTILE fixture-native-controller actor={:08X} family={} block={:08X} native={:08X} volley=3 synthetic-activation=true native-state-dispatch=true observe-native-animation-and-attacks=true normal-traversal-unverified=true",
         binding.actor,uint16_t(binding.id.family),block,Load32(b,block+20));
     return;
   }
