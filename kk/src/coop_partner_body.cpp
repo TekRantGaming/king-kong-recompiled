@@ -883,8 +883,8 @@ void PartnerWeapon(PPCContext& ctx,uint8_t* b,const Rig& rig,const coop::PlayerP
   if (!s.flash_left && s.weapon_flash>=0) {
     Scratch scratch(ctx,b);
     EffectSelection selection(b);
-    ctx.r3.u64=Load32(b,s.world+0x162b0); ctx.r4.s64=s.weapon_flash; ctx.r5.u64=21004; ctx.f1.f64=0;
-    __imp__sub_827F8E38(ctx,b);
+    ctx.r3.u64=rig.actor; ctx.r4.s64=s.weapon_flash; ctx.r5.u64=0; ctx.r6.u64=0;
+    __imp__sub_826FC0D8(ctx,b);
   }
   if (s.weapon_sound>=0 && (weapon!=2 || s.animation.fire_left<=0)) StopPartnerWeaponSound(ctx,b);
   const bool reload=gun && s.animation.last_action==weapon+0x72;
@@ -1134,8 +1134,10 @@ void PartnerWeaponFlash(PPCContext& ctx,uint8_t* b,const Rig& rig) {
     if (s.animation_shots<=4) REXLOG_INFO("PUPPET weapon flash actor={:08X} handle={} equipment={} muzzle={}",
         rig.actor,s.weapon_flash,p.weapon,XYZ(muzzle));
   }
-  // Reuse one glow for the entire lease. Native gfx_expire leaves glows
-  // fading for ten seconds; expiring one per round piles up query work.
+  // Reuse one effect for the entire lease, hiding it between confirmed shots.
+  // Setting the cone's length to zero does not hide its camera-facing triangle.
+  ctx.r3.u64=rig.actor; ctx.r4.s64=s.weapon_flash; ctx.r5.u64=0; ctx.r6.u64=1;
+  __imp__sub_826FC0D8(ctx,b);
   ctx.r3.u64=list; ctx.r4.s64=s.weapon_flash; ctx.r5.u64=21004; ctx.f1.f64=.45;
   __imp__sub_827F8E38(ctx,b);
   ctx.r3.u64=rig.actor; ctx.r4.s64=s.weapon_flash; ctx.r5.u64=21200; ctx.r6.u64=scratch.Vector(muzzle,0x100);
