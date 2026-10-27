@@ -143,7 +143,7 @@ struct Options {
   bool spawn_offset_set = false;
   Vec spawn_offset;
   bool on = true, borrow = true, partner = true, automatic = true;
-  bool spawn = false, nearest = false, index = false, valid = true, action_set = false;
+  bool spawn = false, nearest = false, index = false, slot = false, valid = true, action_set = false;
   uint32_t key = 0, ordinal = 0, census_index = 0, action = 0, item = 0;
   float max_units = 15.0f;
   Options() {
@@ -203,9 +203,10 @@ struct Options {
       }
     }
     index = fields[1] == "index" || spawn;
-    if (partner && (!index || fields.size() != 3)) { valid = false; return; }
+    slot = fields[1] == "slot"; // Stable native H identity for weapon proof runs.
+    if (partner && (!(index || slot) || fields.size() != 3)) { valid = false; return; }
     valid = (fields.size() == 3 || fields.size() == 5) &&
-            (index ? number(fields[2], census_index, 10) :
+            (index || slot ? number(fields[2], census_index, 10) && (!slot || (census_index>=1 && census_index<=12)) :
              number(fields[1], key, 16) && key != 0 && number(fields[2], ordinal, 10));
     if (valid && fields.size() == 5) {
       action_set = true;
@@ -934,15 +935,17 @@ void PartnerWeapon(PPCContext& ctx,uint8_t* b,const Rig& rig,const coop::PlayerP
     }
     // A main/child action swap can hide an already matching model. The native
     // installer returns early for that model, so explicitly show its slot.
-    ctx.r3.u64=rig.actor; ctx.r4.u64=tag; ctx.r5.u64=254; ctx.r6.u64=1;
-    __imp__sub_8286ADA0(ctx,b);
+    // Match group_child_swap(254) without overwriting swap_now with 254.
+    // Keeping the equipment selector avoids reinstalling its model each frame.
+    Store32(b,part+4,Load32(b,part+4)&~0x20200000u);
     // Native H clears the geometry flag 8 when the weapon is in hand.
     const auto mesh=Ptr(b,Ptr(b,part,20,4),0,12);
     ctx.r3.u64=part; ctx.r4.u64=0; ctx.r5.u64=8;
     __imp__sub_8270B008(ctx,b);
     if (s.displayed_weapon!=weapon) {
-      REXLOG_INFO("PUPPET weapon model actor={:08X} equipment={} tag={} variant={} part={:08X} geometry={:08X} material={:08X}",
-          rig.actor,weapon,tag,variant,part,mesh ? Load32(b,mesh) : 0,mesh ? Load32(b,mesh+4) : 0);
+      REXLOG_INFO("PUPPET weapon model actor={:08X} equipment={} tag={} variant={} part={:08X} geometry={:08X} material={:08X} flags={:08X}/{:08X} relation={:08X}",
+          rig.actor,weapon,tag,variant,part,mesh ? Load32(b,mesh) : 0,mesh ? Load32(b,mesh+4) : 0,
+          Load32(b,part),Load32(b,part+4),mesh ? Load32(b,mesh+8) : 0);
     }
   }
   if (s.animation.new_shot && gun) {
@@ -1704,7 +1707,8 @@ void CensusAndSelect(PPCContext& ctx, uint8_t* b, uint32_t w) {
       if (d > Opt().max_units) continue;
       if (!pick || d < closest - 0.0001f) { pick = &c; closest = d; tied = false; }
       else if (std::fabs(d - closest) <= 0.0001f) tied = true;
-    } else if (Opt().index ? c.index == Opt().census_index :
+    } else if (Opt().slot ? !s.humans.at(c.rig.actor).other_human && Load32(b,c.rig.vars+4)==Opt().census_index :
+               Opt().index ? c.index == Opt().census_index :
                c.key == Opt().key && c.ordinal == Opt().ordinal) {
       if (pick) { tied = true; break; }
       pick = &c;
