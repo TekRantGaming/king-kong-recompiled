@@ -459,6 +459,9 @@ bool SessionBeforeGo(PPCContext& ctx,uint8_t* base,uint32_t g) {
   if (!launched || !play::SessionActive() || !PoseAddress(g,0x6000)) return false;
   auto v=SessionFlowSnapshot();
   if (!v.active) return false;
+  // Once the reconnect window ends the host is ordinary local play. It must
+  // still be able to cross a native chapter boundary without a dead barrier.
+  if (v.host && v.reconnect_expired) return false;
   if (v.phase==FlowPhase::Failed) {
     RecordProgress(v);
     play::ReturnToLauncher("co-op session ended","play"); Store32(base,g+4,0); return false;
@@ -668,6 +671,7 @@ void SessionReloadFrame(uint8_t* base) {
     stopping=true;
     play::ReturnToLauncher("co-op reconnect cancelled","play"); return;
   }
+  if (v.host && v.reconnect_expired) { observer::SetPartnerSpectating(false); return; }
   if (v.active && !v.host && (v.reconnecting || v.reconnect_expired)) {
     REXLOG_INFO("KK co-op rejoin: guest waits for host; native simulation held");
     while (!stopping) {
