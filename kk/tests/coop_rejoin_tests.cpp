@@ -69,13 +69,26 @@ void SteamOutage(double duration,bool one_way) {
   Backend a,b; a.self=1; b.self=2; a.other=&b; b.other=&a;
   SteamMessagesTransport at(a,2,true),bt(b,1,true);
   CoopSession h(Config(true,11),at),g(Config(false,22),bt);
-  auto pump=[&](double from,double until) { for (double t=from;t<until;t+=.02) { h.Tick(t); g.Tick(t); } };
-  pump(0,2); Check(h.State()==SessionState::Connected && g.State()==SessionState::Connected,"Steam initial handshake");
+  FlowMailbox hb,gb; double next_life=0; uint32_t life_number=0;
+  auto pump=[&](double from,double until) { for (double t=from;t<until;t+=.02) {
+    if (hb.Snapshot().phase==FlowPhase::Playing && t>=next_life) {
+      Message life; life.type=MessageType::PlayerRevived;
+      life.life={hb.Snapshot().world,1,++life_number,1}; hb.Submit(life); next_life=t+.5;
+    }
+    h.Tick(t); hb.Exchange(h,t); g.Tick(t); gb.Exchange(g,t);
+  } };
+  pump(0,1); Check(h.State()==SessionState::Connected && g.State()==SessionState::Connected,"Steam initial handshake");
+  SessionStart start; start.chapter=7; start.level=303; start.start=1; hb.Begin(start,{});
+  pump(1,2);
+  Message loaded; loaded.type=MessageType::Loaded; loaded.flow=hb.Snapshot().world;
+  hb.Submit(loaded); gb.Submit(loaded); pump(2,3);
+  Check(hb.Snapshot().phase==FlowPhase::Playing && gb.Snapshot().phase==FlowPhase::Playing,"runtime flow starts before the outage");
   const auto old_epoch=a.packet_epoch;
   a.cut=true; b.cut=!one_way; at.SessionFailed(2);
-  pump(2,2+duration);
-  Check(h.State()!=SessionState::Ended && g.State()!=SessionState::Ended,"Steam outage retains session");
-  a.cut=b.cut=false; pump(2+duration,6+duration);
+  pump(3,3+duration);
+  Check(h.State()==SessionState::Lost && g.State()==SessionState::Lost,"both players detect full or one way outage without ending the campaign");
+  Check(hb.Snapshot().phase==FlowPhase::Playing,"host life heartbeats cannot overflow control flow during an outage");
+  a.cut=b.cut=false; pump(3+duration,6+duration);
   Check(h.State()==SessionState::Connected && g.State()==SessionState::Connected,"Steam outage recovers");
   auto gc=Config(false,33); CoopSession restarted(gc,bt);
   // The replacement process has its own monotonic clock starting at zero.

@@ -111,6 +111,7 @@ class CoopSession {
   uint32_t sequence_ = 0, pose_sequence_ = 0;
   bool hello_seen_ = false, ack_seen_ = false, pose_seen_ = false;
   double started_ = 0, last_receive_ = 0, last_hello_ = -1, last_ping_ = -1, last_pose_ = -1;
+  double last_pong_ = 0;
   uint64_t ping_stamp_ = 0;
   bool ping_pending_ = false;
   double ping_ms_ = 0;

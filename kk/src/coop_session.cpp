@@ -167,6 +167,7 @@ void CoopSession::Receive(const Message& packet, double now) {
     }
     partner_name_ = m.display_name;
     peer_process_=m.process_id;
+    last_pong_=now;
     if (config_.resume_token) wire_epoch_=PacketEpoch(config_.resume_token,
         config_.role==Role::Host ? config_.process_id : peer_process_,
         config_.role==Role::Guest ? config_.process_id : peer_process_);
@@ -230,7 +231,7 @@ void CoopSession::Receive(const Message& packet, double now) {
         }
         case MessageType::Pong:
           if (!ping_pending_ || m.clock_ms != ping_stamp_) return;
-          ping_ms_ = std::max(0.0, now * 1000 - double(m.clock_ms)); ping_pending_ = false; break;
+          ping_ms_ = std::max(0.0, now * 1000 - double(m.clock_ms)); ping_pending_ = false; last_pong_=now; break;
         case MessageType::PlayerPose:
           if (pose_seen_ && int32_t(m.sequence - pose_sequence_) <= 0) return;
           pose_seen_ = true; pose_sequence_ = m.sequence;
@@ -266,7 +267,7 @@ void CoopSession::Receive(const Message& packet, double now) {
     last_receive_ = now;
   }
   if (state_ == SessionState::Connecting && hello_seen_ && ack_seen_) Transition(SessionState::Connected);
-  else if (state_ == SessionState::Lost) Transition(SessionState::Connected);
+  else if (state_ == SessionState::Lost && (!config_.resume_token || now-last_pong_<3)) Transition(SessionState::Connected);
 }
 void CoopSession::Tick(double now, const std::optional<PlayerPose>& local, const enemies::Frame* frame, const CheatSet* cheats) {
   // Disabled is inert, including callbacks, polling, reads, writes and transport state queries.
@@ -292,7 +293,8 @@ void CoopSession::Tick(double now, const std::optional<PlayerPose>& local, const
       state_ == SessionState::Connecting && transport_.Stats().received == 0;
   if (waiting) started_ = now;
   const double timeout=config_.resume_token && ever_connected_ ? 120 : 20;
-  if (now - (state_ == SessionState::Connecting ? started_ : last_receive_) >= timeout) {
+  const double contact=config_.resume_token && ever_connected_ ? std::min(last_receive_,last_pong_) : last_receive_;
+  if (now - (state_ == SessionState::Connecting ? started_ : contact) >= timeout) {
     End(now); return;
   }
   if (state_ == SessionState::Connecting) {
@@ -305,7 +307,7 @@ void CoopSession::Tick(double now, const std::optional<PlayerPose>& local, const
     }
     return;
   }
-  if (now - last_receive_ >= 3) Transition(SessionState::Lost);
+  if (now-last_receive_>=3 || (config_.resume_token && now-last_pong_>=3)) Transition(SessionState::Lost);
   if (state_==SessionState::Connected && config_.role==Role::Host && local_camera_ &&
       now>=local_camera_->time && now-local_camera_->time<=.25 && ValidCameraPose(*local_camera_)) {
     const auto& p=*local_camera_;

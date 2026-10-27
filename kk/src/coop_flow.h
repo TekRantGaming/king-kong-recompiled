@@ -423,7 +423,8 @@ class FlowMailbox {
     if (session.State()!=SessionState::Connected) {
       // The host's checkpoints still advance while the partner is absent.
       // Keep them in the authoritative flow before building the rejoin start.
-      if (session.SessionRole()==Role::Host) for (const auto& m : local_) flow_.Local(m,now);
+      if (session.SessionRole()==Role::Host) for (const auto& m : local_)
+        if (!IsLifeMessage(m.type)) flow_.Local(m,now);
       local_.clear(); flow_.Tick(now); return;
     }
     if (pending_) { flow_.Begin(pending_->first,std::move(pending_->second),now); pending_.reset(); }
