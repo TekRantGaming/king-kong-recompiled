@@ -93,6 +93,7 @@ REX_EXTERN(__imp__sub_825491B0);
 REX_EXTERN(__imp__sub_8271ECF8);
 REX_EXTERN(__imp__sub_82663550);
 REX_EXTERN(__imp__sub_8241F0A8);
+REX_EXTERN(__imp__sub_8266D880);
 #endif
 #if defined(KK_DEV_TOOLS)
 REX_EXTERN(__imp__sub_82451A60);
@@ -2474,12 +2475,13 @@ bool NativeShot(PPCContext& ctx, uint8_t* b, const ShotIntent& shot, const ShotH
   // per-hit player adapters, use the validated body so aggro names the shooter.
   // Keep local Jack's native weapon tables and host cheat choices for damage.
   const auto player_cache=PlayerDamageCache(target.id.family);
-  // KNa8241ED88 consumes the native scalar without a Jack-only damage gate,
-  // then retains its real attacker4388 and chooses that actor as target4084.
-  const bool native_kna=target.id.family==EnemyFamily::NativeKna;
-  const auto body_candidate=(player_cache || native_kna) ? kk::PartnerBodyCombatActor(b) : 0;
+  // Na825F2698 and KNa8241ED88 both retain the real attacker and select it
+  // for retaliation. Neither consumer has a Jack-only damage gate. Preserve
+  // the guest as that source instead of making local Jack draw its aggro.
+  const bool native=target.id.family==EnemyFamily::Native || target.id.family==EnemyFamily::NativeKna;
+  const auto body_candidate=(player_cache || native) ? kk::PartnerBodyCombatActor(b) : 0;
   const auto cached_player=player_cache ? Load32(b,target.vars+player_cache) : 0;
-  const auto peer_body=body_candidate && (native_kna || cached_player==hero || cached_player==body_candidate) ? body_candidate : 0;
+  const auto peer_body=body_candidate && (native || cached_player==hero || cached_player==body_candidate) ? body_candidate : 0;
   const auto shooter=peer_body ? peer_body : hero;
   // Native type-4 pool layout verified in 8271E4E8 (.52:27465).
   constexpr uint32_t pool = 0x82C8EF30;
@@ -2693,6 +2695,76 @@ void BeforeAi(PPCContext& ctx, uint8_t* b, uint32_t w) {
   CombatBeforeAi(ctx, b);
 }
 #if defined(KK_DEV_TOOLS)
+void EnemyThrowProbe(PPCContext& ctx,uint8_t* b) {
+  static const double due=[] {
+    const auto* text=std::getenv("KK_DEV_ENEMY_THROW"); return text ? std::atof(text):-1.;
+  }();
+  static double next=due;
+  static unsigned count=0;
+  static const float advance=[] {
+    const auto* text=std::getenv("KK_DEV_ENEMY_THROW_ADVANCE");
+    const auto value=text ? std::strtof(text,nullptr):0.f;
+    return std::isfinite(value) && value>=0 && value<=5 ? value:0.f;
+  }();
+  const auto time=kk::DevSecondsSinceMenu();
+  if (due<0 || count>=12 || time<next || time>due+90 || !EnemyPartnerCombatReady() ||
+      !Scratch::CanUse(ctx)) return;
+  auto& s=Get();
+  const auto body=kk::PartnerBodyCombatActor(b);
+  if (!body) return;
+  const Binding* source=nullptr;
+  float distance=40;
+  for (const auto& [actor,binding]:s.bindings) {
+    if (binding.id.family!=EnemyFamily::Native && binding.id.family!=EnemyFamily::NativeKna) continue;
+    const auto* authority=AuthorityFor(binding.id);
+    const auto d=PlayerDistance(b,actor,body);
+    if (!authority || !authority->Runs(Side()) || authority->last.life<=0 ||
+        !ValidBinding(b,binding) || !(d<distance)) continue;
+    source=&binding; distance=d;
+  }
+  if (!source || distance<2) return;
+  const auto binding=*source;
+  const bool kna=binding.id.family==EnemyFamily::NativeKna;
+  const uint32_t launcher_offset=kna ? 4092:4096,target_offset=kna ? 4084:4088;
+  uint32_t projectile=Load32(b,binding.vars+(kna ? 4408:4400));
+  // Use the actor's own native lance template. A missing template means this
+  // encounter cannot exercise throwing; do not borrow a player's inventory.
+  const auto projectile_ai=Ptr(b,Ptr(b,projectile,24,8),4,88);
+  if (!projectile_ai || !Ptr(b,projectile_ai,64,568)) return;
+  if (Load32(b,binding.vars+launcher_offset)) return;
+  Scratch scratch(ctx,b);
+  constexpr uint32_t globals[]{0x82CCBF58,0x82CCBF5C,0x82CCBF60,0x82CCBF64,0x82CCBF68,0x82CCBF6C,0x82CCBF70};
+  struct Restore {
+    uint8_t* base; Binding binding; uint32_t globals[7],target,offset,launcher_offset;
+    ~Restore() {
+      if (Ptr(base,binding.ai,64,offset+4)==binding.vars && RetainedDamageSource(base,binding)) {
+        Store32(base,binding.vars+offset,target);
+        Store32(base,binding.vars+launcher_offset,0);
+      }
+      constexpr uint32_t cells[]{0x82CCBF58,0x82CCBF5C,0x82CCBF60,0x82CCBF64,0x82CCBF68,0x82CCBF6C,0x82CCBF70};
+      for (unsigned i=0;i<7;++i) Store32(base,cells[i],globals[i]);
+    }
+  } restore{b,binding,{},Load32(b,binding.vars+target_offset),target_offset,launcher_offset};
+  for (unsigned i=0;i<7;++i) restore.globals[i]=Load32(b,globals[i]);
+  const auto bm=Ptr(b,body,12,64); if (!bm) return;
+  const float dx=LoadF(b,bm+48)-LoadF(b,binding.matrix+48),dy=LoadF(b,bm+52)-LoadF(b,binding.matrix+52);
+  const auto length=std::hypot(dx,dy);
+  const auto move=length>2 ? std::min(advance,length-2):0.f;
+  const ShotVector start{LoadF(b,binding.matrix+48)+(move ? move*dx/length:0),
+      LoadF(b,binding.matrix+52)+(move ? move*dy/length:0),LoadF(b,binding.matrix+56)+1.2f};
+  const auto origin=scratch.Vec(start.x,start.y,start.z,0x100);
+  ctx.r3.u64=projectile; ctx.r4.u64=origin; __imp__sub_82715AC8(ctx,b);
+  projectile=ctx.r3.u32;
+  if (!PoseAddress(projectile,32) || !Ptr(b,Ptr(b,projectile,24,24),20,12)) return;
+  Store32(b,0x82CCBF64,binding.ai); Store32(b,0x82CCBF68,binding.ai);
+  Store32(b,0x82CCBF6C,binding.actor); Store32(b,0x82CCBF70,binding.actor);
+  Store32(b,binding.vars+launcher_offset,projectile); Store32(b,binding.vars+target_offset,body);
+  if (kna) __imp__sub_8241F0A8(ctx,b); else __imp__sub_825F2890(ctx,b);
+  ++count; next=time+4;
+  REXLOG_INFO("COOP PROJECTILE fixture-native-throw actor={:08X} family={} projectile={:08X} target={:08X} posted={} count={} distance={:.3f} origin=({:.3f},{:.3f},{:.3f}) advance={:.3f} synthetic-launch=true native-collision-and-damage=true authored-behavior-unverified=true",
+      binding.actor,uint16_t(binding.id.family),projectile,body,!Load32(b,binding.vars+launcher_offset),count,distance,
+      start.x,start.y,start.z,move);
+}
 void ProxyGrabTick(PPCContext& ctx,uint8_t* b) {
   static const bool enabled=[] { const auto* v=std::getenv("KK_DEV_NATIVE_GRABS"); return v && std::strcmp(v,"1")==0; }();
   if (!enabled || !Scratch::CanUse(ctx)) return;
@@ -2738,7 +2810,7 @@ void ProxyGrabTick(PPCContext& ctx,uint8_t* b) {
 void AfterAi(PPCContext& ctx, uint8_t* b, uint32_t w) {
   auto& s = Get();
 #if defined(KK_DEV_TOOLS)
-  if (Environment(b,w)) ProxyGrabTick(ctx,b);
+  if (Environment(b,w)) { ProxyGrabTick(ctx,b); EnemyThrowProbe(ctx,b); }
 #endif
   if (!s.prepared || !Connected() || !Environment(b, w)) { s.driving.clear(); return; }
   Scan(b);
@@ -3214,6 +3286,18 @@ bool EnemyCombatReference(const uint8_t* b, uint32_t owner, uint32_t ai, uint32_
   auto& s = Get();
   if (!s.prepared || !Connected() || !Environment(b, s.world) ||
       Now()-s.prepared_at > .5) return false;
+  // A native spear can retain the struck body or a homing target for several
+  // frames. These are combat references even though projectiles are not enemy
+  // snapshot actors. Require the live projectile layout and its independently
+  // bound, locally simulated enemy source before exempting an exact field.
+  if (Member(b,s.world,owner,true) && combat::ProjectileReference(owner,ai,vars,offset,
+      [&](uint32_t p) { return Load32(b,p); },[&](uint32_t p) { return Load16(b,p); },
+      [](uint32_t p,uint32_t bytes) { return PoseAddress(p,bytes); },[&](uint32_t actor) {
+        const auto source=s.bindings.find(actor);
+        if (source==s.bindings.end() || !RetainedDamageSource(b,source->second)) return false;
+        const auto* authority=AuthorityFor(source->second.id);
+        return authority && authority->Runs(Side());
+      })) return true;
   const auto binding = s.bindings.find(owner);
   if (binding == s.bindings.end() || binding->second.ai != ai || binding->second.vars != vars ||
       !ValidBinding(b, binding->second)) return false;
@@ -3223,6 +3307,7 @@ bool EnemyCombatReference(const uint8_t* b, uint32_t owner, uint32_t ai, uint32_
   if ((binding->second.id.family==EnemyFamily::Raptor && offset==7248) ||
       (binding->second.id.family==EnemyFamily::Crab && offset==764) ||
       (binding->second.id.family==EnemyFamily::Bat && offset==1032) ||
+      (binding->second.id.family==EnemyFamily::Native && offset==4384) ||
       (binding->second.id.family==EnemyFamily::NativeKna && offset==4388)) return true;
   if (binding->second.id.family==EnemyFamily::Raptor && PoseAddress(vars,7388) &&
       combat::CandidateReference(combat::CandidateTable{7296,7304,20},offset,Load32(b,vars+7296))) return true;
@@ -3425,6 +3510,24 @@ std::optional<ShotVector> EnemyAimTarget(const uint8_t* b, ShotVector origin) {
 } // namespace kk::coop
 
 #if defined(KK_DEV_TOOLS)
+REX_HOOK_RAW(sub_8266D880) {
+  static const bool trace=std::getenv("KK_DEV_PROJECTILE_TRACE")!=nullptr;
+  const auto* owner=trace ? kk::coop::CombatOwner(base,kk::coop::EnemyFamily::Native):nullptr;
+  if (trace && !owner) owner=kk::coop::CombatOwner(base,kk::coop::EnemyFamily::NativeKna);
+  const auto binding=owner ? *owner:kk::coop::enemies::Binding{};
+  const auto vector=[](uint64_t xy,uint64_t z) {
+    return kk::coop::ShotVector{std::bit_cast<float>(uint32_t(xy>>32)),
+        std::bit_cast<float>(uint32_t(xy)),std::bit_cast<float>(uint32_t(z>>32))};
+  };
+  const auto origin=vector(ctx.r4.u64,ctx.r5.u64),target=vector(ctx.r6.u64,ctx.r7.u64);
+  const auto caller=uint32_t(ctx.lr),result=ctx.r3.u32;
+  __imp__sub_8266D880(ctx,base);
+  static unsigned lines=0;
+  if (binding.actor && kk::coop::PoseAddress(result,12) && lines++<128)
+    REXLOG_INFO("COOP PROJECTILE native-aim actor={:08X} family={} caller={:08X} origin=({:.3f},{:.3f},{:.3f}) target=({:.3f},{:.3f},{:.3f}) velocity=({:.3f},{:.3f},{:.3f})",
+        binding.actor,uint16_t(binding.id.family),caller,origin.x,origin.y,origin.z,target.x,target.y,target.z,
+        kk::hfr::LoadF(base,result),kk::hfr::LoadF(base,result+4),kk::hfr::LoadF(base,result+8));
+}
 REX_HOOK_RAW(sub_8241F0A8) {
   const auto* owner=kk::coop::CombatOwner(base,kk::coop::EnemyFamily::NativeKna);
   const auto binding=owner ? *owner:kk::coop::enemies::Binding{};
@@ -3770,6 +3873,24 @@ REX_HOOK_RAW(sub_8243A3C0) {
   kk::coop::ShotRay(base, origin, point, object, caller);
 }
 REX_HOOK_RAW(sub_82634428) {
+#if defined(KK_DEV_TOOLS)
+  static const bool trace=std::getenv("KK_DEV_PROJECTILE_TRACE")!=nullptr;
+  const auto source=ctx.r6.u32,victim=ctx.r8.u32,result=ctx.r3.u32,flags=ctx.r5.u32,magnitude=ctx.r10.u32;
+  const auto caller=uint32_t(ctx.lr),projectile=kk::hfr::Load32(base,0x82CCBF6C);
+  const auto body=trace ? kk::PartnerBodyCombatActor(base):0;
+  const auto enemy=kk::coop::Get().bindings.find(source);
+  const bool observe=trace && kk::coop::EnemyConnectionReady() &&
+      enemy!=kk::coop::Get().bindings.end() && kk::coop::RetainedDamageSource(base,enemy->second);
+  const auto family=observe ? uint16_t(enemy->second.id.family):0;
+#endif
   kk::coop::ObjectsFirearm(ctx,base);
   if (!kk::coop::ForwardShotEvent(ctx, base)) __imp__sub_82634428(ctx, base);
+#if defined(KK_DEV_TOOLS)
+  static unsigned lines=0;
+  if (observe && lines++<256) {
+    const auto event=kk::coop::stimulus_debug::ReadHandle([&](uint32_t p){return kk::hfr::Load32(base,p);},result);
+    REXLOG_INFO("COOP PROJECTILE native-impact source={:08X} family={} projectile={:08X} victim={:08X} partner={} flags={:08X} magnitude={} caller={:08X} local-queued={} id={:08X}/{}",
+        source,family,projectile,victim,body && victim==body,flags,magnitude,caller,event.valid,event.id,event.generation);
+  }
+#endif
 }

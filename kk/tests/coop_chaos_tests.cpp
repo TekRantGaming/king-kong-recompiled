@@ -6,6 +6,9 @@
 #include "coop_ownership.h"
 #include "coop_story.h"
 #include "coop_desync.h"
+#include "coop_combat.h"
+#include "coop_stimulus_debug.h"
+#include <map>
 #include <cstdio>
 #include <cstdlib>
 #include <limits>
@@ -55,6 +58,33 @@ struct Pair {
 StoryEvent Event(uint32_t n=1) { return {1,101,n,0x123456789abcdef0ull,0xfedcba9876543210ull,1,n,StoryPhase::Advance}; }
 EnemyState Enemy() {
   EnemyState e; e.id={0x123456789abcdef0ull,1,EnemyFamily::Raptor}; e.life=100; return e;
+}
+void ProjectileSource() {
+  // Sparse native memory fixture. at() makes any unexpected dereference a
+  // failed process, never a successful mutation catch.
+  constexpr uint32_t actor=0x41000000,ext=0x41001000,ai=0x41002000,vars=0x41003000,
+      block=0x41004000,source=0x42000000;
+  std::map<uint32_t,uint32_t> words{{actor+24,ext},{ext+4,ai},{ai+64,vars},
+      {ai+80,2},{ai+82,2},{ai+32,block},{block+20,0x8258C5F8},{vars+232,source}};
+  bool bound=true,owned=true,retained=true;
+  const auto check=[&](uint32_t offset) {
+    return combat::ProjectileReference(actor,ai,vars,offset,
+        [&](uint32_t p){return words.at(p);},[&](uint32_t p){return uint16_t(words.at(p));},
+        [](uint32_t p,uint32_t bytes){return stimulus_debug::Address(p,bytes);},
+        [&](uint32_t p){return p==source && bound && owned && retained;});
+  };
+  Check(check(264) && check(364) && check(428),"owned spear keeps actual contact and homing references");
+  Check(!check(232) && !check(268),"thrower and adjacent words retain story protection");
+  bound=false; Check(!check(264),"unbound projectile source cannot excuse a story reference"); bound=true;
+  owned=false; Check(!check(264),"replica projectile cannot excuse a story reference"); owned=true;
+  retained=false; Check(!check(264),"destroyed or recycled enemy source cannot excuse a story reference"); retained=true;
+  words[vars+232]=source+4; Check(!check(264),"different source is not authenticated by a valid neighbor");
+  words[vars+232]=source;
+  words[ext+4]=ai+4; Check(!check(264),"projectile AI reuse refuses old binding"); words[ext+4]=ai;
+  words[ai+64]=vars+4; Check(!check(264),"projectile vars reuse refuses old binding"); words[ai+64]=vars;
+  words[block+20]=0x8258C5FC; Check(!check(264),"unknown track cannot borrow a projectile layout");
+  words[block+20]=0x8258C5F8; words[ai+82]=4097;
+  Check(!check(264),"out of range track table is refused before any extra read");
 }
 
 void Model() {
@@ -318,6 +348,7 @@ int main(int argc,char** argv) {
   else if(name=="false_quiet") FalseQuiet();
   else if(name=="shot_validator") ShotValidation();
   else if(name=="session_epoch") SessionEpoch();
+  else if(name=="projectile_source") ProjectileSource();
   else if(name=="udp_duplicate" || name=="udp_order") Reliable();
   else { std::fprintf(stderr,"unknown test\n"); return 2; }
   std::printf("PASS [%s]\n",test_name); return 0;

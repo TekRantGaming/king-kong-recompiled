@@ -157,6 +157,19 @@ void Codecs() {
   wire = Packet(Status()); wire.back() = 99; Check(!Decode(wire, decoded), "malformed wire condition refused");
 }
 void Replay() {
+  for (const auto track : {0x8258C5F8u,0x824DF570u}) {
+    const auto layout=NativeProjectile(track);
+    Check(layout.bytes && layout.source && !layout.Reference(layout.source),
+        "projectile source is never an exempted victim or homing reference");
+    for (const auto offset : track==0x8258C5F8u ? std::vector<uint32_t>{264,364,428} :
+         std::vector<uint32_t>{76,176,228}) {
+      Check(layout.Reference(offset),"native collision and homing target fields are combat references");
+      Check(!layout.Reference(offset-4) && !layout.Reference(offset+4),
+          "adjacent projectile words cannot exempt an authored story reference");
+    }
+    Check(!NativeProjectile(track+4).Reference(264) && !NativeProjectile(0).bytes,
+        "unknown and adjacent tracks have no projectile reference permission");
+  }
   for (const auto caller : {0x82473380u,0x8248C9A4u,0x8248D10Cu,0x824866F0u,0x82487D9Cu,
        0x824884B8u,0x82468C40u,0x8246B024u,0x8248FC34u}) {
     Check(NativeImpactProducer(EnemyFamily::VRex,caller),"audited direct native V Rex contact producer admitted");

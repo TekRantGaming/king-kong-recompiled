@@ -1,5 +1,6 @@
 #pragma once
 #include "coop_protocol.h"
+#include "coop_mut.h"
 #include <cmath>
 
 namespace kk::coop::combat {
@@ -49,6 +50,39 @@ inline bool NativeImpactProducer(EnemyFamily family,uint32_t caller) {
       return true;
     default: return false;
   }
+}
+struct ProjectileLayout {
+  uint32_t source = 0, bytes = 0;
+  bool Reference(uint32_t offset) const {
+    if (source == 232) return offset == 264 || offset == 364 || offset == 428;
+    if (source == 44) return offset == 76 || offset == 176 || offset == 228;
+    return false;
+  }
+};
+inline ProjectileLayout NativeProjectile(uint32_t track) {
+  // Javelin_launch and KPJ_launch retain real collision and homing targets.
+  // The source field is deliberately excluded: a player-owned projectile is
+  // not evidence that a story human is available as a partner body.
+  if (track == 0x8258C5F8) return {232, 568};
+  if (track == 0x824DF570) return {44, 384};
+  return {};
+}
+template <class U32, class U16, class Address, class Source>
+bool ProjectileReference(uint32_t actor, uint32_t ai, uint32_t vars, uint32_t offset,
+                         U32 u32, U16 u16, Address address, Source source_ready) {
+  if (!address(actor,32) || !address(ai,88) || !address(vars,4)) return false;
+  const auto ext=u32(actor+24);
+  if (!address(ext,8) || u32(ext+4)!=ai || u32(ai+64)!=vars) return false;
+  const auto first=u16(ai+80),last=u16(ai+82);
+  if (first>last || last>4096 || last-first>=64 || !address(ai,(last+12)*4)) return false;
+  for (uint32_t t=first;t<=last;++t) {
+    const auto block=u32(ai+(t+6)*4);
+    if (!address(block,24)) continue;
+    const auto layout=NativeProjectile(u32(block+20));
+    if (layout.Reference(offset) && address(vars,layout.bytes) &&
+        (COOP_MUT_IF("projectile_source") || source_ready(u32(vars+layout.source)))) return true;
+  }
+  return false;
 }
 inline bool RemoteOwner(EnemyOwner owner, EnemyOwner local, uint32_t generation,
                         uint32_t hit_generation, bool frozen) {
