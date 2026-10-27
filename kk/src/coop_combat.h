@@ -15,6 +15,24 @@ inline bool DamageClock(double hit_time, double host_pose_time) {
   return std::isfinite(hit_time) && std::isfinite(host_pose_time) &&
       hit_time >= host_pose_time-kMaxAge && hit_time <= host_pose_time+.5;
 }
+enum class GrabFeedback { Pending, Accepted, Release };
+inline bool NativeGrabOwnerReleased(const PlayerStatus& p,EnemyWorld world,uint64_t incarnation,
+                                   EnemyId enemy,uint32_t generation,uint32_t first_damage) {
+  return ValidPlayerStatus(p) && p.world==world && p.peer_grab_incarnation==incarnation &&
+      first_damage && p.peer_grab_number>=first_damage &&
+      (p.peer_grab_enemy!=enemy || p.peer_grab_generation!=generation);
+}
+inline GrabFeedback NativeGrabFeedback(const PlayerStatus& p, EnemyWorld world,uint64_t incarnation,
+                                      EnemyId enemy,uint32_t generation,uint32_t first_damage,
+                                      double started,double received,double now) {
+  if (COOP_MUT_IF("grab_feedback")) return GrabFeedback::Accepted;
+  if (!ValidPlayerStatus(p) || p.world!=world || p.incarnation!=incarnation ||
+      p.condition==PlayerCondition::Dead || (!p.grab_ready && !p.grab_enemy.source) || !Fresh(received,now) ||
+      !std::isfinite(started) || now<started || !first_damage) return GrabFeedback::Release;
+  if (p.grab_enemy==enemy && p.grab_generation==generation && p.grab_kind==25) return GrabFeedback::Accepted;
+  if (p.grab_enemy.source || p.last_damage>=first_damage || now-started>kMaxAge) return GrabFeedback::Release;
+  return GrabFeedback::Pending;
+}
 // Exact pairs from Raptor bite8256D2F0 and grab825CF4D8. Zero-strength
 // release reactions still have native meaning; they are not invented damage.
 inline bool RaptorHit(uint32_t flags, uint32_t magnitude) {

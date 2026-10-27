@@ -12,7 +12,7 @@
 
 namespace kk::coop {
 constexpr uint32_t kMagic = 0x4B4B4331;  // KKC1, network byte order throughout
-constexpr uint16_t kProtocolVersion = 26; // Authenticated process reconnect and host checkpoint rejoin.
+constexpr uint16_t kProtocolVersion = 27; // Native scorpion grab acceptance and release feedback.
 constexpr size_t kMaxDisplayNameBytes = 32;
 // Valid UTF-8, no controls or invisible direction/line formatting, bounded at a codepoint.
 // Empty or wholly invalid input becomes "Partner". Never log the input or result.
@@ -266,6 +266,14 @@ struct PlayerStatus {
   uint64_t incarnation = 0;
   uint32_t number = 0, last_damage = 0; // processed, not necessarily injured
   PlayerCondition condition = PlayerCondition::Alive;
+  bool grab_ready = false;
+  EnemyId grab_enemy{}; // Actual local native holder, expressed as a canonical enemy identity.
+  uint32_t grab_generation = 0;
+  uint8_t grab_kind = 0; // Audited native scorpion kind25, or zero with an empty holder.
+  uint64_t peer_grab_incarnation = 0;
+  uint32_t peer_grab_number = 0; // First real damage event of the latest outgoing grab episode.
+  EnemyId peer_grab_enemy{}; // Empty after the owner natively releases that episode.
+  uint32_t peer_grab_generation = 0;
 };
 bool ValidDamageEvent(const DamageEvent& damage);
 bool ValidPlayerStatus(const PlayerStatus& status);

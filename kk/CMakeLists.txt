@@ -394,7 +394,7 @@ if(KK_DEV_TOOLS)
         target_link_libraries(kk-chaos-tests PRIVATE ws2_32)
     endif()
     foreach(case model profiles outages ownership_generation story_duplicate story_world
-            digest_compare false_quiet shot_validator session_epoch udp_duplicate udp_order projectile_source impact_selector)
+            digest_compare false_quiet shot_validator session_epoch udp_duplicate udp_order projectile_source impact_selector grab_feedback)
         add_test(NAME coop-chaos-${case} COMMAND kk-chaos-tests ${case})
         set_tests_properties(coop-chaos-${case} PROPERTIES TIMEOUT 180 RUN_SERIAL TRUE ENVIRONMENT "COOP_MUT=")
     endforeach()

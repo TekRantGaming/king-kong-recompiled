@@ -335,6 +335,43 @@ void ProfileScenario(const char* name,uint32_t seed) {
   std::printf("actual-core profile=%s seed=%u story=%u poses=%llu/%llu converged=yes native-hooks=absent\n",name,seed,applied,
       (unsigned long long)p.host.Poses().received,(unsigned long long)p.guest.Poses().received);
 }
+void GrabFeedback() {
+  using F=combat::GrabFeedback;
+  const EnemyWorld world{204,3,5}; const EnemyId source{123,4,EnemyFamily::Scorpion};
+  PlayerStatus p{world,9,1,0,PlayerCondition::Alive}; p.grab_ready=true;
+  const auto feedback=[&](const PlayerStatus& status,double now=10.) {
+    return combat::NativeGrabFeedback(status,world,9,source,2,7,9.8,9.9,now);
+  };
+  Check(feedback(p)==F::Pending,"unprocessed native request waits briefly for actual acceptance");
+  p.grab_enemy=source; p.grab_generation=2; p.grab_kind=25;
+  Check(feedback(p)==F::Accepted,"matching native holder and ownership generation confirm the claim");
+  auto changed=p; changed.grab_generation=3;
+  Check(feedback(changed)==F::Release,"a different ownership generation cannot confirm a grab");
+  changed=p; changed.world.serial++;
+  Check(feedback(changed)==F::Release,"a different world cannot confirm a grab");
+  changed=p; changed.incarnation++;
+  Check(feedback(changed)==F::Release,"a replacement life cannot inherit a native grab");
+  changed=p; changed.grab_enemy.source++;
+  Check(feedback(changed)==F::Release,"another native holder does not acknowledge this source");
+  Check(feedback(p,11.1)==F::Release,"stale confirmation cannot keep a native attachment alive");
+  p.grab_enemy={}; p.grab_kind=0; p.grab_generation=0; p.last_damage=7;
+  Check(feedback(p)==F::Release,"processed first damage without a native holder releases the host claim");
+  p.last_damage=0;
+  Check(combat::NativeGrabFeedback(p,world,9,source,2,7,8.8,9.9,10)==F::Release,
+      "an unacknowledged request has a bounded lifetime");
+  p.grab_ready=false;
+  Check(feedback(p)==F::Release,"native unavailability ends the offer");
+  p.grab_ready=true; p.peer_grab_incarnation=9; p.peer_grab_number=6;
+  Check(!combat::NativeGrabOwnerReleased(p,world,9,source,2,7),"old owner release cannot end a later native episode");
+  p.peer_grab_number=7;
+  Check(combat::NativeGrabOwnerReleased(p,world,9,source,2,7),"owner release ends the exact incoming episode");
+  p.peer_grab_enemy=source; p.peer_grab_generation=2;
+  Check(!combat::NativeGrabOwnerReleased(p,world,9,source,2,7),"live owner claim is retained");
+  p.peer_grab_generation=3;
+  Check(combat::NativeGrabOwnerReleased(p,world,9,source,2,7),"owner generation replacement ends the old claim");
+  p.peer_grab_incarnation=8;
+  Check(!combat::NativeGrabOwnerReleased(p,world,9,source,2,7),"release from a prior local life is ignored");
+}
 void Profiles() {
   // 40 seeds per profile, 200 real core scenarios. Virtual time, real loopback
   // sockets, real framing/ACKs/nonces, independent peer clocks, no game process.
@@ -373,6 +410,7 @@ int main(int argc,char** argv) {
   else if(name=="session_epoch") SessionEpoch();
   else if(name=="projectile_source") ProjectileSource();
   else if(name=="impact_selector") ImpactSelector();
+  else if(name=="grab_feedback") GrabFeedback();
   else if(name=="udp_duplicate" || name=="udp_order") Reliable();
   else { std::fprintf(stderr,"unknown test\n"); return 2; }
   std::printf("PASS [%s]\n",test_name); return 0;

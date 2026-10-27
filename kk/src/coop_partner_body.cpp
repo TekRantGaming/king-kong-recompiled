@@ -1064,6 +1064,7 @@ void PartnerBodyAim(PPCContext& ctx,uint8_t* b,uint32_t actor,uint32_t ai) {
       !s.partner.fresh || !s.Validate(b,s.world,rig) || !Scratch::CanUse(ctx) ||
       s.humans.at(actor).other_human) return;
   const auto& p=*s.partner.partner;
+  if (coop::EnemyPartnerGrabAction(b,actor)!=UINT32_MAX) return;
   const float body_yaw=std::atan2(s.facing.y,s.facing.x);
   const float yaw=body_yaw+std::clamp(std::remainder(p.facing-body_yaw,6.283185307f),-1.22f,1.22f);
   const float pitch=std::clamp(p.pitch+s.animation.GesturePitch(),-.96f,.96f);
@@ -2073,6 +2074,13 @@ void PartnerBodyAfterAi(PPCContext& ctx, uint8_t* b, uint32_t w) {
     if (s.selected_copy && !human && p.item == 0 && ReadRig(b,s.hero,jack_bank) &&
         rig.table == jack_bank.table && LoadedAction(b,rig,p.action))
       choice = coop::puppet::Action{p.action,0,0};
+    const auto grab=coop::EnemyPartnerGrabAction(b,rig.actor);
+    if (grab!=UINT32_MAX && human) {
+      if (const auto item=LoadedItem(b,rig,uint16_t(grab))) {
+        choice=coop::puppet::Action{uint16_t(grab),*item,0};
+        s.animation.fire_left=0; s.animation.use_left=0; s.animation.land_left=0;
+      }
+    }
     if (choice && !LoadedAction(b,rig,choice->action,choice->item)) choice.reset();
     if (choice) {
       s.action = choice->action; s.item = choice->item;

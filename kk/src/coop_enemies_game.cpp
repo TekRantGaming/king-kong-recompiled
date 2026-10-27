@@ -88,6 +88,12 @@ REX_EXTERN(__imp__sub_8271E760);
 REX_EXTERN(__imp__sub_8271E968);
 REX_EXTERN(__imp__sub_8271EBE8);
 REX_EXTERN(__imp__sub_8271E4E8);
+REX_EXTERN(__imp__sub_825491B0);
+REX_EXTERN(__imp__sub_8271ECF8);
+REX_EXTERN(__imp__sub_826FB0A0);
+REX_EXTERN(__imp__sub_826F9C60);
+REX_EXTERN(__imp__sub_8271E450);
+REX_EXTERN(__imp__sub_8271E290);
 #if defined(KK_DEV_TOOLS)
 REX_EXTERN(__imp__sub_825491B0);
 REX_EXTERN(__imp__sub_8271ECF8);
@@ -523,18 +529,27 @@ struct State {
   bool shooting = false, shot_resolved = false;
   ShotIntent shot;
   InventoryState shot_inventory;
-#if defined(KK_DEV_TOOLS)
-  struct ProxyGrab {
+  struct PeerGrab {
     uint32_t actor=0,ai=0,vars=0,id=UINT32_MAX,generation=0;
     uint32_t client=0,enabled=0,proposal=0;
-  } proxy_grab;
-  struct LocalGrabProbe {
     Binding source{};
-    uint32_t hero=0,ai=0,vars=0,id=UINT32_MAX,generation=0,ownership_generation=0;
+    uint64_t incarnation=0;
+    uint32_t first_damage=0,ownership_generation=0;
+    double started=0;
+    bool experimental=false,client_ready=false;
+  } peer_grab;
+  struct LocalNativeGrab {
+    Binding source{};
+    uint32_t hero=0,ai=0,vars=0,id=UINT32_MAX,generation=0,ownership_generation=0,first_damage=0;
     uint64_t incarnation=0;
     bool ended=false;
     uint32_t observed_state=UINT32_MAX,observed_holder=UINT32_MAX,observed_attachment=UINT32_MAX;
-  } local_grab_probe;
+  } local_native_grab;
+  struct SentGrab {
+    EnemyId enemy{}; uint64_t incarnation=0;
+    uint32_t number=0,generation=0; bool active=false;
+  } sent_grab;
+#if defined(KK_DEV_TOOLS)
   uint32_t shot_hit_object = 0;
   bool shot_matched = false;
   const char* shot_hit_reason = "no-hit";
@@ -571,9 +586,10 @@ struct State {
     next_damage = next_status = 0; pending_damage.clear(); outgoing_damage.clear(); sent_status.reset();
     damage_replay = {}; status_replay = {}; injecting_damage = false;
     next_status_time = 0; partner_status_time = -1;
+    peer_grab={};
+    local_native_grab={};
+    sent_grab={};
 #if defined(KK_DEV_TOOLS)
-    proxy_grab={};
-    local_grab_probe={};
     raptor_logs.clear(); raptor_candidate_lines = 0;
     combat_targets.clear(); targets_host = targets_guest = hits_host = 0; next_targets = 0;
     diagnostic_keys.clear(); ambiguous_logged.clear();
@@ -1738,13 +1754,24 @@ void CombatContext(const uint8_t* b) {
     s.next_status_time = 0; s.pending_damage.clear();
   }
 }
+void CaptureNativeGrabStatus(const uint8_t*,uint32_t,uint32_t,uint32_t,PlayerStatus&);
+void PeerGrabTick(PPCContext&,uint8_t*);
 void PublishPlayerStatus(const uint8_t* b) {
   auto& s = Get();
   if (!s.prepared || !Connected() || !Environment(b, s.world) ||
       !s.combat_epoch || s.combat_epoch != s.link.epoch || !s.incarnation) return;
   const auto h = ReadHumanStatus(b); if (!h || h->hero != s.combat_hero || h->ai != s.combat_ai || h->vars != s.combat_vars) return;
   PlayerStatus p{s.identity, s.incarnation, s.next_status+1, s.damage_replay.Last(), h->condition};
-  const bool changed = !s.sent_status || p.condition != s.sent_status->condition || p.last_damage != s.sent_status->last_damage;
+  CaptureNativeGrabStatus(b,h->hero,h->ai,h->vars,p);
+  if (s.sent_grab.number) {
+    p.peer_grab_incarnation=s.sent_grab.incarnation; p.peer_grab_number=s.sent_grab.number;
+    if (s.sent_grab.active) { p.peer_grab_enemy=s.sent_grab.enemy; p.peer_grab_generation=s.sent_grab.generation; }
+  }
+  const bool changed = !s.sent_status || p.condition != s.sent_status->condition || p.last_damage != s.sent_status->last_damage ||
+      p.grab_ready!=s.sent_status->grab_ready || p.grab_enemy!=s.sent_status->grab_enemy ||
+      p.grab_generation!=s.sent_status->grab_generation || p.grab_kind!=s.sent_status->grab_kind ||
+      p.peer_grab_incarnation!=s.sent_status->peer_grab_incarnation || p.peer_grab_number!=s.sent_status->peer_grab_number ||
+      p.peer_grab_enemy!=s.sent_status->peer_grab_enemy || p.peer_grab_generation!=s.sent_status->peer_grab_generation;
   if (!changed && Now() < s.next_status_time) return;
   if (!p.number) return; // Do not wrap a replay sequence.
   Message m; m.type = MessageType::PlayerStatus; m.epoch = s.combat_epoch; m.player_status = p;
@@ -1756,13 +1783,15 @@ void PublishPlayerStatus(const uint8_t* b) {
 #endif
   }
 }
+bool LocalNativeGrabEnabled() {
 #if defined(KK_DEV_TOOLS)
-bool LocalGrabProbeEnabled() {
-  static const bool enabled=[] { const auto* v=std::getenv("KK_DEV_NATIVE_GRAB_RECEIVE"); return v && std::strcmp(v,"1")==0; }();
-  return enabled;
+  static const int override=[] { const auto* v=std::getenv("KK_DEV_NATIVE_GRAB_RECEIVE"); return v ? (std::strcmp(v,"1")==0 ? 1:0):-1; }();
+  if (override>=0) return override!=0;
+#endif
+  return true;
 }
-stimulus_debug::Record LocalGrabProbeRecord(const uint8_t* b) {
-  const auto& g=Get().local_grab_probe;
+stimulus_debug::Record LocalNativeGrabRecord(const uint8_t* b) {
+  const auto& g=Get().local_native_grab;
   const auto read=[&](uint32_t p){return Load32(b,p);};
   const auto pool=stimulus_debug::ReadPool(read,65);
   if (!pool.valid || pool.capacity>4096 || (g.id>>24)!=65) return {};
@@ -1770,20 +1799,20 @@ stimulus_debug::Record LocalGrabProbeRecord(const uint8_t* b) {
   if (!record.valid || record.generation!=g.generation || record.source!=g.hero || record.target!=g.source.actor) return {};
   return record;
 }
-void LocalGrabProbeRelease(PPCContext& ctx,uint8_t* b,const char* reason) {
-  auto& g=Get().local_grab_probe;
-  if (LocalGrabProbeRecord(b).valid && Scratch::CanUse(ctx)) {
+void LocalNativeGrabRelease(PPCContext& ctx,uint8_t* b,const char* reason) {
+  auto& g=Get().local_native_grab;
+  if (LocalNativeGrabRecord(b).valid && Scratch::CanUse(ctx)) {
     Scratch scratch(ctx,b); const auto handle=scratch.Vec(0,0,0,0x100);
     Store32(b,handle,g.id); Store32(b,handle+4,g.generation);
     ctx.r3.u64=handle; ctx.r4.u64=0; __imp__sub_8271ECF8(ctx,b);
   }
   g.ended=true;
-  REXLOG_INFO("COOP GRAB guest-probe release reason={} source={:08X} hero={:08X} native-controller-cleanup=true shipping-bridge=false",reason,g.source.actor,g.hero);
+  REXLOG_INFO("COOP GRAB guest release reason={} source={:08X} hero={:08X} native-controller-cleanup=true bridge=scorpion",reason,g.source.actor,g.hero);
 }
-bool LocalGrabProbeDamage(PPCContext& ctx,uint8_t* b,const DamageEvent& d,const Binding& source,
+bool LocalNativeGrabDamage(PPCContext& ctx,uint8_t* b,const DamageEvent& d,const Binding& source,
                           uint32_t hero,uint32_t ai,uint32_t vars) {
-  if (!LocalGrabProbeEnabled() || source.id.family!=EnemyFamily::Scorpion || d.projectile) return true;
-  auto& s=Get(); auto& g=s.local_grab_probe;
+  if (!LocalNativeGrabEnabled() || source.id.family!=EnemyFamily::Scorpion || d.projectile) return true;
+  auto& s=Get(); auto& g=s.local_native_grab;
   const bool start=d.flags==3 && d.magnitude==10;
   const bool follow=(d.flags==5 && d.magnitude==10) || ((d.flags==256 || d.flags==512) && !d.magnitude);
   if (!start && !follow) return true;
@@ -1791,8 +1820,8 @@ bool LocalGrabProbeDamage(PPCContext& ctx,uint8_t* b,const DamageEvent& d,const 
     const auto* authority=AuthorityFor(source.id);
     if (!authority || authority->dead || authority->last.life<=0) return false;
     if (g.hero==hero && g.ai==ai && g.vars==vars && g.source.actor==source.actor &&
-        g.incarnation==s.incarnation && !g.ended && LocalGrabProbeRecord(b).valid) return true;
-    if (LocalGrabProbeRecord(b).valid) return false; // Preserve an existing native claim.
+        g.incarnation==s.incarnation && !g.ended && LocalNativeGrabRecord(b).valid) return true;
+    if (LocalNativeGrabRecord(b).valid) return false; // Preserve an existing native claim.
     const auto init=Ptr(b,0x82CC8C58,0,24);
     if (!PoseAddress(vars,15688) || !init || Load32(b,init+20)!=0x825ED5F8) return false;
     const auto result=ctx.r1.u32+0x180;
@@ -1804,44 +1833,74 @@ bool LocalGrabProbeDamage(PPCContext& ctx,uint8_t* b,const DamageEvent& d,const 
     const bool accepted=ctx.r3.u32==hero && record.valid && record.source==hero &&
         record.target==source.actor && (record.id>>24)==65;
     g={}; g.source=source; g.hero=hero; g.ai=ai; g.vars=vars; g.incarnation=s.incarnation;
-    g.id=record.id; g.generation=record.generation; g.ownership_generation=d.generation; g.ended=!accepted;
-    REXLOG_INFO("COOP GRAB guest-probe claim source={:08X} hero={:08X} accepted={} native={:08X}/{} mode={} holder={:08X} state={} shipping-bridge=false",
+    g.id=record.id; g.generation=record.generation; g.ownership_generation=d.generation; g.first_damage=d.number; g.ended=!accepted;
+    REXLOG_INFO("COOP GRAB guest claim source={:08X} hero={:08X} accepted={} native={:08X}/{} mode={} holder={:08X} state={} bridge=scorpion",
         source.actor,hero,accepted,g.id,g.generation,Load32(b,vars+4948),Load32(b,vars+4604),Load32(b,vars+2712));
     return accepted;
   }
   const bool active=g.hero==hero && g.ai==ai && g.vars==vars && g.source.actor==source.actor &&
-      g.incarnation==s.incarnation && !g.ended && LocalGrabProbeRecord(b).valid;
+      g.incarnation==s.incarnation && !g.ended && LocalNativeGrabRecord(b).valid;
   if (!active) {
     static unsigned lines=0;
-    if (lines++<64) REXLOG_INFO("COOP GRAB guest-probe follow refused source={:08X} flags={} magnitude={} reason=no-live-native-claim shipping-bridge=false",source.actor,d.flags,d.magnitude);
+    if (lines++<64) REXLOG_INFO("COOP GRAB guest follow refused source={:08X} flags={} magnitude={} reason=no-live-native-claim bridge=scorpion",source.actor,d.flags,d.magnitude);
     return false;
   }
-  if (d.flags==512) LocalGrabProbeRelease(ctx,b,"authoritative-timeout");
+  if (d.flags==512) LocalNativeGrabRelease(ctx,b,"authoritative-timeout");
   return true;
 }
-void LocalGrabProbeTick(PPCContext& ctx,uint8_t* b) {
-  if (!LocalGrabProbeEnabled()) return;
-  auto& s=Get(); auto& g=s.local_grab_probe;
+void LocalNativeGrabTick(PPCContext& ctx,uint8_t* b) {
+  auto& s=Get(); auto& g=s.local_native_grab;
   if (!g.hero) return;
   if (Load32(b,0x82CCBF7C)!=g.hero || Ptr(b,Ptr(b,g.hero,24,8),4,88)!=g.ai ||
       Ptr(b,g.ai,64,15688)!=g.vars || s.incarnation!=g.incarnation) { g={}; return; }
   const auto* authority=AuthorityFor(g.source.id);
-  if (!g.ended && (!Connected() || !RetainedDamageSource(b,g.source) || !authority || authority->dead || authority->last.life<=0 ||
+  if (!g.ended && (!LocalNativeGrabEnabled() || !Connected() || !combat::Fresh(s.partner_status_time,Now()) ||
+      combat::NativeGrabOwnerReleased(s.status_replay.Status(),s.identity,g.incarnation,Canonical(g.source.id),g.ownership_generation,g.first_damage) ||
+      !RetainedDamageSource(b,g.source) || !authority || authority->dead || authority->last.life<=0 ||
       !combat::RemoteOwner(authority->owner,Side(),authority->generation,g.ownership_generation,authority->Frozen())))
-    LocalGrabProbeRelease(ctx,b,"source-or-session-unavailable");
-  if (!g.ended && !LocalGrabProbeRecord(b).valid) {
+    LocalNativeGrabRelease(ctx,b,"source-or-session-unavailable");
+  if (!g.ended && !LocalNativeGrabRecord(b).valid) {
     g.ended=true;
-    REXLOG_INFO("COOP GRAB guest-probe ended-by-native-controller source={:08X} hero={:08X} shipping-bridge=false",g.source.actor,g.hero);
+    REXLOG_INFO("COOP GRAB guest ended-by-native-controller source={:08X} hero={:08X} bridge=scorpion",g.source.actor,g.hero);
   }
   const auto state=Load32(b,g.vars+2712),holder=Load32(b,g.vars+4604),attachment=Load32(b,g.vars+4944);
   if (state!=g.observed_state || holder!=g.observed_holder || attachment!=g.observed_attachment) {
     g.observed_state=state; g.observed_holder=holder; g.observed_attachment=attachment;
     static unsigned lines=0;
-    if (lines++<128) REXLOG_INFO("COOP GRAB guest-probe controller source={:08X} hero={:08X} state={} holder={:08X} kind={} attachment={:08X} live-claim={} ended={} shipping-bridge=false",
-        g.source.actor,g.hero,state,holder,Load32(b,g.vars+4948),attachment,LocalGrabProbeRecord(b).valid,g.ended);
+    if (lines++<128) REXLOG_INFO("COOP GRAB guest controller source={:08X} hero={:08X} state={} holder={:08X} kind={} attachment={:08X} live-claim={} ended={} bridge=scorpion",
+        g.source.actor,g.hero,state,holder,Load32(b,g.vars+4948),attachment,LocalNativeGrabRecord(b).valid,g.ended);
   }
 }
-#endif
+bool HumanGrabLayout(const uint8_t* b,uint32_t ai,uint32_t vars) {
+  const auto model=Ptr(b,ai,0,4),definition=Ptr(b,model,0,8);
+  const auto bytes=definition ? Load32(b,definition+4):0;
+  return bytes>=15688 && bytes<=1048576 && Ptr(b,ai,64,bytes)==vars;
+}
+bool HumanGrabClient(const uint8_t* b,uint32_t hero,uint32_t ai) {
+  const auto count=Load32(b,ai+68),events=count<=64 ? Ptr(b,ai,72,12*count):0;
+  if (!events) return false;
+  for (uint32_t i=0;i<count;++i) {
+    const auto entry=events+12*i,block=Ptr(b,entry,0,24);
+    if (block && Load32(b,entry+4)==20 && Load32(b,entry+8)==hero && Load32(b,block+20)==0x82670980) return true;
+  }
+  return false;
+}
+void CaptureNativeGrabStatus(const uint8_t* b,uint32_t hero,uint32_t ai,uint32_t vars,PlayerStatus& p) {
+  if (p.condition==PlayerCondition::Dead || !LocalNativeGrabEnabled() || !HumanGrabLayout(b,ai,vars) ||
+      !HumanGrabClient(b,hero,ai)) return;
+  const auto init=Ptr(b,0x82CC8C58,0,24);
+  if (!init || Load32(b,init+20)!=0x825ED5F8) return;
+  const auto record=stimulus_debug::ReadHandle([&](uint32_t a){return Load32(b,a);},vars+4432);
+  if (!record.valid || record.source!=hero || (record.id>>24)!=65) return;
+  p.grab_ready=Load32(b,vars+4544)!=0;
+  const auto it=Get().bindings.find(record.target);
+  if (it==Get().bindings.end() || it->second.id.family!=EnemyFamily::Scorpion ||
+      Load32(b,vars+4604)!=it->second.actor || !RetainedDamageSource(b,it->second)) return;
+  const auto* authority=AuthorityFor(it->second.id);
+  if (!authority || authority->dead || authority->last.life<=0 || authority->Frozen()) return;
+  p.grab_enemy=Canonical(it->second.id); p.grab_generation=authority->generation; p.grab_kind=25;
+  p.grab_ready=true;
+}
 bool NativeDamage(PPCContext& ctx, uint8_t* b, const DamageEvent& d) {
   auto& s = Get();
   if (!Scratch::CanUse(ctx) || !JackReady(b) || !Environment(b, s.world)) return false;
@@ -1865,14 +1924,12 @@ bool NativeDamage(PPCContext& ctx, uint8_t* b, const DamageEvent& d) {
   uint32_t saved[4]; for (unsigned i = 0; i < 4; ++i) saved[i] = Load32(b, globals[i]);
   Store32(b, globals[0], source->ai); Store32(b, globals[1], source->ai);
   Store32(b, globals[2], source->actor); Store32(b, globals[3], source->actor);
-#if defined(KK_DEV_TOOLS)
-  if (!LocalGrabProbeDamage(ctx,b,d,*source,h->hero,h->ai,h->vars)) {
+  if (!LocalNativeGrabDamage(ctx,b,d,*source,h->hero,h->ai,h->vars)) {
     for (unsigned i=0;i<4;++i) Store32(b,globals[i],saved[i]);
     return false;
   }
   Store32(b,globals[0],source->ai); Store32(b,globals[1],source->ai);
   Store32(b,globals[2],source->actor); Store32(b,globals[3],source->actor);
-#endif
   const uint32_t result = scratch.Vec(0, 0, 0, 0x100);
   Store32(b, result, UINT32_MAX); Store32(b, result+4, 0);
   s.injecting_damage = true;
@@ -2814,6 +2871,7 @@ void BeforeAi(PPCContext& ctx, uint8_t* b, uint32_t w) {
   }
   OwnerShots(ctx, b);
   CombatBeforeAi(ctx, b);
+  PeerGrabTick(ctx,b);
 }
 #if defined(KK_DEV_TOOLS)
 void EnemyThrowProbe(PPCContext& ctx,uint8_t* b) {
@@ -2932,12 +2990,42 @@ void EnemyThrowProbe(PPCContext& ctx,uint8_t* b) {
       binding.actor,uint16_t(binding.id.family),projectile,body,!Load32(b,binding.vars+launcher_offset),count,distance,
       start.x,start.y,start.z,move);
 }
-void ProxyGrabTick(PPCContext& ctx,uint8_t* b) {
-  static const bool enabled=[] { const auto* v=std::getenv("KK_DEV_NATIVE_GRABS"); return v && std::strcmp(v,"1")==0; }();
-  static const bool client_enabled=[] { const auto* v=std::getenv("KK_DEV_NATIVE_GRAB_CLIENT"); return v && std::strcmp(v,"1")==0; }();
-  if (!enabled || !Scratch::CanUse(ctx)) return;
-  auto& s=Get(); auto& grab=s.proxy_grab;
-  const auto body=EnemyPartnerCombatReady() ? kk::PartnerBodyCombatCopy(b):0;
+#endif
+bool PeerGrabReady() {
+  const auto& p=Get().status_replay.Status();
+  return EnemyPartnerCombatReady() && (p.grab_ready || p.grab_enemy.source);
+}
+stimulus_debug::Record PeerGrabRecord(const uint8_t* b) {
+  const auto& g=Get().peer_grab;
+  const auto read=[&](uint32_t p){return Load32(b,p);};
+  const auto pool=stimulus_debug::ReadPool(read,65);
+  if (!pool.valid || pool.capacity>4096 || (g.id>>24)!=65) return {};
+  const auto record=stimulus_debug::ReadSlot(read,pool,g.id&0xFFFFFF);
+  if (!record.valid || record.generation!=g.generation || record.source!=g.actor) return {};
+  return record;
+}
+void ReleasePeerGrabOffer(PPCContext& ctx,uint8_t* b,const char* reason) {
+  auto& s=Get(); auto& g=s.peer_grab;
+  if (PeerGrabRecord(b).valid && Scratch::CanUse(ctx)) {
+    Scratch scratch(ctx,b); const auto handle=scratch.Vec(0,0,0,0x100);
+    Store32(b,handle,g.id); Store32(b,handle+4,g.generation);
+    ctx.r3.u64=handle; ctx.r4.u64=0; __imp__sub_8271ECF8(ctx,b);
+  }
+  s.sent_grab.active=false; g.source={}; g.first_damage=0;
+#if defined(KK_DEV_TOOLS)
+  REXLOG_INFO("COOP GRAB owner-release actor={:08X} reason={} experimental={}",g.actor,reason,g.experimental);
+#endif
+}
+void PeerGrabTick(PPCContext& ctx,uint8_t* b) {
+  bool experimental=false,client_enabled=true;
+#if defined(KK_DEV_TOOLS)
+  static const bool probe=[] { const auto* v=std::getenv("KK_DEV_NATIVE_GRABS"); return v && std::strcmp(v,"1")==0; }();
+  static const bool client_probe=[] { const auto* v=std::getenv("KK_DEV_NATIVE_GRAB_CLIENT"); return v && std::strcmp(v,"1")==0; }();
+  experimental=probe; if (experimental) client_enabled=client_probe;
+#endif
+  if (!Scratch::CanUse(ctx)) return;
+  auto& s=Get(); auto& grab=s.peer_grab;
+  const auto body=(experimental ? EnemyPartnerCombatReady():PeerGrabReady()) ? kk::PartnerBodyCombatCopy(b):0;
   const auto ai=Ptr(b,Ptr(b,body,24,8),4,88),model=Ptr(b,ai,0,4),definition=Ptr(b,model,0,8);
   const auto bytes=definition ? Load32(b,definition+4):0;
   // The native H proposal reads as far as15228. A PNJInd or another short
@@ -2947,33 +3035,33 @@ void ProxyGrabTick(PPCContext& ctx,uint8_t* b) {
   if (grab.actor && (body!=grab.actor || ai!=grab.ai || vars!=grab.vars)) {
     // A disconnect, downed partner or changed lease releases only the exact
     // native event this fixture created. No copied donor handle is consumed.
-    Scratch scratch(ctx,b);
-    const auto handle=scratch.start+12288+0x100;
-    Store32(b,handle,grab.id); Store32(b,handle+4,grab.generation);
-    const auto record=stimulus_debug::ReadHandle(read,handle);
-    if (record.valid && record.source==grab.actor && (record.id>>24)==65) {
-      ctx.r3.u64=handle; ctx.r4.u64=0; __imp__sub_8271ECF8(ctx,b);
-      REXLOG_INFO("COOP GRAB proxy released actor={:08X} id={:08X}/{}",grab.actor,grab.id,grab.generation);
-    }
-    if (grab.client && Ptr(b,Ptr(b,grab.actor,24,8),4,88)==grab.ai &&
-        Ptr(b,grab.ai,64,15688)==grab.vars) {
+    const bool same=Ptr(b,Ptr(b,grab.actor,24,8),4,88)==grab.ai && Ptr(b,grab.ai,64,15688)==grab.vars;
+    if (same) ReleasePeerGrabOffer(ctx,b,"body-or-peer-unavailable");
+    else s.sent_grab.active=false;
+    if (grab.client && same) {
+      Scratch scratch(ctx,b);
       ctx.r3.u64=grab.actor; ctx.r4.u64=grab.actor; ctx.r5.u64=20; ctx.r6.u64=grab.client;
       __imp__sub_826F9C60(ctx,b);
       if (Load32(b,grab.vars+4544)==1) Store32(b,grab.vars+4544,grab.enabled);
       const auto proposal=Load32(b,0x82CC8830);
       if (Load32(b,grab.vars+4664)==proposal) Store32(b,grab.vars+4664,grab.proposal);
-      REXLOG_INFO("COOP GRAB proxy native-client-removed actor={:08X} shipping-bridge=false",grab.actor);
+#if defined(KK_DEV_TOOLS)
+      REXLOG_INFO("COOP GRAB native-client-removed actor={:08X} experimental={}",grab.actor,grab.experimental);
+#endif
     }
     grab={};
   }
   if (!body || !ai || !vars) {
+#if defined(KK_DEV_TOOLS)
     static unsigned refused=0;
     if (body && ai && !vars && refused++<8)
-      REXLOG_INFO("COOP GRAB proxy layout-refused actor={:08X} model={:08X} vars-bytes={} required-H-bytes=15688 shipping-bridge=false",body,model,bytes);
+      REXLOG_INFO("COOP GRAB peer-body layout-refused actor={:08X} model={:08X} vars-bytes={} required-H-bytes=15688 bridge=scorpion",body,model,bytes);
+#endif
     return;
   }
   if (!grab.actor) {
     grab={body,ai,vars};
+    grab.experimental=experimental;
     // The copy has independent vars but was duplicated from a story human.
     // Its old server handle may still name the donor. Create a fresh server.
     Store32(b,vars+4432,UINT32_MAX); Store32(b,vars+4436,UINT32_MAX);
@@ -2987,10 +3075,12 @@ void ProxyGrabTick(PPCContext& ctx,uint8_t* b) {
           ++clients; client_owner=Load32(b,entry+8); client_native=Load32(b,fn+20);
         }
       }
+#if defined(KK_DEV_TOOLS)
       const auto hero=Load32(b,0x82CCBF7C),human=Ptr(b,Ptr(b,hero,24,8),4,88),hv=Ptr(b,human,64,4668);
-      REXLOG_INFO("COOP GRAB proxy-layout actor={:08X} ai={:08X} user={} class={} enabled={} proposal={:08X} events={} clients={} client-owner={:08X} client-native={:08X} hero={:08X} hero-enabled={} hero-proposal={:08X}",
+      REXLOG_INFO("COOP GRAB peer-body-layout actor={:08X} ai={:08X} user={} class={} enabled={} proposal={:08X} events={} clients={} client-owner={:08X} client-native={:08X} hero={:08X} hero-enabled={} hero-proposal={:08X}",
           body,ai,Load32(b,vars),Load32(b,vars+4),Load32(b,vars+4544),Load32(b,vars+4664),count,clients,client_owner,client_native,
           hero,hv ? Load32(b,hv+4544):0,hv ? Load32(b,hv+4664):0);
+#endif
       // AI duplicate8271DC78 clears registrations. Repeat only H init's
       // audited event20 registration, never its global player/story setup.
       // Native825491B0 and82674380 still decide acceptance and score.
@@ -3002,10 +3092,21 @@ void ProxyGrabTick(PPCContext& ctx,uint8_t* b) {
         ctx.r3.u64=body; ctx.r4.u64=body; ctx.r5.u64=20; ctx.r6.u64=client;
         __imp__sub_826FB0A0(ctx,b);
         Store32(b,vars+4544,1); Store32(b,vars+4664,proposal);
-        REXLOG_INFO("COOP GRAB proxy native-client-installed actor={:08X} client={:08X} proposal={:08X} vars-bytes={} native-acceptance-required=true shipping-bridge=false",
-            body,client,proposal,bytes);
+        grab.client_ready=true;
+#if defined(KK_DEV_TOOLS)
+        REXLOG_INFO("COOP GRAB native-client-installed actor={:08X} client={:08X} proposal={:08X} vars-bytes={} native-acceptance-required=true experimental={}",body,client,proposal,bytes,experimental);
+#endif
+      } else if (clients==1 && client_owner==body && client_native==0x82670980 &&
+          Load32(b,vars+4544)==1 && Load32(b,vars+4664)==proposal &&
+          PoseAddress(proposal,24) && Load32(b,proposal+20)==0x82674380) {
+        grab.client_ready=true;
       }
     }
+  }
+  if (!grab.client_ready && !experimental) return;
+  auto prior=PeerGrabRecord(b);
+  if (!experimental && !prior.target && s.status_replay.Status().grab_enemy.source) {
+    s.sent_grab.active=false; grab.source={}; grab.first_damage=0; return;
   }
   Scratch scratch(ctx,b);
   constexpr uint32_t globals[]={0x82CCBF64,0x82CCBF68,0x82CCBF6C,0x82CCBF70};
@@ -3013,19 +3114,40 @@ void ProxyGrabTick(PPCContext& ctx,uint8_t* b) {
   Store32(b,globals[0],ai); Store32(b,globals[1],ai); Store32(b,globals[2],body); Store32(b,globals[3],body);
   ctx.r3.u64=1; ctx.r4.u64=vars+4432; ctx.r5.u64=1; ctx.r6.u64=0;
   __imp__sub_825491B0(ctx,b);
+  Store32(b,vars+4604,ctx.r3.u32);
   for (unsigned i=0;i<4;++i) Store32(b,globals[i],saved[i]);
   const auto record=stimulus_debug::ReadHandle(read,vars+4432);
   if (record.valid && record.source==body && (record.id>>24)==65) {
     if (grab.id!=record.id || grab.generation!=record.generation)
-      REXLOG_INFO("COOP GRAB proxy available actor={:08X} id={:08X}/{}",body,record.id,record.generation);
+      REXLOG_INFO("COOP GRAB offer available actor={:08X} id={:08X}/{} experimental={}",body,record.id,record.generation,experimental);
     grab.id=record.id; grab.generation=record.generation;
   }
+  if (!record.valid || record.source!=body || (record.id>>24)!=65 || !record.target) {
+    s.sent_grab.active=false; grab.source={}; grab.first_damage=0; return;
+  }
+  const auto source=s.bindings.find(record.target);
+  const auto* authority=source==s.bindings.end() ? nullptr:AuthorityFor(source->second.id);
+  if (!authority || !authority->Runs(Side()) || authority->dead || authority->last.life<=0 ||
+      source->second.id.family!=EnemyFamily::Scorpion || !RetainedDamageSource(b,source->second)) {
+    ReleasePeerGrabOffer(ctx,b,"unavailable-source"); return;
+  }
+  if (grab.source.actor!=source->second.actor || grab.ownership_generation!=authority->generation ||
+      grab.incarnation!=s.status_replay.Status().incarnation) {
+    grab.source=source->second; grab.ownership_generation=authority->generation;
+    grab.incarnation=s.status_replay.Status().incarnation; grab.first_damage=0; grab.started=Now();
+  }
+  if (!experimental) {
+    if (!grab.first_damage) { if (Now()-grab.started>combat::kMaxAge) ReleasePeerGrabOffer(ctx,b,"no-native-start-event"); }
+    else if (combat::NativeGrabFeedback(s.status_replay.Status(),s.identity,grab.incarnation,
+        Canonical(grab.source.id),grab.ownership_generation,grab.first_damage,grab.started,s.partner_status_time,Now())==combat::GrabFeedback::Release)
+      ReleasePeerGrabOffer(ctx,b,"guest-controller-ended-or-refused");
+  }
 }
-#endif
 void AfterAi(PPCContext& ctx, uint8_t* b, uint32_t w) {
   auto& s = Get();
+  if (Environment(b,w)) { PeerGrabTick(ctx,b); LocalNativeGrabTick(ctx,b); }
 #if defined(KK_DEV_TOOLS)
-  if (Environment(b,w)) { ProxyGrabTick(ctx,b); LocalGrabProbeTick(ctx,b); EnemyThrowProbe(ctx,b); }
+  if (Environment(b,w)) EnemyThrowProbe(ctx,b);
 #endif
   if (!s.prepared || !Connected() || !Environment(b, w)) { s.driving.clear(); return; }
   Scan(b);
@@ -3571,6 +3693,18 @@ bool EnemyPartnerCombatReady() {
       p.world == s.identity && p.incarnation && p.condition != PlayerCondition::Dead &&
       combat::Fresh(s.partner_status_time, Now()) && s.link.partner && s.link.partner->level == s.identity.level;
 }
+uint32_t EnemyPartnerGrabAction(const uint8_t* b,uint32_t body) {
+  const auto& s=Get(); const auto& p=s.status_replay.Status();
+  if (!body || body!=kk::PartnerBodyCombatCopy(b) || !EnemyPartnerCombatReady() ||
+      p.grab_kind!=25 || p.grab_enemy.family!=EnemyFamily::Scorpion || !p.grab_enemy.source) return UINT32_MAX;
+  for (const auto& [actor,binding]:s.bindings) {
+    if (Canonical(binding.id)!=p.grab_enemy || !RetainedDamageSource(b,binding)) continue;
+    const auto* authority=AuthorityFor(binding.id);
+    if (authority && !authority->dead && authority->last.life>0 && !authority->Frozen() &&
+        authority->generation==p.grab_generation) return 0x5B; // Native H scorpion hold826C83A8.
+  }
+  return UINT32_MAX;
+}
 bool EnemyDamageEnqueue(PPCContext& ctx, uint8_t* b, uint32_t body) {
   auto& s = Get();
   if (!REXCVAR_GET(kk_coop_enabled) || ctx.r4.u32 != 4 || !PoseAddress(ctx.r6.u32, 108)) return false;
@@ -3654,6 +3788,17 @@ bool EnemyDamageEnqueue(PPCContext& ctx, uint8_t* b, uint32_t body) {
       if (s.outgoing_damage.empty() && SubmitCombat(m, Now())) { queued = true; ++s.hits_queued; }
       else if (s.outgoing_damage.size() < combat::kQueueLimit) { s.outgoing_damage.push_back({m, Now()}); queued = true; }
       if (queued) ++s.next_damage;
+      if (queued && binding->second.id.family==EnemyFamily::Scorpion && damage.flags==3 && damage.magnitude==10 && !damage.projectile) {
+        auto& grab=s.peer_grab;
+        const auto offer=PeerGrabRecord(b);
+        if (grab.actor==body && grab.client_ready && offer.valid && offer.target==source &&
+            (!grab.first_damage || grab.source.actor!=source || grab.incarnation!=damage.incarnation ||
+             grab.ownership_generation!=damage.generation)) {
+          grab.source=binding->second; grab.incarnation=damage.incarnation; grab.first_damage=damage.number;
+          grab.ownership_generation=damage.generation; grab.started=Now();
+          s.sent_grab={damage.enemy,damage.incarnation,damage.number,damage.generation,true};
+        }
+      }
     }
     if (!queued) ++s.hits_refused;
     if (!audited) kk::PartnerBodyTriggerReference(b, payload); // unknown reference still releases auto leases
@@ -3674,6 +3819,45 @@ bool EnemyDamageEnqueue(PPCContext& ctx, uint8_t* b, uint32_t body) {
   if (PoseAddress(ctx.r8.u32, 8)) { Store32(b, ctx.r8.u32, UINT32_MAX); Store32(b, ctx.r8.u32+4, 0); }
   return true;
 }
+bool AllowedPeerGrabClaim(const uint8_t* b,uint32_t victim,uint32_t kind) {
+  const auto& grab=Get().peer_grab;
+  const auto source=Get().bindings.find(Load32(b,0x82CCBF6C));
+  const auto* authority=source==Get().bindings.end() ? nullptr:AuthorityFor(source->second.id);
+  if (!victim || kind!=1 || victim!=grab.actor || victim!=kk::PartnerBodyCombatCopy(b) ||
+      !grab.client_ready || !authority || !authority->Runs(Side()) || authority->dead || authority->last.life<=0 ||
+      source->second.id.family!=EnemyFamily::Scorpion || !ValidBinding(b,source->second) || !EnemyPartnerCombatReady()) return false;
+  const auto offer=PeerGrabRecord(b); const auto& p=Get().status_replay.Status();
+  if (!offer.valid || (offer.target && offer.target!=source->second.actor)) return false;
+  if (grab.experimental) return true;
+  return PeerGrabReady() && (!p.grab_enemy.source ||
+      (offer.target==source->second.actor && p.grab_enemy==Canonical(source->second.id) && p.grab_generation==authority->generation));
+}
+thread_local bool peer_grab_query_allowed=false;
+bool HiddenPeerGrabOffer(const uint8_t* b,uint32_t handle) {
+  if (peer_grab_query_allowed || !PoseAddress(handle,8)) return false;
+  const auto& g=Get().peer_grab;
+  if (!g.actor || Load32(b,handle)!=g.id || Load32(b,handle+4)!=g.generation) return false;
+  return PeerGrabRecord(b).valid;
+}
+struct PeerOfferQueryScope {
+  bool old;
+  explicit PeerOfferQueryScope(bool allow):old(peer_grab_query_allowed) { peer_grab_query_allowed=old || allow; }
+  ~PeerOfferQueryScope() { peer_grab_query_allowed=old; }
+};
+void FilterPeerGrabQuery(PPCContext& ctx,uint8_t* b,bool filtered) {
+  const auto type=ctx.r3.u32,cursor=ctx.r4.u32,arg5=ctx.r5.u32,arg6=ctx.r6.u32;
+  const auto out=filtered ? arg6:arg5;
+  const auto native=filtered ? __imp__sub_8271E290:__imp__sub_8271E450;
+  native(ctx,b);
+  // The body owns one exact offer. It is private to the audited targeted
+  // scorpion claim; unrelated native selectors must not adopt that offer.
+  if (type!=65) return;
+  for (unsigned n=0;n<2 && HiddenPeerGrabOffer(b,out);++n) {
+    ctx.r3.u64=type; ctx.r4.u64=cursor; ctx.r5.u64=arg5; ctx.r6.u64=arg6;
+    native(ctx,b);
+  }
+  if (HiddenPeerGrabOffer(b,out)) { Store32(b,out,UINT32_MAX); Store32(b,out+4,0); }
+}
 bool PartnerBodyGrabRefusal(const uint8_t* b, uint32_t victim,uint32_t kind) {
   // 82548BC0 explicitly returns zero without side effects for a null victim
   // (.28:19664 -> 82548E7C). Protect only the leased body with that native path.
@@ -3681,18 +3865,7 @@ bool PartnerBodyGrabRefusal(const uint8_t* b, uint32_t victim,uint32_t kind) {
   // damage, and Scorpion LR825FBEAC skips attachment. No other shared combat
   // support is implied by refusing their attachment to an authored human.
   if (!victim || kk::PartnerBodyCombatActor(b)!=victim) return false;
-#if defined(KK_DEV_TOOLS)
-  const auto& grab=Get().proxy_grab;
-  const auto source=Get().bindings.find(Load32(b,0x82CCBF6C));
-  const auto* authority=source==Get().bindings.end() ? nullptr:AuthorityFor(source->second.id);
-  if (kind==1 && authority && authority->Runs(Side()) && ValidBinding(b,source->second) &&
-      victim==kk::PartnerBodyCombatCopy(b) && victim==grab.actor && EnemyPartnerCombatReady()) {
-    const auto record=stimulus_debug::ReadHandle([&](uint32_t p){return Load32(b,p);},grab.vars+4432);
-    if (record.valid && record.source==victim && record.id==grab.id && record.generation==grab.generation)
-      return false;
-  }
-#endif
-  return true;
+  return !AllowedPeerGrabClaim(b,victim,kind);
 }
 #if defined(KK_DEV_TOOLS)
 std::optional<ShotVector> EnemyDormantTarget(const uint8_t* b, uint32_t w, ShotVector origin) {
@@ -3870,6 +4043,7 @@ REX_HOOK_RAW(sub_82548BC0) {
     __imp__sub_82548BC0(ctx, base); // native null-victim return, preserving native call semantics
     return;
   }
+  const kk::coop::PeerOfferQueryScope offer_scope(kk::coop::AllowedPeerGrabClaim(base,ctx.r3.u32,ctx.r4.u32));
 #if defined(KK_DEV_TOOLS)
   const auto victim=ctx.r3.u32,kind=ctx.r4.u32,handle=ctx.r5.u32,caller=uint32_t(ctx.lr);
   const bool copy=victim && victim==kk::PartnerBodyCombatCopy(base);
@@ -3884,6 +4058,8 @@ REX_HOOK_RAW(sub_82548BC0) {
   }
 #endif
 }
+REX_HOOK_RAW(sub_8271E450) { kk::coop::FilterPeerGrabQuery(ctx,base,false); }
+REX_HOOK_RAW(sub_8271E290) { kk::coop::FilterPeerGrabQuery(ctx,base,true); }
 #if defined(KK_DEV_TOOLS)
 REX_HOOK_RAW(sub_82614DC0) {
   const auto ai = kk::hfr::Load32(base, 0x82CCBF64);

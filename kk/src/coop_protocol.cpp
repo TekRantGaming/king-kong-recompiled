@@ -282,8 +282,17 @@ bool ValidDamageEvent(const DamageEvent& d) {
       std::isfinite(d.time) && d.time >= 0 && d.time < 1e12;
 }
 bool ValidPlayerStatus(const PlayerStatus& p) {
+  const bool empty=!p.grab_enemy.source && !p.grab_enemy.sequence && p.grab_enemy.family==EnemyFamily::None &&
+      !p.grab_generation && !p.grab_kind;
+  const bool held=p.grab_enemy.source && p.grab_enemy.family==EnemyFamily::Scorpion && p.grab_kind==25;
+  const bool peer_empty=!p.peer_grab_enemy.source && !p.peer_grab_enemy.sequence &&
+      p.peer_grab_enemy.family==EnemyFamily::None && !p.peer_grab_generation;
+  const bool peer_scope=(!p.peer_grab_incarnation && !p.peer_grab_number && peer_empty) ||
+      (p.peer_grab_incarnation && p.peer_grab_number &&
+       (peer_empty || (p.peer_grab_enemy.source && p.peer_grab_enemy.family==EnemyFamily::Scorpion)));
   return ValidEnemyWorld(p.world) && p.incarnation && p.number &&
-      p.condition >= PlayerCondition::Alive && p.condition <= PlayerCondition::Dead;
+      p.condition >= PlayerCondition::Alive && p.condition <= PlayerCondition::Dead &&
+      (empty || held) && peer_scope && (p.condition!=PlayerCondition::Dead || (empty && !p.grab_ready));
 }
 bool ValidWorldDigest(const WorldDigestPage& p) {
   if (!p.generation || !p.level || p.level>100000 || p.start>10000 || p.checkpoint>10000 || !p.sweep ||
@@ -382,7 +391,14 @@ bool Encode(const Message& m, std::vector<uint8_t>& out) {
       if (!ValidPlayerStatus(m.player_status)) return false;
       WriteWorld(payload, m.player_status.world); payload.U(m.player_status.incarnation, 8);
       payload.U(m.player_status.number, 4); payload.U(m.player_status.last_damage, 4);
-      payload.U(uint8_t(m.player_status.condition), 1); break;
+      payload.U(uint8_t(m.player_status.condition), 1);
+      payload.U(m.player_status.grab_ready,1);
+      payload.U(m.player_status.grab_enemy.source,8); payload.U(m.player_status.grab_enemy.sequence,4);
+      payload.U(uint16_t(m.player_status.grab_enemy.family),2); payload.U(m.player_status.grab_generation,4);
+      payload.U(m.player_status.grab_kind,1);
+      payload.U(m.player_status.peer_grab_incarnation,8); payload.U(m.player_status.peer_grab_number,4);
+      payload.U(m.player_status.peer_grab_enemy.source,8); payload.U(m.player_status.peer_grab_enemy.sequence,4);
+      payload.U(uint16_t(m.player_status.peer_grab_enemy.family),2); payload.U(m.player_status.peer_grab_generation,4); break;
     case MessageType::Cheats:
       if (!ValidCheatSet(m.cheats)) return false;
       payload.U(m.cheats.bits, 2); break;
@@ -597,6 +613,13 @@ bool Decode(std::span<const uint8_t> bytes, Message& out) {
       m.player_status.world = ReadWorld(r); m.player_status.incarnation = r.U(8);
       m.player_status.number = uint32_t(r.U(4)); m.player_status.last_damage = uint32_t(r.U(4));
       m.player_status.condition = PlayerCondition(r.U(1));
+      { const auto ready=r.U(1); if (ready>1) return false; m.player_status.grab_ready=ready!=0; }
+      m.player_status.grab_enemy.source=r.U(8); m.player_status.grab_enemy.sequence=uint32_t(r.U(4));
+      m.player_status.grab_enemy.family=EnemyFamily(r.U(2)); m.player_status.grab_generation=uint32_t(r.U(4));
+      m.player_status.grab_kind=uint8_t(r.U(1));
+      m.player_status.peer_grab_incarnation=r.U(8); m.player_status.peer_grab_number=uint32_t(r.U(4));
+      m.player_status.peer_grab_enemy.source=r.U(8); m.player_status.peer_grab_enemy.sequence=uint32_t(r.U(4));
+      m.player_status.peer_grab_enemy.family=EnemyFamily(r.U(2)); m.player_status.peer_grab_generation=uint32_t(r.U(4));
       if (!ValidPlayerStatus(m.player_status)) return false;
       break;
     case MessageType::Cheats:

@@ -53,11 +53,11 @@ void StimulusDiagnostics() {
   Check(!ReadPool(u32, 1).valid, "record span overflow refused");
 }
 void Codecs() {
-  static_assert(kProtocolVersion == 26);
+  static_assert(kProtocolVersion == 27);
   for (const auto& m : {Damage(), Status()}) {
     const auto bytes = Packet(m); Message out;
-    Check(bytes.size() == (m.type == MessageType::DamageEvent ? 119u : 53u), "fixed bounded wire length");
-    Check(bytes[4] == 0 && bytes[5] == kProtocolVersion && bytes[7] == uint16_t(m.type), "protocol 25 byte order");
+    Check(bytes.size() == (m.type == MessageType::DamageEvent ? 119u : 103u), "fixed bounded wire length");
+    Check(bytes[4] == 0 && bytes[5] == kProtocolVersion && bytes[7] == uint16_t(m.type), "current protocol byte order");
     Check(Decode(bytes, out) && Packet(out) == bytes, "canonical combat round trip");
     for (size_t n = 0; n < bytes.size(); ++n) {
       out.type = MessageType::Bye;
@@ -65,6 +65,23 @@ void Codecs() {
     }
     auto extra = bytes; extra.push_back(0); extra[23]++;
     Check(!Decode(extra, out), "trailing combat payload refused");
+  }
+  {
+    auto active=Status(); auto& p=active.player_status;
+    p.grab_ready=true; p.grab_enemy={123,4,EnemyFamily::Scorpion}; p.grab_generation=9; p.grab_kind=25;
+    p.peer_grab_incarnation=15; p.peer_grab_number=8; p.peer_grab_enemy={456,2,EnemyFamily::Scorpion}; p.peer_grab_generation=4;
+    const auto wire=Packet(active); Message decoded;
+    Check(Decode(wire,decoded) && Packet(decoded)==wire,"native holder values survive status codec");
+    auto malformed=wire; malformed[53]=2;
+    Check(!Decode(malformed,decoded),"grab readiness is a canonical boolean");
+    auto bad=active; bad.player_status.grab_enemy.family=EnemyFamily::Raptor;
+    Check(!Encode(bad,malformed),"unaudited grab family refused");
+    bad=active; bad.player_status.grab_kind=24;
+    Check(!Encode(bad,malformed),"unaudited native controller kind refused");
+    bad=active; bad.player_status.condition=PlayerCondition::Dead;
+    Check(!Encode(bad,malformed),"a dead incarnation cannot retain a grab or readiness");
+    bad=Status(); bad.player_status.grab_kind=25;
+    Check(!Encode(bad,malformed),"empty holder requires an empty native grab payload");
   }
   {
     auto previous=Packet(Damage()); previous[5]=23;
