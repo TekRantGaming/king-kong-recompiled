@@ -64,9 +64,11 @@ PoseRead ReadJackPose(U32 load32, U16 load16, F32 loadf, double now) {
   const float fx = -loadf(matrix + 16), fy = -loadf(matrix + 20);
   if (!std::isfinite(fx) || !std::isfinite(fy) || std::hypot(fx, fy) < .1f) return {{}, "facing"};
   p.facing = std::atan2(fy, fx); p.speed = loadf(vars + 11668);
-  const uint32_t weapon = load32(g + 13128);
-  p.weapon = weapon <= 4 ? uint8_t(weapon) : 0;
+  const uint32_t weapons=load32(0x82CC8848), slot=load32(vars+4);
+  const uint32_t weapon=slot<=12 && PoseAddress(weapons,13176) ? load32(weapons+0x3344+4*slot) : 0;
+  p.weapon = weapon <= 10 ? uint8_t(weapon) : 0;
   p.crouched = load32(vars + 2912) != 0;
+  p.aiming = load32(vars + 0xB94) != 0;
   // H's contact update retains last-ground-Z minus current-Z at +13268
   // (826A159C), and clears it on a floor contact (826A1214). Its NPC airborne
   // clip uses the one-unit threshold (826A80B4). The contact list itself is

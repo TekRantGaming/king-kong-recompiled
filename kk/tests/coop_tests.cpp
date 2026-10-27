@@ -82,7 +82,7 @@ struct Pair {
   }
 };
 void Protocol() {
-  static_assert(kProtocolVersion == 23);
+  static_assert(kProtocolVersion == 24);
   constexpr std::array types{MessageType::Hello, MessageType::HelloAck, MessageType::Reject,
       MessageType::Ping, MessageType::Pong, MessageType::PlayerPose, MessageType::Bye,
       MessageType::EnemySnapshot, MessageType::EnemyEvent, MessageType::ShotIntent,
@@ -344,10 +344,11 @@ void Poses() {
   Check(!sampled.vx,"new level clears the velocity anchor");
   Message extended; extended.type=MessageType::PlayerPose;
   extended.pose.vx=3; extended.pose.vy=-2; extended.pose.pitch=.6f;
-  extended.pose.weapon=4; extended.pose.crouched=1; extended.pose.airborne=1; extended.pose.fire=17; extended.pose.fire_weapon=2;
+  extended.pose.weapon=4; extended.pose.crouched=1; extended.pose.airborne=1; extended.pose.aiming=1;
+  extended.pose.fire=17; extended.pose.fire_weapon=2;
   Message decoded;
   Check(Decode(Packet(extended),decoded) && decoded.pose.fire==17 && decoded.pose.fire_weapon==2 &&
-      decoded.pose.weapon==4 && decoded.pose.crouched==1 && decoded.pose.airborne==1 && Near(decoded.pose.pitch,.6) && Near(decoded.pose.vy,-2),
+      decoded.pose.weapon==4 && decoded.pose.crouched==1 && decoded.pose.airborne==1 && decoded.pose.aiming==1 && Near(decoded.pose.pitch,.6) && Near(decoded.pose.vy,-2),
       "animation pose fields survive the wire");
   std::vector<uint8_t> invalid;
   extended.pose.airborne=2;
@@ -358,8 +359,15 @@ void Poses() {
   }
   extended.pose.vx=0; extended.pose.pitch=2;
   Check(!Encode(extended,invalid), "invalid view pitch rejected");
-  extended.pose.pitch=0; extended.pose.weapon=5;
+  extended.pose.pitch=0; extended.pose.weapon=11;
   Check(!Encode(extended,invalid), "unknown weapon rejected");
+  for (uint8_t equipment=0;equipment<=10;++equipment) {
+    extended.pose.weapon=equipment;
+    Check(Decode(Packet(extended),decoded) && decoded.pose.weapon==equipment,
+        "every native held equipment kind survives the wire");
+  }
+  extended.pose.aiming=2;
+  Check(!Encode(extended,invalid),"unknown aim stance rejected");
   PoseBuffer buffer;
   Check(!buffer.Sample(0), "empty interpolation buffer");
   PlayerPose a{1000, 101, 0, 2, 3, 3.10f, 4, 10}, b = a;
@@ -434,13 +442,23 @@ void PoseReadingAndDisplay() {
       std::string_view(pose.failure) == "ok", "retained load-page mode does not suppress a loaded Jack");
   Check(pose.pose->action == 123 && pose.pose->item == 0xAB, "read diagnostic action and big-endian item byte");
   constexpr uint32_t child=0x4000C000;
-  words[g+13128]=2; words[animation+0x60]=child; words[animation+0x7C]=0x74;
+  constexpr uint32_t weapons=0x40010000;
+  words[0x82CC8848]=weapons; words[vars+4]=1; words[weapons+0x3348]=2;
+  words[g+13128]=4;
+  Check(read().pose->weapon==2,"native H inventory wins over the universe request block");
+  words[vars+0xB94]=1;
+  Check(read().pose->aiming==1,"real native aim flag is published");
+  words[vars+0xB94]=0;
+  words[weapons+0x3348]=6;
+  Check(read().pose->weapon==6,"spear equipment is not published as empty hands");
+  words[weapons+0x3348]=2;
+  words[animation+0x60]=child; words[animation+0x7C]=0x74;
   Check(read().pose->action==0x74 && read().pose->item==0,"active machine-gun reload child is visible to the peer");
   words[child]=0x80;
   Check(read().pose->action==123,"finished reload never hides the main animation");
   words[child]=0; words[animation+0x7C]=0x73;
   Check(read().pose->action==123,"another weapon's child action is not a reload");
-  words[animation+0x60]=0; words[g+13128]=0;
+  words[animation+0x60]=0; words[weapons+0x3348]=0;
   Check(!read().pose->airborne,"cleared native flight height stays grounded");
   floats[vars+13268]=1;
   Check(!read().pose->airborne,"native one-unit flight threshold excludes small steps");
@@ -607,8 +625,11 @@ void PuppetPolicies() {
   Check(HumanAction(1,false,false,false)!=HumanAction(1,true,false,false) &&
       HumanAction(3,true,false,true)!=HumanAction(1,true,false,true), "native motion and weapon firing differ");
   Check(HumanAction(2,true,true,false)!=HumanAction(2,true,true,true),"crouched motion and fire use separate native actions");
-  Check(HumanAction(2,false,false,true)==165 && HumanAction(1,false,false,true)==11,
-      "native machine-gun aim state differs from revolver");
+  Check(HumanAction(2,false,false,true)==146 && HumanAction(1,false,false,true)==145,
+      "native armed stationary clips differ from walking clips");
+  Check(WeaponVariant(2,true)==2 && WeaponVariant(4,true)==5 && WeaponVariant(0,true)==0 &&
+      WeaponVariant(6,true)==10 && WeaponVariant(7,true)==7 && WeaponVariant(6,false)==3,
+      "native hand variants distinguish guns, spear, bone and empty hands");
   const auto carl=[](uint16_t action)->std::optional<uint8_t> {
     return action==11 ? std::optional<uint8_t>{2} : std::nullopt;
   };

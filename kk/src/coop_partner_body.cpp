@@ -72,6 +72,24 @@ REX_EXTERN(__imp__sub_827128F0);
 REX_EXTERN(__imp__sub_8286A660);
 REX_EXTERN(__imp__sub_826BB350);
 REX_EXTERN(__imp__sub_828724C0);
+REX_EXTERN(__imp__sub_8286ADA0);
+REX_EXTERN(__imp__sub_8284FE70);
+REX_EXTERN(__imp__sub_8284FDE0);
+REX_EXTERN(__imp__sub_823FCF58);
+REX_EXTERN(__imp__sub_823FC940);
+REX_EXTERN(__imp__sub_823FC630);
+REX_EXTERN(__imp__sub_8275C1F0);
+REX_EXTERN(__imp__sub_823F90B0);
+REX_EXTERN(__imp__sub_8270B008);
+REX_EXTERN(__imp__sub_827F9978);
+REX_EXTERN(__imp__sub_826FC010);
+REX_EXTERN(__imp__sub_826FC0D8);
+REX_EXTERN(__imp__sub_826FC178);
+REX_EXTERN(__imp__sub_826FE840);
+REX_EXTERN(__imp__sub_826FE8B0);
+REX_EXTERN(__imp__sub_827F8E38);
+REX_EXTERN(__imp__sub_823F6EA0);
+REX_EXTERN(__imp__sub_823F6EF0);
 #if defined(KK_DEV_TOOLS)
 namespace kk {
 void DevFishAfterWorld(PPCContext&, uint8_t*);
@@ -442,6 +460,19 @@ struct State {
   uint8_t saved_rate = 60, playback_rate = 60;
   uint32_t requested_tuple = UINT32_MAX;
   uint32_t animation_shots = 0;
+  uint16_t weapon_child = 0;
+  uint8_t displayed_weapon = 255;
+  int32_t weapon_sound = -1;
+  uint32_t sound_actor = 0;
+  struct WeaponPart { uint32_t actor=0, hidden=0; uint8_t variant=255; };
+  std::array<WeaponPart,3> weapon_parts{};
+  Rig weapon_rig;
+  uint64_t weapon_generation=0;
+  bool weapon_restore=false;
+  std::array<uint32_t,2> weapon_masks{};
+  std::array<uint8_t,2> weapon_selectors{};
+  int32_t weapon_flash=-1;
+  float flash_left=0;
   uint32_t action_changes = 0, action_restarts = 0, native_sets = 0, pose_blends = 0;
   uint32_t logged_changes = 0, logged_restarts = 0, logged_native_sets = 0, logged_blends = 0;
 #if defined(KK_DEV_TOOLS)
@@ -477,6 +508,7 @@ struct State {
 
   void Abort(const char* reason) {
     if (terminal) return;
+    weapon_restore=weapon_rig.actor!=0;
     Rig current;
     if (rate_base && rate_layer && ReadRig(rate_base,selected.actor,current) &&
         Same(current,selected) && current.layer == rate_layer) rate_base[rate_layer+2] = saved_rate;
@@ -752,6 +784,164 @@ float Frame(PPCContext& ctx, uint8_t* b, uint32_t actor) {
   return float(ctx.r3.s32) / 60.0f;
 }
 
+void StopPartnerWeaponSound(PPCContext& ctx,uint8_t* b) {
+  auto& s=Get();
+  if (s.weapon_sound<0 || !Scratch::CanUse(ctx)) return;
+  // Native sound entries can be retired and reused by a scene cut.
+  // Only stop a handle that still names our exact actor.
+  constexpr uint32_t pool=0x82C15070;
+  const auto count=Load32(b,pool+16);
+  const auto entries=count<=16384 ? Ptr(b,pool,24,count*168) : 0;
+  if (entries && uint32_t(s.weapon_sound)<count &&
+      Load32(b,entries+168*s.weapon_sound+128)==s.sound_actor) {
+    Scratch scratch(ctx,b);
+    ctx.r3.s64=s.weapon_sound;
+    __imp__sub_8275C1F0(ctx,b);
+  }
+  s.weapon_sound=-1; s.sound_actor=0;
+}
+uint8_t PartnerPartVariant(PPCContext& ctx,uint8_t* b,const Rig& rig,uint8_t tag) {
+  Scratch scratch(ctx,b);
+  ctx.r3.u64=rig.actor; ctx.r4.u64=tag;
+  __imp__sub_823F90B0(ctx,b);
+  return uint8_t(ctx.r3.u32);
+}
+void RestorePartnerEquipment(PPCContext& ctx,uint8_t* b,uint32_t world) {
+  auto& s=Get();
+  if (!s.weapon_restore || !Scratch::CanUse(ctx)) return;
+  StopPartnerWeaponSound(ctx,b);
+  Rig rig;
+  const auto observed=s.humans.find(s.weapon_rig.actor);
+  if (world==s.world && s.Environment(b,world) && observed!=s.humans.end() &&
+      observed->second.generation==s.weapon_generation && ReadRig(b,s.weapon_rig.actor,rig) && Same(rig,s.weapon_rig)) {
+    Scratch scratch(ctx,b);
+    if (s.weapon_flash>=0) {
+      ctx.r3.u64=rig.actor; ctx.r4.s64=s.weapon_flash;
+      __imp__sub_826FE8B0(ctx,b);
+    }
+    for (unsigned i=0;i<s.weapon_parts.size();++i) {
+      const auto& part=s.weapon_parts[i]; const auto tag=uint8_t(125+i);
+      if (!part.actor || part.variant>=253 || OwnedAimBone(b,rig,tag)!=part.actor) continue;
+      ctx.r3.u64=rig.actor; ctx.r4.u64=tag; ctx.r5.u64=part.variant; ctx.r6.u64=1;
+      __imp__sub_8286ADA0(ctx,b);
+      ctx.r3.u64=part.actor; ctx.r4.u64=part.hidden; ctx.r5.u64=part.hidden ? 0 : 8;
+      __imp__sub_8270B008(ctx,b);
+    }
+    if (s.weapon_child && Load16(b,rig.anim+0x7C)==s.weapon_child) {
+      ctx.r3.u64=rig.actor; ctx.r4.u64=0; ctx.r5.u64=0;
+      __imp__sub_8284FDE0(ctx,b);
+    }
+    Store32(b,rig.anim+112,s.weapon_masks[0]); Store32(b,rig.anim+116,s.weapon_masks[1]);
+    b[rig.anim+128]=s.weapon_selectors[0]; b[rig.anim+129]=s.weapon_selectors[1];
+    REXLOG_INFO("PUPPET weapon restored actor={:08X} generation={}",rig.actor,s.weapon_generation);
+  }
+  s.weapon_restore=false; s.weapon_rig={}; s.weapon_parts={}; s.weapon_child=0;
+  s.weapon_flash=-1; s.flash_left=0;
+}
+void PartnerWeapon(PPCContext& ctx,uint8_t* b,const Rig& rig,const coop::PlayerPose& p) {
+  auto& s=Get();
+  if (s.humans.at(rig.actor).other_human || Load32(b,rig.vars)!=0) return;
+  if (!s.weapon_rig.actor) {
+    s.weapon_rig=rig; s.weapon_generation=s.selected_generation;
+    s.weapon_masks={Load32(b,rig.anim+112),Load32(b,rig.anim+116)};
+    s.weapon_selectors={b[rig.anim+128],b[rig.anim+129]};
+    for (unsigned i=0;i<s.weapon_parts.size();++i) {
+      const auto part=OwnedAimBone(b,rig,uint8_t(125+i));
+      if (!part) continue;
+      const auto mesh=Ptr(b,Ptr(b,part,20,4),0,12);
+      s.weapon_parts[i]={part,mesh ? Load32(b,mesh+8)&8u : 0,PartnerPartVariant(ctx,b,rig,uint8_t(125+i))};
+    }
+  }
+  const auto weapon=p.weapon;
+  const bool gun=weapon>=1 && weapon<=4;
+  s.flash_left=gun ? std::max(0.f,s.flash_left-s.dt) : 0;
+  if (s.animation.new_shot && gun) s.flash_left=.075f;
+  if (!s.flash_left && s.weapon_flash>=0) {
+    Scratch scratch(ctx,b);
+    ctx.r3.u64=rig.actor; ctx.r4.s64=s.weapon_flash;
+    __imp__sub_826FE8B0(ctx,b); s.weapon_flash=-1;
+  }
+  if (s.weapon_sound>=0 && (weapon!=2 || s.animation.fire_left<=0)) StopPartnerWeaponSound(ctx,b);
+  const bool reload=gun && s.animation.use_left>0 && s.animation.use_action==weapon+0x72;
+  // Native H uses a child channel for reload, fire and aiming, while the
+  // full-body idle/walk continues. Never rewind a playing burst per packet.
+  const uint16_t child=reload ? uint16_t(weapon+0x72) :
+      gun && s.animation.fire_left>0 ? uint16_t(weapon+0x7C) :
+      gun && p.aiming ? coop::puppet::WeaponAimAction(weapon) : 0;
+  const auto layer=Ptr(b,rig.anim,0x60,104);
+  const bool finished=!layer || (Load16(b,layer)&0x80);
+  if (child && LoadedAction(b,rig,child,0)) {
+    if (child!=s.weapon_child || (finished && (s.animation.new_shot || s.animation.new_use))) {
+      Scratch scratch(ctx,b);
+      // H's load_list is a mask of authored child tags, not full-body action
+      // IDs. The native channel must be restricted to those upper-body parts.
+      constexpr uint8_t tags[]={40,41,42,43,142,143,140,141,20,21,22,23,122,123,120,121,
+          125,126,127,24,44,220,221,222,223,224,225,240,241,242,243,244,245,0,1,2};
+      const auto mask=scratch.start+12288+0x200;
+      for (unsigned i=0;i<std::size(tags);++i) Store32(b,mask+4*i,tags[i]);
+      ctx.r3.u64=rig.actor; ctx.r4.u64=std::size(tags); ctx.r5.u64=mask;
+      __imp__sub_823F6EF0(ctx,b);
+      ctx.r3.u64=rig.actor; ctx.r4.u64=reload ? weapon==2 ? 20 : weapon==3 ? 10 : 40 : 40;
+      ctx.r5.u64=reload ? 10 : 20;
+      __imp__sub_823F6EA0(ctx,b);
+      ctx.r3.u64=rig.actor; ctx.r4.u64=child;
+      __imp__sub_8284FE70(ctx,b);
+      s.weapon_child=child;
+      REXLOG_INFO("PUPPET weapon child actor={:08X} equipment={} action={} reload={} shot={}",
+          rig.actor,weapon,child,reload,p.fire);
+    }
+  } else if (s.weapon_child) {
+    Scratch scratch(ctx,b);
+    ctx.r3.u64=rig.actor; ctx.r4.u64=0; ctx.r5.u64=0;
+    __imp__sub_8284FDE0(ctx,b);
+    s.weapon_child=0;
+  }
+  // Reapply after native action changes, which can select their own swap
+  // table. group_child_swap avoids replacing an already matching model.
+  for (const uint8_t tag:{125,126,127}) {
+    const auto part=OwnedAimBone(b,rig,tag);
+    if (!part) continue;
+    const auto variant=coop::puppet::WeaponVariant(weapon,tag==125);
+    Scratch scratch(ctx,b);
+    if (PartnerPartVariant(ctx,b,rig,tag)!=variant) {
+      ctx.r3.u64=rig.actor; ctx.r4.u64=tag; ctx.r5.u64=variant; ctx.r6.u64=1;
+      __imp__sub_8286ADA0(ctx,b);
+    }
+    // Native H clears the geometry flag 8 when the weapon is in hand.
+    const auto mesh=Ptr(b,Ptr(b,part,20,4),0,12);
+    ctx.r3.u64=part; ctx.r4.u64=0; ctx.r5.u64=8;
+    __imp__sub_8270B008(ctx,b);
+    if (s.displayed_weapon!=weapon) {
+      REXLOG_INFO("PUPPET weapon model actor={:08X} equipment={} tag={} variant={} part={:08X} geometry={:08X} material={:08X}",
+          rig.actor,weapon,tag,variant,part,mesh ? Load32(b,mesh) : 0,mesh ? Load32(b,mesh+4) : 0);
+    }
+  }
+  if (s.animation.new_shot && gun) {
+    // H_callback_tir's one-shot native weapon sounds. No native shot callback
+    // is invoked here: that would consume donor ammo and hit the local world.
+    Scratch scratch(ctx,b);
+    const auto sound=weapon==1 ? 50 : weapon==2 ? 60 : weapon==3 ? 70 : 80;
+    if (weapon==2) {
+      if (s.weapon_sound<0) {
+        ctx.r3.u64=rig.actor; ctx.r4.u64=sound; ctx.r5.u64=128;
+        __imp__sub_823FC940(ctx,b); s.weapon_sound=ctx.r3.s32;
+        if (s.weapon_sound<0) {
+          ctx.r3.u64=s.hero; ctx.r4.u64=sound; ctx.r5.u64=128;
+          __imp__sub_823FC940(ctx,b); s.weapon_sound=ctx.r3.s32;
+        }
+        if (s.weapon_sound>=0) {
+          ctx.r3.u64=rig.actor; ctx.r4.s64=s.weapon_sound; ctx.r5.s64=-1;
+          __imp__sub_823FC630(ctx,b); s.sound_actor=rig.actor;
+        }
+        REXLOG_INFO("PUPPET weapon sound actor={:08X} handle={} equipment={}",rig.actor,s.weapon_sound,weapon);
+      }
+    } else {
+      ctx.r3.u64=rig.actor; ctx.r4.u64=sound; __imp__sub_823FCF58(ctx,b);
+    }
+  }
+  s.displayed_weapon=weapon;
+}
+
 std::optional<Vec> NativeRootVelocity(PPCContext& ctx, uint8_t* b, const Rig& r,
                                     uint16_t action, uint8_t item) {
   auto unavailable=[&](const char* reason,uint32_t first=0,uint32_t second=0)->std::optional<Vec> {
@@ -801,7 +991,7 @@ void CalibrateGaits(PPCContext& ctx,uint8_t* b,const Rig& r) {
   auto& s=Get(); s.native_gaits.clear();
   // H's native locomotion families, including directional player clips only
   // when this full-body bank really contains a translating root track.
-  for (const uint16_t action : {10,12,15,27,37,40,41,42,43,44,45,50,51,52,53,54,55,160,163,166,167}) {
+  for (const uint16_t action : {10,11,12,15,27,37,40,41,42,43,44,45,50,51,52,53,54,55,150,160,163,165,166,167}) {
     const auto item=LoadedItem(b,r,action);
     if (!item) continue;
     const auto root=NativeRootVelocity(ctx,b,r,action,*item);
@@ -873,6 +1063,46 @@ void PartnerBodyAim(PPCContext& ctx,uint8_t* b,uint32_t actor,uint32_t ai) {
   if (s.updates%120==0) REXLOG_INFO("PUPPET aim actor={:08X} bones={} yaw-offset={:.3f} pitch={:.3f} matrix-delta={:.5f} native-world-pose=1",
       actor,applied,yaw-body_yaw,pitch,matrix_delta);
 #endif
+}
+
+void PartnerWeaponFlash(PPCContext& ctx,uint8_t* b,const Rig& rig) {
+  auto& s=Get();
+  if (s.flash_left<=0 || !s.partner.partner || !Scratch::CanUse(ctx)) return;
+  const auto gun=OwnedAimBone(b,rig,125);
+  Vec origin;
+  if (!gun || !BoneWorldPosition(b,gun,origin) || Distance(origin,rig.pos)>3) return;
+  const auto& p=*s.partner.partner;
+  const Vec aim{std::cos(p.facing)*std::cos(p.pitch),std::sin(p.facing)*std::cos(p.pitch),std::sin(p.pitch)};
+  const float length=p.weapon==1 ? .22f : p.weapon==2 ? .47f : .65f;
+  const Vec muzzle{origin.x+aim.x*length,origin.y+aim.y*length,origin.z+aim.z*length+.03f};
+  const auto list=Ptr(b,s.world,0x162b0,24), resource=Load32(b,0x82CC877C);
+  if (!list || !Ptr(b,Ptr(b,resource,20,4),0,12)) return;
+  Scratch scratch(ctx,b);
+  if (s.weapon_flash<0) {
+    ctx.r3.u64=s.world+0x162b0; ctx.r4.u64=21; ctx.r5.u64=rig.actor;
+    __imp__sub_827F9978(ctx,b); s.weapon_flash=ctx.r3.s32;
+    if (s.weapon_flash<0) return;
+    ctx.r3.u64=rig.actor; ctx.r4.s64=s.weapon_flash; ctx.r5.u64=resource; ctx.r6.u64=0;
+    __imp__sub_826FC010(ctx,b);
+    ctx.r3.u64=rig.actor; ctx.r4.s64=s.weapon_flash; ctx.r5.u64=4; ctx.r6.u64=1;
+    __imp__sub_826FC0D8(ctx,b);
+    // H_exec_GFX_Weapon's native type-21 muzzle sprite. Only appearance,
+    // never the native shot callback or its ammunition and damage writes.
+    for (const auto setting:{std::pair{21000,.1f},{21002,0.f},{21003,0.f},{21004,.45f},{21006,3.141592654f}}) {
+      ctx.r3.u64=list; ctx.r4.s64=s.weapon_flash; ctx.r5.u64=setting.first; ctx.f1.f64=setting.second;
+      __imp__sub_827F8E38(ctx,b);
+    }
+    ctx.r3.u64=rig.actor; ctx.r4.s64=s.weapon_flash; ctx.r5.u64=21104; ctx.r6.u64=7;
+    __imp__sub_826FE840(ctx,b);
+    ctx.r3.u64=rig.actor; ctx.r4.s64=s.weapon_flash; ctx.r5.u64=21101; ctx.r6.u64=0x0080C0FF;
+    __imp__sub_826FE840(ctx,b);
+    if (s.animation_shots<=4) REXLOG_INFO("PUPPET weapon flash actor={:08X} handle={} equipment={} muzzle={}",
+        rig.actor,s.weapon_flash,p.weapon,XYZ(muzzle));
+  }
+  ctx.r3.u64=rig.actor; ctx.r4.s64=s.weapon_flash; ctx.r5.u64=21200; ctx.r6.u64=scratch.Vector(muzzle,0x100);
+  __imp__sub_826FC178(ctx,b);
+  ctx.r3.u64=rig.actor; ctx.r4.s64=s.weapon_flash; ctx.r5.u64=21201; ctx.r6.u64=scratch.Vector(aim,0x110);
+  __imp__sub_826FC178(ctx,b);
 }
 
 // 82712D40 (.77:28379) and 82715438 (.32:28175): source, instance,
@@ -1482,6 +1712,7 @@ void CensusAndSelect(PPCContext& ctx, uint8_t* b, uint32_t w) {
   s.animation = {};
   s.requested_tuple = UINT32_MAX;
   s.animation_shots = 0;
+  s.weapon_child=0; s.displayed_weapon=255;
   s.action_changes=s.action_restarts=s.native_sets=s.pose_blends=0;
   s.logged_changes=s.logged_restarts=s.logged_native_sets=s.logged_blends=0;
 #if defined(KK_DEV_TOOLS)
@@ -1558,6 +1789,9 @@ void PartnerBodyBeforeLoad() {
   s.spawned.clear(); s.spawners.clear();
   s.bone_source = {}; s.bone_copy = {}; s.bones_at = {};
   s.world = s.hero = s.game = 0; s.loading = true; s.ready = false;
+  s.weapon_sound=-1; s.sound_actor=0; // Native scene unload owns these handles.
+  s.weapon_restore=false; s.weapon_rig={}; s.weapon_parts={}; s.weapon_child=0;
+  s.weapon_flash=-1; s.flash_left=0;
   s.census_at = {}; s.tick_at = {};
   s.env_fail_logs = 0;
   if (Opt().partner) {
@@ -1574,6 +1808,8 @@ void PartnerBodyAfterLoad(const uint8_t* b, uint32_t game) {
 }
 
 void PartnerBodyBeforeAi(PPCContext& ctx, uint8_t* b, uint32_t w) {
+  RestorePartnerEquipment(ctx,b,w);
+  if (!Get().driving) StopPartnerWeaponSound(ctx,b);
   if (!Enabled()) return;
   auto& s = Get();
   s.prepared = false;
@@ -1639,6 +1875,7 @@ void PartnerBodyAfterAi(PPCContext& ctx, uint8_t* b, uint32_t w) {
     s.desired = {step->target.x, step->target.y, step->target.z};
     s.facing = {std::cos(p.facing), std::sin(p.facing), 0};
     s.animation.Update(p,s.dt);
+    p.weapon=s.animation.weapon; p.aiming=s.animation.aiming;
     if (s.animation.new_shot) ++s.animation_shots;
 #if defined(KK_DEV_TOOLS)
     static const bool capture_shots=[] { const char* v=std::getenv("KK_DEV_PARTNER_SHOTS"); return v && *v=='1'; }();
@@ -1648,7 +1885,7 @@ void PartnerBodyAfterAi(PPCContext& ctx, uint8_t* b, uint32_t w) {
     auto choice = coop::puppet::ChooseAction(s.animation.moving ? s.animation.speed : 0, s.observed_motion);
     const bool human = !s.humans.at(rig.actor).other_human && Load32(b,rig.vars) == 0;
     const auto held=human ? BodyWeapon(b,rig) : 0;
-    const auto weapon=uint8_t(held);
+    const auto weapon=p.weapon;
     const bool firing=s.animation.fire_left>0;
     const auto native = coop::puppet::HumanAction(weapon,s.animation.moving,s.animation.crouched,firing);
     if (human) {
@@ -1658,7 +1895,7 @@ void PartnerBodyAfterAi(PPCContext& ctx, uint8_t* b, uint32_t w) {
           if (gait.clip.action==native && gait.clip.item==*item) speed=gait.clip.speed;
         choice=coop::puppet::Action{native,*item,speed};
       }
-      if (s.animation.moving && !firing) {
+      if (s.animation.moving && !firing && !weapon) {
         if (const auto gait=coop::puppet::ChooseGait(s.animation.vx,s.animation.vy,p.facing,s.animation.crouched,
                                                    s.native_gaits,s.requested_tuple)) {
           choice=gait->clip;
@@ -1668,7 +1905,7 @@ void PartnerBodyAfterAi(PPCContext& ctx, uint8_t* b, uint32_t w) {
           s.facing={std::cos(direction),std::sin(direction),0};
         }
       }
-      if (firing) {
+      if (firing && !weapon) {
         const auto fire=coop::puppet::FireAction(weapon,s.animation.crouched,
             [&](uint16_t action) { return LoadedItem(b,rig,action); });
         if (fire) choice=fire;
@@ -1687,7 +1924,7 @@ void PartnerBodyAfterAi(PPCContext& ctx, uint8_t* b, uint32_t w) {
       if (!firing && s.animation.use_left>0) {
         // Reloads are authored for an arm-only child layer. Never run one as
         // a full-body clip with undefined leg poses; use the bounded gesture.
-        const auto item=held && coop::puppet::AnimationDrive::FullBodyEquipmentAction(s.animation.use_action) ?
+        const auto item=weapon && coop::puppet::AnimationDrive::FullBodyEquipmentAction(s.animation.use_action) ?
             LoadedItem(b,rig,s.animation.use_action) : std::nullopt;
         if (item) choice=coop::puppet::Action{s.animation.use_action,*item,0};
         if (s.animation.new_use) REXLOG_INFO("PUPPET equipment visual actor={:08X} remote-action={} loaded={} gesture-fallback={}",
@@ -1710,7 +1947,7 @@ void PartnerBodyAfterAi(PPCContext& ctx, uint8_t* b, uint32_t w) {
       const bool changed = tuple != s.requested_tuple;
       // A completed non-looping recoil may replay for a later round. Never
       // rewind an advancing burst on every incoming shot.
-      s.transition_pending = changed || (firing && s.animation.new_shot && (Load16(b,rig.layer)&0x80));
+      s.transition_pending = changed || (!weapon && firing && s.animation.new_shot && (Load16(b,rig.layer)&0x80));
       if (s.transition_pending) { if (changed) ++s.action_changes; else ++s.action_restarts; }
       s.requested_tuple = tuple;
       s.missing_action_kind = 0;
@@ -1769,6 +2006,11 @@ void PartnerBodyAfterAi(PPCContext& ctx, uint8_t* b, uint32_t w) {
   }
   if (!s.Validate(b, w, rig)) return;
   if (Opt().partner) {
+    if (s.partner.partner) {
+      auto equipment=*s.partner.partner;
+      equipment.weapon=s.animation.weapon; equipment.aiming=s.animation.aiming;
+      PartnerWeapon(ctx,b,rig,equipment);
+    }
     if (rig.layer!=s.rate_layer) { s.rate_layer=rig.layer; s.saved_rate=b[rig.layer+2]; }
     // Intermediate blend actions and non-gait clips retain their authored
     // rate. A blanket 60 fps also sped up idle/use clips authored at 30 fps.
@@ -2092,6 +2334,7 @@ void PartnerBodyPoseBlended(PPCContext& ctx,uint8_t* b,uint32_t actor) {
   if (!s.Validate(b,s.world,rig) || !(b[rig.anim+1]&15) || !Ptr(b,rig.anim,8,4)) return;
   ++s.pose_blends;
   PartnerBodyAim(ctx,b,rig.actor,rig.ai);
+  PartnerWeaponFlash(ctx,b,rig);
 #if defined(KK_DEV_TOOLS)
   static const bool trace=[] { const auto* v=std::getenv("KK_DEV_PARTNER_TRACE"); return v && *v=='1'; }();
   const auto now=Clock::now();

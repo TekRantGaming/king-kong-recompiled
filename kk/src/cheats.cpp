@@ -415,6 +415,43 @@ void DevGunfire(uint8_t* base) {
     REXLOG_INFO("KK dev gunfire: machine-gun ammo {}, {} consumed", ammo, consumed);
   }
 }
+// Private two-window weapon appearance proof. This changes Jack's real
+// equipment, using the native inventory and the ordinary gun cheat grant,
+// never the outgoing pose. Example: 12:1,24:2,36:3,48:4,60:6,72:7,84:0.
+void DevWeaponSequence(uint8_t* base) {
+  static const char* sequence=std::getenv("KK_DEV_WEAPON_SEQUENCE");
+  if (!sequence || !*sequence || !REXCVAR_GET(kk_coop_enabled)) return;
+  const auto g=Load32(base,kGamePtr), actor=Load32(base,0x82CCBF7C);
+  if (!coop::PoseAddress(g,13132) || !coop::PoseAddress(actor,28) || Load32(base,g+4)) return;
+  const auto ext=Load32(base,actor+24);
+  if (!coop::PoseAddress(ext,8)) return;
+  const auto ai=Load32(base,ext+4);
+  if (!coop::PoseAddress(ai,68)) return;
+  const auto vars=Load32(base,ai+64), bank=Load32(base,0x82CC8848);
+  if (!coop::PoseAddress(vars,8) || !coop::PoseAddress(bank,13176)) return;
+  const auto slot=Load32(base,vars+4);
+  if (slot>12) return;
+  static uint32_t previous_actor=0;
+  static const char* next=sequence;
+  static auto start=std::chrono::steady_clock::time_point{};
+  const auto now=std::chrono::steady_clock::now();
+  if (previous_actor!=actor) { previous_actor=actor; start=now; next=sequence; }
+  if (!*next) return;
+  char* separator=nullptr;
+  const double at=std::strtod(next,&separator);
+  if (!separator || *separator!=':' || !std::isfinite(at) || at<0 || at>180) return;
+  char* end=nullptr;
+  const auto weapon=std::strtoul(separator+1,&end,10);
+  if (end==separator+1 || (*end && *end!=',') || weapon>10) return;
+  const auto elapsed=std::chrono::duration<double>(now-start).count();
+  if (elapsed<at) return;
+  if (weapon>=1 && weapon<=4) GiveWeapon(base,g,int(weapon),80);
+  else { SetFlags(base,g,kCheatsUsed); Store32(base,g+kWeapon,uint32_t(weapon)); }
+  Store32(base,bank+0x3344+4*slot,uint32_t(weapon));
+  REXLOG_INFO("KK dev weapon sequence: t={:.3f} level={} actor={:08X} slot={} actual-equipment={}",
+      elapsed,Load32(base,g+0x18),actor,slot,weapon);
+  next=*end ? end+1 : end;
+}
 #endif
 
 }  // namespace
@@ -488,5 +525,6 @@ REX_HOOK_RAW(sub_8272C320) {
   kk::hardcore::Frame(base);
 #if defined(KK_DEV_TOOLS)
   kk::DevGunfire(base);
+  kk::DevWeaponSequence(base);
 #endif
 }

@@ -85,6 +85,12 @@ inline std::optional<Action> ChooseAction(float speed, std::span<const Action> o
 // The player-only 40/50 series is deliberately excluded. Callers resolve the
 // loaded rig's action/item resource, including on independent native copies.
 inline uint16_t HumanAction(uint8_t weapon, bool moving, bool crouched, bool firing) {
+  if (weapon>=1 && weapon<=4 && !crouched) {
+    // H npc_idle: 0x91..0x94; npc_walk: 0x0B/0xA5/0x96.
+    // The shot itself belongs to anim2, not a repeated main-clip restart.
+    return moving ? (weapon>=3 ? 150 : weapon==2 ? 165 : 11) : uint16_t(144+weapon);
+  }
+  if (weapon>=6 && weapon<=8 && !crouched) return moving ? 11 : 96;
   if (crouched) {
     if (firing && weapon) return weapon >= 3 ? 36 : 26;
     return moving ? (weapon >= 3 ? 37 : 27) : (weapon >= 3 ? 36 : 26);
@@ -93,6 +99,21 @@ inline uint16_t HumanAction(uint8_t weapon, bool moving, bool crouched, bool fir
   // belong to the vars+2976 hit-reaction branch, not to gunfire.
   if (firing && weapon) return weapon >= 3 ? 150 : weapon==2 ? 165 : 11;
   return moving ? 10 : 0;
+}
+// H_callback_after_blend's tag 125/126/127 variant selection. These are
+// native equipment kinds, including intact/broken spears and bones.
+inline uint8_t WeaponVariant(uint8_t weapon, bool right) {
+  if (weapon>=1 && weapon<=4) {
+    constexpr uint8_t gun[]={0,4,2,6,5};
+    return gun[weapon];
+  }
+  if (!right) return weapon>=5 && weapon<=10 ? 3 : 0;
+  constexpr uint8_t held[]={0,4,2,6,5,3,10,7,9,11,12};
+  return weapon<=10 ? held[weapon] : 0;
+}
+inline uint16_t WeaponAimAction(uint8_t weapon) {
+  constexpr uint16_t aim[]={0,143,146,147,144};
+  return weapon<=4 ? aim[weapon] : 0;
 }
 // Use the native armed stance on a confirmed shot, falling back to another
 // loaded gun's aim. Recoil events are separate from the base action selector.
@@ -139,6 +160,7 @@ struct AnimationDrive {
   uint16_t last_action = 0, use_action = 0;
   double action_time = -1;
   bool crouched = false, airborne = false;
+  uint8_t weapon = 0, aiming = 0;
   static bool FullBodyEquipmentAction(uint16_t action) {
     // H pickup actions 0x22/0x23 and H_ETAT_IA_lance's throws 0x56/0x5C.
     return action==0x22 || action==0x23 || action==0x56 || action==0x5C;
@@ -174,6 +196,7 @@ struct AnimationDrive {
       action_time=p.time;
       if (p.action!=last_action && EquipmentAction(p.action)) { use_action=p.action; use_left=.65f; new_use=true; }
       last_action=p.action; crouched=p.crouched; airborne=p.airborne;
+      weapon=p.weapon; aiming=p.aiming;
       if (have_airborne && was_airborne && !airborne) land_left=.5f;
       was_airborne=airborne; have_airborne=true;
     }
