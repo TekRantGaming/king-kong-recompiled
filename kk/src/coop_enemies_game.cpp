@@ -3553,9 +3553,12 @@ std::optional<ShotVector> EnemyAimTarget(const uint8_t* b, ShotVector origin) {
 #endif
 } // namespace kk::coop
 
+namespace kk::coop { bool EnemySpawnerStep(PPCContext& ctx,uint8_t* base) { return SpawnerStep(ctx,base); } }
+#if !defined(KK_DEV_TOOLS)
 REX_HOOK_RAW(sub_826E1EE8) {
   if (!kk::coop::SpawnerStep(ctx,base)) __imp__sub_826E1EE8(ctx,base);
 }
+#endif
 REX_HOOK_RAW(sub_826F8BC8) {
   if (!kk::coop::SpawnerStep(ctx,base)) __imp__sub_826F8BC8(ctx,base);
 }

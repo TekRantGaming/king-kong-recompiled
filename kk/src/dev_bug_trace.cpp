@@ -11,6 +11,7 @@
 //               ES_CheckPoint hook (port-traces/patches/pause_hooks.patch).
 // Lines start with "KK dev bug". All addresses are the 360 build's (kk-decomp data/names.tsv).
 #if defined(KK_DEV_TOOLS)
+#include "coop_enemies_game.h"
 
 #include <algorithm>
 #include <cmath>
@@ -312,6 +313,7 @@ REX_HOOK_RAW(sub_82508C00) {
 // waves: Spawner_loop runs every frame for every spawner.
 REX_EXTERN(__imp__sub_826E1EE8);
 REX_HOOK_RAW(sub_826E1EE8) {
+  if (kk::coop::EnemySpawnerStep(ctx,base)) return;
   if (!kk::bugtrace::Waves()) {
     __imp__sub_826E1EE8(ctx, base);
     return;
