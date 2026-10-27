@@ -30,6 +30,8 @@ std::optional<CameraPose> host_previous,remote;
 uint32_t cut=1,skip=0,consumed_skip=0;
 bool start_down=false,local_scripted=false,parked=false;
 TogetherCutscene together_scene;
+ObserverSceneHistory scene_history;
+unsigned scene_lag_logs=0;
 float origin[3]{};
 
 bool World(const uint8_t* b,const FlowView& v) {
@@ -57,6 +59,7 @@ void Reset() {
   began=Now(); last_camera=0; checkpoint_mismatch=0; status="Observer: waiting for host camera.";
   camera_timeout_since=host_capture_time=0; host_capture_reason="no scene view";
   together_scene={}; cutscene_active=false;
+  scene_history.Clear(); scene_lag_logs=0;
 }
 }
 void SetPartnerSpectating(bool enabled) {
@@ -231,20 +234,24 @@ bool View(uint8_t* b,uint32_t view,uint32_t caller,std::array<uint8_t,68>& saved
   const bool fresh=info.accepted>=0 && Now()-info.accepted<=.5;
   if (!fresh) mismatch_since=0;
   if (!temporary && !together_scene.Active() && fresh && !remote->paused && caller==0x8287390C) {
-    bool diverged=local_scripted!=remote->scripted;
-    if (local_scripted && remote->scripted) {
-      CameraPose local;
-      CameraAxes axes{};
-      for (unsigned i=0;i<3;++i) for (unsigned j=0;j<3;++j) axes[i][j]=hfr::LoadF(b,view+16*i+4*j);
-      const float distance=std::hypot(hfr::LoadF(b,view+48)-remote->x,
-          hfr::LoadF(b,view+52)-remote->y,hfr::LoadF(b,view+56)-remote->z);
-      // Allow the interpolation delay, never substitute a different local scene
-      // merely because both cameras are scripted. Fast or incompatible scenes fail closed.
-      diverged=!std::isfinite(distance) || distance>5 || !CameraRotation(local,axes) ||
-          std::abs(CameraDot(local,*remote))<.9f;
-    }
+    CameraPose local; local.time=Now(); local.generation=v.world.generation; local.level=v.world.level;
+    local.cut=1; local.scripted=local_scripted;
+    local.x=hfr::LoadF(b,view+48); local.y=hfr::LoadF(b,view+52); local.z=hfr::LoadF(b,view+56);
+    CameraAxes axes{};
+    for (unsigned i=0;i<3;++i) for (unsigned j=0;j<3;++j) axes[i][j]=hfr::LoadF(b,view+16*i+4*j);
+    const float distance=std::hypot(local.x-remote->x,local.y-remote->y,local.z-remote->z);
+    const bool rotation=CameraRotation(local,axes);
+    if (rotation) scene_history.Push(local); else scene_history.Clear();
+    const bool diverged=!rotation || !scene_history.Matches(*remote);
+    if (!diverged && (local_scripted!=remote->scripted || distance>5 || std::abs(CameraDot(local,*remote))<.9f) && scene_lag_logs++<4)
+      REXLOG_INFO("KK co-op observer: delayed host scene matches recent native path generation={} level={} current-distance={:.2f} packet-age={:.3f}s",
+          generation,v.world.level,distance,Now()-info.accepted);
     if (diverged) {
-      if (!mismatch_since) mismatch_since=Now();
+      if (!mismatch_since) {
+        mismatch_since=Now();
+        REXLOG_INFO("KK co-op observer: scene mismatch begins generation={} level={} local-scripted={} host-scripted={} distance={:.2f} rotation-dot={:.3f} packet-age={:.3f}s",
+            generation,v.world.level,local_scripted,remote->scripted,distance,std::abs(CameraDot(local,*remote)),Now()-info.accepted);
+      }
       if (Now()-mismatch_since>1.0) { Fallback("Observer unavailable: local cutscene start/end or scene diverged from host."); return false; }
     } else mismatch_since=0;
   }
