@@ -76,6 +76,19 @@ void Codec() {
   raft.raft.route=1; Check(!ValidObjectState(raft),"raft withdrawal cannot smuggle a stale pose");
 }
 void Policies() {
+  {
+    constexpr uint32_t actor=0x41000000,vars=0x42000000,bank=0x43000000;
+    std::map<uint32_t,uint32_t> memory{{actor+4,0x00400000},{vars,2},{vars+568,1},{vars+572,0},
+        {vars+584,1},{vars+588,215},{vars+1096,1},{0x82CC8F40,bank},{bank+(770+(215>>5))*4,1u<<(215&31)}};
+    float fraction=1;
+    const auto eligible=[&] { return objects::CompletedDormantDoor([&](uint32_t p){return memory.at(p);},
+        [&](uint32_t p){Check(p==vars+1084,"only the door's native progress is read");return fraction;},actor,vars); };
+    Check(eligible(),"completed persistent dormant door can retire its stale controller");
+    memory[actor+4]=0; Check(!eligible(),"active door keeps its native scheduler"); memory[actor+4]=0x00400000;
+    memory[vars+572]=1; Check(!eligible(),"a door that can close again is not retired"); memory[vars+572]=0;
+    fraction=.5f; Check(!eligible(),"partial motion cannot retire a controller"); fraction=1;
+    memory[bank+(770+(215>>5))*4]=0; Check(!eligible(),"an endpoint without its native progress bit is not certified");
+  }
   std::array<float,9> basis{1,0,0,0,1,0,0,0,1};
   Check(objects::RigidSupportBasis(basis),"unit support rotations can retain their complete orientation");
   basis={0,1,0,-1,0,0,0,0,1};

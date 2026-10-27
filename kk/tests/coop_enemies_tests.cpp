@@ -250,9 +250,14 @@ void LifecycleAndInterpolation() {
   Check(receiver.Sample(1.8).records.empty(), "stale live state expires");
   receiver.Receive(Event(b, EnemyEventKind::Removed), 2);
   receiver.Receive(Snapshot(a, 1001, 12), 2.1); receiver.Receive(Event(a, EnemyEventKind::Spawned), 2.2);
+  auto late_death=a; late_death.life=0; receiver.Receive(Event(late_death,EnemyEventKind::Died),2.3);
   sampled = receiver.Sample(20);
-  Check(sampled.records.size() == 1 && sampled.records[0].kind == EnemyEventKind::Removed && sampled.records[0].enemy.life == 0,
-      "terminal event persists and wins over delayed live packets");
+  Check(sampled.records.size() == 1 && sampled.records[0].kind == EnemyEventKind::Removed && sampled.records[0].enemy.life == b.life,
+      "retirement preserves native health and wins over delayed live and death packets");
+  Channel corpse;
+  corpse.Receive(Event(late_death,EnemyEventKind::Died),1);
+  corpse.Receive(Event(b,EnemyEventKind::Removed),2);
+  Check(corpse.Sample(20).records[0].enemy.life==0,"retirement never resurrects an already confirmed death");
   receiver.Receive(Snapshot(Enemy(555), 1, 13, 2), 21);
   receiver.Receive(Snapshot(a, 1002, 14, 1), 21.01);
   Check(receiver.Sample(21.02).world.serial == 2 && receiver.Sample(21.02).records[0].enemy.id.source == 555, "late world cannot roll load backward");
@@ -297,7 +302,7 @@ void ScorpionDamagePools() {
   Check(commit && Near(commit->enemy.life, 24) && Near(commit->enemy.secondary_life, 3), "handover preserves both damaged pools");
   Message wire; wire.type = MessageType::OwnershipChange; wire.epoch = 1; wire.ownership = *commit;
   Check(Decode(Packet(wire), decoded) && Near(decoded.ownership.enemy.secondary_life, 3), "handover wire retains secondary health");
-  auto malformed = Packet(Snapshot(b)); malformed[malformed.size()-4] = 0x7f; malformed[malformed.size()-3] = 0xc0;
+  auto malformed = Packet(Snapshot(b)); malformed[malformed.size()-14] = 0x7f; malformed[malformed.size()-13] = 0xc0;
   Check(!Decode(malformed, decoded), "nonfinite wire secondary health refused");
   Check(owner.Commit(*commit) && guest.Commit(*commit), "both sides commit damaged scorpion");
   auto final = guest.last; final.life = 18; final.secondary_life = 2;

@@ -9,6 +9,7 @@ param(
     [string]$StoryLayout = '',
     [switch]$Stationary,
     [switch]$ObjectTrace,
+    [switch]$VegetationCensus,
     [ValidateRange(0,180)][int]$RouteSeconds = 32,
     [ValidateRange(15,86400)][int]$Seconds = 150,
     [ValidateRange(70,180)][int]$CheckpointSeconds = 90,
@@ -92,7 +93,7 @@ if ($ResumeManifest) {
     $resumePath=[IO.Path]::GetFullPath($ResumeManifest)
     if (-not $resumePath.StartsWith("$coopRoot\runs\",[StringComparison]::OrdinalIgnoreCase)) { throw 'Resume manifest must be a private co-op run.' }
     $prior=Get-Content -LiteralPath $resumePath -Raw | ConvertFrom-Json
-    if ($prior.source_branch -notin @('coop-c86','coop-c87')) { throw 'Only a C86 or C87 sweep may be resumed.' }
+    if ($prior.source_branch -notin @('coop-c86','coop-c87','coop-c99')) { throw 'Only a C86, C87 or C99 sweep may be resumed.' }
     # A service interruption can leave 'running' after the approved runner is
     # gone. Retrying still goes through that runner and its normal slot checks.
     $scenariosToRun=@($prior.runs | Where-Object { $_.status -in @('pending','running','blocked-task-stop','blocked-deadline','blocked-disk-space','waiting-runner','stopped','error') })
@@ -114,6 +115,7 @@ $manifest = [ordered]@{
     world_diff = [bool]$WorldDiff; checkpoints = [bool]$Checkpoints; source_commit = $sourceCommit
     stationary = [bool]$Stationary; route_seconds = $RouteSeconds
     object_trace = [bool]$ObjectTrace
+    vegetation_census = [bool]$VegetationCensus
     source_branch = $sourceBranch; source_dirty = $sourceDirty; exe_sha256 = $exeSha
     protocol = 27; snapshot_schema = 1; fault_profile = 'bad_wifi'; fault_seeds = @(86,86)
     scenarios = $rules; resumed_from = $ResumeManifest
@@ -142,6 +144,7 @@ try {
         $joinText = 'KK_DEV_LAUNCHER_INPUT=wait-home,direct:code:C86ABC,direct:join,direct:ready|KK_DEV_FACE_ENEMY=16:0.001'
         if ($StoryLayout) { $envText += "|KK_DEV_STORY_LAYOUT=$StoryLayout" }
         if ($ObjectTrace) { $envText += '|KK_DEV_OBJECTS=1' }
+        if ($VegetationCensus) { $envText += '|KK_DEV_OBJECTS_SCAN=1|KK_DEV_OBJECTS_SCAN_LATE=25' }
         if ($Stationary) {
             $envText = $envText.Replace('|KK_DEV_WANDER=1','')
             $joinText = $joinText.Replace('|KK_DEV_FACE_ENEMY=16:0.001','')

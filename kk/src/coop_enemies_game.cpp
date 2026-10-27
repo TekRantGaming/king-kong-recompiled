@@ -1485,7 +1485,6 @@ void Replicas(PPCContext& ctx, uint8_t* b, bool drive) {
     auto& authority = a->second;
     if (!authority.Accepts(r.enemy) || authority.owner == Side() || authority.Frozen()) continue;
     authority.Observe(r.latest.id.source ? r.latest : r.enemy);
-    if (authority.dead && r.enemy.life > 0) continue;
     if (r.kind == EnemyEventKind::Removed) {
       // Death and retirement are separate reliable boundaries. A zero-life
       // replica still runs its corpse script until its owner removes the root.
@@ -1506,6 +1505,7 @@ void Replicas(PPCContext& ctx, uint8_t* b, bool drive) {
           authority.owner==EnemyOwner::Host ? "host":"guest",r.enemy.id.source,r.enemy.id.sequence,uint16_t(r.enemy.id.family));
       continue;
     }
+    if (authority.dead && r.enemy.life > 0) continue;
     const bool dead = r.kind != EnemyEventKind::Spawned || r.enemy.life <= 0;
     if (!dead && (!ControllerSafe(b, binding->actor) || !Scratch::CanUse(ctx))) continue;
     // Only the nonowner receives raw life. Corpses run native death dispatches.
@@ -1681,6 +1681,7 @@ void HoldReplicas(PPCContext& ctx, uint8_t* b, bool drive) {
   for (auto& [id, a] : s.authority) {
     if (!a.Frozen() && a.owner == Side() && !s.private_reseed.contains(id)) continue;
     const auto* binding = CanonicalBinding(b, id); if (!binding) continue;
+    if (s.retirement_applied.contains(binding->id)) continue;
     const auto& state = a.Frozen() ? a.pending->enemy : a.last;
     if (state.life <= 0) {
       WriteLife(b, *binding, state);

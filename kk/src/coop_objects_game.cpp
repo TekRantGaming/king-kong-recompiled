@@ -828,6 +828,13 @@ void RetireDoors(PPCContext& ctx,uint8_t* b) {
   };
   for (auto& [actor,o]:state.bindings) {
     if (o.kind!=ObjectKind::Door || !Valid(b,o) || Match(o.source,o.kind)!=&o) continue;
+    if (DoorScheduled(b,o.ai) && objects::CompletedDormantDoor([&](uint32_t a){return Load32(b,a);},
+        [&](uint32_t a){return LoadF(b,a);},actor,o.vars)) {
+      stop(o);
+      if (state.host) Observe(b,o);
+      REXLOG_INFO("KK co-op door controller retirement: role={} id={:016X} native-checkpoint-endpoint=true",
+          state.host ? "host":"guest",o.source);
+    }
     if (o.native_retired) { if (DoorScheduled(b,o.ai)) stop(o); continue; }
     if (state.host) continue;
     const auto* authority=state.replica.Find(o.kind,o.source);

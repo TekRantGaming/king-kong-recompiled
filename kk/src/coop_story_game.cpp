@@ -33,6 +33,7 @@ REX_EXTERN(__imp__sub_82847478);
 REX_EXTERN(__imp__sub_82501A30);
 REX_EXTERN(__imp__sub_82501D50);
 REX_EXTERN(__imp__sub_82449EB0);
+REX_EXTERN(__imp__sub_82449CD0);
 REX_EXTERN(__imp__sub_8250B9D8);
 REX_EXTERN(__imp__sub_8250BED8);
 #if defined(KK_DEV_TOOLS)
@@ -1086,8 +1087,9 @@ bool HostNpcWait(PPCContext& ctx,uint8_t* b,uint32_t fn) {
   if (!s->hints.Passed(s->run,index)) { ctx.r3.u32=0; return true; }
   std::vector<uint32_t> extensions;
   const bool capability=fn==0x82501A30;
+  const bool cinematic=fn==0x8250B9D8;
   if (capability && !Ptr(b,Load32(b,payload+4),24,42)) return false;
-  for (unsigned off=capability ? 8:4;off<=20;off+=4) {
+  for (unsigned off=(capability || cinematic) ? 8:4;off<=20;off+=4) {
     const auto actor=Load32(b,payload+off);
     if (!actor) continue;
     const auto ext=Ptr(b,actor,24,42);
@@ -1102,26 +1104,33 @@ bool HostNpcWait(PPCContext& ctx,uint8_t* b,uint32_t fn) {
     b[ext+40]=uint8_t(((flags|0x1000)&~0x2000u)>>8);
     b[ext+41]=uint8_t(flags);
   }
+  if (cinematic) {
+    // WaitScript's successful branch advances its own debounce timer and
+    // local state word after acknowledging the four optional NPCs. The host
+    // has already passed its distance/view gates. No local failure sound runs.
+    const bool started=Load32(b,payload+100)!=0;
+    const auto dt=LoadF(b,0x82C636E0);
+    StoreF(b,payload+36,started ? LoadF(b,payload+36)+dt:0);
+    StoreF(b,payload+40,started ? LoadF(b,payload+40)+dt:0);
+    Store32(b,payload+100,1);
+  }
   ctx.r3.u32=1;
   Note("host NPC wait",Event(*s,StoryPhase::Advance,index),"same host activation completed; native local acknowledgement retained");
   return true;
 }
 bool HostCinematicWait(PPCContext& ctx,uint8_t* b) {
-  const auto payload=ctx.r3.u32;
-  auto* s=CinematicRecord(ctx,b,payload,0x8250B9D8);
+  return HostNpcWait(ctx,b,0x8250B9D8);
+}
+bool HostAnimationWait(PPCContext& ctx,uint8_t* b) {
+  auto* s=CinematicRecord(ctx,b,ctx.r3.u32,0x82449CD0,true);
   if (!s) return false;
+  // This exact native predicate only reads the actor's action, variant and
+  // frame. It has no completion writes. Local animation cannot start the next
+  // authored order before its host record has actually completed.
   const auto index=Load32(b,s->binding.vars+19812);
-  // WaitScript consumes the NPC-ready flags when it succeeds. Keep that native
-  // completion behind the host boundary; do not consume them speculatively.
-  if (!s->hints.Passed(s->run,index)) { ctx.r3.u32=0; return true; }
-  const auto flags=Load32(b,payload+84);
-  // Decomp: bits 1/2 test local Jack distance and local camera projection.
-  // Host already passed these tests. The native four-NPC-ready test and its
-  // completion writes still run locally, with the authored flags restored.
-  Store32(b,payload+84,flags&~3u);
-  __imp__sub_8250B9D8(ctx,b);
-  Store32(b,payload+84,flags);
-  if (ctx.r3.u32) Note("host cinematic wait",Event(*s,StoryPhase::Advance,index),"local view gates covered; native NPC completion retained");
+  const bool passed=s->hints.Passed(s->run,index);
+  ctx.r3.u32=passed ? 1:0;
+  if (passed) Note("host animation wait",Event(*s,StoryPhase::Advance,index),"read-only native action/frame predicate follows the same host activation");
   return true;
 }
 bool HostCinematicSpeech(PPCContext& ctx,uint8_t* b) {
@@ -1173,6 +1182,9 @@ REX_HOOK_RAW(sub_82501A30) {
 }
 REX_HOOK_RAW(sub_82501D50) {
   if (!kk::coop::HostNpcWait(ctx,base,0x82501D50)) __imp__sub_82501D50(ctx,base);
+}
+REX_HOOK_RAW(sub_82449CD0) {
+  if (!kk::coop::HostAnimationWait(ctx,base)) __imp__sub_82449CD0(ctx,base);
 }
 REX_HOOK_RAW(sub_82449EB0) {
   const auto payload=ctx.r3.u32;
