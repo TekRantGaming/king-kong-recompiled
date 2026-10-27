@@ -95,7 +95,7 @@ void ImpactSelector() {
   std::vector<uint8_t> bytes;
   // Native Javelin launch seeds this integer word with float tolerance bits
   // on its H collision path. The native impact builder uses its low byte.
-  for (const auto word : {0x3A83126Fu,0x3DCCCCCDu,0x40000000u,0xFFFFFFFEu,0x0000FFFFu}) {
+  for (const auto word : {0x38D1B717u,0x3A83126Fu,0x3DCCCCCDu,0x40000000u,0xFFFFFFFEu,0x0000FFFFu}) {
     m.damage.surface=word;
     if (word>65535 && word!=UINT32_MAX)
       Check(!Encode(m,bytes),"raw native high bits cannot be accepted as a wire selector");
