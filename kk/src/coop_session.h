@@ -40,6 +40,9 @@ struct SessionConfig {
   // C80 resumed session (coop_handover.h): both Hellos must carry this token, and the host's epoch is it.
   // Zero for a normal session, which in turn rejects a Hello that carries one.
   uint64_t resume_token = 0;
+  // Steam's lobby already identifies the host's current epoch. A delayed
+  // Hello from the previous session must not choose the new guest's epoch.
+  uint64_t expected_host_epoch = 0;
 };
 struct PoseCounters {
   uint64_t sent = 0, received = 0;

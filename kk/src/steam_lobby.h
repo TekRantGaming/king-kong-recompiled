@@ -62,6 +62,20 @@ struct SocialModel {
   LobbyChoice choice;
 };
 bool CanStartLobby(const SocialModel& model);
+// Lobby data and member data can arrive in different Steam callbacks. Seeing
+// "starting" before the last Ready flag is not a refusal by the partner.
+class LobbyStartReadiness {
+ public:
+  enum class Result { Waiting, Ready, TimedOut };
+  Result Observe(bool starting, bool both_ready, double now) {
+    if (!starting) { since_ = -1; return Result::Waiting; }
+    if (both_ready) { since_ = -1; return Result::Ready; }
+    if (since_ < 0) since_ = now;
+    return now - since_ >= 10 ? Result::TimedOut : Result::Waiting;
+  }
+ private:
+  double since_ = -1;
+};
 enum class SocialAction { Open, CreateLobby, Invite, OverlayInvite, Accept, Decline, SetReady, Start, Leave, SelectChapter, Resume };
 struct SocialCommand { SocialAction action = SocialAction::Open; SocialId id = 0; bool ready = false; LobbyChoice choice; };
 // Actions enqueue work, snapshots are value copies. Open explicitly connects to

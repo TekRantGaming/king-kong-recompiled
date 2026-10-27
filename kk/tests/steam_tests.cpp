@@ -20,6 +20,20 @@ void Check(bool ok, const char* text) {
   if (!ok) { std::fprintf(stderr, "FAIL: %s\n", text); std::exit(1); }
 }
 Compatibility Compatible() { return {kProtocolVersion, "test-version", "test-build", "test-mods"}; }
+void DelayedLobbyReadiness() {
+  using R = LobbyStartReadiness::Result;
+  LobbyStartReadiness gate;
+  Check(gate.Observe(false, false, 50) == R::Waiting, "waiting lobby does not start");
+  Check(gate.Observe(true, false, 51) == R::Waiting, "starting metadata can precede member Ready data");
+  Check(gate.Observe(true, false, 55) == R::Waiting, "allow delayed Steam member callback");
+  Check(gate.Observe(true, true, 56) == R::Ready, "start after both Ready flags arrive");
+  Check(gate.Observe(true, true, 70) == R::Ready, "Ready before starting metadata starts immediately");
+  Check(gate.Observe(true, false, 80) == R::Waiting, "new readiness wait has its own deadline");
+  Check(gate.Observe(true, false, 90) == R::TimedOut, "missing Ready data has a bounded failure");
+  gate.Observe(false, false, 91);
+  Check(gate.Observe(true, false, 100) == R::Waiting, "returning to waiting clears the old deadline");
+  Check(gate.Observe(true, true, 101) == R::Ready, "retry can start after readiness arrives");
+}
 void Keys() {
   const auto local = Compatible(); const auto keys = EncodeLobbyKeys(local);
   Compatibility out;
@@ -361,6 +375,26 @@ void SessionOverMessages() {
   host.End(7.4); guest.Tick(7.4);
   Check(guest.State() == SessionState::Ended, "reliable Bye ends partner session");
 }
+void PreviousSessionMessages() {
+  Backend a, b; a.self=1; b.self=2; a.remote=&b; b.remote=&a;
+  SteamMessagesTransport at(a,2), bt(b,1);
+  SessionConfig config{true,Role::Guest,0,Compatible()};
+  config.expected_host_epoch=12345;
+  CoopSession guest(config,bt);
+  Message stale; stale.type=MessageType::Hello; stale.epoch=987; stale.hello=Compatible();
+  auto inject=[&](const Message& m) {
+    std::vector<uint8_t> bytes; Check(Encode(m,bytes),"encode previous session message");
+    b.incoming.push_back({1,0,true,false,std::move(bytes)});
+  };
+  inject(stale); stale.type=MessageType::HelloAck; inject(stale); stale.type=MessageType::Bye; inject(stale);
+  guest.Tick(0);
+  Check(guest.State()==SessionState::Connecting && guest.Epoch()==0,
+        "old Hello Ack and Bye cannot select the new lobby epoch or end its guest");
+  CoopSession host({true,Role::Host,12345,Compatible()},at);
+  for(unsigned i=1;i<300;++i) { host.Tick(i*.01); guest.Tick(i*.01); }
+  Check(host.State()==SessionState::Connected && guest.State()==SessionState::Connected && guest.Epoch()==12345,
+        "guest accepts the advertised host after delayed messages from the last session");
+}
 }
 // C82: Steam Input actions become one Xbox pad; the manifest names every action the reader asks for.
 void SteamPad() {
@@ -425,6 +459,8 @@ void SteamPad() {
     Check(text->find('-') == std::string::npos, "no dashes in text Steam shows");
 }
 int main() {
+  DelayedLobbyReadiness();
+  PreviousSessionMessages();
   Keys(); Invites(); Social(); Messages(); EveryProtocolMessage(); StoryOverMessages(); FullSaveOverMessages(); SessionOverMessages(); Stub();
   SteamPad();
   std::printf("Steam service tests: %u checks OK\n", checks);

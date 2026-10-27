@@ -114,6 +114,7 @@ void CoopSession::Receive(const Message& m, double now) {
   };
   if (camera) { camera_info_.received=now; camera_info_.sequence=m.sequence; }
   if (m.type == MessageType::Hello && state_ == SessionState::Connecting) {
+    if (config_.role == Role::Guest && config_.expected_host_epoch && m.epoch != config_.expected_host_epoch) return;
     rejection_ = m.protocol != m.hello.protocol ? RejectReason::Protocol :
         CheckCompatibility(config_.compatibility, m.hello);
     const bool epoch_ok = config_.role == Role::Host ? m.epoch == 0 : m.epoch != 0;

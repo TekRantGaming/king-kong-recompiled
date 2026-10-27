@@ -137,8 +137,8 @@ void RecordProgress(const FlowView& v) {
   if (play::ApplyTogetherProgress(personal,progress_slot,v.completed)) applied_progress=v.completed;
   else { Send(MessageType::FlowAbort,v.world); REXLOG_ERROR("KK co-op flow: personal chapter unlock could not be recorded"); }
 }
-FlowView Wait(uint32_t generation, bool load_barrier) {
-  const double until=Now()+125;
+FlowView Wait(uint32_t generation, bool load_barrier, bool host_transition=false) {
+  const double until=Now()+(host_transition ? 2 : 125);
   double paint=0;
   bool waiting_logged=false;
   for (;;) {
@@ -155,8 +155,12 @@ FlowView Wait(uint32_t generation, bool load_barrier) {
       REXLOG_INFO("KK co-op flow: chapter finished role={} generation {} level {}; waiting for partner to finish",
           v.host ? "host" : "guest",generation,v.world.level);
     }
-    if (!load_barrier && v.phase==FlowPhase::Playing && !v.host &&
+    if (!host_transition && !load_barrier && v.phase==FlowPhase::Playing && !v.host &&
         v.policy==ChapterPolicy::Observer && !observer::HoldWorld()) return v;
+    if (host_transition && Now()>=until) {
+      observer::Fallback("Observer unavailable: the host's next load did not arrive.");
+      return v;
+    }
     const bool chapter_wait=v.phase==FlowPhase::Waiting || (v.policy==ChapterPolicy::Observer && !v.host && v.phase==FlowPhase::Playing);
     if (Now()>=until && !chapter_wait) { Send(MessageType::FlowAbort,v.world); return v; }
     if (Now()>=paint) { RequestUiPaint(); paint=Now()+.1; }
@@ -488,12 +492,16 @@ bool SessionBeforeGo(PPCContext& ctx,uint8_t* base,uint32_t g) {
       level=kChapterRules[size_t(next)].level; start=next==40 ? 49 : next==41 ? 0 : 1;
     }
     Store32(base,g+4,0);
-    if (!v.host && v.policy==ChapterPolicy::Observer)
-      observer::Fallback("Observer unavailable: local scripts requested a different load before the host.");
+    // An authored guest exit can precede the host's reliable LevelChange by
+    // a few frames. Hold at this boundary before declaring a divergence.
+    const bool host_transition=!v.host && v.policy==ChapterPolicy::Observer;
+    if (host_transition)
+      REXLOG_INFO("KK co-op observer: local transition to level {} start {} waits for host generation {}",
+          level,start,v.world.generation);
     if (v.host) Send(MessageType::LevelChange,{v.world.generation,level,start,v.completed});
     else if (v.policy==ChapterPolicy::SoloRegroup)
       Send(MessageType::ChapterFinished,v.world);
-    v=Wait(v.world.generation,false);
+    v=Wait(v.world.generation,false,host_transition);
     RecordProgress(v);
     if (v.world.generation>loaded_generation) AskLoad(base,g,v);
     return false;
@@ -557,7 +565,12 @@ void SessionAfterGo(uint8_t* base,uint32_t g,bool loaded) {
   REXLOG_INFO("KK co-op flow: loaded generation {}, waiting for both",loaded_generation);
   // uni_go's loader is synchronous. Stay at this boundary, with the network
   // worker and UI running, before any next simulation step or AI pass.
-  Wait(loaded_generation,true);
+  const auto released=Wait(loaded_generation,true);
+  if (released.phase==FlowPhase::Playing && released.world.generation==loaded_generation)
+    REXLOG_INFO("KK co-op flow: load barrier released role={} generation {} level {} policy={}",
+        released.host ? "host" : "guest",loaded_generation,released.world.level,
+        released.policy==ChapterPolicy::Together ? "together" :
+        released.policy==ChapterPolicy::SoloRegroup ? "solo-regroup" : "observer");
 }
 void SessionCheckpoint(uint32_t level,uint32_t checkpoint) {
   if (!launched) return;
