@@ -1780,6 +1780,9 @@ void PublishPlayerStatus(const uint8_t* b) {
 #if defined(KK_DEV_TOOLS)
     if (changed) REXLOG_INFO("BITE player-status incarnation={} condition={} last-processed={} cell={:08X} value={:.3f} dead={:.3f} hurt={:.3f} recovered={:.3f} bank={:08X} G={:08X}",
         p.incarnation, uint8_t(p.condition), p.last_damage, h->cell, h->value, h->dead, h->hurt, h->recovered, h->bank, Load32(b, 0x82CC97C0));
+    if (changed) REXLOG_INFO("COOP GRAB status local-life={} processed={} ready={} holder={:016X}/{} generation={} kind={} outgoing-life={} outgoing-first={} outgoing-source={:016X}/{} outgoing-generation={}",
+        p.incarnation,p.last_damage,p.grab_ready,p.grab_enemy.source,p.grab_enemy.sequence,p.grab_generation,p.grab_kind,
+        p.peer_grab_incarnation,p.peer_grab_number,p.peer_grab_enemy.source,p.peer_grab_enemy.sequence,p.peer_grab_generation);
 #endif
   }
 }
@@ -4069,6 +4072,18 @@ REX_HOOK_RAW(sub_82548BC0) {
 }
 REX_HOOK_RAW(sub_8271E450) { kk::coop::FilterPeerGrabQuery(ctx,base,false); }
 REX_HOOK_RAW(sub_8271E290) { kk::coop::FilterPeerGrabQuery(ctx,base,true); }
+#if defined(KK_DEV_TOOLS)
+REX_HOOK_RAW(sub_8271ECF8) {
+  const auto& g=kk::coop::Get().peer_grab;
+  const auto h=ctx.r3.u32;
+  if (g.actor && kk::coop::PoseAddress(h,8) && kk::hfr::Load32(base,h)==g.id && kk::hfr::Load32(base,h+4)==g.generation) {
+    static unsigned lines=0;
+    if (lines++<64) REXLOG_INFO("COOP GRAB native-free owner={:08X} source={:08X} caller={:08X} running={:08X} handle={:08X}/{} first-damage={}",
+        g.actor,g.source.actor,uint32_t(ctx.lr),kk::hfr::Load32(base,0x82CCBF6C),g.id,g.generation,g.first_damage);
+  }
+  __imp__sub_8271ECF8(ctx,base);
+}
+#endif
 #if defined(KK_DEV_TOOLS)
 REX_HOOK_RAW(sub_82614DC0) {
   const auto ai = kk::hfr::Load32(base, 0x82CCBF64);
