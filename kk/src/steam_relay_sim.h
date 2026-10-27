@@ -38,7 +38,7 @@ class SteamRelaySimulation final : public ICoopTransport, private ISteamMessages
     // Both channels share the connection, but only channel 0 is ordered.
     // SteamMessagesTransport itself applies its production 32/channel poll cap.
     std::vector<uint8_t> bytes;
-    for (unsigned i=0;i<64 && incoming_[0].size()<64 && incoming_[1].size()<64 && link_.Receive(bytes);++i) {
+    for (unsigned i=0;i<64 && incoming_[0].size()+incoming_[1].size()<64 && link_.Receive(bytes);++i) {
       Message m;
       if (!Decode(bytes,m)) continue;
       const bool reliable=m.type!=MessageType::PlayerPose && m.type!=MessageType::EnemySnapshot &&
