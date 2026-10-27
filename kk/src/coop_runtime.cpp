@@ -455,7 +455,9 @@ class PartnerOverlay final : public rex::ui::ImGuiDialog {
       // or another GameFrame. Never put session UI over their presenter.
       if (movies::LoaderWaiting()) return;
       const auto flow=SessionFlowSnapshot();
-      if (flow.active && (flow.reconnecting || flow.reconnect_expired)) {
+      // Only the waiting guest owns the reconnect buttons. The host's normal
+      // corner notice must not capture a live player's controller or B button.
+      if (flow.active && !flow.host && (flow.reconnecting || flow.reconnect_expired)) {
         ImGui::SetNextWindowPos(ImVec2(24,64),ImGuiCond_Always);
         ImGui::SetNextWindowBgAlpha(.92f);
         if (ImGui::Begin("##coop-rejoin-wait",nullptr,ImGuiWindowFlags_AlwaysAutoResize|ImGuiWindowFlags_NoDecoration)) {
