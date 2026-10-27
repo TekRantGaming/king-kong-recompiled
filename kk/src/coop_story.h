@@ -16,6 +16,7 @@ inline bool RetirableWait(uint32_t callback) {
 }
 inline bool NativeStopMatches(const StoryEvent& event,uint32_t generation,uint32_t level,
     uint64_t source,uint64_t script,uint32_t run,uint32_t record,uint32_t callback) {
+  if (COOP_MUT_IF("story_native_stop")) return true;
   return event.phase==StoryPhase::Stopped && ValidStoryEvent(event) &&
       event.generation==generation && event.level==level && event.source==source && event.script==script &&
       event.run==run && event.record==record && RetirableWait(callback);

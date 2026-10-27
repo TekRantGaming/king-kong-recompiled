@@ -288,6 +288,16 @@ void Profiles() {
   for(const auto name:{"lan","home","bad_wifi","mobile","hell"})
     for(uint32_t n=1;n<=40;++n) ProfileScenario(name,n);
 }
+void NativeStopScope() {
+  StoryEvent stopped{2,203,1,123,456,3,7,StoryPhase::Stopped};
+  const auto check=[&](const StoryEvent& e) {return story::NativeStopMatches(e,2,203,123,456,3,7,0x8250B9D8);};
+  Check(check(stopped),"same native stopped wait is eligible");
+  auto old=stopped; --old.generation;
+  Check(!check(old),"old world cannot retire a local live script");
+  old=stopped; ++old.run; Check(!check(old),"another activation cannot retire this wait");
+  old=stopped; ++old.record; Check(!check(old),"retirement cannot skip callbacks");
+  Check(!story::NativeStopMatches(stopped,2,203,123,456,3,7,0x8250C2C8),"NPC orders retain their native side effects");
+}
 void Outages() {
   for(unsigned role:{1u,2u}) {
     Pair p; p.Connect(); UdpSimulation cut; cut.one_way_roles=role; cut.one_way_seconds=5;
@@ -314,6 +324,7 @@ int main(int argc,char** argv) {
   else if(name=="ownership_generation") OwnershipGeneration();
   else if(name=="story_duplicate") StoryDuplicate();
   else if(name=="story_world") StoryWorld();
+  else if(name=="story_native_stop") NativeStopScope();
   else if(name=="digest_compare") DigestCompare();
   else if(name=="false_quiet") FalseQuiet();
   else if(name=="shot_validator") ShotValidation();
