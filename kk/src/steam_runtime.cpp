@@ -532,10 +532,10 @@ struct SteamRuntime::Impl
       const bool ready = model.members.size() == 2 && model.members[0].ready && model.members[1].ready;
       const auto readiness = start_readiness.Observe(true, ready, Now());
       if (readiness == LobbyStartReadiness::Result::TimedOut) {
-        Leave("The lobby readiness did not arrive. Open a new lobby and try again"); return false;
+        Leave("Could not start together. Open a new lobby and try again"); return false;
       }
       if (readiness == LobbyStartReadiness::Result::Ready) StartSession();
-      else if (model.status == SocialStatus::Lobby) Status(SocialStatus::Starting, "Waiting for lobby readiness");
+      else if (model.status == SocialStatus::Lobby) Status(SocialStatus::Starting, "Starting game");
     } else if (phase != "waiting" && phase != "starting") { Leave("Invalid lobby phase"); return false; }
     else if (phase == "waiting") start_readiness.Observe(false, false, Now());
     Publish(); return true;
