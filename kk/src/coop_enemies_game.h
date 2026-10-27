@@ -8,6 +8,7 @@
 namespace kk::coop {
 bool EnemySpawnerStep(PPCContext& ctx,uint8_t* base);
 bool EnemyHoldDestroy(PPCContext& ctx,uint8_t* base);
+void EnemyDestroying(const PPCContext& ctx,uint8_t* base);
 std::optional<PlayerCondition> LocalPlayerCondition(const uint8_t* base);
 bool ReviveTeleport(PPCContext& ctx, uint8_t* base, const PlayerPose& partner);
 void EnemyBeforeLoad();

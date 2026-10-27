@@ -515,6 +515,7 @@ struct State {
   std::map<uint32_t, Record> driving;
   std::set<EnemyId> unmatched_logged;
   std::set<EnemyId> death_applied, death_refused;
+  std::set<EnemyId> retirement_applied;
   std::set<uint32_t> orphan_logged;
   std::map<EnemyId, EnemyId> aliases; // host ID -> immutable local ID
   std::map<EnemyId, MatchRetry> retry;
@@ -569,7 +570,7 @@ struct State {
     world = game = 0; capture = prepared = false; identity = {};
     load_refused_logged = false;
     authored.clear(); spawners.clear(); bindings.clear(); raptor_players.clear(); native_player_switch.clear(); pending.clear(); records.clear(); driving.clear(); unmatched_logged.clear(); counts = {};
-    death_applied.clear(); death_refused.clear();
+    death_applied.clear(); death_refused.clear(); retirement_applied.clear();
     orphan_logged.clear(); unbound = 0;
     aliases.clear(); retry.clear(); retry_diagnosed.clear(); shots = {}; shot_validator = {}; shot_targets = {}; shooting = shot_resolved = false; shot = {};
     shot_submitted = shot_accepted = shot_blocked = shot_confirmed_deaths = 0;
@@ -850,11 +851,6 @@ void Scan(const uint8_t* b) {
         Ptr(b, Ptr(b, actor, 24, 8), 4, 88) == binding.ai &&
         Ptr(b, binding.ai, 64, LifeBytes(binding.id.family)) == binding.vars &&
         Ptr(b, actor, 12, 64) == binding.matrix;
-    // Native destruction can leave an inactive queued root in the full table
-    // for many seconds. Publish removal at that real lifecycle boundary, not
-    // only when the later registry sweep finally frees its allocation.
-    if (same && (Load32(b,actor+4)&0x00600000)==0x00600000)
-      if (auto it=s.records.find(binding.id);it!=s.records.end()) it->second.kind=EnemyEventKind::Removed;
     if (present.contains(binding.id)) { ++binding_it; continue; }
     if (!same) {
       if (auto it = s.records.find(binding.id); it != s.records.end()) it->second.kind = EnemyEventKind::Removed;
@@ -1496,7 +1492,7 @@ void Replicas(PPCContext& ctx, uint8_t* b, bool drive) {
       // Use native destruction so collision, relations and event 4 are retired
       // together. Never infer removal from age, distance or a missing packet.
       if (!Scratch::CanUse(ctx) || !ControllerSafe(b,binding->actor) ||
-          (Load32(b,binding->actor+4)&0x00600000)==0x00600000) continue;
+          s.retirement_applied.contains(binding->id)) continue;
       const auto actor=binding->actor;
       Scratch scratch(ctx,b);
       constexpr uint32_t globals[]{0x82CCBF58,0x82CCBF5C,0x82CCBF60,0x82CCBF64,0x82CCBF68,0x82CCBF6C,0x82CCBF70};
@@ -1505,6 +1501,7 @@ void Replicas(PPCContext& ctx, uint8_t* b, bool drive) {
       ctx.r3.u64=actor; __imp__sub_82714E40(ctx,b);
       for (unsigned i=0;i<7;++i) Store32(b,globals[i],saved[i]);
       if (auto local=s.records.find(binding->id);local!=s.records.end()) local->second.kind=EnemyEventKind::Removed;
+      s.retirement_applied.insert(binding->id);
       REXLOG_INFO("ENEMIES retirement owner={} id={:016X}/{}/{} native=true",
           authority.owner==EnemyOwner::Host ? "host":"guest",r.enemy.id.source,r.enemy.id.sequence,uint16_t(r.enemy.id.family));
       continue;
@@ -3591,6 +3588,19 @@ bool EnemyHoldDestroy(PPCContext& ctx,uint8_t* base) {
   // the owner's explicit removal, while preserving the caller's stop result.
   ctx.r3.u32=it->first==Load32(base,0x82CCBF6C) ? 1:0;
   return true;
+}
+void EnemyDestroying(const PPCContext& ctx,uint8_t* base) {
+  auto& s=Get();
+  if (!REXCVAR_GET(kk_coop_enabled) || !Connected() || !Environment(base,s.world)) return;
+  const auto it=s.bindings.find(ctx.r3.u32);
+  if (it==s.bindings.end() || !ValidBinding(base,it->second)) return;
+  const auto* authority=AuthorityFor(it->second.id);
+  if (!authority || authority->owner!=Side()) return;
+  if (auto record=s.records.find(it->second.id);record!=s.records.end()) {
+    record->second.kind=EnemyEventKind::Removed;
+    REXLOG_INFO("ENEMIES native retirement role={} id={:016X}/{}/{}",s.link.role==Role::Host ? "host":"guest",
+        it->second.id.source,it->second.id.sequence,uint16_t(it->second.id.family));
+  }
 }
 }
 #if !defined(KK_DEV_TOOLS)

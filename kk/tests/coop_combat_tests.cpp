@@ -154,7 +154,7 @@ void Codecs() {
   m = Status(); m.player_status.incarnation = 0; Check(!Encode(m, out), "zero status life refused");
   auto wire = Packet(Damage()); wire[69] = 7; Message decoded; // last byte of magnitude
   Check(!Decode(wire, decoded), "malformed wire magnitude refused");
-  wire = Packet(Status()); wire.back() = 99; Check(!Decode(wire, decoded), "malformed wire condition refused");
+  wire = Packet(Status()); wire[kHeaderBytes+28] = 99; Check(!Decode(wire, decoded), "malformed wire condition refused");
 }
 void Replay() {
   for (const auto caller : {0x82473380u,0x8248C9A4u,0x8248D10Cu,0x824866F0u,0x82487D9Cu,

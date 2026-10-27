@@ -106,6 +106,7 @@ struct Binding : objects::Binding {
   float driven_position=-1;
   ObjectState last;
   bool sent=false,lever_logged=false;
+  bool native_retired=false;
   bool fire_request=false;
   bool fire_path_refused=false;
   double next_ignite=0;
@@ -120,6 +121,7 @@ struct Binding : objects::Binding {
 #endif
 };
 struct State {
+  std::map<uint32_t,std::array<uint32_t,3>> destroyed_doors;
   struct Body {
     uint32_t actor=0,matrix=0,link=0,physics=0,body=0;
     uint64_t source=0,topology=0;
@@ -311,6 +313,8 @@ void Census(const uint8_t* b) {
     const auto vars=Vars(b,ai,kind); if (!vars) continue;
     if (kind==ObjectKind::Fire && !FireContract(b,vars)) continue;
     Binding o; o.actor=actor; o.ai=ai; o.vars=vars; o.matrix=matrix; o.kind=kind;
+    if (const auto gone=state.destroyed_doors.find(actor);gone!=state.destroyed_doors.end())
+      o.native_retired=gone->second==std::array<uint32_t,3>{ai,vars,matrix};
     o.x=LoadF(b,matrix+48); o.y=LoadF(b,matrix+52); o.z=LoadF(b,matrix+56);
     const auto asset=state.file_keys.find(actor);
     const auto direct=PoseAddress(actor,36) ? enemies::ObjectFileKey(Load32(b,actor+32)):0;
@@ -388,7 +392,7 @@ ObjectState Sample(const uint8_t* b,const Binding& o) {
     }
     s.position=LoadF(b,o.vars+1084); s.seconds=LoadF(b,o.vars+552);
     if (DoorScheduled(b,o.ai)) s.value|=kDoorScheduled;
-    if ((Load32(b,o.actor+4)&0x00600000)==0x00600000) s.value|=kDoorRetired;
+    if (o.native_retired) s.value|=kDoorRetired;
   }
   return s;
 }
@@ -700,7 +704,7 @@ bool PrepareDoorGeometry(PPCContext& ctx,uint8_t* b,const Binding& o) {
 }
 void RefreshDoor(PPCContext& ctx,uint8_t* b,Binding& o,const ObjectState& s,bool own_track=true) {
   if (Load32(b,0x82CCBF64)!=o.ai || Load32(b,0x82CCBF6C)!=o.actor) return;
-  if ((Load32(b,o.actor+4)&0x00600000)==0x00600000) return;
+  if (o.native_retired) return;
   const bool ended=!(s.value&kDoorScheduled) && DoorScheduled(b,o.ai);
   if (!ended && LoadF(b,o.vars+1084)==s.position && o.driven_position==s.position &&
       (s.position!=1 || Load32(b,o.vars+1096)==1)) return;
@@ -795,7 +799,7 @@ void IdleDoors(PPCContext& ctx,uint8_t* b) {
   // A validated installed-lever hold may still complete their own one-way
   // endpoint. The native update retains transforms, collision, grid and caps.
   for (auto& [actor,o] : state.bindings) {
-    if (o.kind!=ObjectKind::Door || !Valid(b,o) || Match(o.source,o.kind)!=&o ||
+    if (o.kind!=ObjectKind::Door || o.native_retired || !Valid(b,o) || Match(o.source,o.kind)!=&o ||
         Load32(b,o.vars)!=2 || Load32(b,o.vars+568)!=1 || Load32(b,o.vars+572)!=0 ||
         !Lever(b,o,0)) continue;
     bool ready=true;
@@ -812,10 +816,20 @@ void IdleDoors(PPCContext& ctx,uint8_t* b) {
   }
 }
 void RetireDoors(PPCContext& ctx,uint8_t* b) {
-  if (state.host) return;
+  const auto stop=[&](const Binding& o) {
+    const auto saved=ctx;
+    constexpr uint32_t globals[]{0x82CCBF58,0x82CCBF5C,0x82CCBF60,0x82CCBF64,0x82CCBF68,0x82CCBF6C,0x82CCBF70};
+    uint32_t values[7]; for (unsigned i=0;i<7;++i) values[i]=Load32(b,globals[i]);
+    Store32(b,0x82CCBF64,o.ai); Store32(b,0x82CCBF68,o.ai);
+    Store32(b,0x82CCBF6C,o.actor); Store32(b,0x82CCBF70,o.actor);
+    EndDoorTracks(ctx,b,o);
+    for (unsigned i=0;i<7;++i) Store32(b,globals[i],values[i]);
+    ctx=saved;
+  };
   for (auto& [actor,o]:state.bindings) {
-    if (o.kind!=ObjectKind::Door || !Valid(b,o) || Match(o.source,o.kind)!=&o ||
-        (Load32(b,actor+4)&0x00600000)==0x00600000) continue;
+    if (o.kind!=ObjectKind::Door || !Valid(b,o) || Match(o.source,o.kind)!=&o) continue;
+    if (o.native_retired) { if (DoorScheduled(b,o.ai)) stop(o); continue; }
+    if (state.host) continue;
     const auto* authority=state.replica.Find(o.kind,o.source);
     if (!authority || !(authority->value&kDoorRetired)) continue;
     const auto sp=ctx.r1.u32;
@@ -828,7 +842,9 @@ void RetireDoors(PPCContext& ctx,uint8_t* b) {
     Store32(b,0x82CCBF64,o.ai); Store32(b,0x82CCBF68,o.ai);
     Store32(b,0x82CCBF6C,actor); Store32(b,0x82CCBF70,actor);
     RefreshDoor(ctx,b,o,*authority,false);
+    stop(o);
     ctx.r3.u32=actor; __imp__sub_82714E40(ctx,b);
+    o.native_retired=true;
     for (unsigned i=0;i<7;++i) Store32(b,globals[i],values[i]);
     std::memcpy(b+start,scratch,sizeof(scratch)); ctx=saved;
     REXLOG_INFO("KK co-op door retirement: id={:016X} native=true",o.source);
@@ -2120,7 +2136,7 @@ void ObjectsDestroy(PPCContext& ctx,uint8_t* b) {
           ctx.r3.u32=actor==Load32(b,0x82CCBF6C) ? 1:0;
           return;
         }
-      } else if (state.number!=UINT32_MAX) {
+      } else if (state.number!=UINT32_MAX && (state.outcomes.contains(o.source) || state.outcomes.size()<objects::kCensus)) {
         // Snapshot before the native destroy callback can retire components.
         // This is an explicit native removal, not an inferred closed track.
         auto terminal=Sample(b,o); terminal.value|=kDoorRetired;
@@ -2128,6 +2144,21 @@ void ObjectsDestroy(PPCContext& ctx,uint8_t* b) {
           o.last=terminal; o.sent=true; terminal.number=++state.number;
           state.pending[o.source]=state.outcomes[o.source]=terminal;
         }
+      }
+    }
+  }
+  EnemyDestroying(ctx,b);
+  // Hidden plus inactive is also used for dormant templates. Only this actual
+  // native destroy call certifies retirement, including before shared census.
+  if (REXCVAR_GET(kk_coop_enabled) && SessionInProcess() && state.epoch &&
+      state.world==Load32(b,0x828E8388) && state.destroyed_doors.size()<objects::kCensus) {
+    const auto ai=Ptr(b,Ptr(b,actor,24,8),4,88),matrix=Ptr(b,actor,12,64);
+    if (matrix && Family(b,ai)==ObjectKind::Door) {
+      const auto vars=Vars(b,ai,ObjectKind::Door);
+      if (vars) {
+        state.destroyed_doors[actor]={ai,vars,matrix};
+        if (auto it=state.bindings.find(actor);it!=state.bindings.end() && Components(b,it->second))
+          it->second.native_retired=true;
       }
     }
   }
@@ -2147,6 +2178,7 @@ void ObjectsLoaded(uint8_t* b) {
   state.bindings.clear(); state.retired.clear(); state.pending.clear(); state.outgoing.clear(); state.ready=false;
   state.identities.Clear();
   state.bodies.clear(); state.support_frozen=false;
+  state.destroyed_doors.clear();
   state.census_started=false;
 #if defined(KK_DEV_TOOLS)
   state.pickups.clear(); state.debug_sources.clear();
