@@ -1942,6 +1942,35 @@ void DevDie(PPCContext& ctx, uint8_t* b) {
         int(h->condition),elapsed,repeat_delay,recovery);
   }
 }
+std::optional<ShotVector> DevBaitFloor(PPCContext& ctx,uint8_t* b,uint32_t world,ShotVector point) {
+  if (!Scratch::CanUse(ctx) || !PoseAddress(world,0x16284)) return {};
+  const auto hero=Load32(b,0x82CCBF7C),body=kk::PartnerBodyCombatActor(b);
+  Scratch scratch(ctx,b);
+  const auto start=scratch.Vec(point.x,point.y,point.z+2,0x100);
+  const auto down=scratch.Vec(0,0,-4,0x110);
+  // Same native general ground query as BC reflex, with all three query flags.
+  // World scratch1626C/16278 contains its hit point/normal (H read_world).
+  ctx.r3.u64=hero; ctx.r4.u64=start; ctx.r5.u64=down;
+  ctx.r6.u64=UINT32_MAX; ctx.r7.u64=2; ctx.r8.u64=0; ctx.r9.u64=1;
+  __imp__sub_82403E38(ctx,b);
+  const auto hit=ctx.r3.u32;
+  if (!hit || hit==hero || (body && hit==body)) return {};
+  const auto floor=Vector(b,world+0x1626C);
+  const auto normal=Vector(b,world+0x16278);
+  if (!std::isfinite(floor.x) || !std::isfinite(floor.y) || !std::isfinite(floor.z) ||
+      !std::isfinite(normal.z) || normal.z<.7f ||
+      std::hypot(floor.x-point.x,floor.y-point.y)>.05f || std::abs(floor.z-point.z)>2) return {};
+  const ShotVector standing{floor.x,floor.y,floor.z+.1f};
+  const auto clearance=scratch.Vec(standing.x,standing.y,standing.z+.1f,0x120);
+  const auto up=scratch.Vec(0,0,1.8f,0x130);
+  ctx.r3.u64=hero; ctx.r4.u64=clearance; ctx.r5.u64=up;
+  ctx.r6.u64=UINT32_MAX; ctx.r7.u64=2; ctx.r8.u64=0; ctx.r9.u64=1;
+  __imp__sub_82403E38(ctx,b);
+  if (ctx.r3.u32) return {};
+  // A floor and headroom ray do not establish capsule clearance or a walkable
+  // route. Keep the fixture qualification and inspect actual post-placement play.
+  return standing;
+}
 void DevBait(PPCContext& ctx, uint8_t* b) {
   struct Bait {
     double due = -1;
@@ -1949,7 +1978,7 @@ void DevBait(PPCContext& ctx, uint8_t* b) {
     EnemyFamily family = EnemyFamily::Raptor;
     double repeat = 0;
     float distance = 3, height = 0, max_height = 1000000;
-    bool keep_height = false;
+    bool keep_height = false, ground = false;
     unsigned placements = 0;
     Bait() {
       const auto placement=[](const char* name,float fallback,float low,float high) {
@@ -1963,6 +1992,7 @@ void DevBait(PPCContext& ctx, uint8_t* b) {
       height=placement("KK_DEV_BAIT_HEIGHT",0,-1,5);
       max_height=placement("KK_DEV_BAIT_MAX_HEIGHT",1000000,0,100);
       if (const char* value=std::getenv("KK_DEV_BAIT_KEEP_HEIGHT")) keep_height=std::strcmp(value,"1")==0;
+      if (const char* value=std::getenv("KK_DEV_BAIT_GROUND")) ground=std::strcmp(value,"1")==0;
       if (const char* value=std::getenv("KK_DEV_BAIT_REPEAT")) {
         char* end=nullptr; const auto parsed=std::strtod(value,&end);
         if (end!=value && !*end && std::isfinite(parsed) && parsed>=3 && parsed<=30) repeat=parsed;
@@ -2008,14 +2038,35 @@ void DevBait(PPCContext& ctx, uint8_t* b) {
   if (!nearest) return;
   const auto& e = nearest->enemy;
   const float dx = e.x-origin.x, dy = e.y-origin.y, length = std::hypot(dx, dy);
-  const float fx = length > .001f ? dx/length : std::cos(e.facing);
-  const float fy = length > .001f ? dy/length : std::sin(e.facing);
-  const ShotVector target{e.x-bait.distance*fx, e.y-bait.distance*fy, (bait.keep_height ? origin.z : e.z)+bait.height};
+  float fx = length > .001f ? dx/length : std::cos(e.facing);
+  float fy = length > .001f ? dy/length : std::sin(e.facing);
+  ShotVector target{e.x-bait.distance*fx, e.y-bait.distance*fy, (bait.keep_height ? origin.z : e.z)+bait.height};
+  if (bait.ground) {
+    std::optional<ShotVector> floor; float closest=std::numeric_limits<float>::infinity();
+    const auto angle=std::atan2(fy,fx);
+    for (unsigned i=0;i<8;++i) {
+      const float a=angle+float(i)*.785398163f;
+      const ShotVector candidate{e.x-bait.distance*std::cos(a),e.y-bait.distance*std::sin(a),target.z};
+      const auto found=DevBaitFloor(ctx,b,s.world,candidate);
+      if (found && ShotDistance(origin,*found)<closest) { floor=found; closest=ShotDistance(origin,*found); }
+    }
+    if (!floor) {
+      static double next_floor_log=0;
+      if (t>=next_floor_log) {
+        next_floor_log=t+2;
+        REXLOG_INFO("KK dev bait: native floor/headroom rays refused family={} enemy=({:.3f},{:.3f},{:.3f}) desired-z={:.3f} radius={:.2f}; no teleport",
+            uint16_t(e.id.family),e.x,e.y,e.z,target.z,bait.distance);
+      }
+      return;
+    }
+    target=*floor;
+    const float facing=std::atan2(e.y-target.y,e.x-target.x); fx=std::cos(facing); fy=std::sin(facing);
+  }
   if (!kk::DevTeleportJack(ctx, b, Load32(b, 0x82CCBF7C), target, fx, fy)) return;
   bait.done = !bait.repeat || ++bait.placements>=12;
   if (!bait.done) bait.due=t+bait.repeat;
-  REXLOG_INFO("KK dev bait: at {:.2f} guest teleported by native 82538B70 family={} enemy={:016X}/{} from=({:.3f},{:.3f},{:.3f}) to=({:.3f},{:.3f},{:.3f}) stand-off={:.2f} height={:.2f} collision-unverified=true",
-      t, uint16_t(e.id.family), e.id.source, e.id.sequence, origin.x, origin.y, origin.z, target.x, target.y, target.z,bait.distance,bait.height);
+  REXLOG_INFO("KK dev bait: at {:.2f} guest teleported by native 82538B70 family={} enemy={:016X}/{} from=({:.3f},{:.3f},{:.3f}) to=({:.3f},{:.3f},{:.3f}) stand-off={:.2f} height={:.2f} floor-rays={} collision-unverified=true",
+      t, uint16_t(e.id.family), e.id.source, e.id.sequence, origin.x, origin.y, origin.z, target.x, target.y, target.z,bait.distance,bait.height,bait.ground);
 }
 // Diagnostics are per validated host raptor, bounded and reset on load. The old
 // process-wide timer hid other raptors; a handle alone did not identify a victim.
