@@ -768,6 +768,8 @@ void Scan(const uint8_t* b) {
         e.spawn_x = it->second.x; e.spawn_y = it->second.y; e.spawn_z = it->second.z;
       }
       if (s.records.contains(binding.id) || s.records.size() >= kMaxEnemies) { unbound(actor, e.id.family); continue; }
+      // A recycled actor address is a new aiming history and aggro lease.
+      s.native_player_switch.erase(actor);
       s.bindings[actor] = binding;
       s.pending.erase(actor);
     }
@@ -805,6 +807,7 @@ void Scan(const uint8_t* b) {
         Ptr(b, actor, 12, 64) == binding.matrix;
     if (!same) {
       if (auto it = s.records.find(binding.id); it != s.records.end()) it->second.kind = EnemyEventKind::Removed;
+        s.native_player_switch.erase(binding.actor);
       binding_it = s.bindings.erase(binding_it);
     } else ++binding_it;
   }
