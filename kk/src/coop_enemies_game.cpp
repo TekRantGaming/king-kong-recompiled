@@ -528,6 +528,13 @@ struct State {
     uint32_t actor=0,ai=0,vars=0,id=UINT32_MAX,generation=0;
     uint32_t client=0,enabled=0,proposal=0;
   } proxy_grab;
+  struct LocalGrabProbe {
+    Binding source{};
+    uint32_t hero=0,ai=0,vars=0,id=UINT32_MAX,generation=0,ownership_generation=0;
+    uint64_t incarnation=0;
+    bool ended=false;
+    uint32_t observed_state=UINT32_MAX,observed_holder=UINT32_MAX,observed_attachment=UINT32_MAX;
+  } local_grab_probe;
   uint32_t shot_hit_object = 0;
   bool shot_matched = false;
   const char* shot_hit_reason = "no-hit";
@@ -566,6 +573,7 @@ struct State {
     next_status_time = 0; partner_status_time = -1;
 #if defined(KK_DEV_TOOLS)
     proxy_grab={};
+    local_grab_probe={};
     raptor_logs.clear(); raptor_candidate_lines = 0;
     combat_targets.clear(); targets_host = targets_guest = hits_host = 0; next_targets = 0;
     diagnostic_keys.clear(); ambiguous_logged.clear();
@@ -1748,6 +1756,92 @@ void PublishPlayerStatus(const uint8_t* b) {
 #endif
   }
 }
+#if defined(KK_DEV_TOOLS)
+bool LocalGrabProbeEnabled() {
+  static const bool enabled=[] { const auto* v=std::getenv("KK_DEV_NATIVE_GRAB_RECEIVE"); return v && std::strcmp(v,"1")==0; }();
+  return enabled;
+}
+stimulus_debug::Record LocalGrabProbeRecord(const uint8_t* b) {
+  const auto& g=Get().local_grab_probe;
+  const auto read=[&](uint32_t p){return Load32(b,p);};
+  const auto pool=stimulus_debug::ReadPool(read,65);
+  if (!pool.valid || pool.capacity>4096 || (g.id>>24)!=65) return {};
+  const auto record=stimulus_debug::ReadSlot(read,pool,g.id&0xFFFFFF);
+  if (!record.valid || record.generation!=g.generation || record.source!=g.hero || record.target!=g.source.actor) return {};
+  return record;
+}
+void LocalGrabProbeRelease(PPCContext& ctx,uint8_t* b,const char* reason) {
+  auto& g=Get().local_grab_probe;
+  if (LocalGrabProbeRecord(b).valid && Scratch::CanUse(ctx)) {
+    Scratch scratch(ctx,b); const auto handle=scratch.Vec(0,0,0,0x100);
+    Store32(b,handle,g.id); Store32(b,handle+4,g.generation);
+    ctx.r3.u64=handle; ctx.r4.u64=0; __imp__sub_8271ECF8(ctx,b);
+  }
+  g.ended=true;
+  REXLOG_INFO("COOP GRAB guest-probe release reason={} source={:08X} hero={:08X} native-controller-cleanup=true shipping-bridge=false",reason,g.source.actor,g.hero);
+}
+bool LocalGrabProbeDamage(PPCContext& ctx,uint8_t* b,const DamageEvent& d,const Binding& source,
+                          uint32_t hero,uint32_t ai,uint32_t vars) {
+  if (!LocalGrabProbeEnabled() || source.id.family!=EnemyFamily::Scorpion || d.projectile) return true;
+  auto& s=Get(); auto& g=s.local_grab_probe;
+  const bool start=d.flags==3 && d.magnitude==10;
+  const bool follow=(d.flags==5 && d.magnitude==10) || ((d.flags==256 || d.flags==512) && !d.magnitude);
+  if (!start && !follow) return true;
+  if (start) {
+    const auto* authority=AuthorityFor(source.id);
+    if (!authority || authority->dead || authority->last.life<=0) return false;
+    if (g.hero==hero && g.ai==ai && g.vars==vars && g.source.actor==source.actor &&
+        g.incarnation==s.incarnation && !g.ended && LocalGrabProbeRecord(b).valid) return true;
+    if (LocalGrabProbeRecord(b).valid) return false; // Preserve an existing native claim.
+    const auto init=Ptr(b,0x82CC8C58,0,24);
+    if (!PoseAddress(vars,15688) || !init || Load32(b,init+20)!=0x825ED5F8) return false;
+    const auto result=ctx.r1.u32+0x180;
+    Store32(b,result,UINT32_MAX); Store32(b,result+4,0);
+    ctx.r3.u64=hero; ctx.r4.u64=1; ctx.r5.u64=result; ctx.r6.u64=1;
+    ctx.r7.u64=init; ctx.r8.u64=0; ctx.r9.u64=init;
+    __imp__sub_82548BC0(ctx,b);
+    const auto record=stimulus_debug::ReadHandle([&](uint32_t p){return Load32(b,p);},result);
+    const bool accepted=ctx.r3.u32==hero && record.valid && record.source==hero &&
+        record.target==source.actor && (record.id>>24)==65;
+    g={}; g.source=source; g.hero=hero; g.ai=ai; g.vars=vars; g.incarnation=s.incarnation;
+    g.id=record.id; g.generation=record.generation; g.ownership_generation=d.generation; g.ended=!accepted;
+    REXLOG_INFO("COOP GRAB guest-probe claim source={:08X} hero={:08X} accepted={} native={:08X}/{} mode={} holder={:08X} state={} shipping-bridge=false",
+        source.actor,hero,accepted,g.id,g.generation,Load32(b,vars+4948),Load32(b,vars+4604),Load32(b,vars+2712));
+    return accepted;
+  }
+  const bool active=g.hero==hero && g.ai==ai && g.vars==vars && g.source.actor==source.actor &&
+      g.incarnation==s.incarnation && !g.ended && LocalGrabProbeRecord(b).valid;
+  if (!active) {
+    static unsigned lines=0;
+    if (lines++<64) REXLOG_INFO("COOP GRAB guest-probe follow refused source={:08X} flags={} magnitude={} reason=no-live-native-claim shipping-bridge=false",source.actor,d.flags,d.magnitude);
+    return false;
+  }
+  if (d.flags==512) LocalGrabProbeRelease(ctx,b,"authoritative-timeout");
+  return true;
+}
+void LocalGrabProbeTick(PPCContext& ctx,uint8_t* b) {
+  if (!LocalGrabProbeEnabled()) return;
+  auto& s=Get(); auto& g=s.local_grab_probe;
+  if (!g.hero) return;
+  if (Load32(b,0x82CCBF7C)!=g.hero || Ptr(b,Ptr(b,g.hero,24,8),4,88)!=g.ai ||
+      Ptr(b,g.ai,64,15688)!=g.vars || s.incarnation!=g.incarnation) { g={}; return; }
+  const auto* authority=AuthorityFor(g.source.id);
+  if (!g.ended && (!Connected() || !RetainedDamageSource(b,g.source) || !authority || authority->dead || authority->last.life<=0 ||
+      !combat::RemoteOwner(authority->owner,Side(),authority->generation,g.ownership_generation,authority->Frozen())))
+    LocalGrabProbeRelease(ctx,b,"source-or-session-unavailable");
+  if (!g.ended && !LocalGrabProbeRecord(b).valid) {
+    g.ended=true;
+    REXLOG_INFO("COOP GRAB guest-probe ended-by-native-controller source={:08X} hero={:08X} shipping-bridge=false",g.source.actor,g.hero);
+  }
+  const auto state=Load32(b,g.vars+2712),holder=Load32(b,g.vars+4604),attachment=Load32(b,g.vars+4944);
+  if (state!=g.observed_state || holder!=g.observed_holder || attachment!=g.observed_attachment) {
+    g.observed_state=state; g.observed_holder=holder; g.observed_attachment=attachment;
+    static unsigned lines=0;
+    if (lines++<128) REXLOG_INFO("COOP GRAB guest-probe controller source={:08X} hero={:08X} state={} holder={:08X} kind={} attachment={:08X} live-claim={} ended={} shipping-bridge=false",
+        g.source.actor,g.hero,state,holder,Load32(b,g.vars+4948),attachment,LocalGrabProbeRecord(b).valid,g.ended);
+  }
+}
+#endif
 bool NativeDamage(PPCContext& ctx, uint8_t* b, const DamageEvent& d) {
   auto& s = Get();
   if (!Scratch::CanUse(ctx) || !JackReady(b) || !Environment(b, s.world)) return false;
@@ -1771,6 +1865,14 @@ bool NativeDamage(PPCContext& ctx, uint8_t* b, const DamageEvent& d) {
   uint32_t saved[4]; for (unsigned i = 0; i < 4; ++i) saved[i] = Load32(b, globals[i]);
   Store32(b, globals[0], source->ai); Store32(b, globals[1], source->ai);
   Store32(b, globals[2], source->actor); Store32(b, globals[3], source->actor);
+#if defined(KK_DEV_TOOLS)
+  if (!LocalGrabProbeDamage(ctx,b,d,*source,h->hero,h->ai,h->vars)) {
+    for (unsigned i=0;i<4;++i) Store32(b,globals[i],saved[i]);
+    return false;
+  }
+  Store32(b,globals[0],source->ai); Store32(b,globals[1],source->ai);
+  Store32(b,globals[2],source->actor); Store32(b,globals[3],source->actor);
+#endif
   const uint32_t result = scratch.Vec(0, 0, 0, 0x100);
   Store32(b, result, UINT32_MAX); Store32(b, result+4, 0);
   s.injecting_damage = true;
@@ -2877,9 +2979,10 @@ void ProxyGrabTick(PPCContext& ctx,uint8_t* b) {
     Store32(b,vars+4432,UINT32_MAX); Store32(b,vars+4436,UINT32_MAX);
     if (PoseAddress(vars,4668)) {
       const auto count=Load32(b,ai+68),events=count<=64 ? Ptr(b,ai,72,12*count):0;
-      uint32_t clients=0,client_owner=0,client_native=0;
+      uint32_t clients=0,client_owner=0,client_native=0,active_callbacks=0;
       if (events) for (uint32_t i=0;i<count;++i) {
         const auto entry=events+12*i,fn=Ptr(b,entry,0,24);
+        active_callbacks+=Load32(b,entry)!=0;
         if (fn && Load32(b,entry+4)==20) {
           ++clients; client_owner=Load32(b,entry+8); client_native=Load32(b,fn+20);
         }
@@ -2892,7 +2995,7 @@ void ProxyGrabTick(PPCContext& ctx,uint8_t* b) {
       // audited event20 registration, never its global player/story setup.
       // Native825491B0 and82674380 still decide acceptance and score.
       const auto client=Load32(b,0x82CC8770),proposal=Load32(b,0x82CC8830);
-      if (client_enabled && !clients && !count && PoseAddress(client,24) && PoseAddress(proposal,24) &&
+      if (client_enabled && !clients && (!count || (events && !active_callbacks)) && PoseAddress(client,24) && PoseAddress(proposal,24) &&
           Load32(b,client+20)==0x82670980 && Load32(b,proposal+20)==0x82674380) {
         grab.client=client; grab.enabled=Load32(b,vars+4544); grab.proposal=Load32(b,vars+4664);
         Scratch register_client(ctx,b);
@@ -2922,7 +3025,7 @@ void ProxyGrabTick(PPCContext& ctx,uint8_t* b) {
 void AfterAi(PPCContext& ctx, uint8_t* b, uint32_t w) {
   auto& s = Get();
 #if defined(KK_DEV_TOOLS)
-  if (Environment(b,w)) { ProxyGrabTick(ctx,b); EnemyThrowProbe(ctx,b); }
+  if (Environment(b,w)) { ProxyGrabTick(ctx,b); LocalGrabProbeTick(ctx,b); EnemyThrowProbe(ctx,b); }
 #endif
   if (!s.prepared || !Connected() || !Environment(b, w)) { s.driving.clear(); return; }
   Scan(b);
