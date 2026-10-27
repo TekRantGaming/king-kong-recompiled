@@ -66,6 +66,10 @@ REX_EXTERN(__imp__sub_82456778);
 REX_EXTERN(__imp__sub_8241A648);
 REX_EXTERN(__imp__sub_824EF8A0);
 REX_EXTERN(__imp__sub_824EF5B8);
+#if defined(KK_DEV_TOOLS)
+REX_EXTERN(__imp__sub_824E4838);
+REX_EXTERN(__imp__sub_824EDBC0);
+#endif
 REX_EXTERN(__imp__sub_82658ED8);
 REX_EXTERN(__imp__sub_82652FF8);
 REX_EXTERN(__imp__sub_824ECBC0);
@@ -981,13 +985,31 @@ void BatPlayerTarget(PPCContext& ctx, uint8_t* b) {
   const auto selected=Load32(b,owner->vars+848);
   if (selected!=hero && selected!=body) return;
   const auto other=selected==hero ? body:hero;
-  if (!(PlayerDistance(b,owner->actor,other)<PlayerDistance(b,owner->actor,selected))) return;
+  const auto current_distance=PlayerDistance(b,owner->actor,selected),other_distance=PlayerDistance(b,owner->actor,other);
+#if defined(KK_DEV_TOOLS)
+  static const bool trace=std::getenv("KK_DEV_BAT_CHOICES")!=nullptr;
+  static unsigned lines=0;
+  if (!(other_distance<current_distance) && trace && lines++<64)
+    REXLOG_INFO("COOP BAT choice actor={:08X} selected={:08X} other={:08X} body={:08X} distance-current={:.3f} distance-other={:.3f} closer=false",
+        owner->actor,selected,other,body,current_distance,other_distance);
+#endif
+  if (!(other_distance<current_distance)) return;
   // Preserve the selector's activation, authored conditions and cooldowns.
   // Only replace an accepted player with the nearer player if the same native
   // life, exclusion and territory predicate accepts that player too.
   Scratch scratch(ctx,b);
   ctx.r3.u64=other; __imp__sub_824EF5B8(ctx,b);
-  if (ctx.r3.u32) Store32(b,owner->vars+848,other);
+  const auto accepted=ctx.r3.u32;
+#if defined(KK_DEV_TOOLS)
+  if (trace && lines++<64) {
+    ctx.r3.u64=other; __imp__sub_824E4838(ctx,b); const auto live=ctx.r3.u32;
+    ctx.r3.u64=other; ctx.r4.u64=0; __imp__sub_824EDBC0(ctx,b); const auto territory=ctx.r3.u32;
+    REXLOG_INFO("COOP BAT choice actor={:08X} selected={:08X} other={:08X} body={:08X} distance-current={:.3f} distance-other={:.3f} closer=true accepted={} live={} territory={} flags6={:04X} excluded={:08X} included-bv={:08X} excluded-bv={:08X}",
+        owner->actor,selected,other,body,current_distance,other_distance,accepted,live,territory,
+        Load16(b,other+6),Load32(b,owner->vars+284),Load32(b,owner->vars+24),Load32(b,owner->vars+28));
+  }
+#endif
+  if (accepted) Store32(b,owner->vars+848,other);
 }
 void BatPlayerFight(PPCContext& ctx, uint8_t* b, void (*native)(PPCContext&,uint8_t*)) {
   const auto* owner=CombatOwner(b,EnemyFamily::Bat);
