@@ -956,9 +956,10 @@ void NativePlayerReflex(PPCContext& ctx, uint8_t* b) {
       auto& log=logs[owner->actor];
       if (Now()>=log.first && log.second++<40) {
         log.first=Now()+2;
-        REXLOG_INFO("COOP PROJECTILE native-reflex actor={:08X} target={:08X} body={:08X} scripted={:08X} required={:08X} excluded={:08X} state={:08X} launcher={:08X} distance-host={:.3f} distance-guest={:.3f}",
+        REXLOG_INFO("COOP PROJECTILE native-reflex actor={:08X} target={:08X} body={:08X} scripted={:08X} required={:08X} excluded={:08X} state={} phase={} script-step={} launcher={:08X} distance-host={:.3f} distance-guest={:.3f}",
             owner->actor,Load32(b,owner->vars+4088),kk::PartnerBodyCombatActor(b),Load32(b,owner->vars+308),
-            Load32(b,owner->vars+204),Load32(b,owner->vars+212),Load32(b,owner->vars+404),Load32(b,owner->vars+4096),
+            Load32(b,owner->vars+204),Load32(b,owner->vars+212),Load32(b,owner->vars+252),Load32(b,owner->vars+264),
+            Load32(b,owner->vars+404),Load32(b,owner->vars+4096),
             PlayerDistance(b,owner->actor,Load32(b,0x82CCBF7C)),PlayerDistance(b,owner->actor,kk::PartnerBodyCombatActor(b)));
       }
     }
@@ -977,6 +978,19 @@ void NativePlayerReflex(PPCContext& ctx, uint8_t* b) {
   } else selected=NearestPlayer(ctx,b,*owner,original,false);
   if (selected!=original) {
     Store32(b,owner->vars+4088,selected);
+    // Na_Exec_Lance leads from the position saved at4472 on the preceding
+    // launch frame. A different player is not movement of the old player.
+    // Reset that sample on a switch, before a same-frame native throw.
+    if (const auto matrix=Ptr(b,selected,12,64)) {
+      StoreF(b,owner->vars+4472,LoadF(b,matrix+48));
+      StoreF(b,owner->vars+4476,LoadF(b,matrix+52));
+      StoreF(b,owner->vars+4480,LoadF(b,matrix+56));
+    }
+#if defined(KK_DEV_TOOLS)
+    static unsigned switches=0;
+    if (switches++<128) REXLOG_INFO("COOP PROJECTILE player-switch actor={:08X} from={:08X} to={:08X} partner={} lead-reset=true",
+        owner->actor,original,selected,selected==body);
+#endif
     // A retained valid target otherwise prevents the native selector from
     // running again. Keep four seconds of aggro and the native volume test.
     if (choice.player!=selected) choice={selected,Now()+4};
