@@ -663,7 +663,7 @@ void ChecksumFrame(uint8_t* b,double now) {
     // and retain it reliably, without inventing a successful NPC order.
     if (!s.exact && s.saw_loop && s.started==s.run && index<kStoryRecords &&
         (Load32(b,bind->actor+4)&0x400000) && !Tracks(b,bind->ai,kLoop) &&
-        story::RetirableWait(Load32(b,bind->vars+924+180*index)) && now>=s.next_native_stop) {
+        story::RetirableWait(Load32(b,bind->vars+924+180*index),Load32(b,bind->vars+1092+180*index)!=0) && now>=s.next_native_stop) {
       auto stopped=Event(s,StoryPhase::Stopped,index);
       if (Emit(stopped)) { s.next_native_stop=now+3; Note("native retirement observed",stopped,"own loop cleared and inactive at the same native wait"); }
     }
@@ -1004,7 +1004,8 @@ bool StoryLoop(PPCContext& ctx,uint8_t* b) {
     const auto stop=*s->native_stop;
     if (stop.run<s->run) s->native_stop.reset();
     else if (story::NativeStopMatches(stop,generation,level,s->binding.source,s->binding.script,s->run,before,
-        before<kStoryRecords ? Load32(b,vars+924+180*before):0)) {
+        before<kStoryRecords ? Load32(b,vars+924+180*before):0,
+        before<kStoryRecords && Load32(b,vars+1092+180*before)!=0)) {
       // This is the actual local SSLoop dispatcher context. Clear its own
       // track and use the native activity API. Leave cursor, NPC flags and
       // completion counters untouched, just as on the stopped host.
