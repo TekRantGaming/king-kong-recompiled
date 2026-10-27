@@ -470,7 +470,7 @@ struct State {
   uint8_t displayed_weapon = 255;
   int32_t weapon_sound = -1;
   uint32_t sound_actor = 0;
-  struct WeaponPart { uint32_t actor=0, hidden=0, visibility=0; uint8_t variant=255; };
+  struct WeaponPart { uint32_t actor=0, draw=0, visibility=0; uint8_t variant=255; };
   std::array<WeaponPart,3> weapon_parts{};
   Rig weapon_rig;
   uint64_t weapon_generation=0;
@@ -852,7 +852,7 @@ void RestorePartnerEquipment(PPCContext& ctx,uint8_t* b,uint32_t world) {
       if (!part.actor || part.variant>=253 || OwnedAimBone(b,rig,tag)!=part.actor) continue;
       ctx.r3.u64=rig.actor; ctx.r4.u64=tag; ctx.r5.u64=part.variant; ctx.r6.u64=1;
       __imp__sub_8286ADA0(ctx,b);
-      ctx.r3.u64=part.actor; ctx.r4.u64=part.hidden; ctx.r5.u64=part.hidden ? 0 : 8;
+      ctx.r3.u64=part.actor; ctx.r4.u64=part.draw; ctx.r5.u64=part.draw ? 0 : 8;
       __imp__sub_8270B008(ctx,b);
       Store32(b,part.actor+4,(Load32(b,part.actor+4)&~0x20200000u)|part.visibility);
     }
@@ -943,9 +943,11 @@ void PartnerWeapon(PPCContext& ctx,uint8_t* b,const Rig& rig,const coop::PlayerP
     // Match group_child_swap(254) without overwriting swap_now with 254.
     // Keeping the equipment selector avoids reinstalling its model each frame.
     Store32(b,part+4,Load32(b,part+4)&~0x20200000u);
-    // Native H clears the geometry flag 8 when the weapon is in hand.
+    // Geometry's native draw selector (827E74E8) requires render flag 8.
+    // H can hide its weapon for the separate first-person presentation; this
+    // borrowed third-person body always needs its held model drawn.
     const auto mesh=Ptr(b,Ptr(b,part,20,4),0,12);
-    ctx.r3.u64=part; ctx.r4.u64=0; ctx.r5.u64=8;
+    ctx.r3.u64=part; ctx.r4.u64=8; ctx.r5.u64=0;
     __imp__sub_8270B008(ctx,b);
     if (s.displayed_weapon!=weapon) {
       REXLOG_INFO("PUPPET weapon model actor={:08X} equipment={} tag={} variant={} part={:08X} geometry={:08X} material={:08X} flags={:08X}/{:08X} relation={:08X}",
@@ -1812,6 +1814,9 @@ void CensusAndSelect(PPCContext& ctx, uint8_t* b, uint32_t w) {
   const float len = std::hypot(s.initial_forward.x, s.initial_forward.y);
   s.initial_forward = {s.initial_forward.x / len, s.initial_forward.y / len, 0};
   s.desired = s.origin; s.facing = s.initial_forward; s.elapsed = 0; s.driving = true;
+#if defined(KK_DEV_TOOLS)
+  if (!s.selected_copy) DevPuppetMeshArm(b,s.hero,selected.actor,s.epoch);
+#endif
   REXLOG_INFO("PUPPET select epoch={} mode={} key={:08X} ordinal={} index={} actor={:08X} ai={:08X} vars={:08X} matrix={:08X} anim={:08X} generation={} human={}/{} distance={:.3f} units=guest nearest-limit={} action={} item={} observed-action={} observed-item={}",
               s.epoch, Opt().automatic ? "auto" : Opt().spawn ? "spawn" : Opt().nearest ? "nearest" : Opt().index ? "index" : "key", pick->key, pick->ordinal, pick->index,
               s.selected.actor, s.selected.ai, s.selected.vars, s.selected.matrix, s.selected.anim,
