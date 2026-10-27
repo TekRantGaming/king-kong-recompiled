@@ -2751,7 +2751,11 @@ bool Hold(PPCContext& ctx, uint8_t* b) {
       uint32_t(ctx.lr)==0x8271D304 && Now()-s.prepared_at<=.5 && Environment(b,s.world)) {
     const auto actor=Load32(b,0x82CCBF6C);
     const auto found=s.bindings.find(actor);
-    if (found!=s.bindings.end() && unsigned(found->second.id.family)!=only_family &&
+    // Keep native variants together: one can complete the authored route that
+    // activates the other. Isolation must not manufacture a missing encounter.
+    const bool native_group=(only_family==unsigned(EnemyFamily::Native) || only_family==unsigned(EnemyFamily::NativeKna)) &&
+        found!=s.bindings.end() && (found->second.id.family==EnemyFamily::Native || found->second.id.family==EnemyFamily::NativeKna);
+    if (found!=s.bindings.end() && !native_group && unsigned(found->second.id.family)!=only_family &&
         found->second.id.family!=EnemyFamily::Prey && found->second.ai==Load32(b,0x82CCBF64) && ValidBinding(b,found->second)) {
       const auto* owner=AuthorityFor(found->second.id);
       if (owner && owner->Runs(Side())) {
