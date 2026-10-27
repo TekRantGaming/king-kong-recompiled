@@ -3,8 +3,17 @@
 #include <algorithm>
 #include <cmath>
 #include <utility>
+#include <bit>
 
 namespace kk::coop {
+namespace {
+uint64_t PacketEpoch(uint64_t token,uint64_t host,uint64_t guest) {
+  auto n=token^(host*0x9e3779b97f4a7c15ull)^std::rotl(guest,23);
+  n=(n^(n>>30))*0xbf58476d1ce4e5b9ull;
+  n=(n^(n>>27))*0x94d049bb133111ebull; n^=n>>31;
+  return n ? n : 1;
+}
+}
 const char* StateName(SessionState s) {
   switch (s) {
     case SessionState::Idle: return "idle";
@@ -103,7 +112,7 @@ bool CoopSession::Send(Message m, bool reliable) {
   if (m.type == MessageType::Hello) { m.display_name = config_.display_name; m.join_code = config_.join_code; m.resume_token = config_.resume_token; m.process_id=config_.process_id; }
   m.protocol = config_.compatibility.protocol;
   m.sequence = ++sequence_;
-  m.epoch = epoch_;
+  m.epoch = m.type==MessageType::Hello || m.type==MessageType::Reject || !wire_epoch_ ? epoch_ : wire_epoch_;
   std::vector<uint8_t> bytes;
   if (!Encode(m, bytes) || !transport_.Send(bytes, reliable)) return false;
   if (m.type == MessageType::PlayerPose) ++pose_counters_.sent;
@@ -111,7 +120,8 @@ bool CoopSession::Send(Message m, bool reliable) {
   if (m.type == MessageType::ShotIntent) ++shots_sent_;
   return true;
 }
-void CoopSession::Receive(const Message& m, double now) {
+void CoopSession::Receive(const Message& packet, double now) {
+  auto m=packet;
   if (m.type==MessageType::Hello && config_.resume_token && ever_connected_ &&
       (state_==SessionState::Connected || state_==SessionState::Lost) &&
       m.resume_token==config_.resume_token && m.process_id &&
@@ -157,6 +167,9 @@ void CoopSession::Receive(const Message& m, double now) {
     }
     partner_name_ = m.display_name;
     peer_process_=m.process_id;
+    if (config_.resume_token) wire_epoch_=PacketEpoch(config_.resume_token,
+        config_.role==Role::Host ? config_.process_id : peer_process_,
+        config_.role==Role::Guest ? config_.process_id : peer_process_);
     hello_seen_ = true;
     Message ack; ack.type = MessageType::HelloAck; Send(ack, true);
     last_receive_ = now;
@@ -164,10 +177,11 @@ void CoopSession::Receive(const Message& m, double now) {
     if (m.epoch != epoch_ || !epoch_) return;
     rejection_ = m.reason; Transition(SessionState::Ended); return;
   } else {
-    if (!epoch_ || (!COOP_MUT_IF("session_epoch") && m.epoch != epoch_) || m.protocol != config_.compatibility.protocol) {
+    if (!epoch_ || (!COOP_MUT_IF("session_epoch") && m.epoch != (wire_epoch_ ? wire_epoch_ : epoch_)) || m.protocol != config_.compatibility.protocol) {
       if (camera) reject_camera("wrong epoch/protocol");
       return;
     }
+    m.epoch=epoch_; // Mailboxes and native identities retain the campaign scope.
     if (m.type == MessageType::HelloAck && state_ == SessionState::Connecting) {
       ack_seen_ = true;
     } else {

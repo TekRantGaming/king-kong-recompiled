@@ -109,7 +109,7 @@ class ResumeDialog final : public rex::ui::ImGuiDialog {
                   machine_.Remaining(now));
     }
     if (machine_.Phase() != before && machine_.Phase() == handover::ResumePhase::Starting)
-      REXLOG_INFO("KK co-op hand over: reconnected to the partner after {:.1f} s", handover::kReconnectSeconds - machine_.Remaining(now));
+      REXLOG_INFO("KK co-op hand over: reconnected to the partner after {:.1f} s", (file_.checkpoint.rejoin ? 120 : handover::kReconnectSeconds) - machine_.Remaining(now));
     if (begin && file_.host && !begun_) {
       begun_ = true;
       if (!BeginResumedStart(request_)) machine_.LaunchFailed();

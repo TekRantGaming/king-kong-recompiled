@@ -102,6 +102,7 @@ class CoopSession {
   SessionState state_ = SessionState::Idle;
   RejectReason rejection_ = RejectReason::None;
   uint64_t epoch_ = 0;
+  uint64_t wire_epoch_ = 0; // Packet incarnation; the campaign Epoch() stays stable.
   uint64_t peer_process_ = 0;
   uint32_t reconnects_ = 0;
   bool ever_connected_ = false;

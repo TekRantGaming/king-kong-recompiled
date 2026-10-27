@@ -49,9 +49,11 @@ void FlowRejoin(bool fresh_guest) {
 }
 struct Backend final : ISteamMessagesBackend {
   Backend* other=nullptr; uint64_t self=0; bool cut=false;
+  uint64_t packet_epoch=0;
   std::deque<SteamBackendMessage> incoming[2];
   SteamSendResult Send(uint64_t,int channel,std::span<const uint8_t> bytes,bool reliable) override {
     if (cut) return SteamSendResult::Failed;
+    Message m; if (Decode(bytes,m) && m.type!=MessageType::Hello && m.type!=MessageType::Reject) packet_epoch=m.epoch;
     other->incoming[channel].push_back({self,channel,reliable,false,{bytes.begin(),bytes.end()}});
     return SteamSendResult::Sent;
   }
@@ -69,6 +71,7 @@ void SteamOutage(double duration,bool one_way) {
   CoopSession h(Config(true,11),at),g(Config(false,22),bt);
   auto pump=[&](double from,double until) { for (double t=from;t<until;t+=.02) { h.Tick(t); g.Tick(t); } };
   pump(0,2); Check(h.State()==SessionState::Connected && g.State()==SessionState::Connected,"Steam initial handshake");
+  const auto old_epoch=a.packet_epoch;
   a.cut=true; b.cut=!one_way; at.SessionFailed(2);
   pump(2,2+duration);
   Check(h.State()!=SessionState::Ended && g.State()!=SessionState::Ended,"Steam outage retains session");
@@ -78,6 +81,16 @@ void SteamOutage(double duration,bool one_way) {
   // The replacement process has its own monotonic clock starting at zero.
   for (double t=6+duration;t<10+duration;t+=.02) { h.Tick(t); restarted.Tick(t-6-duration); }
   Check(h.State()==SessionState::Connected && restarted.State()==SessionState::Connected && h.ReconnectCount()>0,"Steam guest process restart renegotiates");
+  Check(a.packet_epoch!=old_epoch && h.Epoch()==9600 && restarted.Epoch()==9600,"packet incarnation changes while campaign identity stays stable");
+  Message delayed; delayed.type=MessageType::PlayerPose; delayed.epoch=old_epoch; delayed.sequence=100000;
+  delayed.pose.time=1000000; delayed.pose.level=303; delayed.pose.x=17;
+  std::vector<uint8_t> bytes; Check(Encode(delayed,bytes),"encode delayed old process pose");
+  b.incoming[1].push_back({1,1,false,false,bytes}); restarted.Tick(4.1);
+  Check(!restarted.Partner(4.1),"old process packet cannot cross the rejoin boundary");
+  delayed.epoch=a.packet_epoch; ++delayed.sequence;
+  Check(Encode(delayed,bytes),"encode new incarnation pose");
+  b.incoming[1].push_back({1,1,false,false,bytes}); restarted.Tick(4.2);
+  Check(restarted.Partner(4.2).has_value(),"new process packet is accepted");
 }
 void UdpRestart(bool host_crash) {
   static uint16_t next_port=31960;
