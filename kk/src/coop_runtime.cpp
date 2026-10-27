@@ -130,6 +130,8 @@ struct View {
   uint64_t epoch = 0;
 #if defined(KK_DEV_TOOLS)
   UdpFaultStats faults;
+  bool relay_model=false;
+  uint64_t relay_retries=0,relay_drops=0;
 #endif
 };
 std::mutex enemy_status_mutex;
@@ -152,6 +154,7 @@ void LogPoses(const View& v, double now, double& next) {
   REXLOG_INFO("KK dev UDP faults: seen={} copies={} dropped={} duplicates={} reordered={} bytes={} queue-full={} loss={} burst={} one-way={} disconnect={} bandwidth={}",
       f.seen,f.forwarded,f.dropped,f.duplicated,f.reordered,f.bytes,f.queue_full,
       f.reasons[1],f.reasons[2],f.reasons[3],f.reasons[4],f.reasons[5]);
+  if (v.relay_model) REXLOG_INFO("KK dev Steam relay model: retries={} no-delay-drops={}",v.relay_retries,v.relay_drops);
 }
 #endif
 class Service {
@@ -245,6 +248,7 @@ class Service {
         view.epoch = session.Epoch();
 #if defined(KK_DEV_TOOLS)
         view.faults=transport->SimulationStats();
+        if (relay) { view.relay_model=true; view.relay_retries=relay->Retries(); view.relay_drops=relay->NoDelayDrops(); }
         if ((now-copy_started>.5 || poll_gap>.5) && wait_count_<8) {
           std::lock_guard lock(mutex_);
           wait_events_.push_back({now-copy_started,poll_gap}); ++wait_count_;
