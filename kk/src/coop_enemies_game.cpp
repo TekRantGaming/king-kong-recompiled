@@ -301,13 +301,13 @@ void DevWakeBeforeLoad() {
     REXLOG_WARN("KK dev wake: load interrupted visit/observation; discarded saved placement");
   }
 }
-void DevWakeActivity(uint32_t actor, uint32_t off, const char* name) {
+void DevWakeActivity(uint32_t actor, uint32_t active, const char* name) {
   auto& wake = Wake();
   if (!wake.enabled || (wake.phase != DevWake::Visiting && wake.phase != DevWake::Observing) ||
       wake.activity >= 32) return;
   ++wake.activity;
-  REXLOG_INFO("KK dev wake: native {} actor={:08X} off={} selected-target={}",
-      name, actor, off, actor == wake.target.actor);
+  REXLOG_INFO("KK dev wake: native {} actor={:08X} active={} selected-target={}",
+      name, actor, active, actor == wake.target.actor);
 }
 void DevWakeTick(PPCContext& ctx, uint8_t* b, uint32_t w) {
   auto& wake = Wake();
@@ -2772,8 +2772,10 @@ void EnemyThrowProbe(PPCContext& ctx,uint8_t* b) {
     Store32(b,binding.vars+(kna ? 384:388),0);
     Store32(b,binding.vars+292,0);
     const auto activation=scratch.Vec(0,0,0,0x200);
-    std::memset(b+activation,0,108); Store32(b,activation+4,binding.actor);
-    ctx.r3.u64=activation; __imp__sub_8250EE50(ctx,b);
+    std::memset(b+activation,0,108); Store32(b,activation+4,binding.actor); Store32(b,activation+84,1);
+    ctx.r3.u64=activation; __imp__sub_8250EDE8(ctx,b);
+    Store32(b,0x82CCBF64,binding.ai); Store32(b,0x82CCBF68,binding.ai);
+    Store32(b,0x82CCBF6C,binding.actor); Store32(b,0x82CCBF70,binding.actor);
     ctx.r3.u64=2; ctx.r4.u64=block; __imp__sub_826FA3B0(ctx,b);
     count=12;
     REXLOG_INFO("COOP PROJECTILE fixture-native-controller actor={:08X} family={} block={:08X} native={:08X} volley=3 synthetic-activation=true native-animation-and-attacks=true normal-traversal-unverified=true",
@@ -2831,6 +2833,20 @@ void ProxyGrabTick(PPCContext& ctx,uint8_t* b) {
     // The copy has independent vars but was duplicated from a story human.
     // Its old server handle may still name the donor. Create a fresh server.
     Store32(b,vars+4432,UINT32_MAX); Store32(b,vars+4436,UINT32_MAX);
+    if (PoseAddress(vars,4668)) {
+      const auto count=Load32(b,ai+68),events=count<=64 ? Ptr(b,ai,72,12*count):0;
+      uint32_t clients=0,client_owner=0,client_native=0;
+      if (events) for (uint32_t i=0;i<count;++i) {
+        const auto entry=events+12*i,fn=Ptr(b,entry,0,24);
+        if (fn && Load32(b,entry+4)==20) {
+          ++clients; client_owner=Load32(b,entry+8); client_native=Load32(b,fn+20);
+        }
+      }
+      const auto hero=Load32(b,0x82CCBF7C),human=Ptr(b,Ptr(b,hero,24,8),4,88),hv=Ptr(b,human,64,4668);
+      REXLOG_INFO("COOP GRAB proxy-layout actor={:08X} ai={:08X} user={} class={} enabled={} proposal={:08X} events={} clients={} client-owner={:08X} client-native={:08X} hero={:08X} hero-enabled={} hero-proposal={:08X}",
+          body,ai,Load32(b,vars),Load32(b,vars+4),Load32(b,vars+4544),Load32(b,vars+4664),count,clients,client_owner,client_native,
+          hero,hv ? Load32(b,hv+4544):0,hv ? Load32(b,hv+4664):0);
+    }
   }
   Scratch scratch(ctx,b);
   constexpr uint32_t globals[]={0x82CCBF64,0x82CCBF68,0x82CCBF6C,0x82CCBF70};
@@ -3633,22 +3649,22 @@ REX_HOOK_RAW(sub_82663550) {
 }
 // Observe the real scripts' activation execution, without changing their
 // conditions, arguments or result. See TrigExec_SetActivity (.115:18091) and
-// TrigExec_SetActiveAndVisible (.25:19027): +4=actor, +84=off.
+// TrigExec_SetActiveAndVisible: +4=actor, +84=active (1 on, 0 off).
 REX_HOOK_RAW(sub_8250EE50) {
   const auto record = ctx.r3.u32;
   const bool readable = kk::coop::PoseAddress(record, 88);
   const auto actor = readable ? kk::hfr::Load32(base, record+4) : 0;
-  const auto off = readable ? kk::hfr::Load32(base, record+84) : 0;
+  const auto active = readable ? kk::hfr::Load32(base, record+84) : 0;
   __imp__sub_8250EE50(ctx, base);
-  if (readable) kk::coop::DevWakeActivity(actor, off, "SetActivity");
+  if (readable) kk::coop::DevWakeActivity(actor, active, "SetActivity");
 }
 REX_HOOK_RAW(sub_8250EDE8) {
   const auto record = ctx.r3.u32;
   const bool readable = kk::coop::PoseAddress(record, 88);
   const auto actor = readable ? kk::hfr::Load32(base, record+4) : 0;
-  const auto off = readable ? kk::hfr::Load32(base, record+84) : 0;
+  const auto active = readable ? kk::hfr::Load32(base, record+84) : 0;
   __imp__sub_8250EDE8(ctx, base);
-  if (readable) kk::coop::DevWakeActivity(actor, off, "SetActiveAndVisible");
+  if (readable) kk::coop::DevWakeActivity(actor, active, "SetActiveAndVisible");
 }
 #endif
 
