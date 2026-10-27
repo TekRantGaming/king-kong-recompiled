@@ -95,6 +95,8 @@ REX_EXTERN(__imp__sub_82663550);
 REX_EXTERN(__imp__sub_8241F0A8);
 REX_EXTERN(__imp__sub_8266D880);
 REX_EXTERN(__imp__sub_82670980);
+REX_EXTERN(__imp__sub_826FB0A0);
+REX_EXTERN(__imp__sub_826F9C60);
 #endif
 #if defined(KK_DEV_TOOLS)
 REX_EXTERN(__imp__sub_82451A60);
@@ -522,7 +524,10 @@ struct State {
   ShotIntent shot;
   InventoryState shot_inventory;
 #if defined(KK_DEV_TOOLS)
-  struct ProxyGrab { uint32_t actor=0,ai=0,vars=0,id=UINT32_MAX,generation=0; } proxy_grab;
+  struct ProxyGrab {
+    uint32_t actor=0,ai=0,vars=0,id=UINT32_MAX,generation=0;
+    uint32_t client=0,enabled=0,proposal=0;
+  } proxy_grab;
   uint32_t shot_hit_object = 0;
   bool shot_matched = false;
   const char* shot_hit_reason = "no-hit";
@@ -2827,10 +2832,15 @@ void EnemyThrowProbe(PPCContext& ctx,uint8_t* b) {
 }
 void ProxyGrabTick(PPCContext& ctx,uint8_t* b) {
   static const bool enabled=[] { const auto* v=std::getenv("KK_DEV_NATIVE_GRABS"); return v && std::strcmp(v,"1")==0; }();
+  static const bool client_enabled=[] { const auto* v=std::getenv("KK_DEV_NATIVE_GRAB_CLIENT"); return v && std::strcmp(v,"1")==0; }();
   if (!enabled || !Scratch::CanUse(ctx)) return;
   auto& s=Get(); auto& grab=s.proxy_grab;
   const auto body=EnemyPartnerCombatReady() ? kk::PartnerBodyCombatCopy(b):0;
-  const auto ai=Ptr(b,Ptr(b,body,24,8),4,88),vars=Ptr(b,ai,64,4440);
+  const auto ai=Ptr(b,Ptr(b,body,24,8),4,88),model=Ptr(b,ai,0,4),definition=Ptr(b,model,0,8);
+  const auto bytes=definition ? Load32(b,definition+4):0;
+  // The native H proposal reads as far as15228. A PNJInd or another short
+  // human model must never receive H's server/client fields in this fixture.
+  const auto vars=bytes>=15688 && bytes<=1048576 ? Ptr(b,ai,64,bytes):0;
   const auto read=[&](uint32_t p) { return Load32(b,p); };
   if (grab.actor && (body!=grab.actor || ai!=grab.ai || vars!=grab.vars)) {
     // A disconnect, downed partner or changed lease releases only the exact
@@ -2843,9 +2853,23 @@ void ProxyGrabTick(PPCContext& ctx,uint8_t* b) {
       ctx.r3.u64=handle; ctx.r4.u64=0; __imp__sub_8271ECF8(ctx,b);
       REXLOG_INFO("COOP GRAB proxy released actor={:08X} id={:08X}/{}",grab.actor,grab.id,grab.generation);
     }
+    if (grab.client && Ptr(b,Ptr(b,grab.actor,24,8),4,88)==grab.ai &&
+        Ptr(b,grab.ai,64,15688)==grab.vars) {
+      ctx.r3.u64=grab.actor; ctx.r4.u64=grab.actor; ctx.r5.u64=20; ctx.r6.u64=grab.client;
+      __imp__sub_826F9C60(ctx,b);
+      if (Load32(b,grab.vars+4544)==1) Store32(b,grab.vars+4544,grab.enabled);
+      const auto proposal=Load32(b,0x82CC8830);
+      if (Load32(b,grab.vars+4664)==proposal) Store32(b,grab.vars+4664,grab.proposal);
+      REXLOG_INFO("COOP GRAB proxy native-client-removed actor={:08X} shipping-bridge=false",grab.actor);
+    }
     grab={};
   }
-  if (!body || !ai || !vars) return;
+  if (!body || !ai || !vars) {
+    static unsigned refused=0;
+    if (body && ai && !vars && refused++<8)
+      REXLOG_INFO("COOP GRAB proxy layout-refused actor={:08X} model={:08X} vars-bytes={} required-H-bytes=15688 shipping-bridge=false",body,model,bytes);
+    return;
+  }
   if (!grab.actor) {
     grab={body,ai,vars};
     // The copy has independent vars but was duplicated from a story human.
@@ -2864,6 +2888,20 @@ void ProxyGrabTick(PPCContext& ctx,uint8_t* b) {
       REXLOG_INFO("COOP GRAB proxy-layout actor={:08X} ai={:08X} user={} class={} enabled={} proposal={:08X} events={} clients={} client-owner={:08X} client-native={:08X} hero={:08X} hero-enabled={} hero-proposal={:08X}",
           body,ai,Load32(b,vars),Load32(b,vars+4),Load32(b,vars+4544),Load32(b,vars+4664),count,clients,client_owner,client_native,
           hero,hv ? Load32(b,hv+4544):0,hv ? Load32(b,hv+4664):0);
+      // AI duplicate8271DC78 clears registrations. Repeat only H init's
+      // audited event20 registration, never its global player/story setup.
+      // Native825491B0 and82674380 still decide acceptance and score.
+      const auto client=Load32(b,0x82CC8770),proposal=Load32(b,0x82CC8830);
+      if (client_enabled && !clients && !count && PoseAddress(client,24) && PoseAddress(proposal,24) &&
+          Load32(b,client+20)==0x82670980 && Load32(b,proposal+20)==0x82674380) {
+        grab.client=client; grab.enabled=Load32(b,vars+4544); grab.proposal=Load32(b,vars+4664);
+        Scratch register_client(ctx,b);
+        ctx.r3.u64=body; ctx.r4.u64=body; ctx.r5.u64=20; ctx.r6.u64=client;
+        __imp__sub_826FB0A0(ctx,b);
+        Store32(b,vars+4544,1); Store32(b,vars+4664,proposal);
+        REXLOG_INFO("COOP GRAB proxy native-client-installed actor={:08X} client={:08X} proposal={:08X} vars-bytes={} native-acceptance-required=true shipping-bridge=false",
+            body,client,proposal,bytes);
+      }
     }
   }
   Scratch scratch(ctx,b);
