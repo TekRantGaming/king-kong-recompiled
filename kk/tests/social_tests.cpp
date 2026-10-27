@@ -345,6 +345,17 @@ void CoopPages() {
   Check(StartupInvite(s) == 77, "the Steam start lobby is the invite without an inviter");
   s.pending_invites = {{55, 9}};
   Check(!StartupInvite(s), "ordinary invites are not a Steam start");
+  SocialModel reconnect;
+  reconnect.status=SocialStatus::Connected; reconnect.lobby=77; reconnect.self=reconnect.owner=1;
+  reconnect.rejoin_partner=2; reconnect.overlay_available=true;
+  reconnect.members={{1,"Host",false}};
+  reconnect.friends={{2,"Partner",FriendState::Online},{3,"Other friend",FriendState::Online}};
+  const auto rejoin_rows=SocialRows(reconnect);
+  Check(Find(rejoin_rows,SocialRowKind::OverlayInvite).enabled,"active host can open Steam rejoin invite");
+  Check(Find(rejoin_rows,SocialRowKind::Friend,2).enabled && !Find(rejoin_rows,SocialRowKind::Friend,3).enabled,
+      "active campaign invites only the previous partner");
+  Check(CoopRowCommand(Find(rejoin_rows,SocialRowKind::Friend,2),reconnect,CoopPage::Lobby).has_value(),
+      "controller rejoin invite uses the existing command path");
 }
 }
 int main() { InputPolicy(); FocusAndActions(); PreviewScenes(); DirectRows(); ChapterChoice(); CoopPages(); std::printf("Social panel: %u checks passed\n", checks); }

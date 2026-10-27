@@ -378,6 +378,7 @@ std::wstring HandoverArg() {
 }
 bool TakeHandover() {
   if (handover_taken || !REXCVAR_GET(kk_coop_enabled)) return false;
+  if (Social().Snapshot().rejoin_requested) return PrepareMenuRejoin(play::UserDir());
   StartPlan plan; const char* failure="";
   const auto phase=StartPlanState(&plan,&failure);
   if (phase==handover::PlanPhase::Failed) {

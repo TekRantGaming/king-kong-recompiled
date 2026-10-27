@@ -60,6 +60,8 @@ struct SocialModel {
   std::string direct_addresses, direct_code;
   uint16_t direct_port = 27080;
   LobbyChoice choice;
+  bool rejoin_requested = false; // UI consumes the durable campaign hand over.
+  SocialId rejoin_partner = 0; // Only that friend may rejoin an active host.
 };
 bool CanStartLobby(const SocialModel& model);
 // Lobby data and member data can arrive in different Steam callbacks. Seeing
