@@ -701,7 +701,7 @@ void OwnershipWire() {
                    phase == OwnershipPhase::Matched ? EnemyOwner::Host : EnemyOwner::Guest, Enemy()};
     if (phase == OwnershipPhase::Commit) { m.ownership.enemy.owner = EnemyOwner::Guest; m.ownership.enemy.generation = 1; }
     auto bytes = Packet(m); Message out;
-    Check(bytes.size() == 104 && Decode(bytes, out) && Packet(out) == bytes, "ownership phase round trip with final state");
+    Check(bytes.size() == kHeaderBytes+18+kEnemyStateBytes && Decode(bytes, out) && Packet(out) == bytes, "ownership phase round trip with final state");
     for (size_t n = 0; n < bytes.size(); ++n) {
       Message sentinel; sentinel.sequence = 77;
       Check(!Decode(std::span(bytes.data(), n), sentinel) && sentinel.sequence == 77, "ownership truncations preserve output");
