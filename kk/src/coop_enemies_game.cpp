@@ -2386,9 +2386,12 @@ bool NativeShot(PPCContext& ctx, uint8_t* b, const ShotIntent& shot, const ShotH
   // per-hit player adapters, use the validated body so aggro names the shooter.
   // Keep local Jack's native weapon tables and host cheat choices for damage.
   const auto player_cache=PlayerDamageCache(target.id.family);
-  const auto body_candidate=player_cache ? kk::PartnerBodyCombatActor(b) : 0;
+  // KNa8241ED88 consumes the native scalar without a Jack-only damage gate,
+  // then retains its real attacker4388 and chooses that actor as target4084.
+  const bool native_kna=target.id.family==EnemyFamily::NativeKna;
+  const auto body_candidate=(player_cache || native_kna) ? kk::PartnerBodyCombatActor(b) : 0;
   const auto cached_player=player_cache ? Load32(b,target.vars+player_cache) : 0;
-  const auto peer_body=body_candidate && (cached_player==hero || cached_player==body_candidate) ? body_candidate : 0;
+  const auto peer_body=body_candidate && (native_kna || cached_player==hero || cached_player==body_candidate) ? body_candidate : 0;
   const auto shooter=peer_body ? peer_body : hero;
   // Native type-4 pool layout verified in 8271E4E8 (.52:27465).
   constexpr uint32_t pool = 0x82C8EF30;
@@ -3119,7 +3122,8 @@ bool EnemyCombatReference(const uint8_t* b, uint32_t owner, uint32_t ai, uint32_
   // These exact fields are combat evidence, not authored story references.
   if ((binding->second.id.family==EnemyFamily::Raptor && offset==7248) ||
       (binding->second.id.family==EnemyFamily::Crab && offset==764) ||
-      (binding->second.id.family==EnemyFamily::Bat && offset==1032)) return true;
+      (binding->second.id.family==EnemyFamily::Bat && offset==1032) ||
+      (binding->second.id.family==EnemyFamily::NativeKna && offset==4388)) return true;
   if (binding->second.id.family==EnemyFamily::Raptor && PoseAddress(vars,7388) &&
       combat::CandidateReference(combat::CandidateTable{7296,7304,20},offset,Load32(b,vars+7296))) return true;
   if (binding->second.id.family==EnemyFamily::Raptor && (offset==5100 || offset==14192 || offset==7756)) {
