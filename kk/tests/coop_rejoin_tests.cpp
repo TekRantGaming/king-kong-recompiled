@@ -89,6 +89,7 @@ void SteamOutage(double duration,bool one_way) {
   Message loaded; loaded.type=MessageType::Loaded; loaded.flow=hb.Snapshot().world;
   hb.Submit(loaded); gb.Submit(loaded); pump(2,3);
   Check(hb.Snapshot().phase==FlowPhase::Playing && gb.Snapshot().phase==FlowPhase::Playing,"runtime flow starts before the outage");
+  hb.PublishRejoinState(start);
   const auto old_epoch=a.packet_epoch;
   a.cut=true; b.cut=!one_way; at.SessionFailed(2);
   pump(3,3+duration);
@@ -155,9 +156,30 @@ void Record() {
   Check(handover::Parse(handover::Format(f),61000,"v",parsed)==handover::ParseResult::Ok && parsed.checkpoint.start==4 && parsed.checkpoint.generation==9,"durable record survives restart");
   Check(handover::Parse(handover::Format(f),122000,"v",parsed)==handover::ParseResult::Expired,"durable record expires");
 }
+void HostReloadWhileAbsent() {
+  SessionFlow h(true),g;
+  SessionStart s; s.chapter=7; s.level=303; s.start=1;
+  h.Begin(s,{},0); Transfer(h,g,0);
+  h.Local(Loaded(h),1); g.Local(Loaded(g),1); Transfer(g,h,1); Transfer(h,g,1);
+  h.PublishRejoinState(s); h.Connection(SessionState::Lost,0,2);
+  Message reload; reload.type=MessageType::ReloadRequest; reload.flow=h.View().world;
+  h.Local(reload,3);
+  Check(h.View().world.generation==2 && h.View().phase==FlowPhase::Loading,"absent guest does not prevent the native host checkpoint reload");
+  h.Local(Loaded(h),4);
+  Check(h.View().phase==FlowPhase::Playing,"host continues after its own reload without waiting for absent guest");
+  h.Connection(SessionState::Connected,1,10);
+  Check(h.View().rejoin_revision==0,"rejoin waits for the newly loaded native world metadata");
+  s.generation=2; s.visit=2; h.PublishRejoinState(s); h.Tick(10.1);
+  Transfer(h,g,10.1);
+  Check(g.View().world.generation==2 && g.View().start.visit==2 && g.View().phase==FlowPhase::Loading,
+      "returning guest receives the fresh host checkpoint visit rather than the previous dead world");
+  g.Local(Loaded(g),11); Transfer(g,h,11); Transfer(h,g,11);
+  Check(h.View().phase==FlowPhase::Playing && g.View().phase==FlowPhase::Playing,"guest joins the host's new checkpoint world");
+}
 }
 int main() {
   Record(); FlowRejoin(false); FlowRejoin(true);
+  HostReloadWhileAbsent();
   for (auto seconds : {10.,60.}) for (bool one_way : {false,true}) SteamOutage(seconds,one_way);
   UdpRestart(false); UdpRestart(true);
   LostProbes();

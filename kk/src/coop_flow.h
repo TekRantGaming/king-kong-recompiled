@@ -184,6 +184,7 @@ class SessionFlow {
     if (state==SessionState::Lost || state==SessionState::Connecting) {
       rejoin_requested_=false;
       view_.reconnecting=true;
+      if (view_.host && view_.phase==FlowPhase::Loading && local_loaded_) Release();
       view_.status=view_.host ? "Partner disconnected. You can keep playing while they reconnect." :
           "Connection lost. Waiting for the host to reconnect...";
     } else if (state==SessionState::Ended) {
@@ -204,6 +205,10 @@ class SessionFlow {
   }
   void Rejoin(double now) {
     if (!view_.host || !view_.active) return;
+    if (view_.phase!=FlowPhase::Playing || !checkpoint_state_ || checkpoint_state_->generation!=view_.world.generation) {
+      rejoin_deferred_=true; return;
+    }
+    rejoin_deferred_=false;
     ++view_.rejoin_revision;
     auto s=checkpoint_state_.value_or(view_.start);
     s.rejoin=true; s.chapter=uint16_t(FlowChapter(view_.world.level));
@@ -222,6 +227,8 @@ class SessionFlow {
   void Local(Message m, double now) { Handle(m, true, now); }
   void Remote(const Message& m, double now) { Handle(m, false, now); }
   void Tick(double now) {
+    if (rejoin_deferred_ && view_.phase==FlowPhase::Playing && checkpoint_state_ &&
+        checkpoint_state_->generation==view_.world.generation) Rejoin(now);
     if (!view_.host && view_.reconnecting && rejoin_requested_ && now>=rejoin_deadline_) {
       view_.reconnect_expired=true; view_.phase=FlowPhase::Failed;
       view_.status="Couldn't catch up with the host. Back to menu is available.";
@@ -313,7 +320,8 @@ class SessionFlow {
     }
     if (!ValidFlowEvent(m.flow)) return;
     if (m.type==MessageType::RejoinRequest) {
-      if (view_.host && !local && view_.phase==FlowPhase::Playing && !guest_rejoining_) Rejoin(now);
+      if (view_.host && !local && !guest_rejoining_ &&
+          !(view_.phase==FlowPhase::Loading && view_.start.rejoin && view_.start.generation==view_.world.generation)) Rejoin(now);
       return;
     }
     if (view_.host && !local && m.type==MessageType::Loaded && guest_rejoining_ &&
@@ -347,7 +355,10 @@ class SessionFlow {
           local_loaded_=true; view_.status="Waiting for partner..."; Emit(m.type,view_.world);
         }
         else remote_loaded_=true;
-        if (view_.host && local_loaded_ && remote_loaded_) { Emit(MessageType::LoadRelease,view_.world); Release(); }
+        if (view_.host && local_loaded_ && (remote_loaded_ || view_.reconnecting || rejoin_deferred_)) {
+          if (remote_loaded_) Emit(MessageType::LoadRelease,view_.world);
+          Release();
+        }
         break;
       case MessageType::LoadRelease:
         if (!local && authority && local_loaded_ && m.flow.start==view_.world.start && view_.phase==FlowPhase::Loading) Release();
@@ -388,6 +399,7 @@ class SessionFlow {
   uint32_t reconnects_=0;
   bool guest_rejoining_=false;
   bool rejoin_requested_=false;
+  bool rejoin_deferred_=false;
   FlowEvent rejoin_world_;
   double rejoin_deadline_=0;
 };
