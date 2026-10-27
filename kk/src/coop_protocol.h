@@ -26,7 +26,7 @@ enum class MessageType : uint16_t {
   DamageEvent = 22, PlayerStatus = 23, OwnershipChange = 24,
   PlayerDowned = 25, PlayerRevived = 26, CameraPose = 27, CameraCut = 28,
   StoryEvent = 29, TriggerRequest = 30, WorldDigest = 31, ShotReceipt = 32,
-  StartPlan = 33, StartPlanAck = 34, ObjectState = 35, ObjectRequest = 36
+  StartPlan = 33, StartPlanAck = 34, ObjectState = 35, ObjectRequest = 36, RejoinRequest = 37
 };
 
 enum class ObjectKind : uint8_t { Breakable=1, Door=2, Fire=3, Raft=4, Ode=5, Tree=6, SupportBody=7 };

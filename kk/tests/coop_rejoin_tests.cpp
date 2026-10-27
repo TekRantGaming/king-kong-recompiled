@@ -42,6 +42,11 @@ void FlowRejoin(bool fresh_guest) {
   Check(h.View().phase==FlowPhase::Playing,"host never enters load barrier");
   g.Local(Loaded(g),64); Transfer(g,h,64); Transfer(h,g,64);
   Check(g.View().phase==FlowPhase::Playing && h.View().phase==FlowPhase::Playing,"only guest reload releases");
+  g.Connection(SessionState::Lost,1,65); g.Connection(SessionState::Connected,2,66);
+  Transfer(g,h,66); Transfer(h,g,66);
+  Check(h.View().phase==FlowPhase::Playing && g.View().phase==FlowPhase::Loading,"guest only interruption explicitly requests a host snapshot");
+  g.Local(Loaded(g),67); Transfer(g,h,67); Transfer(h,g,67);
+  Check(g.View().phase==FlowPhase::Playing,"asymmetric interruption releases after the guest load");
   h.Connection(SessionState::Lost,1,70); g.Connection(SessionState::Lost,1,70);
   h.Connection(SessionState::Ended,1,190); g.Connection(SessionState::Ended,1,190);
   Check(h.View().phase==FlowPhase::Playing && h.View().reconnect_expired,"host continues after bounded timeout");

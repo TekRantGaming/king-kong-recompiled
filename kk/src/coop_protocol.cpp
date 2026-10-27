@@ -128,7 +128,7 @@ uint64_t SessionSaveHash(std::span<const uint8_t> bytes) {
   for (uint8_t b : bytes) { hash ^= b; hash *= 1099511628211ull; }
   return hash;
 }
-bool IsFlowMessage(MessageType t) { return (t >= MessageType::SessionStart && t <= MessageType::FlowAbort) || IsLifeMessage(t) || IsPlanMessage(t); }
+bool IsFlowMessage(MessageType t) { return (t >= MessageType::SessionStart && t <= MessageType::FlowAbort) || IsLifeMessage(t) || IsPlanMessage(t) || t==MessageType::RejoinRequest; }
 bool ValidObjectState(const ObjectState& s) {
   if (!s.generation || !s.level || s.level>100000 || !s.number || !s.source ||
       !std::isfinite(s.position) || !std::isfinite(s.seconds)) return false;
@@ -420,7 +420,7 @@ bool Encode(const Message& m, std::vector<uint8_t>& out) {
       break;
     case MessageType::LevelChange: case MessageType::Loaded: case MessageType::LoadRelease:
     case MessageType::Checkpoint: case MessageType::ChapterFinished: case MessageType::ReloadRequest:
-    case MessageType::FlowAbort:
+    case MessageType::FlowAbort: case MessageType::RejoinRequest:
       if (!ValidFlowEvent(m.flow)) return false;
       payload.U(m.flow.generation, 4); payload.U(m.flow.level, 4); payload.U(m.flow.start, 4); payload.U(m.flow.completed, 8);
       break;
@@ -640,7 +640,7 @@ bool Decode(std::span<const uint8_t> bytes, Message& out) {
     }
     case MessageType::LevelChange: case MessageType::Loaded: case MessageType::LoadRelease:
     case MessageType::Checkpoint: case MessageType::ChapterFinished: case MessageType::ReloadRequest:
-    case MessageType::FlowAbort:
+    case MessageType::FlowAbort: case MessageType::RejoinRequest:
       m.flow = {uint32_t(r.U(4)), uint32_t(r.U(4)), uint32_t(r.U(4)), r.U(8)};
       if (!ValidFlowEvent(m.flow)) return false;
       break;

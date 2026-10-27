@@ -182,6 +182,7 @@ class SessionFlow {
   void Connection(SessionState state, uint32_t reconnects, double now) {
     if (!view_.active || view_.phase==FlowPhase::Failed) return;
     if (state==SessionState::Lost || state==SessionState::Connecting) {
+      rejoin_requested_=false;
       view_.reconnecting=true;
       view_.status=view_.host ? "Partner disconnected. You can keep playing while they reconnect." :
           "Connection lost. Waiting for the host to reconnect...";
@@ -194,6 +195,10 @@ class SessionFlow {
       if (view_.host) {
         Rejoin(now); view_.reconnecting=false;
         view_.status="Partner is catching up. You can keep playing.";
+      } else if (!rejoin_requested_) {
+        // A one sided interruption need not make the host's session Lost.
+        // Ask explicitly rather than waiting for a host transition it never saw.
+        Emit(MessageType::RejoinRequest,view_.world); rejoin_requested_=true; rejoin_deadline_=now+120;
       }
     }
   }
@@ -217,6 +222,10 @@ class SessionFlow {
   void Local(Message m, double now) { Handle(m, true, now); }
   void Remote(const Message& m, double now) { Handle(m, false, now); }
   void Tick(double now) {
+    if (!view_.host && view_.reconnecting && rejoin_requested_ && now>=rejoin_deadline_) {
+      view_.reconnect_expired=true; view_.phase=FlowPhase::Failed;
+      view_.status="Couldn't catch up with the host. Back to menu is available.";
+    }
     if (guest_rejoining_ && now>=rejoin_deadline_) {
       guest_rejoining_=false; view_.reconnect_expired=true;
       view_.status="Partner could not catch up. You can keep playing or go back to menu.";
@@ -240,6 +249,7 @@ class SessionFlow {
   }
   void Setup(SessionStart s, double now) {
     local_loaded_=remote_loaded_=local_finished_=remote_finished_=false;
+    rejoin_requested_=false;
     view_.active=true; view_.start=s; view_.world={s.generation,s.level,s.rejoin ? s.world_start : s.start,s.completed};
     view_.completed=s.completed;
     if (s.rejoin) ++view_.rejoin_revision;
@@ -302,6 +312,10 @@ class SessionFlow {
       return;
     }
     if (!ValidFlowEvent(m.flow)) return;
+    if (m.type==MessageType::RejoinRequest) {
+      if (view_.host && !local && view_.phase==FlowPhase::Playing && !guest_rejoining_) Rejoin(now);
+      return;
+    }
     if (view_.host && !local && m.type==MessageType::Loaded && guest_rejoining_ &&
         m.flow.generation==rejoin_world_.generation && m.flow.level==rejoin_world_.level &&
         m.flow.start==rejoin_world_.start && view_.phase==FlowPhase::Playing) {
@@ -373,6 +387,7 @@ class SessionFlow {
   std::optional<SessionStart> checkpoint_state_;
   uint32_t reconnects_=0;
   bool guest_rejoining_=false;
+  bool rejoin_requested_=false;
   FlowEvent rejoin_world_;
   double rejoin_deadline_=0;
 };
