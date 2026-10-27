@@ -6,6 +6,7 @@
 #include "coop_ownership.h"
 #include "coop_runtime.h"
 #include "coop_pose.h"
+#include "coop_animation_fire.h"
 #include "hfr.h"
 #include "settings.h"
 #include "play_internal.h"
@@ -2214,7 +2215,6 @@ const char* EndShot(const uint8_t* b, bool fired) {
   // A confirmed native gun ray is also evidence of firing. Do not require an
   // ammo delta to forward misses or a real shot whose ammo was replenished.
   if (!fired && !s.shot_resolved) return "no-native-shot";
-  PartnerAnimationShot(s.shot.weapon);
   if (!ValidShotIntent(s.shot)) return "invalid-intent";
   if (!SubmitShotIntent(s.shot, s.shot_inventory)) { s.shots.Reject(ShotReject::Queue); return "queue-refused"; }
   return nullptr;
@@ -3462,9 +3462,13 @@ REX_HOOK_RAW(sub_82696A28) {
   constexpr uint32_t ammo[] = {13432, 13504, 13576, 13648};
   const bool armed = weapon >= 1 && weapon <= 4;
   const auto before = armed ? kk::hfr::Load32(base, game+ammo[weapon-1]) : 0;
+  const auto hero = kk::hfr::Load32(base, 0x82CCBF7C);
+  const auto hero_ai=kk::coop::Ptr(base,kk::coop::Ptr(base,hero,24,8),4,88);
+  const bool own_jack=REXCVAR_GET(kk_coop_enabled) && hero_ai &&
+      kk::hfr::Load32(base,0x82CCBF6C)==hero && kk::hfr::Load32(base,0x82CCBF64)==hero_ai;
+  kk::coop::puppet::FireCapture visual_shot(own_jack);
 #if defined(KK_DEV_TOOLS)
   const bool guest = kk::coop::EnemyLinkSnapshot().role == kk::coop::Role::Guest;
-  const auto hero = kk::hfr::Load32(base, 0x82CCBF7C);
   const bool host_jack = !guest && kk::coop::EnemyConnectionReady() && kk::coop::PoseAddress(hero,32) &&
       kk::hfr::Load32(base,0x82CCBF6C) == hero;
   const auto caller = uint32_t(ctx.lr);
@@ -3475,6 +3479,9 @@ REX_HOOK_RAW(sub_82696A28) {
   }
   const bool same = game == kk::hfr::Load32(base, 0x82CC97C0);
   const auto after = same && armed ? kk::hfr::Load32(base, game+ammo[weapon-1]) : before;
+  // Appearance must survive a pending enemy load identity, a missed ray or a
+  // refused damage packet. Native evidence still gives exactly one visual.
+  if (visual_shot.Fired(same,after<before)) kk::coop::PartnerAnimationShot(uint8_t(weapon));
   if (observe) {
     reason = kk::coop::EndShot(base, same && after < before);
   }
@@ -3488,6 +3495,7 @@ REX_HOOK_RAW(sub_82696A28) {
 REX_HOOK_RAW(sub_8243A3C0) {
   const auto origin = ctx.r3.u32, point = ctx.r4.u32, object = ctx.r6.u32, caller = uint32_t(ctx.lr);
   __imp__sub_8243A3C0(ctx, base);
+  kk::coop::puppet::FireCapture::Ray(caller);
   kk::coop::ShotRay(base, origin, point, object, caller);
 }
 REX_HOOK_RAW(sub_82634428) {

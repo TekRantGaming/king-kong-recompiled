@@ -5,6 +5,8 @@
 // pitch and no position writes. Due requests wait for a usable pose/camera.
 // KK_DEV_FACE_PARTNER_PITCH=1 frames the partner's chest from the actual camera
 // eye, useful for animation evidence on slopes. It never moves either player.
+// KK_DEV_FACE_PARTNER_UNTIL=<seconds> ends that camera aid, so the watcher can
+// then turn away and fire normally while the other window films them.
 // KK_DEV_FACE_ENEMY=<seconds>[:<repeat seconds>] takes precedence and aims at
 // the nearest matched live enemy on the guest, including pitch at camera commit.
 // KK_DEV_FACE_POINT=seconds:repeat,x,y,z[/seconds:repeat,x,y,z...] aims this
@@ -122,6 +124,10 @@ void DevFacePartnerCamera(PPCContext& ctx, uint8_t* base) {
   auto& f = Face();
   if (!f.enabled || !f.loaded || f.done) return;
   const double elapsed = std::chrono::duration<double>(FacePartner::Clock::now() - f.load_time).count();
+  static const double until=[] {
+    const auto* v=std::getenv("KK_DEV_FACE_PARTNER_UNTIL"); return v ? std::atof(v) : 0.;
+  }();
+  if (!f.enemy && !f.point_set && until>0 && elapsed>until) { f.done=true; return; }
   if (f.point_set && f.point_index+1<f.points.size() && elapsed>=f.points[f.point_index+1].at) {
     while (f.point_index+1<f.points.size() && elapsed>=f.points[f.point_index+1].at) ++f.point_index;
     const auto& p=f.points[f.point_index]; f.first=p.at; f.point=p.position; f.repeat=p.repeat; f.next=p.at; f.done=false; f.logged=false;

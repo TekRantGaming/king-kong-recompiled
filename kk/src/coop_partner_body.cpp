@@ -70,6 +70,8 @@ REX_EXTERN(__imp__sub_8242AA88);
 REX_EXTERN(__imp__sub_8271A6F8);
 REX_EXTERN(__imp__sub_827128F0);
 REX_EXTERN(__imp__sub_8286A660);
+REX_EXTERN(__imp__sub_826BB350);
+REX_EXTERN(__imp__sub_828724C0);
 #if defined(KK_DEV_TOOLS)
 namespace kk {
 void DevFishAfterWorld(PPCContext&, uint8_t*);
@@ -435,15 +437,16 @@ struct State {
   int selected_tier = -1;
   unsigned missing_action_kind = 0;
   coop::puppet::AnimationDrive animation;
-  float aim_clip_frame = -1;
-  uint32_t aim_tuple = UINT32_MAX;
   uint32_t rate_layer = 0;
   uint8_t* rate_base = nullptr; // game thread only; restored before relinquishing the exact rig
   uint8_t saved_rate = 60, playback_rate = 60;
   uint32_t requested_tuple = UINT32_MAX;
   uint32_t animation_shots = 0;
+  uint32_t action_changes = 0, action_restarts = 0, native_sets = 0, pose_blends = 0;
+  uint32_t logged_changes = 0, logged_restarts = 0, logged_native_sets = 0, logged_blends = 0;
 #if defined(KK_DEV_TOOLS)
   unsigned capture_left = 0;
+  Clock::time_point animation_sample_at{};
 #endif
   std::set<uint32_t> retired;
   std::map<uint32_t, std::pair<uint32_t, uint32_t>> deferred_prg;
@@ -828,14 +831,10 @@ void PartnerBodyAim(PPCContext& ctx,uint8_t* b,uint32_t actor,uint32_t ai) {
       actor!=s.selected.actor || ai!=s.selected.ai || !s.partner.partner ||
       !s.partner.fresh || !s.Validate(b,s.world,rig) || !Scratch::CanUse(ctx) ||
       s.humans.at(actor).other_human) return;
-  const auto clip_frame=Frame(ctx,b,actor);
-  const auto tuple=(rig.action<<8)|rig.item;
-  if (clip_frame==s.aim_clip_frame && tuple==s.aim_tuple) return;
-  s.aim_clip_frame=clip_frame; s.aim_tuple=tuple;
   const auto& p=*s.partner.partner;
   const float body_yaw=std::atan2(s.facing.y,s.facing.x);
   const float yaw=body_yaw+std::clamp(std::remainder(p.facing-body_yaw,6.283185307f),-1.22f,1.22f);
-  const float pitch=std::clamp(p.pitch,-.96f,.96f);
+  const float pitch=std::clamp(p.pitch+s.animation.GesturePitch(),-.96f,.96f);
   const Vec aim{std::cos(yaw)*std::cos(pitch),std::sin(yaw)*std::cos(pitch),std::sin(pitch)};
   unsigned applied=0;
 #if defined(KK_DEV_TOOLS)
@@ -843,9 +842,11 @@ void PartnerBodyAim(PPCContext& ctx,uint8_t* b,uint32_t actor,uint32_t ai) {
 #endif
   // H_callback_after_blend uses tags 3 and 2 with 8271A6F8 (inverse
   // orientation) then 827128F0 (weighted local rotation), .22:32690+.
-  // The authored H callback is held with its AI. Apply only its isolated bone
-  // rotation after the native world/animation pass, once per advancing clip
-  // sample. A stopped/culled pose must not accumulate another rotation.
+  // Called at skeleton-blend completion. Scheduled AI
+  // quarantine does not hold event callbacks. Applying again at LateWorld
+  // would fight the native callback and can accumulate on an unevaluated pose.
+  // Each call here belongs to a newly evaluated native pose, including a loop
+  // wrap or a repeated clip cursor. Culled poses receive no extra rotation.
   for (const uint8_t tag:{3,2}) {
     const auto bone=OwnedAimBone(b,rig,tag);
     if (!bone) continue;
@@ -1438,6 +1439,12 @@ void CensusAndSelect(PPCContext& ctx, uint8_t* b, uint32_t w) {
       pick = &c;
     }
   }
+  if (!pick && !Opt().automatic && Opt().partner && now-s.loaded<std::chrono::seconds(8)) {
+    // A fast dev-link connection may arrive before a full second of census
+    // stability. Keep the explicit visual-test selector alive until then.
+    s.attempted=false;
+    return;
+  }
   if (!pick || tied) { s.Abort(tied ? "ambiguous-selector" : "no-qualified-selector-within-limit"); return; }
   if (!(Opt().automatic && s.selected_tier == 6 ? Registered(b, w, pick->rig.actor) :
         Opt().automatic ? AutoMembership(b, w, pick->rig) : Member(b, w, pick->rig.actor))) {
@@ -1473,9 +1480,10 @@ void CensusAndSelect(PPCContext& ctx, uint8_t* b, uint32_t w) {
   }
   s.selected = selected; s.selected_generation = s.humans.at(selected.actor).generation;
   s.animation = {};
-  s.aim_clip_frame=-1; s.aim_tuple=UINT32_MAX;
   s.requested_tuple = UINT32_MAX;
   s.animation_shots = 0;
+  s.action_changes=s.action_restarts=s.native_sets=s.pose_blends=0;
+  s.logged_changes=s.logged_restarts=s.logged_native_sets=s.logged_blends=0;
 #if defined(KK_DEV_TOOLS)
   s.capture_left=0;
 #endif
@@ -1640,9 +1648,9 @@ void PartnerBodyAfterAi(PPCContext& ctx, uint8_t* b, uint32_t w) {
     auto choice = coop::puppet::ChooseAction(s.animation.moving ? s.animation.speed : 0, s.observed_motion);
     const bool human = !s.humans.at(rig.actor).other_human && Load32(b,rig.vars) == 0;
     const auto held=human ? BodyWeapon(b,rig) : 0;
-    const auto weapon=held>=1 && held<=4 ? uint8_t(held) : s.animation.fire_left>0 ? p.fire_weapon : p.weapon;
+    const auto weapon=uint8_t(held);
     const bool firing=s.animation.fire_left>0;
-    const auto native = coop::puppet::HumanAction(weapon,s.animation.moving,p.crouched,firing);
+    const auto native = coop::puppet::HumanAction(weapon,s.animation.moving,s.animation.crouched,firing);
     if (human) {
       if (const auto item=LoadedItem(b,rig,native)) {
         float speed=choice && choice->action==native && choice->item==*item ? choice->speed : 0;
@@ -1651,16 +1659,17 @@ void PartnerBodyAfterAi(PPCContext& ctx, uint8_t* b, uint32_t w) {
         choice=coop::puppet::Action{native,*item,speed};
       }
       if (s.animation.moving && !firing) {
-        if (const auto gait=coop::puppet::ChooseGait(p.vx,p.vy,p.facing,p.crouched,s.native_gaits)) {
+        if (const auto gait=coop::puppet::ChooseGait(s.animation.vx,s.animation.vy,p.facing,s.animation.crouched,
+                                                   s.native_gaits,s.requested_tuple)) {
           choice=gait->clip;
           s.facing={std::cos(gait->facing),std::sin(gait->facing),0};
         } else {
-          const float direction=std::atan2(p.vy,p.vx);
+          const float direction=std::atan2(s.animation.vy,s.animation.vx);
           s.facing={std::cos(direction),std::sin(direction),0};
         }
       }
       if (firing) {
-        const auto fire=coop::puppet::FireAction(weapon,p.crouched,
+        const auto fire=coop::puppet::FireAction(weapon,s.animation.crouched,
             [&](uint16_t action) { return LoadedItem(b,rig,action); });
         if (fire) choice=fire;
         if (s.animation.new_shot && log_shot)
@@ -1670,13 +1679,22 @@ void PartnerBodyAfterAi(PPCContext& ctx, uint8_t* b, uint32_t w) {
       }
       // H's native airborne/landing chain is 20 -> 21/22 (826A80B4).
       // Position still comes entirely from the peer; these clips add no jump force.
-      if (!firing && (p.airborne || s.animation.land_left>0)) {
-        const uint16_t air=p.airborne ? 20 : 21;
+      if (!firing && (s.animation.airborne || s.animation.land_left>0)) {
+        const uint16_t air=s.animation.airborne ? 20 : 21;
         if (const auto item=LoadedItem(b,rig,air)) choice=coop::puppet::Action{air,*item,0};
-        else if (!p.airborne) if (const auto item=LoadedItem(b,rig,22)) choice=coop::puppet::Action{22,*item,0};
+        else if (!s.animation.airborne) if (const auto item=LoadedItem(b,rig,22)) choice=coop::puppet::Action{22,*item,0};
+      }
+      if (!firing && s.animation.use_left>0) {
+        // Reloads are authored for an arm-only child layer. Never run one as
+        // a full-body clip with undefined leg poses; use the bounded gesture.
+        const auto item=held && coop::puppet::AnimationDrive::FullBodyEquipmentAction(s.animation.use_action) ?
+            LoadedItem(b,rig,s.animation.use_action) : std::nullopt;
+        if (item) choice=coop::puppet::Action{s.animation.use_action,*item,0};
+        if (s.animation.new_use) REXLOG_INFO("PUPPET equipment visual actor={:08X} remote-action={} loaded={} gesture-fallback={}",
+            rig.actor,s.animation.use_action,bool(item),!item);
       }
     } else if (s.animation.moving && !firing) {
-      const float direction=std::atan2(p.vy,p.vx);
+      const float direction=std::atan2(s.animation.vy,s.animation.vx);
       s.facing={std::cos(direction),std::sin(direction),0};
     }
     // Tier C may be a copy of Jack's first-person rig. Its loaded bank can
@@ -1693,12 +1711,13 @@ void PartnerBodyAfterAi(PPCContext& ctx, uint8_t* b, uint32_t w) {
       // A completed non-looping recoil may replay for a later round. Never
       // rewind an advancing burst on every incoming shot.
       s.transition_pending = changed || (firing && s.animation.new_shot && (Load16(b,rig.layer)&0x80));
+      if (s.transition_pending) { if (changed) ++s.action_changes; else ++s.action_restarts; }
       s.requested_tuple = tuple;
       s.missing_action_kind = 0;
       // The engine stores frames/second in layer+2 (826A9338, 826A93BC).
       // Scale a proven gait instead of restarting it for every pose packet.
       s.playback_rate = s.animation.moving && choice->speed > .1f ?
-          uint8_t(std::clamp(std::lround(60*s.animation.speed/choice->speed),15l,150l)) : 60;
+          uint8_t(std::clamp(std::lround(60*s.animation.speed/choice->speed),15l,150l)) : 0;
       if (s.transition_pending) REXLOG_INFO("PUPPET partner action={} item={} speed={:.3f} moving={} weapon={} body-weapon={} crouch={} fire={} restart={} copy={} pitch={:.3f}",
           s.action, s.item, s.animation.speed,s.animation.moving,p.weapon,held,p.crouched,p.fire,!changed,s.selected_copy,p.pitch);
     } else {
@@ -1751,7 +1770,11 @@ void PartnerBodyAfterAi(PPCContext& ctx, uint8_t* b, uint32_t w) {
   if (!s.Validate(b, w, rig)) return;
   if (Opt().partner) {
     if (rig.layer!=s.rate_layer) { s.rate_layer=rig.layer; s.saved_rate=b[rig.layer+2]; }
-    b[rig.layer+2] = s.playback_rate;
+    // Intermediate blend actions and non-gait clips retain their authored
+    // rate. A blanket 60 fps also sped up idle/use clips authored at 30 fps.
+    const auto items=Ptr(b,rig.table,4*(rig.action+4),20);
+    const auto authored=items && rig.item<b[items] ? uint8_t((unsigned(b[items+20*rig.item+18])*60)>>6) : s.saved_rate;
+    b[rig.layer+2] = s.playback_rate && rig.action==s.action && rig.item==s.item ? s.playback_rate : authored;
   }
   // A requested action can take a few frames to show, and the rig may refuse one: never drop the body for it
   // (Claude, run c08 14:49: released after 1 update). Log, then follow what the rig really plays.
@@ -1803,7 +1826,6 @@ void PartnerBodyLateWorld(PPCContext& ctx, uint8_t* b, uint32_t w) {
   s.measure = false;
   Rig rig;
   if (!s.Validate(b, w, rig)) return;
-  if (Opt().partner) PartnerBodyAim(ctx,b,rig.actor,rig.ai);
 #if defined(KK_DEV_TOOLS)
   if (Opt().partner && s.capture_left && s.updates%3==0 && Scratch::CanUse(ctx)) {
     --s.capture_left;
@@ -1819,6 +1841,13 @@ void PartnerBodyLateWorld(PPCContext& ctx, uint8_t* b, uint32_t w) {
   s.max_late_error = std::max(s.max_late_error, Distance(s.desired, rig.pos));
   s.max_forward_error = std::max(s.max_forward_error, Distance(s.facing, rig.forward));
   if (s.tick_at == Clock::time_point{} || now - s.tick_at >= std::chrono::seconds(1)) {
+    const float seconds=s.tick_at==Clock::time_point{} ? 1.f : std::chrono::duration<float>(now-s.tick_at).count();
+    REXLOG_INFO("PUPPET animation counters actor={:08X} changes/s={:.2f} restarts/s={:.2f} native-sets/s={:.2f} blends/s={:.2f} rate={} desired={}:{} actual={}:{}",
+        rig.actor,(s.action_changes-s.logged_changes)/seconds,(s.action_restarts-s.logged_restarts)/seconds,
+        (s.native_sets-s.logged_native_sets)/seconds,(s.pose_blends-s.logged_blends)/seconds,
+        b[rig.layer+2],s.requested_tuple>>8,s.requested_tuple&255,rig.action,rig.item);
+    s.logged_changes=s.action_changes; s.logged_restarts=s.action_restarts;
+    s.logged_native_sets=s.native_sets; s.logged_blends=s.pose_blends;
     s.tick_at = now;
     REXLOG_INFO("PUPPET hold count={} passed={} epoch={} actor={:08X} lr=8271D304 block={:08X} track={:08X}",
                 s.held, s.passed, s.epoch, rig.actor, s.last_block, s.last_track);
@@ -2047,6 +2076,35 @@ void PartnerBodyScriptRecord(const uint8_t* b) {
     }
   }
 }
+void PartnerBodyObserveAction(const PPCContext& ctx,const uint8_t* b) {
+  auto& s=Get();
+  if (Enabled() && s.driving && ctx.r3.u32==s.selected.actor && s.Environment(b,s.world)) {
+    ++s.native_sets;
+    if (s.native_sets<=8) REXLOG_INFO("PUPPET native animation set actor={:08X} action={} caller={:08X}",
+        ctx.r3.u32,ctx.r4.u32,uint32_t(ctx.lr));
+  }
+}
+void PartnerBodyPoseBlended(PPCContext& ctx,uint8_t* b,uint32_t actor) {
+  auto& s=Get();
+  if (!Enabled() || !Opt().partner || !s.driving || actor!=s.selected.actor ||
+      !s.partner.fresh || !s.Environment(b,s.world)) return;
+  Rig rig;
+  if (!s.Validate(b,s.world,rig) || !(b[rig.anim+1]&15) || !Ptr(b,rig.anim,8,4)) return;
+  ++s.pose_blends;
+  PartnerBodyAim(ctx,b,rig.actor,rig.ai);
+#if defined(KK_DEV_TOOLS)
+  static const bool trace=[] { const auto* v=std::getenv("KK_DEV_PARTNER_TRACE"); return v && *v=='1'; }();
+  const auto now=Clock::now();
+  if (trace && now-s.animation_sample_at>=std::chrono::milliseconds(190) && Scratch::CanUse(ctx)) {
+    s.animation_sample_at=now;
+    const auto bone=OwnedAimBone(b,rig,3), matrix=Ptr(b,bone,12,80);
+    REXLOG_INFO("PUPPET animation sample t={:.3f} action={} item={} frame={:.3f} rate={} fire={} use={} gesture={:.3f} aim-axis={}",
+        s.elapsed,rig.action,rig.item,Frame(ctx,b,rig.actor),b[rig.layer+2],
+        s.animation.last_fire,s.animation.use_action,s.animation.GesturePitch(),
+        matrix ? XYZ(ReadVec(b,matrix+16)) : "unavailable");
+  }
+#endif
+}
 }  // namespace kk
 
 REX_HOOK_RAW(sub_8286A660) {
@@ -2070,6 +2128,32 @@ REX_HOOK_RAW(sub_8286A660) {
 #endif
   kk::GroupInstanceLookup(ctx,base);
 }
+
+REX_HOOK_RAW(sub_826BB350) {
+  if (kk::Enabled() && kk::Opt().partner && kk::Get().driving &&
+      kk::hfr::Load32(base,0x82CCBF6C)==kk::Get().selected.actor &&
+      kk::hfr::Load32(base,0x82CCBF64)==kk::Get().selected.ai &&
+      kk::PartnerBodySuppressShot(base)) {
+    // Native event callbacks are separate from the scheduled AI quarantine.
+    // They must not bend or reposition the driven body's freshly blended pose.
+    // PoseBlended handles copies too, even when their event list is empty.
+    ctx.r3.u64=0;
+    return;
+  }
+  __imp__sub_826BB350(ctx,base);
+}
+
+#if !defined(KK_DEV_TOOLS)
+REX_HOOK_RAW(sub_828724C0) {
+  const auto actor=ctx.r3.u32;
+  __imp__sub_828724C0(ctx,base);
+  kk::PartnerBodyPoseBlended(ctx,base,actor);
+}
+REX_HOOK_RAW(sub_82850100) {
+  kk::PartnerBodyObserveAction(ctx,base);
+  __imp__sub_82850100(ctx,base);
+}
+#endif
 
 REX_HOOK_RAW(sub_8280F328) {
   if (REXCVAR_GET(kk_coop_enabled) && kk::Range(ctx.r4.u32, 12) &&

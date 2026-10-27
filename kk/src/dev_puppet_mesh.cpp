@@ -4,6 +4,7 @@
 // 8286FE40 (.102). Never call initialization, change flags, or step animation.
 #if defined(KK_DEV_TOOLS)
 #include "dev_puppet_mesh.h"
+#include "coop_partner_body.h"
 #include "hfr.h"
 #include "plugin/native_puppet_probe.h"
 
@@ -944,6 +945,7 @@ REX_HOOK_RAW(sub_828724C0) {
   const uint32_t actor = ctx.r3.u32;
   __imp__sub_828724C0(ctx, base);
   kk::HierarchyCalled(actor);
+  kk::PartnerBodyPoseBlended(ctx,base,actor);
 }
 // The engine's append helpers return the newly stored matrix's index (.56:150+,
 // .37:146+). Preserve provenance rather than matching floats or a shared VB.

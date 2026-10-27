@@ -13,6 +13,7 @@
 #include <rex/logging.h>
 
 #include "hfr.h"
+#include "coop_partner_body.h"
 
 // KK_DEV_VENTURE_PASS=1: once the vertical sighting choice is made, count the
 // "look at the boat" step as done (as if the target had been in view for
@@ -90,6 +91,7 @@ REX_HOOK_RAW(sub_823F80A8) {
 
 REX_EXTERN(__imp__sub_82850100);
 REX_HOOK_RAW(sub_82850100) {
+  kk::PartnerBodyObserveAction(ctx,base);
   if (ActionTrace()) {
     const uint32_t obj = ctx.r3.u32, req = ctx.r4.u32;
     const uint16_t cur = CurrentAction(base, obj);
