@@ -53,11 +53,11 @@ void StimulusDiagnostics() {
   Check(!ReadPool(u32, 1).valid, "record span overflow refused");
 }
 void Codecs() {
-  static_assert(kProtocolVersion == 24);
+  static_assert(kProtocolVersion == 25);
   for (const auto& m : {Damage(), Status()}) {
     const auto bytes = Packet(m); Message out;
     Check(bytes.size() == (m.type == MessageType::DamageEvent ? 119u : 53u), "fixed bounded wire length");
-    Check(bytes[4] == 0 && bytes[5] == kProtocolVersion && bytes[7] == uint16_t(m.type), "protocol 23 byte order");
+    Check(bytes[4] == 0 && bytes[5] == kProtocolVersion && bytes[7] == uint16_t(m.type), "protocol 25 byte order");
     Check(Decode(bytes, out) && Packet(out) == bytes, "canonical combat round trip");
     for (size_t n = 0; n < bytes.size(); ++n) {
       out.type = MessageType::Bye;
@@ -65,6 +65,12 @@ void Codecs() {
     }
     auto extra = bytes; extra.push_back(0); extra[23]++;
     Check(!Decode(extra, out), "trailing combat payload refused");
+  }
+  {
+    auto previous=Packet(Damage()); previous[5]=23;
+    Message decoded;
+    Check(Decode(previous,decoded) && decoded.protocol==23,
+        "decoder preserves protocol23 for the session version gate");
   }
   auto m = Damage(); std::vector<uint8_t> out{9};
   for (auto flags : {0u, 1u, 3u, 0xFFFFFFFFu, 0x4005u}) {
@@ -94,8 +100,23 @@ void Codecs() {
         "native marine flag driven contact retains its zero scalar");
     contact.damage.flags=0; Check(!Encode(contact,out),"zero scalar does not admit an empty hit");
   }
+  for (auto flags : {1u,33u}) {
+    auto impulse=Damage(); impulse.damage.enemy.family=EnemyFamily::VRex;
+    impulse.damage.flags=flags; impulse.damage.magnitude=0; impulse.damage.projectile=true;
+    impulse.damage.point={1,2,3};
+    Message decoded;
+    Check(Decode(Packet(impulse),decoded) && decoded.damage.flags==flags && !decoded.damage.magnitude &&
+        decoded.damage.projectile && decoded.damage.point.z==3,
+        "native V Rex neighbor impulse preserves zero scalar and contact point");
+    impulse.damage.projectile=false; impulse.damage.point={};
+    Check(!Encode(impulse,out),"zero V Rex scalar needs the audited impact route");
+    impulse.damage.projectile=true; impulse.damage.flags=2;
+    Check(!Encode(impulse,out),"other zero scalar V Rex flags remain refused");
+    impulse.damage.flags=flags; impulse.damage.enemy.family=EnemyFamily::Bat;
+    Check(!Encode(impulse,out),"neighbor impulse cannot borrow another family");
+  }
   for (auto family : {EnemyFamily::Crab, EnemyFamily::Worm, EnemyFamily::Scorpion, EnemyFamily::Bat,
-       EnemyFamily::Centipede, EnemyFamily::Native, EnemyFamily::Marine, EnemyFamily::VRex,
+       EnemyFamily::Centipede, EnemyFamily::Native, EnemyFamily::NativeKna, EnemyFamily::Marine, EnemyFamily::VRex,
        EnemyFamily::SwampCrawler, EnemyFamily::SwampCrawlerSmall, EnemyFamily::Spider, EnemyFamily::Pny}) {
     auto hit = Damage(); hit.damage.enemy.family = family; hit.damage.flags = 4096;
     hit.damage.magnitude = 10; hit.damage.direction = {3, 4, 0}; hit.damage.part = 64; hit.damage.duration = .025f;

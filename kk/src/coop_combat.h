@@ -27,9 +27,12 @@ inline bool NativeHit(EnemyFamily family, uint32_t flags, uint32_t magnitude, bo
   // Marine reflex824B42E4 uses512 with magnitude0 after actual timed contact.
   // The native reaction is carried by its flags, not a positive scalar.
   if (family == EnemyFamily::Marine && !projectile && flags == 512 && !magnitude) return true;
+  // KT neighbor contact8246AC88 emits an impulse with flags1 or33 and no
+  // scalar damage. Retain that native reaction through the impact builder.
+  if (family == EnemyFamily::VRex && projectile && (flags == 1 || flags == 33) && !magnitude) return true;
   switch (family) {
     case EnemyFamily::Raptor: case EnemyFamily::Crab: case EnemyFamily::Worm: case EnemyFamily::Scorpion:
-    case EnemyFamily::Bat: case EnemyFamily::Centipede: case EnemyFamily::Native:
+    case EnemyFamily::Bat: case EnemyFamily::Centipede: case EnemyFamily::Native: case EnemyFamily::NativeKna:
     case EnemyFamily::Marine: case EnemyFamily::VRex: case EnemyFamily::SwampCrawler:
     case EnemyFamily::SwampCrawlerSmall: case EnemyFamily::Spider: case EnemyFamily::Pny:
       return flags && flags <= 0x00FFFFFF && magnitude && magnitude <= 1000000;

@@ -12,7 +12,7 @@
 
 namespace kk::coop {
 constexpr uint32_t kMagic = 0x4B4B4331;  // KKC1, network byte order throughout
-constexpr uint16_t kProtocolVersion = 24; // Native held equipment 0..10 and aim stance.
+constexpr uint16_t kProtocolVersion = 25; // Native equipment and aim stance, plus distinct KNa attack authority.
 constexpr size_t kMaxDisplayNameBytes = 32;
 // Valid UTF-8, no controls or invisible direction/line formatting, bounded at a codepoint.
 // Empty or wholly invalid input becomes "Partner". Never log the input or result.
@@ -193,10 +193,10 @@ struct CameraPose {
 bool ValidCameraPose(const CameraPose& camera);
 enum class EnemyFamily : uint16_t {
   None, Raptor, Worm, Scorpion, Crab, Bat, Centipede, Native, Marine, VRex,
-  SwampCrawler, SwampCrawlerSmall, Spider, Pny, Prey
+  SwampCrawler, SwampCrawlerSmall, Spider, Pny, Prey, NativeKna
 };
 inline bool ValidEnemyFamily(EnemyFamily family) {
-  return family >= EnemyFamily::Raptor && family <= EnemyFamily::Prey;
+  return family >= EnemyFamily::Raptor && family <= EnemyFamily::NativeKna;
 }
 enum class EnemyOwner : uint8_t { Host, Guest };
 // source is a signature of family + authored spawn point, or spawner + template.

@@ -82,7 +82,7 @@ struct Pair {
   }
 };
 void Protocol() {
-  static_assert(kProtocolVersion == 24);
+  static_assert(kProtocolVersion == 25);
   constexpr std::array types{MessageType::Hello, MessageType::HelloAck, MessageType::Reject,
       MessageType::Ping, MessageType::Pong, MessageType::PlayerPose, MessageType::Bye,
       MessageType::EnemySnapshot, MessageType::EnemyEvent, MessageType::ShotIntent,
@@ -289,7 +289,7 @@ void Handshake() {
   for (RejectReason reason : {RejectReason::Protocol, RejectReason::Version, RejectReason::Build,
       RejectReason::GameplayMods}) {
     auto c = Compatible();
-    if (reason == RejectReason::Protocol) --c.protocol; // Previous C70 peers use 15.
+    if (reason == RejectReason::Protocol) --c.protocol; // Previous protocol peers must fail the handshake.
     if (reason == RejectReason::Version) c.version += "-different";
     if (reason == RejectReason::Build) c.build += "-different";
     if (reason == RejectReason::GameplayMods) c.gameplay_digest += "-different";
