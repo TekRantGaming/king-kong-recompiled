@@ -94,6 +94,21 @@ void Codecs() {
         "native marine flag driven contact retains its zero scalar");
     contact.damage.flags=0; Check(!Encode(contact,out),"zero scalar does not admit an empty hit");
   }
+  for (auto flags : {1u,33u}) {
+    auto impulse=Damage(); impulse.damage.enemy.family=EnemyFamily::VRex;
+    impulse.damage.flags=flags; impulse.damage.magnitude=0; impulse.damage.projectile=true;
+    impulse.damage.point={1,2,3};
+    Message decoded;
+    Check(Decode(Packet(impulse),decoded) && decoded.damage.flags==flags && !decoded.damage.magnitude &&
+        decoded.damage.projectile && decoded.damage.point.z==3,
+        "native V Rex neighbor impulse preserves zero scalar and contact point");
+    impulse.damage.projectile=false; impulse.damage.point={};
+    Check(!Encode(impulse,out),"zero V Rex scalar needs the audited impact route");
+    impulse.damage.projectile=true; impulse.damage.flags=2;
+    Check(!Encode(impulse,out),"other zero scalar V Rex flags remain refused");
+    impulse.damage.flags=flags; impulse.damage.enemy.family=EnemyFamily::Bat;
+    Check(!Encode(impulse,out),"neighbor impulse cannot borrow another family");
+  }
   for (auto family : {EnemyFamily::Crab, EnemyFamily::Worm, EnemyFamily::Scorpion, EnemyFamily::Bat,
        EnemyFamily::Centipede, EnemyFamily::Native, EnemyFamily::Marine, EnemyFamily::VRex,
        EnemyFamily::SwampCrawler, EnemyFamily::SwampCrawlerSmall, EnemyFamily::Spider, EnemyFamily::Pny}) {

@@ -3084,7 +3084,13 @@ bool EnemyCombatReference(const uint8_t* b, uint32_t owner, uint32_t ai, uint32_
       combat::CandidateReference(combat::CandidateTable{1536,1544,20},offset,Load32(b,vars+1536))) return true;
   if ((binding->second.id.family == EnemyFamily::Crab && offset == 1056) ||
       (binding->second.id.family == EnemyFamily::Bat && (offset == 848 || offset == 852)) ||
-      (binding->second.id.family == EnemyFamily::Native && offset == 4088)) return true;
+      (binding->second.id.family == EnemyFamily::Native && offset == 4088) ||
+      (binding->second.id.family == EnemyFamily::VRex && offset == 516)) return true;
+  // KT_exec_zdf_zdc records actual native contacts at824, count904. These
+  // are combat references, like its selected target516, rather than a story
+  // claim on the leased human. The pending grab target544 remains excluded.
+  if (binding->second.id.family==EnemyFamily::VRex && PoseAddress(vars,908) &&
+      combat::CandidateReference(combat::CandidateTable{904,824,20},offset,Load32(b,vars+904))) return true;
   return table.limit && PoseAddress(vars, table.actors+4*table.limit) &&
       combat::CandidateReference(table, offset, Load32(b, vars+table.count));
 }
