@@ -128,7 +128,7 @@ uint64_t SessionSaveHash(std::span<const uint8_t> bytes) {
   for (uint8_t b : bytes) { hash ^= b; hash *= 1099511628211ull; }
   return hash;
 }
-bool IsFlowMessage(MessageType t) { return (t >= MessageType::SessionStart && t <= MessageType::FlowAbort) || IsLifeMessage(t) || IsPlanMessage(t); }
+bool IsFlowMessage(MessageType t) { return (t >= MessageType::SessionStart && t <= MessageType::FlowAbort) || IsLifeMessage(t) || IsPlanMessage(t) || t==MessageType::RejoinRequest; }
 bool ValidObjectState(const ObjectState& s) {
   if (!s.generation || !s.level || s.level>100000 || !s.number || !s.source ||
       !std::isfinite(s.position) || !std::isfinite(s.seconds)) return false;
@@ -215,7 +215,9 @@ bool ValidCameraPose(const CameraPose& p) {
 }
 bool ValidSessionStart(const SessionStart& s) {
   return s.chapter < 42 && s.level > 0 && s.level <= 100000 && s.start <= 10000 &&
-      s.cheats <= 0x1ff && s.difficulty <= 1 &&
+      s.cheats <= 0x1ff && s.difficulty <= 1 && s.generation && s.world_start<=10000 && s.visit &&
+      !(s.completed>>42) && s.weapon<=7 &&
+      std::all_of(s.stock.begin(),s.stock.end(),[](auto n){ return n<=100000; }) &&
       (s.save_bytes == 0 || s.save_bytes == kSessionSaveBytes) &&
       (s.save_bytes != 0 || s.save_hash == SessionSaveHash({}));
 }
@@ -396,6 +398,9 @@ bool Encode(const Message& m, std::vector<uint8_t>& out) {
       payload.U(m.start.chapter, 2); payload.U(m.start.level, 4); payload.U(m.start.start, 4);
       payload.U(m.start.chapter_select, 1); payload.U(m.start.cheats, 2); payload.U(m.start.difficulty, 1);
       payload.U(m.start.save_bytes, 4); payload.U(m.start.save_hash, 8);
+      payload.U(m.start.rejoin,1); payload.U(m.start.generation,4); payload.U(m.start.world_start,4);
+      payload.U(m.start.visit,4); payload.U(m.start.completed,8); payload.U(m.start.weapon,4);
+      for (auto n : m.start.stock) payload.U(n,4);
       break;
     case MessageType::StartPlan:
       if (!ValidStartPlan(m.plan)) return false;
@@ -415,7 +420,7 @@ bool Encode(const Message& m, std::vector<uint8_t>& out) {
       break;
     case MessageType::LevelChange: case MessageType::Loaded: case MessageType::LoadRelease:
     case MessageType::Checkpoint: case MessageType::ChapterFinished: case MessageType::ReloadRequest:
-    case MessageType::FlowAbort:
+    case MessageType::FlowAbort: case MessageType::RejoinRequest:
       if (!ValidFlowEvent(m.flow)) return false;
       payload.U(m.flow.generation, 4); payload.U(m.flow.level, 4); payload.U(m.flow.start, 4); payload.U(m.flow.completed, 8);
       break;
@@ -433,7 +438,7 @@ bool Encode(const Message& m, std::vector<uint8_t>& out) {
         payload.U(m.join_code.size(), 1);
         payload.bytes.insert(payload.bytes.end(), m.join_code.begin(), m.join_code.end());
       }
-      if (m.resume_token) { payload.U(kResumeTag, 1); payload.U(m.resume_token, 8); }
+      if (m.resume_token) { payload.U(kResumeTag, 1); payload.U(m.resume_token, 8); payload.U(m.process_id,8); }
       break;
     case MessageType::Reject:
       if (!ReasonValid(m.reason)) return false;
@@ -609,6 +614,10 @@ bool Decode(std::span<const uint8_t> bytes, Message& out) {
       const auto chapter = r.U(1); if (chapter > 1) return false;
       m.start.chapter_select = chapter != 0; m.start.cheats = uint16_t(r.U(2)); m.start.difficulty = uint8_t(r.U(1));
       m.start.save_bytes = uint32_t(r.U(4)); m.start.save_hash = r.U(8);
+      const auto rejoin=r.U(1); if (rejoin>1) return false; m.start.rejoin=rejoin!=0;
+      m.start.generation=uint32_t(r.U(4)); m.start.world_start=uint32_t(r.U(4));
+      m.start.visit=uint32_t(r.U(4)); m.start.completed=r.U(8); m.start.weapon=uint32_t(r.U(4));
+      for (auto& n : m.start.stock) n=uint32_t(r.U(4));
       if (!ValidSessionStart(m.start)) return false;
       break;
     }
@@ -631,7 +640,7 @@ bool Decode(std::span<const uint8_t> bytes, Message& out) {
     }
     case MessageType::LevelChange: case MessageType::Loaded: case MessageType::LoadRelease:
     case MessageType::Checkpoint: case MessageType::ChapterFinished: case MessageType::ReloadRequest:
-    case MessageType::FlowAbort:
+    case MessageType::FlowAbort: case MessageType::RejoinRequest:
       m.flow = {uint32_t(r.U(4)), uint32_t(r.U(4)), uint32_t(r.U(4)), r.U(8)};
       if (!ValidFlowEvent(m.flow)) return false;
       break;
@@ -653,7 +662,8 @@ bool Decode(std::span<const uint8_t> bytes, Message& out) {
       if (r.at < bytes.size()) {
         if (r.U(1) != kResumeTag) return false;
         m.resume_token = r.U(8);
-        if (!r.ok || !m.resume_token) return false;
+        m.process_id = r.U(8);
+        if (!r.ok || !m.resume_token || !m.process_id) return false;
       }
       break;
     }

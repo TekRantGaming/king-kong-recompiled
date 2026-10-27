@@ -132,6 +132,7 @@ struct State {
   std::map<uint32_t,Body> bodies;
   bool support_frozen=false;
   uint64_t epoch=0;
+  uint32_t rejoin_revision=0;
   uint64_t ai_tick=0;
   uint32_t generation=0,level=0,world=0,number=0,request=0;
   bool host=false,ready=false,census_started=false;
@@ -269,7 +270,7 @@ bool Shared() {
   const auto link=EnemyLinkSnapshot();
   return v.active && v.policy==ChapterPolicy::Together && v.phase==FlowPhase::Playing &&
       v.world.generation==state.generation && v.world.level==state.level &&
-      link.epoch==state.epoch && link.SessionConnected();
+      link.epoch==state.epoch && (link.SessionConnected() || (v.host && v.reconnecting));
 }
 void WithdrawRaft(const uint8_t* b,Binding& o);
 void PrepareSupport(const uint8_t* b,Binding& o);
@@ -495,6 +496,11 @@ void Holds(const uint8_t* b) {
 }
 void Receive(const uint8_t* b) {
   const auto link=EnemyLinkSnapshot();
+  const auto revision=SessionFlowSnapshot().rejoin_revision;
+  if (state.rejoin_revision!=revision) {
+    state.rejoin_revision=revision; state.requests={}; state.next_full=0;
+    if (!state.host) state.replica={};
+  }
   for (const auto& m : TakeObjects()) {
     const auto& r=m.object;
     if (m.epoch!=state.epoch || r.generation!=state.generation || r.level!=state.level) { ++state.rejected; continue; }

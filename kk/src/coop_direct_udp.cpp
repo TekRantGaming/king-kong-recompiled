@@ -138,7 +138,11 @@ class Udp final : public DirectUdpTransport {
     state_=TransportState::Ready;
   }
   ~Udp() override { Close(); }
-  bool Send(std::span<const uint8_t> data, bool reliable) override { return Queue(data,reliable,false); }
+  bool Send(std::span<const uint8_t> data, bool reliable) override {
+    Message m;
+    if (reliable && Decode(data,m) && m.type==MessageType::Hello) local_hello_=m;
+    return Queue(data,reliable,false);
+  }
   bool SetChoice(LobbyChoice choice) override {
     if (!options_.host || !choice.valid() || choice.revision <= choice_.revision) return false;
     std::array<uint8_t,11> data{}; data[0]=2; Put(data.data()+1,choice.revision,8);
@@ -194,7 +198,6 @@ class Udp final : public DirectUdpTransport {
 #endif
         break;
       }
-      if (has_address_ && !SameAddress(from,peer_)) continue; // One peer, forever, until explicit Leave.
       if (!(peer_nonce_ ? incoming_.Take(now) : attempts_.Take(now))) continue;
       if (n<int(kWireHeader) || n>int(kMaxPacketBytes+kWireHeader) || Get(wire.data(),4)!=kWireMagic ||
           Get(wire.data()+8,2)!=size_t(n)-kWireHeader || wire[10]>3 || wire[11]>1) {
@@ -204,6 +207,27 @@ class Udp final : public DirectUdpTransport {
       const uint8_t kind=wire[10]; const bool control=wire[11]!=0;
       const uint64_t source=Get(wire.data()+12,8), target=Get(wire.data()+20,8);
       const std::span<const uint8_t> payload(wire.data()+kWireHeader,size_t(n)-kWireHeader);
+      // A restarted process has a fresh socket and nonce. Only the previous
+      // session token and code can replace the pinned endpoint after silence.
+      if (peer_nonce_ && source!=peer_nonce_ && options_.resume_token && now-last_peer_>=3 &&
+          kind==1 && seq==1 && !control && source &&
+          std::find(retired_nonces_.begin(),retired_nonces_.end(),source)==retired_nonces_.end()) {
+        Message hello;
+        if (Decode(payload,hello) && hello.type==MessageType::Hello &&
+            hello.resume_token==options_.resume_token &&
+            NormalizeJoinCode(hello.join_code)==NormalizeJoinCode(options_.join_code) &&
+            (options_.host ? hello.epoch==0 : hello.epoch==options_.resume_token)) {
+          retired_nonces_.push_back(peer_nonce_);
+          if (retired_nonces_.size()>8) retired_nonces_.erase(retired_nonces_.begin());
+          peer_nonce_=0; has_address_=!options_.host; peer_ready_=false;
+          pending_.clear(); ordered_.clear(); ready_.clear(); next_receive_=1; next_send_=1;
+          // A new peer needs our Hello at reliable sequence one too.
+          auto own=local_hello_;
+          own.epoch=options_.host ? options_.resume_token : 0;
+          std::vector<uint8_t> bytes; if (Encode(own,bytes)) Send(bytes,true);
+        }
+      }
+      if (has_address_ && !SameAddress(from,peer_)) continue;
       if (!source || (target!=nonce_ && !(options_.host && !peer_nonce_ && !target)) ||
           (peer_nonce_ && source!=peer_nonce_)) continue;
       if (kind==3) {
@@ -230,7 +254,7 @@ class Udp final : public DirectUdpTransport {
         }
         peer_=from; peer_length_=length; has_address_=true; peer_nonce_=source;
       }
-      ++stats_.received;
+      ++stats_.received; last_peer_=now;
       if (kind==2) {
         auto p=pending_.find(seq);
         if (p!=pending_.end()) {
@@ -252,6 +276,17 @@ class Udp final : public DirectUdpTransport {
       }
     }
     if (!has_address_) return;
+    if (!options_.host && peer_nonce_ && options_.resume_token && now-last_peer_>=3 && now-next_probe_>=.5) {
+      // The host may have restarted on the same address with a new nonce and
+      // no pinned guest. Probe without disturbing this connection's window.
+      next_probe_=now;
+      auto hello=local_hello_; hello.epoch=0;
+      std::vector<uint8_t> bytes;
+      if (Encode(hello,bytes)) {
+        auto probe=Wire(1,1,false,bytes); Put(probe.data()+20,0,8);
+        TransmitTo(probe,peer_,peer_length_);
+      }
+    }
     for (auto& [seq,p] : pending_) {
       if (p.last>=0 && now-p.last<.15) continue;
       if (Transmit(p.wire)) { if (p.attempts++) ++stats_.resent; p.last=now; }
@@ -336,6 +371,10 @@ class Udp final : public DirectUdpTransport {
   uint16_t local_port_=0;
   bool has_address_=false, peer_ready_=false, local_ready_=false, code_rejected_=false;
   uint64_t nonce_=0,peer_nonce_=0;
+  double last_peer_=0;
+  double next_probe_=-1;
+  std::vector<uint64_t> retired_nonces_;
+  Message local_hello_;
   LobbyChoice choice_;
   uint32_t next_send_=1,next_receive_=1;
   double now_=0;

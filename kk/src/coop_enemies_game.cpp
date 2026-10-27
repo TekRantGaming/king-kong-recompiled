@@ -485,6 +485,7 @@ struct State {
   std::map<EnemyId, double> matched_at;
   std::deque<Message> ownership_in;
   uint64_t ownership_epoch = 0;
+  uint32_t rejoin_revision = 0;
   double next_ownership = 0;
   std::map<uint32_t, Record> driving;
   std::set<EnemyId> unmatched_logged;
@@ -2652,6 +2653,12 @@ void BeforeAi(PPCContext& ctx, uint8_t* b, uint32_t w) {
   if (s.world == w && Now() <= s.census_until && Environment(b, w)) Capture(b, w, false);
   if (!Connected()) return;
   s.link = EnemyLinkSnapshot();
+  const auto flow_revision=SessionFlowSnapshot().rejoin_revision;
+  if (s.rejoin_revision!=flow_revision) {
+    s.rejoin_revision=flow_revision;
+    s.shot_validator={}; s.shot_targets={};
+    REXLOG_INFO("KK co-op rejoin: peer shot replay window reset revision={}",flow_revision);
+  }
   if (!s.game && !s.load_refused_logged) {
     s.load_refused_logged = true;
     REXLOG_INFO("ENEMIES waiting reason=no-connected-load-identity restart-both-and-load-while-connected=true");
@@ -3034,6 +3041,12 @@ void EnemyAfterLoad(const uint8_t* b, uint32_t game) {
     }
     s.next_damage=private_sequences.damage; s.combat_epoch=private_sequences.epoch;
     s.status_replay=private_sequences.status;
+  }
+  else if (const auto flow=SessionFlowSnapshot(); flow.active && flow.start.rejoin &&
+      flow.start.generation==flow.world.generation && flow.start.level==level) {
+    s.identity={level,flow.start.world_start,flow.start.visit};
+    s.visits[{level,s.identity.start}]=s.identity.serial;
+    REXLOG_INFO("KK co-op rejoin: enemy identity level={} start={} visit={}",level,s.identity.start,s.identity.serial);
   }
   else s.identity = {level, start, ++s.visits[{level, start}]};
   private_identity.reset();

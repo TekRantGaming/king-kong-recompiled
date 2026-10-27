@@ -65,6 +65,7 @@ story::Ordered ordered;
 story::Checksums checksums;
 uint64_t epoch=0;
 uint32_t generation=0, level=0, number=0, request_number=0, last_request=0, last_loaded=0;
+uint32_t rejoin_revision=0;
 double next_census=0, request_window=0;
 double next_checksum=0;
 uint32_t checksum_actor=0;
@@ -241,6 +242,7 @@ void World(const FlowView& v,uint64_t session_epoch) {
   if (epoch!=session_epoch || generation!=v.world.generation || level!=v.world.level) {
     for (auto& [actor,s] : scripts) FinishRequest(s,"request refused","world retired");
     epoch=session_epoch; generation=v.world.generation; level=v.world.level; host=v.host;
+    rejoin_revision=v.rejoin_revision;
     number=request_number=last_request=last_loaded=0; scripts.clear(); bindings.clear(); runs.clear(); outgoing.clear();
     ordered.Reset(generation,level); behind=needs_move=false; failed=disconnected=recovery_pending=false;
     waiting_number=0; waiting_since=0;
@@ -757,9 +759,10 @@ void StoryLoaded(uint8_t* b) {
   const auto session_epoch=StorySessionEpoch();
   if (!session_epoch) return;
   World(v,session_epoch);
-  checkpoint_loaded_at=SessionCheckpointCatchup() ? Now() : 0;
+  checkpoint_loaded_at=SessionCheckpointCatchup() || v.start.rejoin ? Now() : 0;
   for (auto& [actor,s] : scripts) FinishRequest(s,"request refused","level load invalidated request");
-  if (last_loaded==v.world.generation) {
+  if (last_loaded==v.world.generation || (!host && v.start.rejoin)) {
+    disconnected=false; recovery_pending=false;
     scripts.clear(); bindings.clear(); next_census=0;
     if (!host) {
       runs.clear(); Census(b);
@@ -785,6 +788,11 @@ void StoryGameFrame(uint8_t* b) {
     return;
   }
   const double now=Now();
+  const auto revision=SessionFlowSnapshot().rejoin_revision;
+  if (host && revision!=rejoin_revision) {
+    rejoin_revision=revision; last_request=0; last_snapshot_request=-10;
+    snapshot_out.clear(); recovery_pending=false; disconnected=false;
+  }
   // uni_go returns before the first native AI initialization pass. Capture
   // authored checkpoint omissions only during its short settling window, and
   // only from a populated table plus the dispatcher's explicit disabled bit

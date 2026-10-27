@@ -100,8 +100,9 @@ std::vector<SocialRow> SocialRows(const SocialModel& m, int direct_mode, bool ip
   }
   }
   auto steam_invites = [&] {
+    const bool invite_lobby=lobby || (m.rejoin_partner && m.lobby && m.owner==m.self);
     add(SocialRowKind::Section,23,"3. Invite a friend");
-    add(SocialRowKind::OverlayInvite,0,"Open Steam invite","",lobby && m.members.size()<2 && m.overlay_available);
+    add(SocialRowKind::OverlayInvite,0,"Open Steam invite","",invite_lobby && m.members.size()<2 && m.overlay_available);
     if (!m.overlay_available) add(SocialRowKind::Text,23,"Overlay unavailable. Use an Invite button below.");
     add(SocialRowKind::Section,4,"Friends");
     std::vector<SocialFriend> friends=m.friends;
@@ -114,7 +115,8 @@ std::vector<SocialRow> SocialRows(const SocialModel& m, int direct_mode, bool ip
     for (const auto& f : friends) if (f.id!=m.self) {
       const bool member=std::any_of(m.members.begin(),m.members.end(),[&](const auto& p) { return p.id==f.id; });
       add(SocialRowKind::Friend,f.id,f.name,SocialFriendState(f.state),
-          lobby && m.members.size()<2 && f.state!=FriendState::Offline && !member);
+          invite_lobby && m.members.size()<2 && f.state!=FriendState::Offline && !member &&
+          (!m.rejoin_partner || f.id==m.rejoin_partner));
     }
     if (friends.empty()) add(SocialRowKind::Text,5,"No friends to show");
   };

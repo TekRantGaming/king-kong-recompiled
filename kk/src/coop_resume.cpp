@@ -8,6 +8,10 @@
 #include <sstream>
 #include <string>
 #include <system_error>
+#include <mutex>
+#if defined(_WIN32)
+#include <windows.h>
+#endif
 
 #include <imgui.h>
 #include <rex/cvar.h>
@@ -31,6 +35,11 @@ long long UnixMs() {
 }
 std::string requested_name;
 bool requested_read = false;
+std::mutex rejoin_mutex;
+std::optional<handover::File> rejoin_file;
+std::filesystem::path rejoin_root;
+double next_record=0;
+constexpr const char* kRejoinFile="coop-rejoin.txt";
 const char* ParseName(handover::ParseResult r) {
   switch (r) {
     case handover::ParseResult::Ok: return "ok";
@@ -68,7 +77,7 @@ class ResumeDialog final : public rex::ui::ImGuiDialog {
 
  private:
   void StartLink() {
-    machine_.Begin(Now());
+    machine_.Begin(Now(),file_.checkpoint.rejoin ? 120 : handover::kReconnectSeconds);
     begun_ = false; relink_at_ = -1; auto_choice_at_ = -1; failure_logged_ = false;
 #if defined(KK_DEV_TOOLS)
     if (DevFlag("KK_DEV_RESUME_STALL")) {
@@ -100,7 +109,7 @@ class ResumeDialog final : public rex::ui::ImGuiDialog {
                   machine_.Remaining(now));
     }
     if (machine_.Phase() != before && machine_.Phase() == handover::ResumePhase::Starting)
-      REXLOG_INFO("KK co-op hand over: reconnected to the partner after {:.1f} s", handover::kReconnectSeconds - machine_.Remaining(now));
+      REXLOG_INFO("KK co-op hand over: reconnected to the partner after {:.1f} s", (file_.checkpoint.rejoin ? 120 : handover::kReconnectSeconds) - machine_.Remaining(now));
     if (begin && file_.host && !begun_) {
       begun_ = true;
       if (!BeginResumedStart(request_)) machine_.LaunchFailed();
@@ -207,11 +216,17 @@ class ResumeDialog final : public rex::ui::ImGuiDialog {
 };
 }  // namespace
 
-bool ResumeRequested() {
+bool ResumeRequested(const std::filesystem::path& user_dir) {
   if (!requested_read) {
     requested_read = true;
     requested_name = REXCVAR_GET(kk_coop_resume);
     rex::cvar::ResetToDefault("kk_coop_resume");  // never saved
+    if (requested_name.empty() && !user_dir.empty() &&
+        rex::cvar::GetFlagByName("kk_launcher_open").empty() && rex::cvar::GetFlagByName("kk_start").empty()) {
+      handover::File file;
+      if (ReadRejoinRecord(user_dir,file))
+        requested_name=kRejoinFile;
+    }
   }
   return !requested_name.empty();
 }
@@ -232,8 +247,9 @@ void BeginResume(rex::ui::ImGuiDrawer* drawer, const std::filesystem::path& user
       if (text.size() > 4096) text.clear();
     }
     // The file is used once: a later start never resumes this session.
-    std::error_code ec;
-    std::filesystem::remove(path, ec);
+    // Retain the durable campaign record. The one-shot hand over is invalidated
+    // by truncation, without deleting a file from the user's folder.
+    if (requested_name!=kRejoinFile) { std::ofstream consumed(path,std::ios::trunc); }
     result = text.empty() ? handover::ParseResult::Malformed : handover::Parse(text, UnixMs(), KK_VERSION, file);
     REXLOG_INFO("KK co-op hand over: hand over file {} ({})", text.empty() ? "missing" : "read", ParseName(result));
   }
@@ -245,6 +261,47 @@ void BeginResume(rex::ui::ImGuiDrawer* drawer, const std::filesystem::path& user
   REXLOG_INFO("KK co-op hand over: resumed {} for chapter {} ({}), {}", file.host ? "host" : "guest", file.plan.chapter,
               file.plan.continue_game ? "Continue" : "chapter select",
               file.plan.transport == StartTransport::Steam ? "Steam" : "Direct IP");
+  { std::lock_guard lock(rejoin_mutex); rejoin_file=file; rejoin_root=user_dir; next_record=0; }
   new ResumeDialog(drawer, std::move(file), std::move(callbacks));  // deletes itself with the UI
+}
+void UpdateRejoinCheckpoint(const SessionStart& checkpoint) {
+  if (!ValidSessionStart(checkpoint)) return;
+  std::lock_guard lock(rejoin_mutex);
+  if (!rejoin_file || rejoin_root.empty()) return;
+  rejoin_file->checkpoint=checkpoint; rejoin_file->checkpoint.rejoin=true;
+  rejoin_file->plan.chapter=uint8_t(checkpoint.chapter); rejoin_file->plan.continue_game=0;
+  if (Now()<next_record) return;
+  next_record=Now()+2; rejoin_file->written_ms=UnixMs();
+  const auto pending=rejoin_root/"coop-rejoin-pending.txt", target=rejoin_root/kRejoinFile;
+  { std::ofstream out(pending,std::ios::binary|std::ios::trunc); out<<handover::Format(*rejoin_file); out.flush(); if (!out) return; }
+#if defined(_WIN32)
+  if (!MoveFileExW(pending.c_str(),target.c_str(),MOVEFILE_REPLACE_EXISTING|MOVEFILE_WRITE_THROUGH))
+    REXLOG_WARN("KK co-op rejoin: checkpoint record could not be replaced");
+#else
+  std::error_code ec; std::filesystem::rename(pending,target,ec);
+#endif
+}
+bool RejoinCheckpoint(SessionStart& checkpoint) {
+  std::lock_guard lock(rejoin_mutex);
+  if (!rejoin_file || !rejoin_file->checkpoint.rejoin) return false;
+  checkpoint=rejoin_file->checkpoint; return true;
+}
+void ForgetRejoin() {
+  std::lock_guard lock(rejoin_mutex);
+  if (!rejoin_root.empty()) { std::ofstream out(rejoin_root/kRejoinFile,std::ios::trunc); }
+  rejoin_file.reset();
+}
+bool ReadRejoinRecord(const std::filesystem::path& root, handover::File& record) {
+  std::ifstream in(root/kRejoinFile,std::ios::binary);
+  char bytes[4097]; in.read(bytes,sizeof(bytes));
+  const auto count=in.gcount();
+  return count>0 && count<=4096 && handover::Parse(std::string_view(bytes,size_t(count)),UnixMs(),KK_VERSION,record)==handover::ParseResult::Ok && record.checkpoint.rejoin;
+}
+bool RejoinAvailable(const std::filesystem::path& root) {
+  static std::filesystem::path checked_root; static double until=0; static bool available=false;
+  if (root!=checked_root || Now()>=until) {
+    handover::File record; available=ReadRejoinRecord(root,record); checked_root=root; until=Now()+.5;
+  }
+  return available;
 }
 }  // namespace kk::coop

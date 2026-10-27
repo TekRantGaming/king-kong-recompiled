@@ -14,6 +14,7 @@ struct DirectUdpOptions {
   uint16_t port = 27080;
   std::string join_code;
   UdpSimulation simulation;
+  uint64_t resume_token = 0;
 };
 bool ValidJoinCode(std::string_view code);
 std::string NormalizeJoinCode(std::string_view code);

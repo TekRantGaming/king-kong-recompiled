@@ -37,6 +37,8 @@ bool SessionBeforeGo(PPCContext& ctx, uint8_t* base, uint32_t g);
 void SessionAfterGo(uint8_t* base, uint32_t g, bool loaded);
 void SessionCheckpoint(uint32_t level, uint32_t checkpoint);
 void SessionReloadFrame(uint8_t* base);
+void PublishRejoinState(const SessionStart& state);
+void RejoinBackToMenu();
 #if defined(KK_DEV_TOOLS)
 bool SessionDevChapterEnd();  // same finish messages as a native chapter exit, no hero dependency
 bool SessionDevFollowPad(uint32_t user, uint8_t* state);
@@ -134,6 +136,7 @@ bool HandoverPending();
 std::wstring HandoverArg();
 // Resumed host: the existing SessionStart for the plan's chapter or save, without the lobby.
 bool BeginResumedStart(const play::StartRequest& request);
+bool PrepareMenuRejoin(const std::filesystem::path& root);
 void Shutdown();
 // Only caller: the existing per-frame game-thread hook in hfr_frame_time.cpp.
 void GameFrame(uint8_t* base);

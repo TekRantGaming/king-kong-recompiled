@@ -82,7 +82,7 @@ struct Pair {
   }
 };
 void Protocol() {
-  static_assert(kProtocolVersion == 25);
+  static_assert(kProtocolVersion == 26);
   constexpr std::array types{MessageType::Hello, MessageType::HelloAck, MessageType::Reject,
       MessageType::Ping, MessageType::Pong, MessageType::PlayerPose, MessageType::Bye,
       MessageType::EnemySnapshot, MessageType::EnemyEvent, MessageType::ShotIntent,
@@ -93,11 +93,11 @@ void Protocol() {
       MessageType::OwnershipChange,
       MessageType::PlayerDowned, MessageType::PlayerRevived,
       MessageType::CameraPose, MessageType::CameraCut, MessageType::StoryEvent, MessageType::TriggerRequest,
-      MessageType::WorldDigest, MessageType::ShotReceipt, MessageType::StartPlan, MessageType::StartPlanAck, MessageType::ObjectState, MessageType::ObjectRequest};
+      MessageType::WorldDigest, MessageType::ShotReceipt, MessageType::StartPlan, MessageType::StartPlanAck, MessageType::ObjectState, MessageType::ObjectRequest, MessageType::RejoinRequest};
   for (size_t i = 0; i < types.size(); ++i) {
     const auto type = types[i];
     Check(uint16_t(type) == i+1, "protocol 22 message IDs have no collisions or gaps");
-    Check(IsFlowMessage(type) == ((i >= 12 && i <= 20) || i == 24 || i == 25 || i == 32 || i == 33), "flow includes life events and excludes combat and cameras");
+    Check(IsFlowMessage(type) == ((i >= 12 && i <= 20) || i == 24 || i == 25 || i == 32 || i == 33 || i==36), "flow includes life and rejoin events and excludes combat and cameras");
     Message input;
     input.type = type; input.sequence = 0x12345678; input.epoch = 0x0123456789ABCDEFull;
     input.hello = Compatible(); input.reason = RejectReason::GameplayMods;

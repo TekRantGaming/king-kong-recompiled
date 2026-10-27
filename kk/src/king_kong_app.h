@@ -489,6 +489,7 @@ class KingKongApp : public rex::ReXApp {
       config.gpu_plugin = kk::startup::ApplyChoice(config.gpu_plugin);
       gpu_plugin_ = config.gpu_plugin;
       show_launcher_ = LauncherWillShow(game_data_root());
+      if (REXCVAR_GET(kk_coop_enabled) && kk::coop::ResumeRequested(user_data_root_) && !kk::benchmark::Requested()) show_launcher_=false;
       kk::startup::Begin(config.gpu_plugin, !*show_launcher_);
     }
     REXLOG_INFO("KK: renderer {} (kk_renderer {})", config.gpu_plugin, rex::cvar::GetFlagByName("kk_renderer"));

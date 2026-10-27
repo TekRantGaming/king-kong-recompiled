@@ -12,7 +12,7 @@
 
 namespace kk::coop {
 constexpr uint32_t kMagic = 0x4B4B4331;  // KKC1, network byte order throughout
-constexpr uint16_t kProtocolVersion = 25; // Native equipment and aim stance, plus distinct KNa attack authority.
+constexpr uint16_t kProtocolVersion = 26; // Authenticated process reconnect and host checkpoint rejoin.
 constexpr size_t kMaxDisplayNameBytes = 32;
 // Valid UTF-8, no controls or invisible direction/line formatting, bounded at a codepoint.
 // Empty or wholly invalid input becomes "Partner". Never log the input or result.
@@ -26,7 +26,7 @@ enum class MessageType : uint16_t {
   DamageEvent = 22, PlayerStatus = 23, OwnershipChange = 24,
   PlayerDowned = 25, PlayerRevived = 26, CameraPose = 27, CameraCut = 28,
   StoryEvent = 29, TriggerRequest = 30, WorldDigest = 31, ShotReceipt = 32,
-  StartPlan = 33, StartPlanAck = 34, ObjectState = 35, ObjectRequest = 36
+  StartPlan = 33, StartPlanAck = 34, ObjectState = 35, ObjectRequest = 36, RejoinRequest = 37
 };
 
 enum class ObjectKind : uint8_t { Breakable=1, Door=2, Fire=3, Raft=4, Ode=5, Tree=6, SupportBody=7 };
@@ -127,6 +127,11 @@ struct SessionStart {
   uint8_t difficulty = 0;  // 0 normal, 1 port hardcore
   uint32_t save_bytes = 0;
   uint64_t save_hash = 14695981039346656037ull;  // FNV-1a of empty data, integrity only
+  bool rejoin = false;
+  uint32_t generation = 1, world_start = 0, visit = 1;
+  uint64_t completed = 0;
+  uint32_t weapon = 0;
+  std::array<uint32_t, 8> stock{}; // Four magazines, then four reserves.
 };
 struct FlowEvent {
   uint32_t generation = 0, level = 0, start = 0;
@@ -354,6 +359,7 @@ struct Message {
   std::string join_code;
   // Optional Hello extension (C80): the resumed session's token, zero for a normal session.
   uint64_t resume_token = 0;
+  uint64_t process_id = 1; // Random per process link. No operating system identifier.
   StartPlan plan;
   RejectReason reason = RejectReason::None;
   uint64_t clock_ms = 0;

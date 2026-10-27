@@ -375,6 +375,15 @@ if(KK_DEV_TOOLS)
         target_link_libraries(kk-direct-tests PRIVATE ws2_32)
     endif()
     add_test(NAME coop-direct-udp COMMAND kk-direct-tests)
+    add_executable(kk-rejoin-tests tests/coop_rejoin_tests.cpp src/coop_direct_udp.cpp src/coop_protocol.cpp
+        src/coop_session.cpp src/steam_lobby.cpp src/steam_transport.cpp)
+    target_include_directories(kk-rejoin-tests PRIVATE src)
+    target_compile_definitions(kk-rejoin-tests PRIVATE KK_DEV_TOOLS=1)
+    target_link_libraries(kk-rejoin-tests PRIVATE Threads::Threads)
+    if(WIN32)
+        target_link_libraries(kk-rejoin-tests PRIVATE ws2_32)
+    endif()
+    add_test(NAME coop-rejoin COMMAND kk-rejoin-tests)
     # Mutation code exists only in this separately compiled actual-core test binary.
     add_executable(kk-chaos-tests tests/coop_chaos_tests.cpp src/coop_direct_udp.cpp
         src/coop_protocol.cpp src/coop_session.cpp src/steam_lobby.cpp)

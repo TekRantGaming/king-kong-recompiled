@@ -3,8 +3,20 @@
 #include <algorithm>
 #include <cmath>
 #include <utility>
+#include <bit>
 
 namespace kk::coop {
+namespace {
+// Inbound traffic still proves the peer is running. Allow several lost
+// unreliable Pong probes before treating a one way path as interrupted.
+constexpr double kRoundTripLossSeconds=6;
+uint64_t PacketEpoch(uint64_t token,uint64_t host,uint64_t guest) {
+  auto n=token^(host*0x9e3779b97f4a7c15ull)^std::rotl(guest,23);
+  n=(n^(n>>30))*0xbf58476d1ce4e5b9ull;
+  n=(n^(n>>27))*0x94d049bb133111ebull; n^=n>>31;
+  return n ? n : 1;
+}
+}
 const char* StateName(SessionState s) {
   switch (s) {
     case SessionState::Idle: return "idle";
@@ -77,6 +89,10 @@ CoopSession::CoopSession(SessionConfig c, ICoopTransport& t, StateCallback f)
 }
 void CoopSession::Transition(SessionState s) {
   if (state_ == s) return;
+  if (s==SessionState::Connected) {
+    if (ever_connected_) ++reconnects_;
+    ever_connected_=true;
+  }
   state_ = s;
   if (s != SessionState::Connected) {
     cameras_.Clear(); local_camera_.reset(); sent_camera_cut_.reset();
@@ -96,10 +112,10 @@ void CoopSession::Transition(SessionState s) {
   if (changed_) changed_(s);
 }
 bool CoopSession::Send(Message m, bool reliable) {
-  if (m.type == MessageType::Hello) { m.display_name = config_.display_name; m.join_code = config_.join_code; m.resume_token = config_.resume_token; }
+  if (m.type == MessageType::Hello) { m.display_name = config_.display_name; m.join_code = config_.join_code; m.resume_token = config_.resume_token; m.process_id=config_.process_id; }
   m.protocol = config_.compatibility.protocol;
   m.sequence = ++sequence_;
-  m.epoch = epoch_;
+  m.epoch = m.type==MessageType::Hello || m.type==MessageType::Reject || !wire_epoch_ ? epoch_ : wire_epoch_;
   std::vector<uint8_t> bytes;
   if (!Encode(m, bytes) || !transport_.Send(bytes, reliable)) return false;
   if (m.type == MessageType::PlayerPose) ++pose_counters_.sent;
@@ -107,7 +123,30 @@ bool CoopSession::Send(Message m, bool reliable) {
   if (m.type == MessageType::ShotIntent) ++shots_sent_;
   return true;
 }
-void CoopSession::Receive(const Message& m, double now) {
+void CoopSession::Receive(const Message& packet, double now) {
+  auto m=packet;
+  if (m.type==MessageType::Hello && config_.resume_token && ever_connected_ &&
+      (state_==SessionState::Connected || state_==SessionState::Lost) &&
+      m.resume_token==config_.resume_token && m.process_id &&
+      CheckCompatibility(config_.compatibility,m.hello)==RejectReason::None &&
+      m.protocol==config_.compatibility.protocol &&
+      (config_.role==Role::Host ? !m.epoch : m.epoch==config_.resume_token)) {
+    if (std::find(retired_processes_.begin(),retired_processes_.end(),m.process_id)!=retired_processes_.end()) return;
+    if (m.process_id!=peer_process_) {
+      retired_processes_.push_back(peer_process_);
+      if (retired_processes_.size()>8) retired_processes_.pop_front();
+      Transition(SessionState::Connecting);
+      hello_seen_=ack_seen_=pose_seen_=camera_seen_=cheat_seen_=inventory_seen_=false;
+      peer_process_=0; started_=last_receive_=now;
+      epoch_=config_.role==Role::Host ? config_.epoch : 0;
+      Message hello; hello.type=MessageType::Hello; hello.hello=config_.compatibility;
+      Send(hello,true); last_hello_=now;
+    } else {
+      Message ack; ack.type=MessageType::HelloAck; Send(ack,true);
+      last_receive_=now;
+      return;
+    }
+  }
   const bool camera=m.type==MessageType::CameraPose || m.type==MessageType::CameraCut;
   auto reject_camera=[&](const char* why) {
     ++camera_info_.rejected_count; camera_info_.rejected_at=now; camera_info_.rejection=why;
@@ -130,6 +169,11 @@ void CoopSession::Receive(const Message& m, double now) {
       Send(reject, true); Transition(SessionState::Ended); return;
     }
     partner_name_ = m.display_name;
+    peer_process_=m.process_id;
+    last_pong_=now;
+    if (config_.resume_token) wire_epoch_=PacketEpoch(config_.resume_token,
+        config_.role==Role::Host ? config_.process_id : peer_process_,
+        config_.role==Role::Guest ? config_.process_id : peer_process_);
     hello_seen_ = true;
     Message ack; ack.type = MessageType::HelloAck; Send(ack, true);
     last_receive_ = now;
@@ -137,10 +181,11 @@ void CoopSession::Receive(const Message& m, double now) {
     if (m.epoch != epoch_ || !epoch_) return;
     rejection_ = m.reason; Transition(SessionState::Ended); return;
   } else {
-    if (!epoch_ || (!COOP_MUT_IF("session_epoch") && m.epoch != epoch_) || m.protocol != config_.compatibility.protocol) {
+    if (!epoch_ || (!COOP_MUT_IF("session_epoch") && m.epoch != (wire_epoch_ ? wire_epoch_ : epoch_)) || m.protocol != config_.compatibility.protocol) {
       if (camera) reject_camera("wrong epoch/protocol");
       return;
     }
+    m.epoch=epoch_; // Mailboxes and native identities retain the campaign scope.
     if (m.type == MessageType::HelloAck && state_ == SessionState::Connecting) {
       ack_seen_ = true;
     } else {
@@ -189,13 +234,13 @@ void CoopSession::Receive(const Message& m, double now) {
         }
         case MessageType::Pong:
           if (!ping_pending_ || m.clock_ms != ping_stamp_) return;
-          ping_ms_ = std::max(0.0, now * 1000 - double(m.clock_ms)); ping_pending_ = false; break;
+          ping_ms_ = std::max(0.0, now * 1000 - double(m.clock_ms)); ping_pending_ = false; last_pong_=now; break;
         case MessageType::PlayerPose:
           if (pose_seen_ && int32_t(m.sequence - pose_sequence_) <= 0) return;
           pose_seen_ = true; pose_sequence_ = m.sequence;
           ++pose_counters_.received; pose_counters_.remote_level = m.pose.level;
           poses_.Push(m.pose, now); break;
-        case MessageType::Bye: Transition(SessionState::Ended); return;
+        case MessageType::Bye: left_=true; Transition(SessionState::Ended); return;
         case MessageType::EnemySnapshot: case MessageType::EnemyEvent:
           if (state_ != SessionState::Connected) return;
           if (m.type == MessageType::EnemyEvent) {
@@ -225,7 +270,7 @@ void CoopSession::Receive(const Message& m, double now) {
     last_receive_ = now;
   }
   if (state_ == SessionState::Connecting && hello_seen_ && ack_seen_) Transition(SessionState::Connected);
-  else if (state_ == SessionState::Lost) Transition(SessionState::Connected);
+  else if (state_ == SessionState::Lost && (!config_.resume_token || now-last_pong_<kRoundTripLossSeconds)) Transition(SessionState::Connected);
 }
 void CoopSession::Tick(double now, const std::optional<PlayerPose>& local, const enemies::Frame* frame, const CheatSet* cheats) {
   // Disabled is inert, including callbacks, polling, reads, writes and transport state queries.
@@ -250,7 +295,9 @@ void CoopSession::Tick(double now, const std::optional<PlayerPose>& local, const
   const bool waiting = config_.wait_for_peer && config_.role == Role::Host &&
       state_ == SessionState::Connecting && transport_.Stats().received == 0;
   if (waiting) started_ = now;
-  if (now - (state_ == SessionState::Connecting ? started_ : last_receive_) >= 20) {
+  const double timeout=config_.resume_token && ever_connected_ ? 120 : 20;
+  const double contact=config_.resume_token && ever_connected_ ? std::min(last_receive_,last_pong_) : last_receive_;
+  if (now - (state_ == SessionState::Connecting ? started_ : contact) >= timeout) {
     End(now); return;
   }
   if (state_ == SessionState::Connecting) {
@@ -263,7 +310,7 @@ void CoopSession::Tick(double now, const std::optional<PlayerPose>& local, const
     }
     return;
   }
-  if (now - last_receive_ >= 3) Transition(SessionState::Lost);
+  if (now-last_receive_>=3 || (config_.resume_token && now-last_pong_>=kRoundTripLossSeconds)) Transition(SessionState::Lost);
   if (state_==SessionState::Connected && config_.role==Role::Host && local_camera_ &&
       now>=local_camera_->time && now-local_camera_->time<=.25 && ValidCameraPose(*local_camera_)) {
     const auto& p=*local_camera_;

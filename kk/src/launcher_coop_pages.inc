@@ -316,6 +316,14 @@
     else {
       rows = coop::CoopPageRows(model, coop_page_, {UsedSlots() > 0, coop_choice_.has_value()});
       items = CoopItems(rows, model);
+      if ((coop_page_==CoopPage::Hub || coop_page_==CoopPage::Join) && !model.lobby && coop::RejoinAvailable(paths_.user_dir)) {
+        Item rejoin; rejoin.type=ItemType::kAction; rejoin.label="Rejoin previous game";
+        rejoin.description="Reconnect to the same partner and catch up to the host's checkpoint.";
+        rejoin.on_activate=[this] {
+          if (coop::PrepareMenuRejoin(paths_.user_dir)) { play::SetStartRequest({}); Play(); }
+        };
+        items.push_back(std::move(rejoin));
+      }
       row_data_.clear();
     }
     // A page opens on its first row that can be pressed (not a greyed Steam row while Steam is off).

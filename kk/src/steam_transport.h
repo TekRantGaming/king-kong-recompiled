@@ -24,7 +24,7 @@ class ISteamMessagesBackend {
 // All methods and backend calls belong to the same Steam owner thread.
 class SteamMessagesTransport final : public ICoopTransport {
  public:
-  SteamMessagesTransport(ISteamMessagesBackend& backend, uint64_t partner);
+  SteamMessagesTransport(ISteamMessagesBackend& backend, uint64_t partner, bool recovery = false);
   ~SteamMessagesTransport() override;
   bool Send(std::span<const uint8_t> bytes, bool reliable) override;
   bool Receive(std::vector<uint8_t>& bytes) override;
@@ -37,6 +37,7 @@ class SteamMessagesTransport final : public ICoopTransport {
  private:
   ISteamMessagesBackend& backend_;
   uint64_t partner_;
+  bool recovery_ = false;
   TransportState state_ = TransportState::Ready;
   TransportStats stats_;
   std::deque<std::vector<uint8_t>> incoming_;

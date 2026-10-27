@@ -229,14 +229,14 @@ void EveryProtocolMessage() {
     MessageType::PlayerDowned, MessageType::PlayerRevived, MessageType::CameraCut,
     MessageType::StoryEvent, MessageType::TriggerRequest, MessageType::WorldDigest, MessageType::ShotReceipt,
     MessageType::StartPlan, MessageType::StartPlanAck,
-    MessageType::ObjectState, MessageType::ObjectRequest
+    MessageType::ObjectState, MessageType::ObjectRequest, MessageType::RejoinRequest
   };
   const MessageType unreliable[] = {MessageType::Ping, MessageType::Pong, MessageType::PlayerPose,
       MessageType::EnemySnapshot, MessageType::CameraPose};
-  static_assert(kProtocolVersion == 25 && std::size(reliable)+std::size(unreliable) == 36);
+  static_assert(kProtocolVersion == 26 && std::size(reliable)+std::size(unreliable) == 37);
   Backend a,b; a.self=1; b.self=2; a.remote=&b; b.remote=&a;
   SteamMessagesTransport at(a,2),bt(b,1);
-  unsigned seen[unsigned(MessageType::ObjectRequest)+1]{};
+  unsigned seen[unsigned(MessageType::RejoinRequest)+1]{};
   for (bool r : {true,false}) {
     const auto types = r ? std::span<const MessageType>(reliable) : std::span<const MessageType>(unreliable);
     for (auto type : types) {
@@ -260,7 +260,7 @@ void EveryProtocolMessage() {
       if (type==MessageType::ShotIntent) Check(packet.size()==558,"maximum shotgun hits fit packet cap");
     }
   }
-  for (unsigned i=1;i<=unsigned(MessageType::ObjectRequest);++i) Check(seen[i]==1,"all distinct protocol IDs covered");
+  for (unsigned i=1;i<=unsigned(MessageType::RejoinRequest);++i) Check(seen[i]==1,"all distinct protocol IDs covered");
 }
 void StoryOverMessages() {
   Backend a,b; a.self=1; b.self=2; a.remote=&b; b.remote=&a;
