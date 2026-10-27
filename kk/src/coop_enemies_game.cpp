@@ -390,6 +390,12 @@ void DevEnemyNear(const uint8_t* b, uint32_t w) {
     return value && std::strcmp(value, "1") == 0;
   }();
   if (!enabled) return;
+  static const uint32_t family=[] {
+    const auto* value=std::getenv("KK_DEV_ENEMY_NEAR_FAMILY");
+    char* end=nullptr;
+    const auto parsed=value ? std::strtoul(value,&end,10):0;
+    return value && end!=value && !*end && parsed>=1 && parsed<=14 ? uint32_t(parsed):0u;
+  }();
   static double next = 0;
   const auto now = Now();
   if (now < next) return;
@@ -405,6 +411,7 @@ void DevEnemyNear(const uint8_t* b, uint32_t w) {
   const DevEnemy* nearest = nullptr;
   size_t scheduled = 0, dormant = 0;
   for (const auto& e : all) {
+    if (family && uint32_t(e.family)!=family) continue;
     e.scheduled ? ++scheduled : ++dormant;
     if (!nearest || e.distance < nearest->distance) nearest = &e;
   }
@@ -449,7 +456,10 @@ struct State {
   std::map<uint32_t, Spawner> spawners;
   std::map<uint32_t, Binding> bindings;
   std::map<uint32_t, RaptorPlayerCache> raptor_players;
-  struct NativePlayerChoice { uint32_t player=0; double until=0; };
+  struct NativePlayerChoice {
+    uint32_t player=0; double until=0;
+    uint32_t aim_player=0; double aim_time=0;
+  };
   std::map<uint32_t,NativePlayerChoice> native_player_switch;
   std::map<uint32_t, Pending> pending;
   std::map<EnemyId, Record> records;
@@ -978,22 +988,14 @@ void NativePlayerReflex(PPCContext& ctx, uint8_t* b) {
   } else selected=NearestPlayer(ctx,b,*owner,original,false);
   if (selected!=original) {
     Store32(b,owner->vars+4088,selected);
-    // Na_Exec_Lance leads from the position saved at4472 on the preceding
-    // launch frame. A different player is not movement of the old player.
-    // Reset that sample on a switch, before a same-frame native throw.
-    if (const auto matrix=Ptr(b,selected,12,64)) {
-      StoreF(b,owner->vars+4472,LoadF(b,matrix+48));
-      StoreF(b,owner->vars+4476,LoadF(b,matrix+52));
-      StoreF(b,owner->vars+4480,LoadF(b,matrix+56));
-    }
 #if defined(KK_DEV_TOOLS)
     static unsigned switches=0;
-    if (switches++<128) REXLOG_INFO("COOP PROJECTILE player-switch actor={:08X} from={:08X} to={:08X} partner={} lead-reset=true",
+    if (switches++<128) REXLOG_INFO("COOP PROJECTILE player-switch actor={:08X} from={:08X} to={:08X} partner={}",
         owner->actor,original,selected,selected==body);
 #endif
     // A retained valid target otherwise prevents the native selector from
     // running again. Keep four seconds of aggro and the native volume test.
-    if (choice.player!=selected) choice={selected,Now()+4};
+    if (choice.player!=selected) { choice.player=selected; choice.until=Now()+4; }
   }
 }
 void NativePlayerLaunch(PPCContext& ctx,uint8_t* b) {
@@ -1001,6 +1003,21 @@ void NativePlayerLaunch(PPCContext& ctx,uint8_t* b) {
   const auto hero=Load32(b,0x82CCBF7C),body=kk::PartnerBodyCombatActor(b);
   const auto scripted=owner ? Load32(b,owner->vars+308):0;
   const auto selected=owner ? Load32(b,owner->vars+4088):0;
+  if (owner && body && (!scripted || scripted==hero || scripted==body) && (selected==hero || selected==body)) {
+    auto& choice=Get().native_player_switch[owner->actor];
+    // Na_Exec_Lance leads from the preceding launch frame's sample at4472.
+    // The authored target can be reasserted before every reflex, so compare
+    // actual consecutive launch targets rather than counting those rewrites
+    // as movement. Drop the sample after a readiness or state gap too.
+    if (choice.aim_player!=selected || Now()-choice.aim_time>.5) {
+      if (const auto matrix=Ptr(b,selected,12,64)) {
+        StoreF(b,owner->vars+4472,LoadF(b,matrix+48));
+        StoreF(b,owner->vars+4476,LoadF(b,matrix+52));
+        StoreF(b,owner->vars+4480,LoadF(b,matrix+56));
+      }
+    }
+    choice.aim_player=selected; choice.aim_time=Now();
+  }
   if (!owner || !body || (scripted!=hero && scripted!=body) || (selected!=hero && selected!=body)) {
     __imp__sub_82617858(ctx,b); return;
   }
