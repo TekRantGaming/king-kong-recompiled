@@ -15,11 +15,14 @@ inline bool DamageClock(double hit_time, double host_pose_time) {
   return std::isfinite(hit_time) && std::isfinite(host_pose_time) &&
       hit_time >= host_pose_time-kMaxAge && hit_time <= host_pose_time+.5;
 }
-// Exact flags observed in Raptor 8256D2F0's non-grab branches (.17).
+// Exact pairs from Raptor bite8256D2F0 and grab825CF4D8. Zero-strength
+// release reactions still have native meaning; they are not invented damage.
 inline bool RaptorHit(uint32_t flags, uint32_t magnitude) {
   return (flags == 2048 && (magnitude == 1 || magnitude == 2 || magnitude == 4)) ||
       (flags == 4096 && magnitude == 1) || (flags == 16644 && magnitude == 1000) ||
-      (flags == 16388 && (magnitude == 6 || magnitude == 10)) || (flags == 16386 && magnitude == 6);
+      (flags == 16388 && (magnitude == 6 || magnitude == 10)) || (flags == 16386 && magnitude == 6) ||
+      ((flags == 18960 || flags == 8192 || flags == 2560) && magnitude == 1000) ||
+      (flags == 516 && magnitude == 1) || ((flags == 4 || flags == 256) && !magnitude);
 }
 // The authority captures an already produced native type-4 event. Bounds here
 // do not create hits or decide contact, range, immunity or the native reaction.
@@ -28,6 +31,9 @@ inline bool NativeHit(EnemyFamily family, uint32_t flags, uint32_t magnitude, bo
   // Marine reflex824B42E4 uses512 with magnitude0 after actual timed contact.
   // The native reaction is carried by its flags, not a positive scalar.
   if (family == EnemyFamily::Marine && !projectile && flags == 512 && !magnitude) return true;
+  // Scorpion grab82616490 sends256/0 for the native NPC hold and512/0
+  // when the hold times out. Do not drop those native controller reactions.
+  if (family == EnemyFamily::Scorpion && !projectile && (flags == 256 || flags == 512) && !magnitude) return true;
   // KT neighbor contact8246AC88 emits an impulse with flags1 or33 and no
   // scalar damage. Retain that native reaction through the impact builder.
   if (family == EnemyFamily::VRex && projectile && (flags == 1 || flags == 33) && !magnitude) return true;

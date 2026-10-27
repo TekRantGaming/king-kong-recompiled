@@ -92,6 +92,26 @@ void Codecs() {
   m.damage.direction = {2, 0, 0}; Check(Encode(m, out), "scaled native forward is retained for Jack's native normalization");
   m.damage.direction = {2001, 0, 0}; Check(!Encode(m, out), "unbounded direction refused");
   m = Damage(); m.damage.enemy.family = EnemyFamily::Prey; Check(!Encode(m, out), "nonattacking family refused");
+  for (const auto [flags,magnitude] : {std::pair{18960u,1000u}, {8192u,1000u}, {2560u,1000u},
+       {516u,1u}, {4u,0u}, {256u,0u}}) {
+    auto grab=Damage(); grab.damage.flags=flags; grab.damage.magnitude=magnitude;
+    Message decoded;
+    Check(Decode(Packet(grab),decoded) && decoded.damage.flags==flags && decoded.damage.magnitude==magnitude,
+        "native raptor grab damage and release reactions survive transport unchanged");
+    grab.damage.magnitude=magnitude+1;
+    Check(!Encode(grab,out),"grab flags cannot carry a scalar from a different native attack");
+  }
+  for (const auto flags : {256u,512u}) {
+    auto release=Damage(); release.damage.enemy.family=EnemyFamily::Scorpion;
+    release.damage.flags=flags; release.damage.magnitude=0;
+    Message decoded;
+    Check(Decode(Packet(release),decoded) && decoded.damage.flags==flags && !decoded.damage.magnitude,
+        "native scorpion zero scalar hold and release reactions survive transport");
+    release.damage.projectile=true;
+    Check(!Encode(release,out),"scorpion zero scalar reactions cannot borrow a projectile route");
+    release.damage.projectile=false; release.damage.flags=1;
+    Check(!Encode(release,out),"other zero scalar scorpion attacks stay refused");
+  }
   {
     auto contact=Damage(); contact.damage.enemy.family=EnemyFamily::Marine;
     contact.damage.flags=512; contact.damage.magnitude=0; contact.damage.part=64;

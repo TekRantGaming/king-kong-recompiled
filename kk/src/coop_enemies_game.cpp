@@ -94,6 +94,7 @@ REX_EXTERN(__imp__sub_8271ECF8);
 REX_EXTERN(__imp__sub_82663550);
 REX_EXTERN(__imp__sub_8241F0A8);
 REX_EXTERN(__imp__sub_8266D880);
+REX_EXTERN(__imp__sub_82670980);
 #endif
 #if defined(KK_DEV_TOOLS)
 REX_EXTERN(__imp__sub_82451A60);
@@ -2736,15 +2737,21 @@ void EnemyThrowProbe(PPCContext& ctx,uint8_t* b) {
   constexpr uint32_t globals[]{0x82CCBF58,0x82CCBF5C,0x82CCBF60,0x82CCBF64,0x82CCBF68,0x82CCBF6C,0x82CCBF70};
   struct Restore {
     uint8_t* base; Binding binding; uint32_t globals[7],target,offset,launcher_offset;
+    ShotVector history;
     ~Restore() {
       if (Ptr(base,binding.ai,64,offset+4)==binding.vars && RetainedDamageSource(base,binding)) {
         Store32(base,binding.vars+offset,target);
         Store32(base,binding.vars+launcher_offset,0);
+        if (binding.id.family==EnemyFamily::Native) {
+          StoreF(base,binding.vars+4472,history.x); StoreF(base,binding.vars+4476,history.y);
+          StoreF(base,binding.vars+4480,history.z);
+        }
       }
       constexpr uint32_t cells[]{0x82CCBF58,0x82CCBF5C,0x82CCBF60,0x82CCBF64,0x82CCBF68,0x82CCBF6C,0x82CCBF70};
       for (unsigned i=0;i<7;++i) Store32(base,cells[i],globals[i]);
     }
-  } restore{b,binding,{},Load32(b,binding.vars+target_offset),target_offset,launcher_offset};
+  } restore{b,binding,{},Load32(b,binding.vars+target_offset),target_offset,launcher_offset,
+      kna ? ShotVector{}:Vector(b,binding.vars+4472)};
   for (unsigned i=0;i<7;++i) restore.globals[i]=Load32(b,globals[i]);
   const auto bm=Ptr(b,body,12,64); if (!bm) return;
   const float dx=LoadF(b,bm+48)-LoadF(b,binding.matrix+48),dy=LoadF(b,bm+52)-LoadF(b,binding.matrix+52);
@@ -2759,6 +2766,12 @@ void EnemyThrowProbe(PPCContext& ctx,uint8_t* b) {
   Store32(b,0x82CCBF64,binding.ai); Store32(b,0x82CCBF68,binding.ai);
   Store32(b,0x82CCBF6C,binding.actor); Store32(b,0x82CCBF70,binding.actor);
   Store32(b,binding.vars+launcher_offset,projectile); Store32(b,binding.vars+target_offset,body);
+  // The staged throw has no preceding launch frame for Na's velocity sample.
+  // Its normal state supplies that sample once per frame; preserve it on exit.
+  if (!kna) {
+    StoreF(b,binding.vars+4472,LoadF(b,bm+48)); StoreF(b,binding.vars+4476,LoadF(b,bm+52));
+    StoreF(b,binding.vars+4480,LoadF(b,bm+56));
+  }
   if (kna) __imp__sub_8241F0A8(ctx,b); else __imp__sub_825F2890(ctx,b);
   ++count; next=time+4;
   REXLOG_INFO("COOP PROJECTILE fixture-native-throw actor={:08X} family={} projectile={:08X} target={:08X} posted={} count={} distance={:.3f} origin=({:.3f},{:.3f},{:.3f}) advance={:.3f} synthetic-launch=true native-collision-and-damage=true authored-behavior-unverified=true",
@@ -3415,6 +3428,16 @@ bool EnemyDamageEnqueue(PPCContext& ctx, uint8_t* b, uint32_t body) {
         combat::NativeHit(binding->second.id.family, damage.flags, damage.magnitude,damage.projectile);
     const bool ready=EnemyPartnerCombatReady(), wire_valid=ValidDamageEvent(damage);
     const bool qualified = audited && ready && wire_valid;
+#if defined(KK_DEV_TOOLS)
+    if (audited && ready && !wire_valid) {
+      static unsigned refusals=0;
+      if (refusals++<64)
+        REXLOG_INFO("COOP PROJECTILE wire-refused family={} id={:016X}/{} world={}/{}/{} projectile={} surface={:08X} point=({},{},{}) flags={:08X} magnitude={} native-pair={}",
+            uint16_t(damage.enemy.family),damage.enemy.source,damage.enemy.sequence,damage.world.level,damage.world.start,damage.world.serial,
+            damage.projectile,damage.surface,damage.point.x,damage.point.y,damage.point.z,damage.flags,damage.magnitude,
+            combat::NativeHit(binding->second.id.family,damage.flags,damage.magnitude,damage.projectile));
+    }
+#endif
     bool queued = false;
     if (qualified) {
       Message m; m.type = MessageType::DamageEvent; m.epoch = s.combat_epoch; m.damage = damage;
@@ -3510,6 +3533,24 @@ std::optional<ShotVector> EnemyAimTarget(const uint8_t* b, ShotVector origin) {
 } // namespace kk::coop
 
 #if defined(KK_DEV_TOOLS)
+REX_HOOK_RAW(sub_82670980) {
+  const auto body=kk::PartnerBodyCombatCopy(base);
+  const auto actor=kk::hfr::Load32(base,0x82CCBF6C),ai=kk::hfr::Load32(base,0x82CCBF64);
+  const auto vars=body && actor==body ? kk::coop::Ptr(base,ai,64,13500):0;
+  const auto kind=kk::hfr::Load32(base,0x82CCBFFC);
+  const bool observe=vars && kind==1;
+  const auto before=observe ? kk::coop::stimulus_debug::ReadHandle(
+      [&](uint32_t p){return kk::hfr::Load32(base,p);},vars+4432):kk::coop::stimulus_debug::Record{};
+  __imp__sub_82670980(ctx,base);
+  static unsigned lines=0;
+  if (observe && lines++<128) {
+    const auto after=kk::coop::stimulus_debug::ReadHandle([&](uint32_t p){return kk::hfr::Load32(base,p);},vars+4432);
+    REXLOG_INFO("COOP GRAB native-client actor={:08X} user={} class={} enabled={} proposal={:08X} protected={} before={:08X}/{} after={:08X}/{} valid={} claimed={:08X} second={:08X}",
+        actor,kk::hfr::Load32(base,vars),kk::hfr::Load32(base,vars+4),kk::hfr::Load32(base,vars+4544),
+        kk::hfr::Load32(base,vars+4664),kk::hfr::Load32(base,vars+13492),before.id,before.generation,after.id,after.generation,
+        after.valid,after.target,after.valid ? kk::hfr::Load32(base,after.address+16):0);
+  }
+}
 REX_HOOK_RAW(sub_8266D880) {
   static const bool trace=std::getenv("KK_DEV_PROJECTILE_TRACE")!=nullptr;
   const auto* owner=trace ? kk::coop::CombatOwner(base,kk::coop::EnemyFamily::Native):nullptr;
