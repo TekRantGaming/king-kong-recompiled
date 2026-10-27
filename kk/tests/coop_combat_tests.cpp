@@ -53,7 +53,7 @@ void StimulusDiagnostics() {
   Check(!ReadPool(u32, 1).valid, "record span overflow refused");
 }
 void Codecs() {
-  static_assert(kProtocolVersion == 23);
+  static_assert(kProtocolVersion == 24);
   for (const auto& m : {Damage(), Status()}) {
     const auto bytes = Packet(m); Message out;
     Check(bytes.size() == (m.type == MessageType::DamageEvent ? 119u : 53u), "fixed bounded wire length");

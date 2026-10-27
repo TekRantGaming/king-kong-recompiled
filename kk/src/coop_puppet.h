@@ -84,7 +84,18 @@ inline std::optional<Action> ChooseAction(float speed, std::span<const Action> o
 // H_exec_select_action's NPC branches (826A9B30, 826AA83C, 826A918C).
 // The player-only 40/50 series is deliberately excluded. Callers resolve the
 // loaded rig's action/item resource, including on independent native copies.
-inline uint16_t HumanAction(uint8_t weapon, bool moving, bool crouched, bool firing) {
+// Loaded action numbers are not a semantic capability check: unarmed H banks
+// reuse the gun IDs for story gestures. Preserve their proven locomotion.
+inline uint8_t AnimationWeapon(uint8_t remote,uint8_t donor) {
+  return remote>=1 && remote<=4 && !(donor>=1 && donor<=4) ? 0 : remote;
+}
+inline uint16_t HumanAction(uint8_t weapon, bool moving, bool crouched, bool firing, bool aiming=false) {
+  if (weapon>=1 && weapon<=4 && !crouched) {
+    // H npc_idle: 0x91..0x94; npc_walk: 0x0B/0xA5/0x96.
+    // The shot itself belongs to anim2, not a repeated main-clip restart.
+    return moving ? (weapon>=3 ? 150 : weapon==2 ? 165 : 11) : uint16_t(144+weapon);
+  }
+  if (weapon>=6 && weapon<=8 && !crouched) return moving ? 11 : aiming ? 75 : 96;
   if (crouched) {
     if (firing && weapon) return weapon >= 3 ? 36 : 26;
     return moving ? (weapon >= 3 ? 37 : 27) : (weapon >= 3 ? 36 : 26);
@@ -93,6 +104,21 @@ inline uint16_t HumanAction(uint8_t weapon, bool moving, bool crouched, bool fir
   // belong to the vars+2976 hit-reaction branch, not to gunfire.
   if (firing && weapon) return weapon >= 3 ? 150 : weapon==2 ? 165 : 11;
   return moving ? 10 : 0;
+}
+// H_callback_after_blend's tag 125/126/127 variant selection. These are
+// native equipment kinds, including intact/broken spears and bones.
+inline uint8_t WeaponVariant(uint8_t weapon, bool right) {
+  if (weapon>=1 && weapon<=4) {
+    constexpr uint8_t gun[]={0,4,2,6,5};
+    return gun[weapon];
+  }
+  if (!right) return weapon>=5 && weapon<=10 ? 3 : 0;
+  constexpr uint8_t held[]={0,4,2,6,5,3,10,7,9,11,12};
+  return weapon<=10 ? held[weapon] : 0;
+}
+inline uint16_t WeaponAimAction(uint8_t weapon) {
+  constexpr uint16_t aim[]={0,143,146,147,144};
+  return weapon<=4 ? aim[weapon] : 0;
 }
 // Use the native armed stance on a confirmed shot, falling back to another
 // loaded gun's aim. Recoil events are separate from the base action selector.
@@ -133,12 +159,13 @@ inline std::optional<GaitChoice> ChooseGait(float vx, float vy, float view, bool
   return best;
 }
 struct AnimationDrive {
-  float speed = 0, vx = 0, vy = 0, stop_left = 0, fire_left = 0, recoil_left = 0, land_left = 0, use_left = 0;
+  float speed = 0, vx = 0, vy = 0, stop_left = 0, fire_left = 0, recoil_left = 0, land_left = 0, use_left = 0, aim_weight = 0;
   bool moving = false, have_fire = false, new_shot = false, new_use = false, was_airborne = false, have_airborne = false;
   uint32_t last_fire = 0;
   uint16_t last_action = 0, use_action = 0;
   double action_time = -1;
   bool crouched = false, airborne = false;
+  uint8_t weapon = 0, aiming = 0;
   static bool FullBodyEquipmentAction(uint16_t action) {
     // H pickup actions 0x22/0x23 and H_ETAT_IA_lance's throws 0x56/0x5C.
     return action==0x22 || action==0x23 || action==0x56 || action==0x5C;
@@ -174,6 +201,7 @@ struct AnimationDrive {
       action_time=p.time;
       if (p.action!=last_action && EquipmentAction(p.action)) { use_action=p.action; use_left=.65f; new_use=true; }
       last_action=p.action; crouched=p.crouched; airborne=p.airborne;
+      weapon=p.weapon; aiming=p.aiming;
       if (have_airborne && was_airborne && !airborne) land_left=.5f;
       was_airborne=airborne; have_airborne=true;
     }
@@ -182,6 +210,10 @@ struct AnimationDrive {
     }
     if (!have_fire) last_fire = p.fire;
     have_fire = true;
+    const bool gun=weapon>=1 && weapon<=4;
+    const bool reload=gun && last_action==weapon+0x72;
+    const float aim_target=gun && !reload && (aiming || fire_left>0) ? 1.f : 0.f;
+    aim_weight+=(aim_target-aim_weight)*(1-std::exp(-dt*15.f));
   }
 };
 struct Point { float x = 0, y = 0, z = 0; };
