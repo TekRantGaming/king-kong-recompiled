@@ -2183,6 +2183,7 @@ void DevBait(PPCContext& ctx, uint8_t* b) {
     double due = -1;
     bool done = false;
     EnemyFamily family = EnemyFamily::Raptor;
+    uint64_t source = 0;
     double repeat = 0;
     float distance = 3, height = 0, max_height = 1000000;
     bool keep_height = false, ground = false, grab_floor = false;
@@ -2211,6 +2212,10 @@ void DevBait(PPCContext& ctx, uint8_t* b) {
             parsed<=unsigned(EnemyFamily::NativeKna) && parsed!=unsigned(EnemyFamily::Prey))
           family=EnemyFamily(parsed);
       }
+      if (const char* value=std::getenv("KK_DEV_BAIT_SOURCE")) {
+        char* end=nullptr; const auto parsed=std::strtoull(value,&end,16);
+        if (end!=value && !*end) source=parsed;
+      }
       const char* value = std::getenv("KK_DEV_BAIT");
       if (!value || !*value) return;
       char* end = nullptr; const auto parsed = std::strtod(value, &end);
@@ -2234,6 +2239,7 @@ void DevBait(PPCContext& ctx, uint8_t* b) {
   const Record* nearest = nullptr; float distance = 300;
   for (const auto& [actor, record] : s.driving) {
     if (record.kind != EnemyEventKind::Spawned || record.enemy.life <= 0 || record.enemy.id.family != bait.family) continue;
+    if (bait.source && record.enemy.id.source!=bait.source) continue;
     // Optional fixture limit: a flying or perched enemy on another floor is
     // not evidence that Jack can stand underneath it. This does not prove
     // collision or ground even for an accepted placement.
