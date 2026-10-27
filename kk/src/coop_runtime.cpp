@@ -162,6 +162,10 @@ class Service {
   ~Service() { Stop(); }
   void Start(SessionConfig config, DirectUdpOptions options, bool direct = false) {
     if (running_.exchange(true)) return;
+    std::random_device random;
+    config.process_id=(uint64_t(random())<<32)^random();
+    if (!config.process_id) config.process_id=1;
+    options.resume_token=config.resume_token;
 #if defined(KK_DEV_TOOLS)
     ConfigureDevUdpSimulation(options);
 #endif
@@ -295,6 +299,7 @@ class Service {
     flow_.Disconnect();
   }
   bool Running() const { return running_; }
+  void PublishRejoinState(const SessionStart& state) { flow_.PublishRejoinState(state); }
   // UI-thread only, including while the launcher or a cover screen is up.
   // Release every shared lock before formatting or writing any log message.
   void LogDiagnostics() {
@@ -450,6 +455,15 @@ class PartnerOverlay final : public rex::ui::ImGuiDialog {
       // or another GameFrame. Never put session UI over their presenter.
       if (movies::LoaderWaiting()) return;
       const auto flow=SessionFlowSnapshot();
+      if (flow.active && (flow.reconnecting || flow.reconnect_expired)) {
+        ImGui::SetNextWindowPos(ImVec2(24,64),ImGuiCond_Always);
+        ImGui::SetNextWindowBgAlpha(.92f);
+        if (ImGui::Begin("##coop-rejoin-wait",nullptr,ImGuiWindowFlags_AlwaysAutoResize|ImGuiWindowFlags_NoDecoration)) {
+          ImGui::TextUnformatted(flow.status);
+          if (ImGui::Button("Back to menu (B)") || ImGui::IsKeyPressed(ImGuiKey_GamepadFaceRight,false)) RejoinBackToMenu();
+        }
+        ImGui::End();
+      }
       if (flow.active && (*flow.status || observer::Active())) {
         auto* draw=ImGui::GetForegroundDrawList();
         const bool waiting=flow.phase!=FlowPhase::Playing ||
@@ -721,7 +735,7 @@ ISocialService& Social() {
 }
 namespace {
 bool OpenDirect(DirectUdpOptions options, uint64_t resume_token = 0) {
-  if (!REXCVAR_GET(kk_coop_enabled) || SessionInProcess() || !ValidJoinCode(options.join_code)) return false;
+  if (!REXCVAR_GET(kk_coop_enabled) || (SessionInProcess() && !resume_token) || !ValidJoinCode(options.join_code)) return false;
   if (steam && steam->Snapshot().lobby) return false;
 #if defined(KK_DEV_TOOLS)
   if (DevSelected() || social_preview) return false;
@@ -807,6 +821,10 @@ bool BeginSessionFlow(SessionStart start, std::vector<uint8_t> save) {
   if (service.Running()) return service.BeginFlow(start, std::move(save));
   return steam && steam->BeginFlow(start, std::move(save));
 }
+void PublishRejoinState(const SessionStart& state) {
+  if (service.Running()) service.PublishRejoinState(state);
+  else if (steam) steam->PublishRejoinState(state);
+}
 bool SubmitFlowMessage(Message m) {
   if (service.Running()) return service.SubmitFlow(std::move(m));
   return steam && steam->SubmitFlow(std::move(m));
@@ -883,6 +901,7 @@ bool EnemyConnectionReady() {
   if (!REXCVAR_GET(kk_coop_enabled)) return false;
   const auto flow=SessionFlowSnapshot();
   if (flow.active && (flow.phase!=FlowPhase::Playing || flow.policy!=ChapterPolicy::Together)) return false;
+  if (flow.active && flow.host && flow.reconnecting) return true; // Retain deaths and removals while playing alone.
   if (service.Running()) return service.EnemyReady(Now());
   return steam && steam->EnemyConnectionReady(Now());
 }

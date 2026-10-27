@@ -13,6 +13,7 @@
 #include "ui_paint.h"
 #include "menu_scene.h"
 #include "coop_handover.h"
+#include "coop_resume.h"
 #include <random>
 #include <rex/cvar.h>
 #include <rex/hook.h>
@@ -34,6 +35,9 @@ namespace {
 std::filesystem::path personal, private_root;
 play::StartRequest selected;
 bool requested=false, launched=false;
+std::atomic<bool> rejoin_cancel{false};
+uint32_t loaded_rejoin_revision=0;
+double next_rejoin_publish=0;
 SocialId requested_lobby=0;
 int progress_slot=-1;
 std::atomic<int> session_cheats{-1};
@@ -184,7 +188,7 @@ void AskLoad(PPCContext& ctx,uint8_t* base,uint32_t g,const FlowView& v) {
   // continue. Perform its exact inventory initializer once for the initial
   // chapter selection, before loading, rather than losing the grant entirely.
   // Story transitions and private checkpoint revives retain their saved stock.
-  if (!loaded_generation && !loading_generation && v.start.chapter_select && v.start.chapter<42) {
+  if (!v.start.rejoin && !loaded_generation && !loading_generation && v.start.chapter_select && v.start.chapter<42) {
     const auto saved=ctx;
     const auto bank=Load32(base,0x82CC9C98);
     Store32(base,0x82CC9C98,g);
@@ -197,7 +201,18 @@ void AskLoad(PPCContext& ctx,uint8_t* base,uint32_t g,const FlowView& v) {
         Load32(base,g+13576),Load32(base,g+13648),Load32(base,g+14880),Load32(base,g+14952),
         Load32(base,g+15024),Load32(base,g+15096));
   }
-  Store32(base,g+8,v.world.level); Store32(base,g+12,v.world.start); Store32(base,g+4,1);
+  const bool rejoin=v.start.rejoin && v.start.generation==v.world.generation;
+  const auto start=rejoin ? v.start.start : v.world.start;
+  if (rejoin) {
+    Store32(base,g+13128,v.start.weapon);
+    for (unsigned i=0;i<4;++i) {
+      Store32(base,g+13432+i*72,v.start.stock[i]);
+      Store32(base,g+14880+i*72,v.start.stock[i+4]);
+    }
+    REXLOG_INFO("KK co-op rejoin: equipment restored weapon={} magazines={}/{}/{}/{}",v.start.weapon,
+        v.start.stock[0],v.start.stock[1],v.start.stock[2],v.start.stock[3]);
+  }
+  Store32(base,g+8,v.world.level); Store32(base,g+12,start); Store32(base,g+4,1);
   Store32(base,0x828E3B48,1); Store32(base,g+0x5F1C,0);
   // Co-op chapter selection continues as a story, not the practice-mode menu route.
   Store32(base,g+0x5668,0);
@@ -207,7 +222,7 @@ void AskLoad(PPCContext& ctx,uint8_t* base,uint32_t g,const FlowView& v) {
   move_offer=false;
   move_request=0; pending_move=0;
   CancelCatchup(); catchup_notice_until=0;
-  catchup.Reset(v.world.generation,v.world.start);
+  catchup.Reset(v.world.generation,start);
   behind=BehindRule{};
   recorded_checkpoint=v.world.start;
   REXLOG_INFO("KK co-op flow: load generation {} level {} start {}",v.world.generation,v.world.level,v.world.start);
@@ -388,6 +403,12 @@ bool BeginResumedStart(const play::StartRequest& request) {
   auto r=request;
   SessionStart s; std::vector<uint8_t> save;
   if (!BuildSessionStart(r,s,save)) { REXLOG_WARN("KK co-op hand over: the resumed start could not be built"); return false; }
+  SessionStart recorded;
+  if (RejoinCheckpoint(recorded)) {
+    recorded.save_bytes=s.save_bytes; recorded.save_hash=s.save_hash;
+    s=recorded; r={play::StartKind::kChapter,request.slot,int(s.chapter),{}};
+    REXLOG_INFO("KK co-op rejoin: restarted host restores generation={} level={} checkpoint={}",s.generation,s.level,s.start);
+  }
   if (!BeginSessionFlow(s,std::move(save))) return false;
   selected=r; requested=true; requested_lobby=Social().Snapshot().lobby;
   REXLOG_INFO("KK co-op hand over: resumed host sent SessionStart chapter {} level {} start {}",s.chapter,s.level,s.start);
@@ -435,7 +456,8 @@ bool SessionBeforeGo(PPCContext& ctx,uint8_t* base,uint32_t g) {
     play::ReturnToLauncher("co-op session ended","play"); Store32(base,g+4,0); return false;
   }
   RecordProgress(v);
-  if (v.world.generation>loaded_generation) {
+  if ((!v.host && v.rejoin_revision!=loaded_rejoin_revision && v.start_ready) || v.world.generation>loaded_generation) {
+    loaded_rejoin_revision=v.rejoin_revision;
     private_load=private_request=false;
     independent_load.reset();
     AskLoad(ctx,base,g,v); return false;
@@ -634,7 +656,29 @@ void SessionReloadFrame(uint8_t* base) {
     observer::SetPartnerSpectating(false); return;
   }
   const auto v=SessionFlowSnapshot();
-  if (v.active && v.phase==FlowPhase::Failed) {
+  if (rejoin_cancel.exchange(false)) {
+    ForgetRejoin(); stopping=true;
+    play::ReturnToLauncher("co-op reconnect cancelled","play"); return;
+  }
+  if (v.active && !v.host && (v.reconnecting || v.reconnect_expired)) {
+    REXLOG_INFO("KK co-op rejoin: guest waits for host; native simulation held");
+    while (!stopping) {
+      const auto wait=SessionFlowSnapshot();
+      if (!wait.reconnecting && !wait.reconnect_expired && wait.start_ready && wait.phase!=FlowPhase::Failed) break;
+      if (rejoin_cancel.exchange(false)) {
+        ForgetRejoin(); stopping=true; play::ReturnToLauncher("co-op reconnect cancelled","play"); return;
+      }
+      RequestUiPaint(); std::this_thread::sleep_for(std::chrono::milliseconds(10));
+    }
+    REXLOG_INFO("KK co-op rejoin: host reachable; preparing guest checkpoint load");
+  }
+  const auto current=SessionFlowSnapshot();
+  if (current.active && !current.host && current.start_ready && current.rejoin_revision!=loaded_rejoin_revision) {
+    const auto g=hfr::Load32(base,0x82CC97C0);
+    if (PoseAddress(g,0x6000)) hfr::Store32(base,g+4,1);
+    return;
+  }
+  if (v.active && v.phase==FlowPhase::Failed && !v.reconnect_expired) {
     // Disconnects can arrive while normal gameplay never calls uni_go. Use
     // the regular save-aware launcher return instead of waiting for a load.
     observer::SetPartnerSpectating(false);
@@ -644,6 +688,23 @@ void SessionReloadFrame(uint8_t* base) {
   }
   if (!v.active || v.phase!=FlowPhase::Playing) {
     observer::SetPartnerSpectating(false); return;
+  }
+  if (!v.reconnect_expired && Now()>=next_rejoin_publish) {
+    next_rejoin_publish=Now()+.5;
+    auto checkpoint=v.start;
+    checkpoint.rejoin=true; checkpoint.level=v.world.level;
+    checkpoint.chapter=uint16_t(FlowChapter(v.world.level)); checkpoint.start=v.checkpoint;
+    checkpoint.generation=v.world.generation; checkpoint.world_start=v.world.start; checkpoint.completed=v.completed;
+    const auto identity=EnemyCurrentWorld(); checkpoint.visit=identity.serial ? identity.serial : 1;
+    const auto g=hfr::Load32(base,0x82CC97C0);
+    if (PoseAddress(g,0x6000)) {
+      checkpoint.weapon=hfr::Load32(base,g+13128);
+      for (unsigned i=0;i<4;++i) {
+        checkpoint.stock[i]=hfr::Load32(base,g+13432+i*72);
+        checkpoint.stock[i+4]=hfr::Load32(base,g+14880+i*72);
+      }
+      PublishRejoinState(checkpoint); UpdateRejoinCheckpoint(checkpoint);
+    }
   }
 #if defined(KK_DEV_TOOLS)
   // Background sweep equivalent of pressing each existing catch-up button once.
@@ -786,6 +847,7 @@ void SessionReloadFrame(uint8_t* base) {
   Send(MessageType::ReloadRequest,v.world);
   REXLOG_INFO("KK co-op flow: death/reload fallback, both reload the host checkpoint");
 }
+void RejoinBackToMenu() { rejoin_cancel=true; }
 #if defined(KK_DEV_TOOLS)
 bool SessionDevFollowPad(uint32_t user,uint8_t* state) {
   if (!DevFollowEnabled() || user!=0 || dev_follow_at<0 || Now()-dev_follow_at>.5) return false;

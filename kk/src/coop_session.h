@@ -40,6 +40,7 @@ struct SessionConfig {
   // C80 resumed session (coop_handover.h): both Hellos must carry this token, and the host's epoch is it.
   // Zero for a normal session, which in turn rejects a Hello that carries one.
   uint64_t resume_token = 0;
+  uint64_t process_id = 1;
   // Steam's lobby already identifies the host's current epoch. A delayed
   // Hello from the previous session must not choose the new guest's epoch.
   uint64_t expected_host_epoch = 0;
@@ -60,6 +61,8 @@ class CoopSession {
   SessionState State() const { return state_; }
   Role SessionRole() const { return config_.role; }
   uint64_t Epoch() const { return epoch_; }
+  uint32_t ReconnectCount() const { return reconnects_; }
+  bool RejoinEnabled() const { return config_.resume_token && ever_connected_ && !left_ && rejection_==RejectReason::None; }
   TransportStats Stats() const;
   RejectReason Rejection() const { return rejection_; }
   std::optional<PlayerPose> Partner(double now) const;
@@ -99,6 +102,11 @@ class CoopSession {
   SessionState state_ = SessionState::Idle;
   RejectReason rejection_ = RejectReason::None;
   uint64_t epoch_ = 0;
+  uint64_t peer_process_ = 0;
+  uint32_t reconnects_ = 0;
+  bool ever_connected_ = false;
+  bool left_ = false;
+  std::deque<uint64_t> retired_processes_;
   uint32_t sequence_ = 0, pose_sequence_ = 0;
   bool hello_seen_ = false, ack_seen_ = false, pose_seen_ = false;
   double started_ = 0, last_receive_ = 0, last_hello_ = -1, last_ping_ = -1, last_pose_ = -1;

@@ -233,7 +233,7 @@ void EveryProtocolMessage() {
   };
   const MessageType unreliable[] = {MessageType::Ping, MessageType::Pong, MessageType::PlayerPose,
       MessageType::EnemySnapshot, MessageType::CameraPose};
-  static_assert(kProtocolVersion == 25 && std::size(reliable)+std::size(unreliable) == 36);
+  static_assert(kProtocolVersion == 26 && std::size(reliable)+std::size(unreliable) == 36);
   Backend a,b; a.self=1; b.self=2; a.remote=&b; b.remote=&a;
   SteamMessagesTransport at(a,2),bt(b,1);
   unsigned seen[unsigned(MessageType::ObjectRequest)+1]{};

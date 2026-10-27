@@ -77,6 +77,10 @@ CoopSession::CoopSession(SessionConfig c, ICoopTransport& t, StateCallback f)
 }
 void CoopSession::Transition(SessionState s) {
   if (state_ == s) return;
+  if (s==SessionState::Connected) {
+    if (ever_connected_) ++reconnects_;
+    ever_connected_=true;
+  }
   state_ = s;
   if (s != SessionState::Connected) {
     cameras_.Clear(); local_camera_.reset(); sent_camera_cut_.reset();
@@ -96,7 +100,7 @@ void CoopSession::Transition(SessionState s) {
   if (changed_) changed_(s);
 }
 bool CoopSession::Send(Message m, bool reliable) {
-  if (m.type == MessageType::Hello) { m.display_name = config_.display_name; m.join_code = config_.join_code; m.resume_token = config_.resume_token; }
+  if (m.type == MessageType::Hello) { m.display_name = config_.display_name; m.join_code = config_.join_code; m.resume_token = config_.resume_token; m.process_id=config_.process_id; }
   m.protocol = config_.compatibility.protocol;
   m.sequence = ++sequence_;
   m.epoch = epoch_;
@@ -108,6 +112,28 @@ bool CoopSession::Send(Message m, bool reliable) {
   return true;
 }
 void CoopSession::Receive(const Message& m, double now) {
+  if (m.type==MessageType::Hello && config_.resume_token && ever_connected_ &&
+      (state_==SessionState::Connected || state_==SessionState::Lost) &&
+      m.resume_token==config_.resume_token && m.process_id &&
+      CheckCompatibility(config_.compatibility,m.hello)==RejectReason::None &&
+      m.protocol==config_.compatibility.protocol &&
+      (config_.role==Role::Host ? !m.epoch : m.epoch==config_.resume_token)) {
+    if (std::find(retired_processes_.begin(),retired_processes_.end(),m.process_id)!=retired_processes_.end()) return;
+    if (m.process_id!=peer_process_) {
+      retired_processes_.push_back(peer_process_);
+      if (retired_processes_.size()>8) retired_processes_.pop_front();
+      Transition(SessionState::Connecting);
+      hello_seen_=ack_seen_=pose_seen_=camera_seen_=cheat_seen_=inventory_seen_=false;
+      peer_process_=0; started_=last_receive_=now;
+      epoch_=config_.role==Role::Host ? config_.epoch : 0;
+      Message hello; hello.type=MessageType::Hello; hello.hello=config_.compatibility;
+      Send(hello,true); last_hello_=now;
+    } else {
+      Message ack; ack.type=MessageType::HelloAck; Send(ack,true);
+      last_receive_=now;
+      return;
+    }
+  }
   const bool camera=m.type==MessageType::CameraPose || m.type==MessageType::CameraCut;
   auto reject_camera=[&](const char* why) {
     ++camera_info_.rejected_count; camera_info_.rejected_at=now; camera_info_.rejection=why;
@@ -130,6 +156,7 @@ void CoopSession::Receive(const Message& m, double now) {
       Send(reject, true); Transition(SessionState::Ended); return;
     }
     partner_name_ = m.display_name;
+    peer_process_=m.process_id;
     hello_seen_ = true;
     Message ack; ack.type = MessageType::HelloAck; Send(ack, true);
     last_receive_ = now;
@@ -195,7 +222,7 @@ void CoopSession::Receive(const Message& m, double now) {
           pose_seen_ = true; pose_sequence_ = m.sequence;
           ++pose_counters_.received; pose_counters_.remote_level = m.pose.level;
           poses_.Push(m.pose, now); break;
-        case MessageType::Bye: Transition(SessionState::Ended); return;
+        case MessageType::Bye: left_=true; Transition(SessionState::Ended); return;
         case MessageType::EnemySnapshot: case MessageType::EnemyEvent:
           if (state_ != SessionState::Connected) return;
           if (m.type == MessageType::EnemyEvent) {
@@ -250,7 +277,8 @@ void CoopSession::Tick(double now, const std::optional<PlayerPose>& local, const
   const bool waiting = config_.wait_for_peer && config_.role == Role::Host &&
       state_ == SessionState::Connecting && transport_.Stats().received == 0;
   if (waiting) started_ = now;
-  if (now - (state_ == SessionState::Connecting ? started_ : last_receive_) >= 20) {
+  const double timeout=config_.resume_token && ever_connected_ ? 120 : 20;
+  if (now - (state_ == SessionState::Connecting ? started_ : last_receive_) >= timeout) {
     End(now); return;
   }
   if (state_ == SessionState::Connecting) {

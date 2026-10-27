@@ -92,6 +92,7 @@ struct File {
   uint16_t protocol = kProtocolVersion;
   std::string version;           // the game version that wrote it
   long long written_ms = 0;      // Unix epoch milliseconds
+  SessionStart checkpoint;      // rejoin=true only for a running campaign.
 };
 inline std::string Hex(uint64_t v) { char b[17]; std::snprintf(b, sizeof(b), "%016llx", static_cast<unsigned long long>(v)); return b; }
 inline bool ParseUnsigned(std::string_view s, uint64_t& out, int base = 10) {
@@ -137,6 +138,15 @@ inline std::string Format(const File& f) {
   line("protocol", std::to_string(f.protocol));
   line("version", f.version);
   line("written", std::to_string(f.written_ms));
+  if (f.checkpoint.rejoin) {
+    Message m; m.type=MessageType::SessionStart; m.start=f.checkpoint;
+    std::vector<uint8_t> bytes;
+    if (Encode(m,bytes)) {
+      constexpr char hex[]="0123456789abcdef"; std::string encoded;
+      for (auto b : bytes) { encoded+=hex[b>>4]; encoded+=hex[b&15]; }
+      line("checkpoint",encoded);
+    }
+  }
   return t;
 }
 enum class ParseResult { Ok, Malformed, Expired, Protocol };
@@ -179,6 +189,17 @@ inline ParseResult Parse(std::string_view text, long long now_ms, std::string_vi
     else if (k == "protocol") { if (!ParseUnsigned(v, n) || n > 65535) return ParseResult::Malformed; f.protocol = uint16_t(n); }
     else if (k == "version") { if (!SafeText(v, 64)) return ParseResult::Malformed; f.version = std::string(v); }
     else if (k == "written") { if (!ParseUnsigned(v, n) || n > uint64_t(1) << 62) return ParseResult::Malformed; f.written_ms = (long long)n; written = true; }
+    else if (k == "checkpoint") {
+      if (v.empty() || v.size()>1024 || v.size()%2) return ParseResult::Malformed;
+      std::vector<uint8_t> bytes;
+      for (size_t i=0;i<v.size();i+=2) {
+        if (!ParseUnsigned(v.substr(i,2),n,16)) return ParseResult::Malformed;
+        bytes.push_back(uint8_t(n));
+      }
+      Message m;
+      if (!Decode(bytes,m) || m.type!=MessageType::SessionStart || !m.start.rejoin) return ParseResult::Malformed;
+      f.checkpoint=m.start;
+    }
     // Unknown keys are ignored (a newer writer may add some).
   }
   if (!magic || !role || !token || !transport || !written || chapter >= 42 || cont > 1) return ParseResult::Malformed;
@@ -202,11 +223,11 @@ struct ResumeInput {
 };
 class ResumeMachine {
  public:
-  void Begin(double now) { *this = {}; started_ = now; }
+  void Begin(double now, double timeout=kReconnectSeconds) { *this = {}; started_ = now; timeout_=timeout; }
   ResumePhase Phase() const { return phase_; }
   ResumeFailure Failure() const { return failure_; }
   bool Connected() const { return connected_; }
-  double Remaining(double now) const { return started_ + kReconnectSeconds - now; }
+  double Remaining(double now) const { return started_ + timeout_ - now; }
   // Returns true once, when the host should begin the SessionStart (first time connected).
   bool Tick(double now, const ResumeInput& in) {
     if (phase_ == ResumePhase::Failed || phase_ == ResumePhase::Launched) return false;
@@ -216,14 +237,14 @@ class ResumeMachine {
     if (in.state == SessionState::Ended) {
       // A link that gave up before the partner arrived (a guest's handshake ends after 20 s) starts again
       // until the reconnect time is over.
-      if (!connected_ && now - started_ < kReconnectSeconds) { relink_ = true; return false; }
+      if (!connected_ && now - started_ < timeout_) { relink_ = true; return false; }
       return Fail(connected_ ? ResumeFailure::PartnerLeft : ResumeFailure::Timeout);
     }
     if (in.flow_failed && connected_) return Fail(ResumeFailure::StartFailed);
     bool begin = false;
     if (in.state == SessionState::Connected && !connected_) { connected_ = true; phase_ = ResumePhase::Starting; begin = true; }
     if (connected_ && in.start_ready) { phase_ = ResumePhase::Launched; return begin; }
-    if (now - started_ >= kReconnectSeconds) return Fail(connected_ ? ResumeFailure::StartFailed : ResumeFailure::Timeout);
+    if (now - started_ >= timeout_) return Fail(connected_ ? ResumeFailure::StartFailed : ResumeFailure::Timeout);
     return begin;
   }
   // The driver restarts the transport (same plan) when this returns true.
@@ -236,6 +257,7 @@ class ResumeMachine {
   ResumeFailure failure_ = ResumeFailure::None;
   bool connected_ = false, relink_ = false;
   double started_ = 0;
+  double timeout_ = kReconnectSeconds;
 };
 inline const char* FailureText(ResumeFailure f) {
   switch (f) {

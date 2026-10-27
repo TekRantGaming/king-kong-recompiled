@@ -15,8 +15,8 @@ bool Valid(std::span<const uint8_t> bytes, bool reliable) {
   return reliable;
 }
 }
-SteamMessagesTransport::SteamMessagesTransport(ISteamMessagesBackend& backend, uint64_t partner)
-    : backend_(backend), partner_(partner) { if (!partner) state_ = TransportState::Failed; }
+SteamMessagesTransport::SteamMessagesTransport(ISteamMessagesBackend& backend, uint64_t partner, bool recovery)
+    : backend_(backend), partner_(partner), recovery_(recovery) { if (!partner) state_ = TransportState::Failed; }
 SteamMessagesTransport::~SteamMessagesTransport() { Close(); }
 bool SteamMessagesTransport::Send(std::span<const uint8_t> bytes, bool reliable) {
   if (state_ != TransportState::Ready || !Valid(bytes, reliable)) return false;
@@ -25,6 +25,7 @@ bool SteamMessagesTransport::Send(std::span<const uint8_t> bytes, bool reliable)
   // control messages until Send succeeds. Unreliable snapshots can be dropped.
   if (result == SteamSendResult::Retry) return false;
   if (result == SteamSendResult::Failed || (reliable && result == SteamSendResult::Ignored)) {
+    if (recovery_) return false; // Bound the recovery in CoopSession, not in a single send.
     state_ = TransportState::Failed; return false;
   }
   ++stats_.sent; return true;
@@ -65,5 +66,9 @@ bool SteamMessagesTransport::SessionRequest(uint64_t peer) {
   if (backend_.Accept(peer)) return true;
   state_ = TransportState::Failed; return false;
 }
-void SteamMessagesTransport::SessionFailed(uint64_t peer) { if (peer == partner_) state_ = TransportState::Failed; }
+void SteamMessagesTransport::SessionFailed(uint64_t peer) {
+  if (peer!=partner_) return;
+  if (recovery_) { backend_.Close(partner_); incoming_.clear(); }
+  else state_=TransportState::Failed;
+}
 }  // namespace kk::coop

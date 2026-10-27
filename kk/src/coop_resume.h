@@ -7,6 +7,7 @@
 #include <functional>
 
 #include "play_session.h"
+#include "coop_protocol.h"
 
 namespace rex::ui { class ImGuiDrawer; }
 
@@ -18,7 +19,10 @@ struct ResumeCallbacks {
   std::function<void()> back_to_menu;
 };
 // --kk_coop_resume was given (read once; the cvar is never saved).
-bool ResumeRequested();
+bool ResumeRequested(const std::filesystem::path& user_dir = {});
+void UpdateRejoinCheckpoint(const SessionStart& checkpoint);
+bool RejoinCheckpoint(SessionStart& checkpoint);
+void ForgetRejoin();
 // Reads and consumes the hand over file in user_dir. A missing, malformed or stale file goes straight
 // back to the menu. Otherwise shows the connecting screen and starts the link.
 void BeginResume(rex::ui::ImGuiDrawer* drawer, const std::filesystem::path& user_dir, ResumeCallbacks callbacks);

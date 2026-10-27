@@ -117,6 +117,8 @@ struct FlowView {
   ChapterPolicy policy = ChapterPolicy::Together;
   const char* status = "";
   revive::PeerLife partner_life;
+  bool reconnecting = false, reconnect_expired = false;
+  uint32_t rejoin_revision = 0;
 };
 // Continuous evidence only; loading, stale poses or solo policy reset the timer.
 class BehindRule {
@@ -174,31 +176,73 @@ class SessionFlow {
   const std::deque<Message>& Outgoing() const { return outgoing_; }
   void Sent() { outgoing_.pop_front(); }
   void Fail(const char* reason) { if (view_.active) { view_.phase = FlowPhase::Failed; view_.status = reason; } }
+  void PublishRejoinState(const SessionStart& s) {
+    if (view_.host && view_.active && s.level==view_.world.level && ValidSessionStart(s)) checkpoint_state_=s;
+  }
+  void Connection(SessionState state, uint32_t reconnects, double now) {
+    if (!view_.active || view_.phase==FlowPhase::Failed) return;
+    if (state==SessionState::Lost || state==SessionState::Connecting) {
+      view_.reconnecting=true;
+      view_.status=view_.host ? "Partner disconnected. You can keep playing while they reconnect." :
+          "Connection lost. Waiting for the host to reconnect...";
+    } else if (state==SessionState::Ended) {
+      view_.reconnect_expired=true; view_.reconnecting=!view_.host;
+      view_.status="Couldn't reach your partner. Back to menu is available.";
+      if (!view_.host) view_.phase=FlowPhase::Failed;
+    } else if (state==SessionState::Connected && (view_.reconnecting || reconnects!=reconnects_)) {
+      reconnects_=reconnects;
+      if (view_.host) {
+        Rejoin(now); view_.reconnecting=false;
+        view_.status="Partner is catching up. You can keep playing.";
+      }
+    }
+  }
+  void Rejoin(double now) {
+    if (!view_.host || !view_.active) return;
+    ++view_.rejoin_revision;
+    auto s=checkpoint_state_.value_or(view_.start);
+    s.rejoin=true; s.chapter=uint16_t(FlowChapter(view_.world.level));
+    s.level=view_.world.level; s.start=view_.checkpoint;
+    s.generation=view_.world.generation; s.world_start=view_.world.start; s.completed=view_.completed;
+    s.save_bytes=uint32_t(view_.save.size()); s.save_hash=SessionSaveHash(view_.save);
+    outgoing_.clear(); QueueStart(s,view_.save);
+    guest_rejoining_=true; rejoin_world_=view_.world; rejoin_deadline_=now+120;
+  }
   bool Begin(SessionStart start, std::vector<uint8_t> save, double now) {
     if (!view_.host || view_.active || !ValidSessionStart(start) || start.save_bytes != save.size() ||
         start.save_hash != SessionSaveHash(save) || FlowChapter(start.level) != start.chapter) return false;
-    Message m; m.type = MessageType::SessionStart; m.start = start; outgoing_.push_back(m);
-    for (uint32_t offset=0; offset<save.size(); offset += kSaveChunkBytes) {
-      Message chunk; chunk.type = MessageType::SaveChunk; chunk.save_chunk.offset = offset;
-      const size_t end = std::min(save.size(), size_t(offset+kSaveChunkBytes));
-      chunk.save_chunk.bytes.assign(save.begin()+offset, save.begin()+end); outgoing_.push_back(std::move(chunk));
-    }
+    QueueStart(start,save);
     Setup(start, now); view_.save = std::move(save); view_.start_ready = true; return true;
   }
   void Local(Message m, double now) { Handle(m, true, now); }
   void Remote(const Message& m, double now) { Handle(m, false, now); }
   void Tick(double now) {
+    if (guest_rejoining_ && now>=rejoin_deadline_) {
+      guest_rejoining_=false; view_.reconnect_expired=true;
+      view_.status="Partner could not catch up. You can keep playing or go back to menu.";
+    }
     if (view_.active && (view_.phase==FlowPhase::Preparing || view_.phase==FlowPhase::Loading) && now-deadline_ >= 120) {
       Emit(MessageType::FlowAbort, view_.world); Fail("Co-op timed out waiting for partner. Return to the launcher.");
     }
   }
  private:
+  void QueueStart(const SessionStart& start, const std::vector<uint8_t>& save) {
+    Message m; m.type=MessageType::SessionStart; m.start=start; outgoing_.push_back(m);
+    for (uint32_t offset=0; offset<save.size(); offset+=kSaveChunkBytes) {
+      Message chunk; chunk.type=MessageType::SaveChunk; chunk.save_chunk.offset=offset;
+      const size_t end=std::min(save.size(),size_t(offset+kSaveChunkBytes));
+      chunk.save_chunk.bytes.assign(save.begin()+offset,save.begin()+end); outgoing_.push_back(std::move(chunk));
+    }
+  }
   void Emit(MessageType type, FlowEvent f) {
     if (outgoing_.size() >= 64) { Fail("Co-op control queue full. Return to the launcher."); return; }
     Message m; m.type=type; m.flow=f; outgoing_.push_back(std::move(m));
   }
   void Setup(SessionStart s, double now) {
-    view_.active=true; view_.start=s; view_.world={1,s.level,s.start,0};
+    local_loaded_=remote_loaded_=local_finished_=remote_finished_=false;
+    view_.active=true; view_.start=s; view_.world={s.generation,s.level,s.rejoin ? s.world_start : s.start,s.completed};
+    view_.completed=s.completed;
+    if (s.rejoin) ++view_.rejoin_revision;
     view_.checkpoint=s.start; view_.policy=PolicyFor(s.level); view_.phase=FlowPhase::Loading;
     view_.status="Loading..."; deadline_=now;
   }
@@ -227,7 +271,10 @@ class SessionFlow {
   void Handle(const Message& m, bool local, double now) {
     const bool authority = local == view_.host;
     if (m.type==MessageType::SessionStart) {
-      if (local || view_.host || view_.active || !ValidSessionStart(m.start) || FlowChapter(m.start.level)!=m.start.chapter) return;
+      if (local || view_.host || (view_.active && !m.start.rejoin) || !ValidSessionStart(m.start) || FlowChapter(m.start.level)!=m.start.chapter) return;
+      // A repeated start from the same handshake cannot load twice.
+      if (view_.active && m.start.rejoin && !view_.reconnecting && view_.phase==FlowPhase::Loading) return;
+      outgoing_.clear(); view_.reconnecting=false; view_.reconnect_expired=false;
       Setup(m.start,now); view_.phase=FlowPhase::Preparing; view_.save.clear();
       view_.start_ready=m.start.save_bytes==0;
       if (view_.start_ready) view_.phase=FlowPhase::Loading;
@@ -255,6 +302,12 @@ class SessionFlow {
       return;
     }
     if (!ValidFlowEvent(m.flow)) return;
+    if (view_.host && !local && m.type==MessageType::Loaded && guest_rejoining_ &&
+        m.flow.generation==rejoin_world_.generation && m.flow.level==rejoin_world_.level &&
+        m.flow.start==rejoin_world_.start && view_.phase==FlowPhase::Playing) {
+      Emit(MessageType::LoadRelease,rejoin_world_); guest_rejoining_=false;
+      view_.status=""; view_.partner_life={}; return;
+    }
     if (m.type==MessageType::LevelChange) {
       if (!authority) return;
       if (local) {
@@ -317,6 +370,11 @@ class SessionFlow {
   bool local_loaded_=false,remote_loaded_=false,local_finished_=false,remote_finished_=false;
   std::optional<FlowEvent> next_;
   std::deque<Message> outgoing_;
+  std::optional<SessionStart> checkpoint_state_;
+  uint32_t reconnects_=0;
+  bool guest_rejoining_=false;
+  FlowEvent rejoin_world_;
+  double rejoin_deadline_=0;
 };
 
 class FlowMailbox {
@@ -352,12 +410,22 @@ class FlowMailbox {
     local_.push_back(std::move(m)); return true;
   }
   FlowView Snapshot() const { std::lock_guard lock(mutex_); return flow_.View(); }
+  void PublishRejoinState(const SessionStart& s) { std::lock_guard lock(mutex_); flow_.PublishRejoinState(s); }
   void Exchange(CoopSession& session, double now) {
     std::lock_guard lock(mutex_);
     if (!initialized_) { flow_=SessionFlow(session.SessionRole()==Role::Host); initialized_=true; }
     plan_.Tick(now,session.State());
-    if (session.State()==SessionState::Ended) { flow_.Fail("Partner disconnected. Return to the launcher."); return; }
-    if (session.State()!=SessionState::Connected) { flow_.Tick(now); return; }
+    if (session.State()==SessionState::Ended && !session.RejoinEnabled()) {
+      flow_.Fail("Partner left the session. Return to the launcher."); return;
+    }
+    flow_.Connection(session.State(),session.ReconnectCount(),now);
+    if (session.State()==SessionState::Ended) return;
+    if (session.State()!=SessionState::Connected) {
+      // The host's checkpoints still advance while the partner is absent.
+      // Keep them in the authoritative flow before building the rejoin start.
+      if (session.SessionRole()==Role::Host) for (const auto& m : local_) flow_.Local(m,now);
+      local_.clear(); flow_.Tick(now); return;
+    }
     if (pending_) { flow_.Begin(pending_->first,std::move(pending_->second),now); pending_.reset(); }
     if (plan_pending_) {
       if (session.SessionRole()!=Role::Host || !plan_.Begin(*plan_pending_,now)) plan_.Reset();

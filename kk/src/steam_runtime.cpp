@@ -597,10 +597,11 @@ struct SteamRuntime::Impl
       Status(SocialStatus::Ended, "Partner unavailable"); return;
     }
     partner = resume_partner = peer;
-    transport = std::make_unique<SteamMessagesTransport>(*this, partner);
+    transport = std::make_unique<SteamMessagesTransport>(*this, partner, true);
     SessionConfig config{true, host ? Role::Host : Role::Guest, host ? token : 0, options.compatibility};
     config.display_name = SanitizeDisplayName(Text(api.SteamAPI_ISteamFriends_GetPersonaName(friends)));
     config.resume_token = token; config.wait_for_peer = host;
+    config.process_id=uint64_t(std::chrono::steady_clock::now().time_since_epoch().count());
     if (!host) config.expected_host_epoch = token;
     session = std::make_unique<CoopSession>(config, *transport);
     model.start_requested = true; presence_wanted = host;
@@ -823,6 +824,9 @@ struct SteamRuntime::Impl
       if (transport) transport->SessionFailed(failure.m_info.m_identityRemote.GetSteamID64()); return;
     }
     if (m.m_iCallback == SteamServersDisconnected_t::k_iCallback || m.m_iCallback == SteamShutdown_t::k_iCallback) {
+      if (resume_partner && session && flow.Snapshot().active) {
+        Status(SocialStatus::Connected,"Steam connection lost. Waiting for reconnection..."); return;
+      }
       stop = true; Leave("Steam is needed for co-op");
       Status(SocialStatus::Unavailable, "Steam is needed for co-op");
     }
@@ -875,6 +879,7 @@ struct SteamRuntime::Impl
 #endif
     { std::lock_guard lock(mutex); session_view = view; }
     if (session->State() == SessionState::Ended) {
+      if (resume_partner && session->RejoinEnabled() && flow.Snapshot().active) return;
       if (session->Rejection() != RejectReason::None)
         REXLOG_WARN("KK co-op Steam: connection rejected: {}", RejectName(session->Rejection()));
       Leave("Co-op session ended"); return;
@@ -1071,6 +1076,7 @@ bool SteamRuntime::BeginFlow(SessionStart start, std::vector<uint8_t> save) { re
 bool SteamRuntime::SubmitFlow(Message m) { return impl_->flow.Submit(std::move(m)); }
 bool SteamRuntime::BeginPlan(const StartPlan& plan) { return impl_->flow.BeginPlan(plan); }
 handover::PlanPhase SteamRuntime::PlanState(StartPlan* plan, const char** failure) const { return impl_->flow.PlanState(plan, failure); }
+void SteamRuntime::PublishRejoinState(const SessionStart& state) { impl_->flow.PublishRejoinState(state); }
 bool SteamRuntime::Resume(bool host, uint64_t partner, uint64_t token) {
 #if KK_HAS_STEAM
   { std::lock_guard lock(impl_->mutex); impl_->resume_host = host; impl_->resume_token = token; }

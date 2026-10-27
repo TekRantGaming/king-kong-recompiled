@@ -78,6 +78,7 @@ class SteamRuntime final : public ISocialService {
   bool BeginPlan(const StartPlan& plan);
   handover::PlanPhase PlanState(StartPlan* plan, const char** failure) const;
   bool Resume(bool host, uint64_t partner, uint64_t token);
+  void PublishRejoinState(const SessionStart& state);
   void Shutdown();
 #if defined(KK_DEV_TOOLS)
   // Blocks caller, but all Steam calls still belong to the worker. Never signs in or starts Steam.
