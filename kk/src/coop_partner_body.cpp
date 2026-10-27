@@ -884,6 +884,9 @@ void PartnerWeapon(PPCContext& ctx,uint8_t* b,const Rig& rig,const coop::PlayerP
   }
   const auto weapon=p.weapon;
   const bool gun=weapon>=1 && weapon<=4;
+  // An unarmed H bank can contain these numbers as unrelated story gestures.
+  // Only a naturally armed donor proves that its gun channels have this ABI.
+  const bool gun_clips=gun && BodyWeapon(b,rig)!=0;
   s.flash_left=gun ? std::max(0.f,s.flash_left-s.dt) : 0;
   if (s.animation.new_shot && gun) s.flash_left=.075f;
   if (!s.flash_left && s.weapon_flash>=0) {
@@ -896,7 +899,7 @@ void PartnerWeapon(PPCContext& ctx,uint8_t* b,const Rig& rig,const coop::PlayerP
   const bool reload=gun && s.animation.last_action==weapon+0x72;
   // Native H uses a child channel for reload, fire and aiming, while the
   // full-body idle/walk continues. Never rewind a playing burst per packet.
-  const uint16_t child=reload ? uint16_t(weapon+0x72) :
+  const uint16_t child=!gun_clips ? 0 : reload ? uint16_t(weapon+0x72) :
       gun && s.animation.fire_left>0 ? uint16_t(weapon+0x7C) :
       gun && p.aiming ? coop::puppet::WeaponAimAction(weapon) : 0;
   const auto layer=Ptr(b,rig.anim,0x60,104);
@@ -2011,7 +2014,7 @@ void PartnerBodyAfterAi(PPCContext& ctx, uint8_t* b, uint32_t w) {
     auto choice = coop::puppet::ChooseAction(s.animation.moving ? s.animation.speed : 0, s.observed_motion);
     const bool human = !s.humans.at(rig.actor).other_human && Load32(b,rig.vars) == 0;
     const auto held=human ? BodyWeapon(b,rig) : 0;
-    const auto weapon=p.weapon;
+    const auto weapon=coop::puppet::AnimationWeapon(p.weapon,uint8_t(held));
     const bool firing=s.animation.fire_left>0;
     const auto native = coop::puppet::HumanAction(weapon,s.animation.moving,s.animation.crouched,firing,p.aiming);
     if (human) {

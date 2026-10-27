@@ -630,6 +630,9 @@ void PuppetPolicies() {
   Check(HumanAction(2,true,true,false)!=HumanAction(2,true,true,true),"crouched motion and fire use separate native actions");
   Check(HumanAction(2,false,false,true)==146 && HumanAction(1,false,false,true)==145,
       "native armed stationary clips differ from walking clips");
+  Check(AnimationWeapon(2,0)==0 && AnimationWeapon(4,0)==0 &&
+      AnimationWeapon(4,2)==4 && AnimationWeapon(6,0)==6 && AnimationWeapon(0,2)==0,
+      "unarmed donor never plays unrelated gun IDs; native armed and held item banks remain usable");
   Check(HumanAction(6,false,false,false)==96 && HumanAction(6,false,false,false,true)==75 &&
       HumanAction(7,true,false,false,true)==11,"native spear and bone aim preserves the moving gait");
   AnimationDrive aimed; PlayerPose aim_pose; aim_pose.time=1; aim_pose.weapon=2; aim_pose.aiming=1;

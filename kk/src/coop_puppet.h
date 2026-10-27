@@ -84,6 +84,11 @@ inline std::optional<Action> ChooseAction(float speed, std::span<const Action> o
 // H_exec_select_action's NPC branches (826A9B30, 826AA83C, 826A918C).
 // The player-only 40/50 series is deliberately excluded. Callers resolve the
 // loaded rig's action/item resource, including on independent native copies.
+// Loaded action numbers are not a semantic capability check: unarmed H banks
+// reuse the gun IDs for story gestures. Preserve their proven locomotion.
+inline uint8_t AnimationWeapon(uint8_t remote,uint8_t donor) {
+  return remote>=1 && remote<=4 && !(donor>=1 && donor<=4) ? 0 : remote;
+}
 inline uint16_t HumanAction(uint8_t weapon, bool moving, bool crouched, bool firing, bool aiming=false) {
   if (weapon>=1 && weapon<=4 && !crouched) {
     // H npc_idle: 0x91..0x94; npc_walk: 0x0B/0xA5/0x96.
