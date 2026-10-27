@@ -1898,7 +1898,7 @@ void DevBait(PPCContext& ctx, uint8_t* b) {
     bool done = false;
     EnemyFamily family = EnemyFamily::Raptor;
     double repeat = 0;
-    float distance = 3, height = 0;
+    float distance = 3, height = 0, max_height = 1000000;
     bool keep_height = false;
     unsigned placements = 0;
     Bait() {
@@ -1911,6 +1911,7 @@ void DevBait(PPCContext& ctx, uint8_t* b) {
       };
       distance=placement("KK_DEV_BAIT_DISTANCE",3,.5f,10);
       height=placement("KK_DEV_BAIT_HEIGHT",0,-1,5);
+      max_height=placement("KK_DEV_BAIT_MAX_HEIGHT",1000000,0,100);
       if (const char* value=std::getenv("KK_DEV_BAIT_KEEP_HEIGHT")) keep_height=std::strcmp(value,"1")==0;
       if (const char* value=std::getenv("KK_DEV_BAIT_REPEAT")) {
         char* end=nullptr; const auto parsed=std::strtod(value,&end);
@@ -1944,6 +1945,10 @@ void DevBait(PPCContext& ctx, uint8_t* b) {
   const Record* nearest = nullptr; float distance = 300;
   for (const auto& [actor, record] : s.driving) {
     if (record.kind != EnemyEventKind::Spawned || record.enemy.life <= 0 || record.enemy.id.family != bait.family) continue;
+    // Optional fixture limit: a flying or perched enemy on another floor is
+    // not evidence that Jack can stand underneath it. This does not prove
+    // collision or ground even for an accepted placement.
+    if (std::abs(record.enemy.z-origin.z)>bait.max_height) continue;
     const auto it = s.bindings.find(actor); const auto alias = s.aliases.find(record.enemy.id);
     if (it == s.bindings.end() || alias == s.aliases.end() || alias->second != it->second.id || !ValidBinding(b, it->second)) continue;
     const float d = ShotDistance(origin, {record.enemy.x, record.enemy.y, record.enemy.z});
