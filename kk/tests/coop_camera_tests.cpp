@@ -37,6 +37,26 @@ void TogetherCinematics() {
   follow.Update({},2,102,7);
   Check(!follow.Active() && !follow.Skip(7),"expired stream, disconnect or leaving Together releases its independent lease");
 }
+void DelayedObserverScene() {
+  ObserverSceneHistory history;
+  auto local=Pose(1000); local.scripted=true; local.x=0;
+  history.Push(local);
+  local.time=1000.5; local.x=50; history.Push(local);
+  auto remote=local; remote.time=20000; remote.x=0;
+  Check(history.Matches(remote),"fast native scene matches delayed host camera without comparing PC clocks");
+  remote.x=1000;
+  Check(!history.Matches(remote),"unrelated scene still rejected");
+  remote.x=0; local.time=1001.1; local.x=100; history.Push(local);
+  Check(!history.Matches(remote),"old native scene expires after bounded delay window");
+  remote=local; remote.generation++;
+  Check(!history.Matches(remote),"different load generation cannot reuse native scene history");
+  remote=local; remote.scripted=false;
+  Check(!history.Matches(remote),"script state mismatch still rejected when no recent matching state");
+  local.time=1001.2; local.scripted=false; history.Push(local);
+  Check(history.Matches(remote),"native scene exit tolerates host packet delay");
+  local.generation++; local.time=1001.3; history.Push(local);
+  Check(!history.Matches(remote),"new world clears previous native scene history");
+}
 void Codec() {
   for (auto type : {MessageType::CameraPose,MessageType::CameraCut}) {
     Message m; m.type=type; m.epoch=0x123456789abcdef0ull; m.sequence=0xabcdef01;
@@ -191,4 +211,4 @@ void Sessions() {
   off.PublishCamera(Pose(1)); off.Tick(1); Check(!dt.poses && !dt.cuts,"co-op off emits no camera");
 }
 }
-int main() { Codec(); RotationAndBuffer(); TogetherCinematics(); Sessions(); std::puts("observer camera tests passed"); }
+int main() { Codec(); RotationAndBuffer(); TogetherCinematics(); DelayedObserverScene(); Sessions(); std::puts("observer camera tests passed"); }

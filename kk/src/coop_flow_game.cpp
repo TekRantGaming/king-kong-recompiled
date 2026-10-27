@@ -139,11 +139,20 @@ void RecordProgress(const FlowView& v) {
   else { Send(MessageType::FlowAbort,v.world); REXLOG_ERROR("KK co-op flow: personal chapter unlock could not be recorded"); }
 }
 FlowView Wait(uint32_t generation, bool load_barrier, bool host_transition=false) {
-  const double until=Now()+(host_transition ? 2 : 125);
+  // Use the shared load budget for an early observer script exit too. Steam
+  // relay queueing and host frame stalls can exceed the old two second grace.
+  const double began=Now(),until=began+125;
+  double next_wait_log=began+5;
   double paint=0;
   bool waiting_logged=false;
   for (;;) {
     auto v=SessionFlowSnapshot();
+    if (Now()>=next_wait_log) {
+      next_wait_log=Now()+5;
+      REXLOG_INFO("KK co-op flow wait: role={} generation={} level={} phase={} save={}/{} ready={} barrier={} host-transition={} elapsed={:.1f}s",
+          v.host ? "host":"guest",v.world.generation,v.world.level,int(v.phase),v.save.size(),v.start.save_bytes,
+          v.start_ready,load_barrier,host_transition,Now()-began);
+    }
     if (stopping || !v.active || v.phase==FlowPhase::Failed || v.world.generation!=generation ||
         (load_barrier && v.phase==FlowPhase::Playing)) {
       if (waiting_logged && v.world.generation!=generation)

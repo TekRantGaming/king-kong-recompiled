@@ -11,6 +11,9 @@
 #include "settings.h"
 #include "steam_runtime.h"
 #include "social_fake.h"
+#if defined(KK_DEV_TOOLS)
+#include "steam_relay_sim.h"
+#endif
 
 #include <atomic>
 #include <algorithm>
@@ -127,6 +130,8 @@ struct View {
   uint64_t epoch = 0;
 #if defined(KK_DEV_TOOLS)
   UdpFaultStats faults;
+  bool relay_model=false;
+  uint64_t relay_retries=0,relay_drops=0;
 #endif
 };
 std::mutex enemy_status_mutex;
@@ -149,6 +154,7 @@ void LogPoses(const View& v, double now, double& next) {
   REXLOG_INFO("KK dev UDP faults: seen={} copies={} dropped={} duplicates={} reordered={} bytes={} queue-full={} loss={} burst={} one-way={} disconnect={} bandwidth={}",
       f.seen,f.forwarded,f.dropped,f.duplicated,f.reordered,f.bytes,f.queue_full,
       f.reasons[1],f.reasons[2],f.reasons[3],f.reasons[4],f.reasons[5]);
+  if (v.relay_model) REXLOG_INFO("KK dev Steam relay model: retries={} no-delay-drops={}",v.relay_retries,v.relay_drops);
 }
 #endif
 class Service {
@@ -174,8 +180,24 @@ class Service {
     }
     worker_ = std::thread([this, config = std::move(config), options = std::move(options)] {
       auto transport = CreateDirectUdp(options);
+      ICoopTransport* session_transport=transport.get();
+#if defined(KK_DEV_TOOLS)
+      std::unique_ptr<SteamRelaySimulation> relay;
+      if (std::getenv("KK_DEV_STEAM_RELAY")) {
+        SteamRelayOptions sim;
+        if (const char* value=std::getenv("KK_DEV_STEAM_RELAY_BUFFER"))
+          sim.send_buffer_bytes=std::clamp<size_t>(std::strtoul(value,nullptr,10),1024,65536);
+        if (const char* value=std::getenv("KK_DEV_STEAM_RELAY_TRANSITION_MS"))
+          sim.transition_seconds=std::clamp(std::strtod(value,nullptr)/1000.,0.,10.);
+        relay=std::make_unique<SteamRelaySimulation>(*transport,sim);
+        session_transport=relay.get();
+        REXLOG_INFO("KK dev Steam relay model: app-cap={} reliable-ch=0 unreliable-ch=1 send-buffer={} bytes-per-second={} latency-ms={} route-ms={} transition-ms={}; SteamMessagesTransport over local UDP, no Steam service",
+            kMaxPacketBytes,sim.send_buffer_bytes,sim.bytes_per_second,sim.latency_seconds*1000,
+            sim.route_seconds*1000,sim.transition_seconds*1000);
+      }
+#endif
       { std::lock_guard lock(mutex_); open_failed_ = transport->State()!=TransportState::Ready; }
-      CoopSession session(config, *transport, [this](SessionState s) {
+      CoopSession session(config, *session_transport, [this](SessionState s) {
         // A synchronous log sink can stall on disk or another producer. Never
         // call it from the heartbeat worker. UI drains bounded copied events.
         std::lock_guard lock(mutex_);
@@ -226,6 +248,7 @@ class Service {
         view.epoch = session.Epoch();
 #if defined(KK_DEV_TOOLS)
         view.faults=transport->SimulationStats();
+        if (relay) { view.relay_model=true; view.relay_retries=relay->Retries(); view.relay_drops=relay->NoDelayDrops(); }
         if ((now-copy_started>.5 || poll_gap>.5) && wait_count_<8) {
           std::lock_guard lock(mutex_);
           wait_events_.push_back({now-copy_started,poll_gap}); ++wait_count_;
@@ -245,10 +268,14 @@ class Service {
         std::this_thread::sleep_for(std::chrono::milliseconds(5));
       }
       session.End(Now());
+#if defined(KK_DEV_TOOLS)
+      if (relay) REXLOG_INFO("KK dev Steam relay model: retries={} no-delay-drops={} state={}",
+          relay->Retries(),relay->NoDelayDrops(),int(relay->State()));
+#endif
       // Bounded clean shutdown; deliver and acknowledge Bye without touching game memory.
       const double until = Now() + .2;
       while (Now() < until) {
-        transport->Poll(Now());
+        session_transport->Poll(Now());
         std::this_thread::sleep_for(std::chrono::milliseconds(5));
       }
       transport->Close();

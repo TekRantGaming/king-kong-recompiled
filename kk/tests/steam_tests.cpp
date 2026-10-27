@@ -4,6 +4,7 @@
 #include "steam_transport.h"
 #include "steam_loopback_test.h"
 #include "steam_pad.h"
+#include "steam_relay_sim.h"
 
 #include <algorithm>
 #include <cstdio>
@@ -141,13 +142,13 @@ std::vector<uint8_t> Packet(MessageType type) {
 struct Backend final : ISteamMessagesBackend {
   Backend* remote = nullptr;
   uint64_t self = 0, accepted = 0, closed = 0;
-  bool send_ok = true;
+  SteamSendResult send_result = SteamSendResult::Sent;
   unsigned receives = 0;
   std::deque<SteamBackendMessage> incoming;
-  bool Send(uint64_t, int channel, std::span<const uint8_t> bytes, bool reliable) override {
-    if (!send_ok) return false;
+  SteamSendResult Send(uint64_t, int channel, std::span<const uint8_t> bytes, bool reliable) override {
+    if (send_result!=SteamSendResult::Sent) return send_result;
     if (remote) remote->incoming.push_back({self, channel, reliable, false, {bytes.begin(), bytes.end()}});
-    return true;
+    return SteamSendResult::Sent;
   }
   bool Receive(int channel, SteamBackendMessage& out) override {
     ++receives;
@@ -206,7 +207,13 @@ void Messages() {
   host.SessionFailed(3); Check(host.State() == TransportState::Ready, "foreign failure ignored");
   host.SessionFailed(2); Check(host.State() == TransportState::Failed, "partner failure surfaced");
   host.Close(); Check(a.closed == 2 && host.State() == TransportState::Closed, "close partner");
-  Backend failure; failure.send_ok = false; SteamMessagesTransport fail(failure, 2);
+  Backend failure; failure.send_result = SteamSendResult::Retry; SteamMessagesTransport fail(failure, 2);
+  Check(!fail.Send(hello,true) && fail.State()==TransportState::Ready,"full send buffer preserves connection for retry");
+  failure.send_result=SteamSendResult::Sent;
+  Check(fail.Send(hello,true),"retained reliable message can retry after buffer drains");
+  failure.send_result=SteamSendResult::Ignored;
+  Check(fail.Send(pose,false) && fail.State()==TransportState::Ready,"NoDelay unreliable drop is nonfatal");
+  failure.send_result=SteamSendResult::Failed;
   Check(!fail.Send(hello, true) && fail.State() == TransportState::Failed, "send failure surfaced");
   SteamMessagesTransport invalid(failure, 0);
   Check(invalid.State() == TransportState::Failed, "zero partner invalid");
@@ -229,7 +236,7 @@ void EveryProtocolMessage() {
   static_assert(kProtocolVersion == 23 && std::size(reliable)+std::size(unreliable) == 36);
   Backend a,b; a.self=1; b.self=2; a.remote=&b; b.remote=&a;
   SteamMessagesTransport at(a,2),bt(b,1);
-  unsigned seen[35]{};
+  unsigned seen[unsigned(MessageType::ObjectRequest)+1]{};
   for (bool r : {true,false}) {
     const auto types = r ? std::span<const MessageType>(reliable) : std::span<const MessageType>(unreliable);
     for (auto type : types) {
@@ -253,7 +260,7 @@ void EveryProtocolMessage() {
       if (type==MessageType::ShotIntent) Check(packet.size()==558,"maximum shotgun hits fit packet cap");
     }
   }
-  for (unsigned i=1;i<=34;++i) Check(seen[i]==1,"all 34 distinct protocol IDs covered");
+  for (unsigned i=1;i<=unsigned(MessageType::ObjectRequest);++i) Check(seen[i]==1,"all distinct protocol IDs covered");
 }
 void StoryOverMessages() {
   Backend a,b; a.self=1; b.self=2; a.remote=&b; b.remote=&a;
@@ -344,6 +351,78 @@ void FullSaveOverMessages() {
   }
   Check(!h.Snapshot().host && g.Snapshot().host && h.Snapshot().start_ready && h.Snapshot().save==save,
       "new Steam session resets failed flow, role and save assembly");
+}
+struct RelayLink final : ICoopTransport {
+  RelayLink* remote=nullptr;
+  std::deque<std::vector<uint8_t>> incoming;
+  TransportState state=TransportState::Ready;
+  bool Send(std::span<const uint8_t> bytes,bool) override {
+    remote->incoming.emplace_back(bytes.begin(),bytes.end()); return true;
+  }
+  bool Receive(std::vector<uint8_t>& out) override {
+    if (incoming.empty()) return false;
+    out=std::move(incoming.front()); incoming.pop_front(); return true;
+  }
+  void Poll(double) override {}
+  TransportState State() const override { return state; }
+  TransportStats Stats() const override { return {}; }
+  void Close() override { state=TransportState::Closed; }
+};
+void RelayChapterStarts() {
+  uint64_t retries=0,drops=0;
+  for (unsigned chapter=0;chapter<42;++chapter) {
+    RelayLink a,b; a.remote=&b; b.remote=&a;
+    SteamRelayOptions options;
+    options.send_buffer_bytes=4096; options.transition_seconds=3;
+    SteamRelaySimulation at(a,options),bt(b,options);
+    Check(at.Send(Packet(MessageType::PlayerPose),false),"route negotiation may ignore NoDelay snapshot without failing");
+    CoopSession host({true,Role::Host,12345,Compatible()},at),guest({true,Role::Guest,0,Compatible()},bt);
+    FlowMailbox h,g;
+    std::vector<uint8_t> save(kSessionSaveBytes);
+    for (size_t i=0;i<save.size();++i) save[i]=uint8_t(i*37+chapter);
+    auto start=SteamProbeMessage(MessageType::SessionStart).start;
+    start.chapter=chapter; start.level=kChapterRules[chapter].level;
+    start.start=chapter==40 ? 49 : chapter==0 || chapter==41 ? 0 : 1;
+    start.save_bytes=uint32_t(save.size()); start.save_hash=SessionSaveHash(save);
+    Check(h.Begin(start,save),"relay chapter start queued");
+    auto tick=[&](unsigned i) {
+      host.Tick(1000+i*.016); guest.Tick(20000+i*.016);
+      h.Exchange(host,1000+i*.016); g.Exchange(guest,20000+i*.016);
+    };
+    // Both native load orders, with the full production save and a tighter
+    // buffer than production. A slow host sends Loaded after the guest.
+    bool hl=false,gl=false;
+    unsigned i=0;
+    for (;i<2000;++i) {
+      tick(i);
+      if (i==50) Check(host.State()==SessionState::Connecting && guest.State()==SessionState::Connecting,
+          "relay route negotiation delays first Hello with unrelated process clocks");
+      if (!hl && h.Snapshot().start_ready && i>(chapter%2 ? 550u : 200u)) {
+        Check(h.Submit(Message{.type=MessageType::Loaded,.flow=h.Snapshot().world}),"relay host loaded"); hl=true;
+      }
+      if (!gl && g.Snapshot().start_ready && i>(chapter%2 ? 200u : 550u)) {
+        Check(g.Submit(Message{.type=MessageType::Loaded,.flow=g.Snapshot().world}),"relay guest loaded"); gl=true;
+      }
+      if (h.Snapshot().phase==FlowPhase::Playing && g.Snapshot().phase==FlowPhase::Playing) break;
+    }
+    Check(i<2000 && g.Snapshot().save==save,"all 42 chapters transfer exact save and release both barriers under relay pressure");
+    Check(host.State()==SessionState::Connected && guest.State()==SessionState::Connected,"temporary relay buffer exhaustion never ends session");
+    if (chapter==40) {
+      auto next=h.Snapshot().world; next.level=7; next.start=0;
+      Check(h.Submit(Message{.type=MessageType::LevelChange,.flow=next}),"Kong death host requests credits");
+      const unsigned began=i;
+      for (;i<began+500;++i) {
+        tick(i);
+        if (g.Snapshot().world.generation==2) break;
+      }
+      Check(i>began+125 && i<began+500 && g.Snapshot().world.level==7,
+          "observer accepts authoritative credits transition delayed more than two seconds");
+    }
+    retries+=at.Retries()+bt.Retries(); drops+=at.NoDelayDrops()+bt.NoDelayDrops();
+  }
+  Check(retries>0 && drops>0,"relay proof exercises real buffer retries and NoDelay drops");
+  std::printf("Relay chapter starts: 42/42, retries=%llu NoDelay drops=%llu\n",
+      static_cast<unsigned long long>(retries),static_cast<unsigned long long>(drops));
 }
 void Stub() {
   unsigned paints = 0;
@@ -459,6 +538,7 @@ void SteamPad() {
     Check(text->find('-') == std::string::npos, "no dashes in text Steam shows");
 }
 int main() {
+  RelayChapterStarts();
   DelayedLobbyReadiness();
   PreviousSessionMessages();
   Keys(); Invites(); Social(); Messages(); EveryProtocolMessage(); StoryOverMessages(); FullSaveOverMessages(); SessionOverMessages(); Stub();

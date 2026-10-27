@@ -73,6 +73,29 @@ inline bool CameraRotation(CameraPose& p,const CameraAxes& axes) {
   if (!std::isfinite(n) || n<.5f) return false;
   p.qx/=n; p.qy/=n; p.qz/=n; p.qw/=n; return true;
 }
+// Observer validation compares a delayed host stream with the recent native
+// scene path, rather than requiring a moving camera to occupy the same spot
+// on both PCs at this instant. Remote clocks never index the local history.
+class ObserverSceneHistory {
+ public:
+  void Clear() { poses_.clear(); }
+  void Push(CameraPose p) {
+    if (!ValidCameraPose(p)) { Clear(); return; }
+    if (!poses_.empty() && (p.generation!=poses_.back().generation || p.level!=poses_.back().level || p.time<poses_.back().time)) Clear();
+    poses_.push_back(p);
+    while (poses_.size()>256 || p.time-poses_.front().time>1) poses_.pop_front();
+  }
+  bool Matches(const CameraPose& remote) const {
+    if (!ValidCameraPose(remote)) return false;
+    return std::any_of(poses_.begin(),poses_.end(),[&](const CameraPose& local) {
+      if (local.generation!=remote.generation || local.level!=remote.level || local.scripted!=remote.scripted) return false;
+      if (!local.scripted) return true;
+      return std::hypot(local.x-remote.x,local.y-remote.y,local.z-remote.z)<=5 && std::abs(CameraDot(local,remote))>=.9f;
+    });
+  }
+ private:
+  std::deque<CameraPose> poses_;
+};
 inline CameraPose BlendCamera(const CameraPose& a,const CameraPose& b,float t) {
   if (a.generation!=b.generation || a.level!=b.level || a.cut!=b.cut || a.scripted!=b.scripted) return b;
   t=std::clamp(t,0.f,1.f);
