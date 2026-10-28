@@ -791,6 +791,105 @@ void Profiles() {
   for(const auto name:{"lan","home","bad_wifi","mobile","hell"})
     for(uint32_t n=1;n<=40;++n) ProfileScenario(name,n);
 }
+// C114, 303 checkpoint 5: the host arms an NPC order detector (run 2) and the
+// native program is cancelled before its start. The guest detector was
+// cancelled before the hint arrived, so the guest stays on run 1. The ordered
+// host stream crosses a seeded bad_wifi style link (35 +/- 25 ms, 2% loss
+// resent after 200 ms, reordering). Then the host arms again (run 3), either
+// natively or for a guest request, and that run really starts. The guest
+// detector is scheduled again before that new hint arrives, so it must not
+// follow the stalled run 2 hint.
+struct CancelRun {
+  unsigned moves=0, reloads=0;
+  uint32_t guest_run=0, guest_started=0, host_active=0, guest_active=0, phase_a_host=0, phase_a_guest=0;
+  bool requested=false, granted=false;
+};
+CancelRun CancelledRun(uint32_t seed,bool rearm_by_request,bool started_before) {
+  uint32_t rng=seed*2654435761u+1;
+  const auto next=[&] { rng=rng*1664525u+1013904223u; return rng>>8; };
+  struct Wire { double at; StoryEvent e; };
+  std::vector<Wire> wire;
+  uint32_t number=0;
+  story::Progress host; host.Baseline(0);
+  const auto emit=[&](double t,StoryPhase phase,uint32_t record) {
+    StoryEvent e{1,303,++number,0x2EC85D5319B53E6Eull,0x11A2EDA4476DE437ull,host.run,record,phase};
+    double delay=.035+(double(next()%5001)/5000.0-.5)*.05;
+    if (next()%100<2) delay+=.2;
+    wire.push_back({t+delay,e});
+  };
+  story::Ordered q; q.Reset(1,303);
+  story::ActivationGate gate;
+  story::Progress guest; guest.Baseline(0);
+  story::Lag lag;
+  CancelRun out;
+  bool guest_detect=false; double guest_start_at=-1;
+  bool host_armed=false; double host_start_at=-1, host_checksum=3, request_at=-1;
+  // Phase A: host arms run 2 at 1.0 s, cancelled with no start (or, for the
+  // control, really started and the guest missed it).
+  for (double t=0;t<150;t+=.016) {
+    if (t>=1 && !host_armed) {
+      host_armed=true; host.Arm(2); emit(t,StoryPhase::Armed,kStoryRecords);
+      if (started_before) { host.started=2; emit(t+.1,StoryPhase::Started,kStoryRecords); }
+    }
+    // Phase B at 70 s: the detector is scheduled again on both peers.
+    if (t>=70 && !guest_detect) {
+      guest_detect=true;
+      if (rearm_by_request) { out.requested=true; request_at=t+.04+double(next()%50)/1000.0; }
+      else { host.Arm(host.run+1); emit(t,StoryPhase::Armed,kStoryRecords); host_start_at=t+.1; }
+    }
+    if (request_at>0 && t>=request_at) {
+      request_at=-1;
+      // The guest asked for its own next run (local+1).
+      if (host.Requestable(guest.run+1)) {
+        out.granted=true; host.Arm(host.run+1); emit(t,StoryPhase::Armed,kStoryRecords); host_start_at=t+.1;
+      }
+    }
+    if (host_start_at>0 && t>=host_start_at) {
+      host_start_at=-1; host.started=host.run; emit(t,StoryPhase::Started,kStoryRecords);
+      for (uint32_t i=0;i<3;++i) emit(t+.01*i,StoryPhase::Advance,i);
+      host.record=3;
+    }
+    if (t>=host_checksum) { host_checksum+=3; emit(t,StoryPhase::Checksum,host.record); }
+    for (auto it=wire.begin();it!=wire.end();)
+      if (it->at<=t) { q.Push(it->e,t); it=wire.erase(it); } else ++it;
+    while (const auto* front=q.Front()) {
+      const auto e=*front; q.Applied(t);
+      gate.Observe(e,t);
+      if (e.phase!=StoryPhase::Checksum) continue;
+      auto stage=lag.Sample({gate.HostActive(e.run),e.record},guest,t);
+      if (stage==story::Lag::Stage::Move) { ++out.moves; lag.Moved(t); }
+      if (stage==story::Lag::Stage::Reload) { ++out.reloads; lag={}; }
+    }
+    // The guest's own detector only runs again in phase B; it follows the host.
+    if (guest_detect && guest_start_at<0 && gate.CanArm(guest.run,t)) {
+      guest.Arm(gate.armed); guest_start_at=t+.1;
+    }
+    if (guest_start_at>0 && t>=guest_start_at && !(guest.started>=guest.run)) {
+      guest.started=guest.run; guest.record=3;
+    }
+    if (t>=60 && t<60.02) { out.phase_a_host=host.Active(); out.phase_a_guest=guest.Active(); }
+  }
+  Check(q.Error().reason==story::Ordered::Failure::None && !q.Behind(),"ordered stream survives the bad link");
+  out.guest_run=guest.run; out.guest_started=guest.started;
+  out.host_active=host.Active(); out.guest_active=guest.Active();
+  return out;
+}
+void CancelledActivation() {
+  for (uint32_t seed=1;seed<=24;++seed) {
+    for (bool request : {false,true}) {
+      const auto r=CancelledRun(seed,request,false);
+      Check(r.phase_a_host==1 && r.phase_a_guest==1,"cancelled host run is not an executed activation on either peer");
+      Check(r.moves==0 && r.reloads==0,"cancelled host run causes no soft move and no catch up reload");
+      if (request) Check(r.requested && r.granted,"guest request after a cancelled host run is granted");
+      Check(r.guest_run==3 && r.guest_started==3,"later host arm (run 3) is followed and started by the guest");
+      Check(r.host_active==3 && r.guest_active==3,"world comparison agrees after the later start");
+    }
+    // Control: a host run that really started and the guest missed is still lag.
+    const auto miss=CancelledRun(seed,false,true);
+    Check(miss.moves>=1,"a missed started host run still offers the soft move");
+    Check(miss.guest_run==2,"a started host run is followed, never skipped");
+  }
+}
 void NativeStopScope() {
   StoryEvent stopped{2,203,1,123,456,3,7,StoryPhase::Stopped};
   const auto check=[&](const StoryEvent& e) {return story::NativeStopMatches(e,2,203,123,456,3,7,0x8250B9D8);};
@@ -828,6 +927,7 @@ int main(int argc,char** argv) {
   else if(name=="story_duplicate") StoryDuplicate();
   else if(name=="story_world") StoryWorld();
   else if(name=="story_native_stop") NativeStopScope();
+  else if(name=="cancelled_activation") CancelledActivation();
   else if(name=="digest_compare") DigestCompare();
   else if(name=="false_quiet") FalseQuiet();
   else if(name=="unarmed_gait") UnarmedGait();

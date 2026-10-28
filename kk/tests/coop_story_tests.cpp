@@ -2,6 +2,7 @@
 #include "coop_story.h"
 #include "coop_session.h"
 #include "coop_runtime.h"
+#include <algorithm>
 #include <array>
 #include <cstdio>
 #include <cstdlib>
@@ -98,6 +99,72 @@ void NativeRetirement() {
   }
   Check(!ValidStoryRequest(StoryPhase::Stopped),"guest cannot author native host retirement");
 }
+// C114, 303 checkpoint 5: the host arms an NPC order detector to run 2 and
+// the native program is cancelled before it starts; the guest stays on run 1.
+void CancelledActivation() {
+  auto ev=[](StoryPhase phase,uint32_t run) { auto e=Event(); e.phase=phase; e.run=run; return e; };
+  story::ActivationGate gate;
+  gate.Observe(ev(StoryPhase::Armed,2));
+  Check(gate.HostActive(2)==1,"armed host run without start is not ahead of the guest");
+  Check(gate.HostActive(1)==1 && gate.HostActive(0)==0,"other captured runs are compared unchanged");
+  gate.Observe(ev(StoryPhase::Armed,2));
+  Check(gate.HostActive(2)==1 && gate.CanArm(1),"duplicate arm keeps the proof");
+  gate.Observe(ev(StoryPhase::Armed,3));
+  Check(gate.CanArm(1) && gate.CanArm(2) && !gate.CanArm(3),"later host arm can be followed past a cancelled run");
+  Check(gate.HostActive(3)==1,"whole cancelled chain is excluded");
+  gate.Observe(ev(StoryPhase::Started,3));
+  Check(gate.HostActive(3)==3 && gate.CanArm(1,100) && gate.CanArm(2,100) && !gate.CanArm(3,100),"start keeps the cancelled proof and needs no freshness");
+  story::ActivationGate stale; auto armed=ev(StoryPhase::Armed,2);
+  stale.Observe(armed,10);
+  Check(stale.CanArm(1,10.2) && !stale.CanArm(1,9) && !stale.CanArm(1,12),"a stalled host arm is not followed late");
+  stale.Observe(ev(StoryPhase::Started,2),20);
+  Check(stale.CanArm(1,30),"a resumed host run is followed after its start");
+  stale.Observe(ev(StoryPhase::Armed,3),40);
+  Check(!stale.CanArm(1,40) && stale.CanArm(2,40),"a started run is never passed");
+  story::ActivationGate started;
+  started.Observe(ev(StoryPhase::Armed,2)); started.Observe(ev(StoryPhase::Started,2)); started.Observe(ev(StoryPhase::Armed,3));
+  Check(!started.CanArm(1) && started.CanArm(2),"a host run that started is never skipped");
+  Check(started.HostActive(3)==2,"a started run still makes the guest behind");
+  story::ActivationGate gap;
+  gap.Observe(ev(StoryPhase::Armed,2)); gap.Observe(ev(StoryPhase::Armed,4));
+  Check(!gap.CanArm(1) && !gap.CanArm(2) && gap.CanArm(3),"an unseen run is not proven cancelled");
+  Check(gap.HostActive(4)==3,"only the observed chain is excluded");
+  story::ActivationGate stopped;
+  stopped.Observe(ev(StoryPhase::Armed,2)); stopped.Observe(ev(StoryPhase::Stopped,2));
+  Check(stopped.HostActive(2)==2,"native retirement proves the run started");
+  story::ActivationGate snap;
+  snap.Observe(ev(StoryPhase::SnapshotIdle,5));
+  Check(!snap.armed && snap.HostActive(5)==5,"idle snapshot is no activation evidence");
+  // Lag: the guest on run 1 is not behind a cancelled host run 2.
+  using Stage=story::Lag::Stage;
+  story::ActivationGate cancel; cancel.Observe(ev(StoryPhase::Armed,2));
+  story::Lag lag,raw; const story::Cursor guest{1,0};
+  Stage worst=Stage::Clear;
+  for (double t=0;t<90;t+=3) {
+    Check(lag.Sample({cancel.HostActive(2),0},guest,t)==Stage::Clear,"no soft move or catch up for a cancelled run");
+    const auto stage=raw.Sample({2,0},guest,t); if (stage==Stage::Move) raw.Moved(t);
+    worst=std::max(worst,stage);
+  }
+  Check(worst==Stage::Reload,"the raw run comparison was the 303/5 soft move and catch up");
+  // Local bookkeeping: arms, cancelled chains and the world comparison run.
+  story::Progress host; host.Baseline(0);
+  Check(host.Active()==1 && host.Requestable(2) && !host.Requestable(3),"loaded run is active");
+  host.Arm(2);
+  Check(host.Pending() && host.Active()==1,"armed without start is not an executed activation");
+  Check(host.Requestable(2) && host.Requestable(3) && !host.Requestable(1) && !host.Requestable(4),"guest request passes only never started host runs");
+  host.Arm(3);
+  Check(host.Active()==1 && host.Requestable(2),"chain stays excluded");
+  host.started=3;
+  Check(!host.Pending() && host.Active()==3 && !host.Requestable(3) && host.Requestable(4),"start ends the chain");
+  host.Arm(4);
+  Check(host.Active()==3,"next chain begins after the start");
+  story::Progress guest_progress; guest_progress.Baseline(0); guest_progress.Arm(3);
+  Check(guest_progress.Active()==1 && guest_progress.run==3,"guest follows the host arm past cancelled runs");
+  guest_progress.Align(3);
+  Check(guest_progress.Active()==3,"aligned host evidence is not a pending arm");
+  story::Progress top; top.run=UINT32_MAX;
+  Check(!top.Requestable(0) && !top.Requestable(UINT32_MAX),"request run cannot wrap");
+}
 void HostActivation() {
   Check(story::FileSource(123,0x12345678) && story::FileSource(123,0x12345678)!=story::FileSource(123,0x12345679),"script BIG keys distinguish colocated native controllers");
   Check(!story::FileSource(123,0) && !story::FileSource(0,0x12345678),"unproven script resources cannot acquire authored identity");
@@ -114,6 +181,7 @@ void HostActivation() {
   Check(gate.CanArm(2),"stale activation cannot rewind the host boundary");
   Check(!gate.CanArm(UINT32_MAX),"activation run cannot wrap");
   gate={}; Check(!gate.CanArm(2),"native rebind discards previous activation authority");
+  CancelledActivation();
   story::Hints hints;
   e=Event(); e.run=3; e.record=8; e.phase=StoryPhase::SnapshotIdle; hints.Remember(e);
   Check(!hints.Passed(3,7),"idle snapshot cannot authorize a cinematic completion");

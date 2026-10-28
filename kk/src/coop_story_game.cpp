@@ -65,6 +65,7 @@ struct Script : story::Progress {
   std::optional<StoryEvent> native_finish;
   double next_native_stop=0;
   story::Lag lag;
+  uint32_t noted_unstarted=0;
   bool exact=false;
   bool saw_detect=false, saw_loop=false;
   bool checkpoint_omitted=false;
@@ -130,13 +131,15 @@ void TraceLayout(const uint8_t* b,const Script& s) {
   }
 #endif
 }
+bool Tracks(const uint8_t* b,uint32_t ai,uint32_t tag);
 void TraceLag(const uint8_t* b,const Script& s,const StoryEvent& e) {
   if (!Trace()) return;
   const auto vars=s.binding.vars,index=Load32(b,vars+19812);
   const auto p=vars+992+180*std::min(index,kStoryRecords);
-  REXLOG_INFO("KK co-op story lag detail: source={:016X} script={:016X} host={}/{} local={}/{} detect={:08X} callback={:08X} args={:08X},{:08X},{:08X},{:08X} flags={:08X} local-word={} loop={} exact={}",
+  REXLOG_INFO("KK co-op story lag detail: source={:016X} script={:016X} host={}/{} local={}/{} detect={:08X} callback={:08X} args={:08X},{:08X},{:08X},{:08X} flags={:08X} local-word={} loop={} exact={} detect-track={} actor-flags={:08X} host-armed={} host-unstarted-from={}",
       e.source,e.script,e.run,e.record,s.run,index,Load32(b,vars+20),Load32(b,p-68),
-      Load32(b,p+4),Load32(b,p+8),Load32(b,p+12),Load32(b,p+16),Load32(b,p+84),Load32(b,p+100),s.saw_loop,s.exact);
+      Load32(b,p+4),Load32(b,p+8),Load32(b,p+12),Load32(b,p+16),Load32(b,p+84),Load32(b,p+100),s.saw_loop,s.exact,
+      Tracks(b,s.binding.ai,kDetect),Load32(b,s.binding.actor+4),s.activation.armed,s.activation.unstarted_from);
 }
 void Note(const char* what,const StoryEvent& e,const char* reason="") {
   if (Trace()) REXLOG_INFO("KK co-op {}: {} role={} gen={} level={} number={} source={:016X} script={:016X} run={} record={} phase={} {}",
@@ -454,7 +457,7 @@ void CoverCheckpointPrefix(const uint8_t* b,Script& s) {
   // The loader, not a received callback, omitted this pre-checkpoint program.
   // Align only our activation metadata for a possible future native activation.
   // Keep the raw native record and all callback/actor state untouched.
-  s.run=e.run; runs[e.source]=e.run; s.lag={}; s.checkpoint_covered=e;
+  s.Align(e.run); runs[e.source]=e.run; s.lag={}; s.checkpoint_covered=e;
   REXLOG_INFO("KK co-op story: checkpoint prefix covered source={:016X} host={}/{} native={}/{} flags={:08X}; omitted from populated native AI table at newer checkpoint load and still unscheduled, no callbacks replayed",
       e.source,e.run,e.record,s.run,Load32(b,s.binding.vars+19812),Load32(b,s.binding.actor+4));
 }
@@ -476,13 +479,13 @@ void RestoreSnapshot(uint8_t* b) {
     }
     ++matched;
     auto& s=scripts.at(bind->actor); s.restore.clear(); s.lag={};
-    s.activation.Observe(e);
+    s.activation.Observe(e,Now());
     const auto index=Load32(b,bind->vars+19812);
     if (index>kStoryRecords) { snapshot_unresolved.push_back(e); continue; }
     const bool looping=Tracks(b,bind->ai,kLoop);
     if (e.phase==StoryPhase::SnapshotFinished) { s.checkpoint_finished=e; CoverCheckpointPrefix(b,s); }
     if (e.phase==StoryPhase::SnapshotIdle) {
-      if (!looping) { s.run=e.run; runs[e.source]=e.run; s.record=index; }
+      if (!looping) { s.Align(e.run); runs[e.source]=e.run; s.record=index; }
       continue;
     }
     // Metadata activation counters restart on a private native load. Align
@@ -505,7 +508,7 @@ void RestoreSnapshot(uint8_t* b) {
     };
     uint32_t first=index;
     if (!looping) {
-      s.run=e.run-1; s.record=0; runs[e.source]=s.run; first=0;
+      s.Align(e.run-1); s.record=0; runs[e.source]=s.run; first=0;
       add(StoryPhase::Armed,kDetectRecord); add(StoryPhase::Started,kDetectRecord);
     }
     for (auto i=first;i<e.record;++i) add(StoryPhase::Advance,i);
@@ -611,7 +614,7 @@ void ChecksumFrame(uint8_t* b,double now) {
         ordered.Applied(now); continue;
       }
       auto& s=scripts.at(bind->actor);
-      s.activation.Observe(e);
+      s.activation.Observe(e,now);
       if (e.phase==StoryPhase::Stopped) {
         // A real native host retirement is separate from successful callback
         // completion. Keep it pending until this guest reaches that same wait.
@@ -642,8 +645,14 @@ void ChecksumFrame(uint8_t* b,double now) {
       const auto before=s.lag.State(now);
       const bool checkpoint_covered=CheckpointCovers(b,s,e);
       if (checkpoint_covered) s.lag={};
+      // A host run armed and never started (cancelled SSDetect) is not ahead.
+      const auto host_run=s.activation.HostActive(e.run);
+      if (host_run!=e.run && reply.run<e.run && s.noted_unstarted!=e.run) {
+        s.noted_unstarted=e.run; Note("host run armed, never started",e,"compared at the host run that started");
+        TraceLag(b,s,e);
+      }
       const auto stage=checkpoint_covered ? story::Lag::Stage::Clear :
-          s.lag.Sample({e.run,e.record},{reply.run,reply.record},now);
+          s.lag.Sample({host_run,e.record},{reply.run,reply.record},now);
       if (stage!=before) {
         const char* what=checkpoint_covered ? "checksum history covered by checkpoint" :
             stage==story::Lag::Stage::Clear ? "native checksum converged" :
@@ -652,7 +661,7 @@ void ChecksumFrame(uint8_t* b,double now) {
         Note(what,e,"guest must remain behind without advancing for more than 20 seconds");
         if (stage!=story::Lag::Stage::Clear) TraceLag(b,s,e);
       }
-      if (reply.run!=e.run || reply.record!=e.record) Note("checksum differs (hint)",reply);
+      if ((reply.run!=e.run && reply.run!=host_run) || reply.record!=e.record) Note("checksum differs (hint)",reply);
       else Note("checksum matched",reply);
     }
     return;
@@ -686,6 +695,11 @@ void ChecksumFrame(uint8_t* b,double now) {
       if (Emit(stopped)) { s.next_native_stop=now+3; Note("native retirement observed",stopped,"own loop cleared and inactive at the same native wait"); }
     }
     auto e=Event(s,StoryPhase::Checksum,index); e.number=number+1;
+    if (s.Pending() && s.noted_unstarted!=s.run && Trace()) {
+      s.noted_unstarted=s.run;
+      REXLOG_INFO("KK co-op story: host run armed, not started at checksum source={:016X} run={} armed-from={} started={} record={} detect-track={} loop-track={} actor-flags={:08X}",
+          s.binding.source,s.run,s.armed_from,s.started,index,Tracks(b,bind->ai,kDetect),Tracks(b,bind->ai,kLoop),Load32(b,bind->actor+4));
+    }
     if (!ValidStoryEvent(e)) { checksum_actor=it->first; continue; }
     if (!checksums.Remember(e,now)) break;
     if (!Emit(e)) break;
@@ -720,7 +734,7 @@ world::Json world::StorySnapshot(const uint8_t* b,world::Capture& capture) {
     if (cursor>kStoryRecords) { capture.Error("script-cursor-out-of-range:"+key); continue; }
     if (!rows.emplace(key,Json::Object({{"cursor",cursor},{"loop",Tracks(b,bind->ai,kLoop)},
         {"detect",Tracks(b,bind->ai,kDetect)},{"activity",bool(Load32(b,actor+4)&0x400000)},
-        {"run",s.run},{"started",s.started},{"finished",s.finished}})).second)
+        {"run",s.Active()},{"started",s.started},{"finished",s.finished}})).second)
       capture.Error("script-id-collision:"+key);
   }
   const bool ready=!failed && !snapshot_waiting && !ordered.Behind() && outgoing.empty() && snapshot_out.empty();
@@ -897,13 +911,17 @@ void StoryGameFrame(uint8_t* b) {
     if (!bind) { Note("request refused",e,"missing/ambiguous identity"); continue; }
     auto& s=scripts.at(bind->actor);
     if (s.request) { Note("request refused",e,"activation already pending"); continue; }
-    if (failed || s.run==UINT32_MAX || e.run!=s.run+1) { Note("request refused",e,"stale activation run"); continue; }
+    // Host runs from e.run on that armed and never started executed no
+    // callback: the guest asks for the next activation that can really start.
+    const bool cancelled=e.run!=s.run+1;
+    if (failed || !s.Requestable(e.run)) { Note("request refused",e,"stale activation run"); continue; }
     // A request only substitutes the validated guest's volume membership in
     // the host's own detector. The host still runs the authored native chain;
     // no received callback or record is executed by this request path.
     if (!SharedDetector(b,s)) { Note("request refused",e,"not a shared Jack-volume detector"); continue; }
     // Recheck a fresh partner pose and native volume when this script is scheduled.
-    s.request=e; s.request_until=now+.5; Note("request pending",e);
+    s.request=e; s.request->run=s.run+1; s.request_until=now+.5;
+    Note("request pending",*s.request,cancelled ? "host runs armed and never started passed" : "");
   }
   if (host) for (auto& [actor,s] : scripts) if (s.request && now>s.request_until)
     FinishRequest(s,"request refused","script not scheduled before request deadline");
@@ -959,7 +977,7 @@ bool StoryDetect(PPCContext& ctx,uint8_t* b) {
     // bit bookkeeping remain intact, including persistent programs.
     if (!host && !s->exact && Load32(b,vars+20)==kPivot && SharedPivot(b,vars+88) &&
         story::DetectIdle(before)) {
-      if (s->activation.CanArm(s->run)) {
+      if (s->activation.CanArm(s->run,Now())) {
         forced_pivot=vars+88;
         Note("host volume activation",Event(*s,StoryPhase::Armed,kDetectRecord),"native mixed chain and persistence retained");
       } else {
@@ -973,7 +991,11 @@ bool StoryDetect(PPCContext& ctx,uint8_t* b) {
     if (story::DetectArmed(before,after)) {
       if (s->run==UINT32_MAX) Refuse("script run overflow");
       else {
-        ++s->run; runs[s->binding.source]=s->run;
+        // Following the host may pass host runs proven armed and never started.
+        const auto next=!host && s->activation.CanArm(s->run,Now()) ? s->activation.armed : s->run+1;
+        if (next!=s->run+1) Note("cancelled host runs passed",Event(*s,StoryPhase::Armed,kDetectRecord),
+            "host armed them and never started; no callback executed there or here");
+        s->Arm(next); runs[s->binding.source]=s->run;
         if (host) {
           FinishRequest(*s,"request applied","native detection armed");
           Emit(Event(*s,StoryPhase::Armed,kDetectRecord));
@@ -991,14 +1013,16 @@ bool StoryDetect(PPCContext& ctx,uint8_t* b) {
   const auto* front=s->restore.empty() ? ordered.Front() : &s->restore.front();
   if (For(front,*s,StoryPhase::Armed)) {
     const auto e=*front;
-    if (!story::DetectIdle(before) || e.run!=s->run+1 || Load32(b,vars+20)!=kPivot || !HeroPivot(b,vars+88) || Load32(b,vars+8)) {
+    s->activation.Observe(e,Now()); // this hook can run before the frame's hint drain
+    const bool next_run=e.run==s->run+1 || (e.run==s->activation.armed && s->activation.CanArm(s->run,Now()));
+    if (!story::DetectIdle(before) || !next_run || Load32(b,vars+20)!=kPivot || !HeroPivot(b,vars+88) || Load32(b,vars+8)) {
       Native(*s,e,"detection callback or state is not replay-safe");
       // Re-enter once under the native policy to observe any immediate Armed
       // transition too. Returning to the raw hook would lose that activation.
       return StoryDetect(ctx,b);
     }
     forced_pivot=vars+88; __imp__sub_82476848(ctx,b); forced_pivot=0;
-    if (Load32(b,flag)==1) { s->run=e.run; runs[s->binding.source]=s->run; Applied(e); }
+    if (Load32(b,flag)==1) { s->Arm(e.run); runs[s->binding.source]=s->run; Applied(e); }
     else Native(*s,e,"native detection did not arm");
   } else if (For(front,*s,StoryPhase::Started)) {
     const auto e=*front;
@@ -1286,7 +1310,7 @@ void StoryCapability(PPCContext& ctx,uint8_t* b,uint32_t payload,bool any) {
   } else {
     // Host Arms this same script before the native persistent detector starts
     // it. An idle checksum alone never authorizes capability completion.
-    const bool arm=s->activation.CanArm(s->run);
+    const bool arm=s->activation.CanArm(s->run,Now());
     Store32(b,payload+20,arm ? (target ? target:hero):0); ctx.r3.u32=arm ? 1:0;
   }
 }
