@@ -33,6 +33,10 @@
 #include <set>
 #include <string>
 #include <utility>
+#if defined(KK_DEV_TOOLS)
+#include <filesystem>
+#include <fstream>
+#endif
 
 REX_EXTERN(__imp__sub_8271D498);
 REX_EXTERN(__imp__sub_8271CCB8);
@@ -573,7 +577,7 @@ struct DevRaptorLog {
 void ShotSummary(const char* boundary, bool end = true);
 struct State {
   uint64_t actor_holds=0,actor_last_bytes=0,actor_drifts=0;
-  double actor_log_at=0;
+  double actor_log_at=0,actor_publish_at=0;
   uint32_t world = 0, game = 0;
   std::map<std::pair<uint32_t, uint32_t>, uint32_t> visits;
   bool capture = false, prepared = false, load_refused_logged = false;
@@ -676,7 +680,7 @@ struct State {
   Counters counts;
   double next_log = 0, prepared_at = 0;
   void ResetWorld() {
-    actor_holds=actor_last_bytes=actor_drifts=0; actor_log_at=0;
+    actor_holds=actor_last_bytes=actor_drifts=0; actor_log_at=actor_publish_at=0;
     ShotSummary("world-end");
     world = game = 0; capture = prepared = false; identity = {};
     load_refused_logged = false;
@@ -1772,23 +1776,15 @@ void ActorMetadata(const uint8_t* b,const Binding& binding,EnemyState& e) {
   if (!Replication()) return;
   ActorAnimation(b,binding.actor,&e.animation_time);
   e.actor_flags=Load32(b,binding.actor+4)&actors::kFlagsMask;
-  uint32_t offset=0,target=0,handle=0;
+  const uint32_t offset=actors::TargetOffset(binding.id.family);
+  uint32_t target=0,handle=0;
   switch (binding.id.family) {
     case EnemyFamily::Raptor: handle=5216; break;
     case EnemyFamily::Worm: handle=2948; break;
     case EnemyFamily::Scorpion: handle=2992; break;
     case EnemyFamily::Crab: handle=1048; break;
-    case EnemyFamily::Bat: offset=848; break;
     case EnemyFamily::Centipede: handle=5888; break;
     case EnemyFamily::Spider: handle=1420; break;
-    case EnemyFamily::Native: offset=4088; break;
-    case EnemyFamily::NativeKna: offset=4084; break;
-    case EnemyFamily::Marine: offset=348; break;
-    case EnemyFamily::VRex: offset=516; break;
-    case EnemyFamily::SwampCrawler: offset=556; break;
-    case EnemyFamily::SwampCrawlerSmall: offset=1912; break;
-    case EnemyFamily::Human: offset=0xC60; break;
-    case EnemyFamily::Independent: offset=0x290; break;
     default: break;
   }
   if (offset && ActorReadable(binding.vars,offset+4)) target=Load32(b,binding.vars+offset);
@@ -1808,6 +1804,22 @@ void ActorMetadata(const uint8_t* b,const Binding& binding,EnemyState& e) {
       if (slot>=1 && slot<=12) { e.target=3; e.target_crew=uint8_t(slot); }
     }
   }
+}
+void ActorTarget(uint8_t* b,const Binding& binding,const EnemyState& e) {
+  if (Get().link.role!=Role::Guest) return;
+  const auto offset=actors::TargetOffset(binding.id.family);
+  if (!offset || !e.target || !ActorReadable(binding.vars,offset+4)) return;
+  uint32_t target=0;
+  if (e.target==1) target=kk::PartnerBodyCombatActor(b);
+  else if (e.target==2) target=Load32(b,0x82CCBF7C);
+  else if (e.target==3) {
+    for (const auto& [actor,crew]:Get().bindings) if (crew.id.family==EnemyFamily::Human &&
+        ActorReadable(crew.vars,8) && Load32(b,crew.vars+4)==e.target_crew && ValidBinding(b,crew)) {
+      if (target) return; // A crew slot must resolve uniquely in this world.
+      target=actor;
+    }
+  }
+  if (target && Member(b,Get().world,target,true)) Store32(b,binding.vars+offset,target);
 }
 void DeathTransition(PPCContext& ctx, uint8_t* b, const Binding& binding) {
   auto& s = Get();
@@ -1858,6 +1870,7 @@ bool Drive(PPCContext& ctx, uint8_t* b, const Binding& binding, const EnemyState
     __imp__sub_82850100(ctx, b);
   }
   if (Replication() && ValidBinding(b,binding)) {
+    ActorTarget(b,binding,e);
     float current=-1;
     if (e.animation_time>=0 && ActorAnimation(b,binding.actor,&current) &&
         Load16(b,anim+156)==e.action && b[anim+160]==e.item &&
@@ -1994,6 +2007,8 @@ void Replicas(PPCContext& ctx, uint8_t* b, bool drive) {
     ShotResultLog(sample, before, true);
     WriteLife(b, *binding, sample);
     if (dead && !Replication()) { DeathTransition(ctx, b, *binding); continue; }
+    if (dead && (StateLife(binding->id.family) || binding->id.family==EnemyFamily::VRex))
+      DeathTransition(ctx,b,*binding); // Set the audited local terminal track without executing it.
     if (!drive || Drive(ctx, b, *binding, r.enemy)) {
       s.driving[binding->actor] = r;
       if (drive) ++s.counts.driven;
@@ -2165,6 +2180,8 @@ void HoldReplicas(PPCContext& ctx, uint8_t* b, bool drive) {
     if (state.life <= 0) {
       WriteLife(b, *binding, state);
       if (!Replication()) { DeathTransition(ctx, b, *binding); continue; }
+      if (StateLife(binding->id.family) || binding->id.family==EnemyFamily::VRex)
+        DeathTransition(ctx,b,*binding);
     }
     // Keep known replicas held even after live snapshots expire. Native AI
     // resumes only on a Commit, or when the connection/load guard releases it.
@@ -4533,9 +4550,47 @@ desync::Evidence EnemyCompareDigest(uint8_t* b,const desync::State& state,bool r
   }
   return result;
 }
+void ActorNativeAudit(const uint8_t* b) {
+#if defined(KK_DEV_TOOLS)
+  static const bool enabled=[] { const auto* p=std::getenv("KK_DEV_ACTOR_AUDIT"); return p && std::strcmp(p,"1")==0; }();
+  if (!enabled) return;
+  static double next=0;
+  const auto now=Now(); if (now<next) return; next=now+.05;
+  const auto* path=std::getenv("KK_DEV_WORLD_DIR"); if (!path || !*path) return;
+  const auto dir=std::filesystem::absolute(path).lexically_normal();
+  if (!dir.generic_string().starts_with("F:/kk-native-coop/") && !dir.generic_string().starts_with("f:/kk-native-coop/")) return;
+  auto& s=Get(); std::vector<world::Json> rows;
+  for (const auto& [actor,binding]:s.bindings) {
+    Binding observed; EnemyState e;
+    if (!ValidBinding(b,binding) || !Read(b,actor,observed,e)) continue;
+    const auto id=Canonical(binding.id);
+    const auto driven=s.driving.find(actor);
+    float animation=-1; ActorAnimation(b,actor,&animation);
+    const auto cell=LifeCell(b,binding);
+    rows.push_back(world::Json::Object({{"id",world::Hex(id.source)},{"sequence",id.sequence},
+        {"family",uint16_t(binding.id.family)},{"bound",id.source!=0},
+        {"x",e.x},{"y",e.y},{"z",e.z},{"facing",e.facing},{"life",e.life},
+        {"native_health",cell ? world::Json(LoadF(b,cell)):world::Json()},
+        {"action",e.action},{"item",e.item},{"animation_time",animation},
+        {"flags",Load32(b,actor+4)&actors::kFlagsMask},
+        {"source_time",driven==s.driving.end() ? 0.:driven->second.source_time}}));
+  }
+  const double utc=std::chrono::duration<double>(std::chrono::system_clock::now().time_since_epoch()).count();
+  const auto record=world::Json::Object({{"role",s.link.role==Role::Host ? "host":"guest"},
+      {"epoch",world::Hex(s.link.epoch)},{"level",s.identity.level},{"start",s.identity.start},{"visit",s.identity.serial},
+      {"native_time",now},{"utc",utc},{"replication",Replication()},{"rows",world::Json::Array(rows)}});
+  try {
+    std::filesystem::create_directories(dir);
+    std::ofstream out(dir/"actors-native.jsonl",std::ios::app|std::ios::binary); out<<record.text<<'\n';
+  } catch (const std::exception& ex) { REXLOG_WARN("ACTORS audit write failed {}",ex.what()); }
+#else
+  (void)b;
+#endif
+}
 void ActorLateWorld(PPCContext& ctx,uint8_t* b,uint32_t w) {
   auto& s=Get();
-  if (!Replication() || !s.prepared || !Environment(b,w)) return;
+  if (!s.prepared || !Environment(b,w)) return;
+  if (!Replication()) { ActorNativeAudit(b); return; }
   const auto now=Now();
   if (now-s.actor_log_at>=5) {
     const auto bytes=s.link.bytes>=s.actor_last_bytes ? s.link.bytes-s.actor_last_bytes:0;
@@ -4551,9 +4606,12 @@ void ActorLateWorld(PPCContext& ctx,uint8_t* b,uint32_t w) {
     if (Connected()) Replicas(ctx,b,true);
     if (s.link.session_state==SessionState::Connected || s.link.session_state==SessionState::Lost)
       HoldReplicas(ctx,b,true);
+    ActorNativeAudit(b);
     return;
   }
   if (!Connected()) return;
+  if (now<s.actor_publish_at) return;
+  s.actor_publish_at=s.actor_publish_at>0 && now-s.actor_publish_at<.25 ? s.actor_publish_at+.05:now+.05;
   Scan(b);
   Frame frame{s.identity,Now(),{}};
   const auto hero=Ptr(b,Load32(b,0x82CCBF7C),12,64);
@@ -4571,6 +4629,7 @@ void ActorLateWorld(PPCContext& ctx,uint8_t* b,uint32_t w) {
     a->Observe(sample.enemy); frame.records.push_back(sample);
   }
   PublishEnemyFrame(frame);
+  ActorNativeAudit(b);
 }
 void EnemyGameFrame() {
   if (!Connected()) {

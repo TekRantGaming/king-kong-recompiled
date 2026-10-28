@@ -68,14 +68,16 @@ inline uint32_t TerminalState(EnemyFamily f) {
 // Reserve life==0 for the observed MORT track. A +1 representation retains
 // the actual zero-health value on replicas without announcing an early death.
 inline float ReplicatedLife(EnemyFamily f, uint32_t state, float native) {
-  if (f==EnemyFamily::Human) return state==0x826B95A0 ? 0.f:native+2.f;
+  // The human bank is a condition enum: 0 normal, 1 hurt, 2 recovered,
+  // 3 dead (820B0C98), rather than a decreasing scalar health pool.
+  if (f==EnemyFamily::Human) return state==0x826B95A0 || native==3.f ? 0.f:native+2.f;
   if (StateLife(f)) return state == TerminalState(f) ? 0.f : 1.f;
   if (f == EnemyFamily::VRex)
     return !std::isfinite(native) ? native : state == TerminalState(f) ? 0.f : std::max(0.f,native)+1.f;
   return native;
 }
 inline float NativeLife(EnemyFamily f, float replicated) {
-  if (f==EnemyFamily::Human) return replicated-2.f;
+  if (f==EnemyFamily::Human) return replicated<=0 ? 3.f:replicated-2.f;
   return f == EnemyFamily::VRex ? std::max(0.f,replicated-1.f) : replicated;
 }
 inline uint32_t LifeOffset(EnemyFamily f) {
@@ -262,6 +264,7 @@ struct Record {
   EnemyState enemy;
   EnemyEventKind kind = EnemyEventKind::Spawned; // Spawned means present, possibly alive.
   EnemyState latest; // Uninterpolated host sample, diagnostics only.
+  double source_time = 0; // Host pose time selected by the render buffer, diagnostics only.
 };
 struct Frame {
   EnemyWorld world;
@@ -376,11 +379,12 @@ class Channel {
       r.seen = true; r.sequence = m.sequence;
       if (r.terminal) {
         if (replication && r.record.kind!=EnemyEventKind::Removed && e.life<=0) {
-          r.record.enemy=e; r.received=now;
+          r.record.enemy=e; r.record.source_time=time; r.received=now;
         }
         return;
       }
       r.record = {e, e.life <= 0 ? EnemyEventKind::Died : EnemyEventKind::Spawned};
+      r.record.source_time=time;
       r.received = now;
       if (e.life <= 0) { r.terminal = true; return; }
       if (!r.history.empty() && time <= r.history.back().time) return;
@@ -400,9 +404,10 @@ class Channel {
       if (!r.terminal) {
         const double target = r.history.back().time + (now-r.received) - .1;
         record.enemy = r.history.front().enemy;
+        record.source_time=r.history.front().time;
         for (size_t i = 1; i < r.history.size(); ++i) {
           const auto& a = r.history[i-1]; const auto& b = r.history[i];
-          if (target > b.time) { record.enemy = b.enemy; continue; }
+          if (target > b.time) { record.enemy = b.enemy; record.source_time=b.time; continue; }
           const float t = float(std::clamp((target-a.time)/(b.time-a.time), 0., 1.));
           if (replication) record.enemy=actors::Interpolate(a.enemy,b.enemy,t);
           else {
@@ -411,6 +416,8 @@ class Channel {
             record.enemy.z += (b.enemy.z-a.enemy.z)*t;
             record.enemy.facing = std::remainder(a.enemy.facing + std::remainder(b.enemy.facing-a.enemy.facing, 6.2831853f)*t, 6.2831853f);
           }
+          record.source_time=replication && std::hypot(b.enemy.x-a.enemy.x,b.enemy.y-a.enemy.y,b.enemy.z-a.enemy.z)>actors::kSnapDistance ?
+              b.time:a.time+(b.time-a.time)*t;
           break;
         }
         const bool same_clip=record.enemy.action==r.record.enemy.action && record.enemy.item==r.record.enemy.item;

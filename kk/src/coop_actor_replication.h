@@ -16,6 +16,20 @@ inline bool IndependentTrack(uint32_t fn) {
     default: return false;
   }
 }
+inline uint32_t TargetOffset(EnemyFamily family) {
+  switch (family) {
+    case EnemyFamily::Bat: return 848;
+    case EnemyFamily::Native: return 4088;
+    case EnemyFamily::NativeKna: return 4084;
+    case EnemyFamily::Marine: return 348;
+    case EnemyFamily::VRex: return 516;
+    case EnemyFamily::SwampCrawler: return 556;
+    case EnemyFamily::SwampCrawlerSmall: return 1912;
+    case EnemyFamily::Human: return 0xC60;
+    case EnemyFamily::Independent: return 0x290;
+    default: return 0;
+  }
+}
 inline bool Relevant(const EnemyState& e, const PlayerPose& player) {
   return std::hypot(e.x-player.x,e.y-player.y,e.z-player.z)<=kRadius;
 }

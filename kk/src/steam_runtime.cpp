@@ -687,6 +687,13 @@ struct SteamRuntime::Impl
     if (d.m_ulSteamIDLobby != validating || d.m_ulSteamIDMember != validating) return;
     const auto lobby = validating; validating = 0;
     const auto owner = api.SteamAPI_ISteamMatchmaking_GetLobbyOwner(matchmaking, lobby);
+    Compatibility advertised;
+    if (d.m_bSuccess && Friend(owner) && DecodeLobbyKeys(ReadKeys(lobby),advertised)) {
+      const auto reason=CheckCompatibility(options.compatibility,advertised);
+      if (reason!=RejectReason::None) {
+        Status(SocialStatus::Idle,"Steam connected"); Error(RejectName(reason)); return;
+      }
+    }
     if (d.m_bSuccess && Friend(owner) && CompatibleLobby(ReadKeys(lobby),options.compatibility) && Data(lobby,"kkrc_rejoin")=="1") {
       handover::File record;
       if (ReadRejoinRecord(options.input_folder,record) && !record.host && record.plan.transport==StartTransport::Steam &&

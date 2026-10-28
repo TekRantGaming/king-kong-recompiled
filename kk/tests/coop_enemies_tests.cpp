@@ -108,6 +108,12 @@ void SpiderCopyMatching() {
       "missing parent, invalid native ordinal and unbounded copy count refuse");
 }
 void ExpandedFamilies() {
+  Check(ReplicatedLife(EnemyFamily::Human,0,0)==2 && ReplicatedLife(EnemyFamily::Human,0,1)==3 &&
+      ReplicatedLife(EnemyFamily::Human,0,2)==4,"human condition bank is not scalar health");
+  Check(ReplicatedLife(EnemyFamily::Human,0,3)==0 && ReplicatedLife(EnemyFamily::Human,0x826B95A0,0)==0,
+      "human bank death stays terminal while guest scripts are held");
+  Check(NativeLife(EnemyFamily::Human,0)==3 && NativeLife(EnemyFamily::Human,2)==0 &&
+      NativeLife(EnemyFamily::Human,3)==1 && NativeLife(EnemyFamily::Human,4)==2,"human condition mapping reverses exactly");
   for (uint16_t raw=uint16_t(EnemyFamily::Bat); raw<=uint16_t(EnemyFamily::NativeKna); ++raw) {
     auto e=Enemy(); e.id.family=EnemyFamily(raw);
     Message decoded;
