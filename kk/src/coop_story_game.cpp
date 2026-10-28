@@ -41,7 +41,10 @@ REX_EXTERN(__imp__sub_82713A58);
 REX_EXTERN(__imp__sub_8250B9D8);
 REX_EXTERN(__imp__sub_8250BED8);
 #if defined(KK_DEV_TOOLS)
-namespace kk { void DevTrigPivotResult(uint8_t*,uint32_t,uint32_t,uint32_t); }
+namespace kk {
+void DevTrigPivotResult(uint8_t*,uint32_t,uint32_t,uint32_t);
+void DevTrigScreenResult(uint8_t*,uint32_t,uint32_t,uint32_t);
+}
 #endif
 
 namespace kk::coop {
@@ -1308,9 +1311,12 @@ REX_HOOK_RAW(sub_82449CD0) {
   if (!kk::coop::HostAnimationWait(ctx,base)) __imp__sub_82449CD0(ctx,base);
 }
 REX_HOOK_RAW(sub_82466878) {
-  const auto payload=ctx.r3.u32;
+  const auto payload=ctx.r3.u32,lr=uint32_t(ctx.lr);
   __imp__sub_82466878(ctx,base);
   kk::coop::HostScreenWait(ctx,base,payload);
+#if defined(KK_DEV_TOOLS)
+  kk::DevTrigScreenResult(base,payload,lr,ctx.r3.u32);
+#endif
 }
 REX_HOOK_RAW(sub_82449EB0) {
   const auto payload=ctx.r3.u32;
