@@ -157,6 +157,13 @@ try {
             $envText += '|KK_DEV_TELEPORT=19,127.9,191.8,17.2,-1,0'
             $joinText += '|KK_DEV_TELEPORT=19.5,127.9,191.8,17.2,-1,0'
         }
+        # C121 fixture: level 402 checkpoint 4 starts at a drop the native ground check kills in (void, about 3 m
+        # fall). The host wander and the guest face enemy aid walk both players off it within seconds of every
+        # load, so the C24 both dead reload loops every 3 s. Both players stand still there instead.
+        if (-not $NoStoryFixture -and $record.entry -eq 12 -and $record.start -eq 4) {
+            $envText = $envText.Replace('|KK_DEV_WANDER=1','|KK_DEV_WANDER=0')
+            $joinText = $joinText.Replace('|KK_DEV_FACE_ENEMY=16:0.001','')
+        }
         if ($ExtraEnv) { $envText += "|$ExtraEnv" }
         if ($ExtraJoinEnv) { $joinText += "|$ExtraJoinEnv" }
         if ($ObjectTrace) { $envText += '|KK_DEV_OBJECTS=1' }

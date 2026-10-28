@@ -59,6 +59,23 @@ class Contract(unittest.TestCase):
         self.g["shared"]["objects"]["bodies"][key]["pose"][0] = 1.
         self.assertEqual(self.result()["differences"][0]["key"], "shared.objects.bodies." + key + ".pose.0")
 
+    def test_out_of_world_bodies_compare_as_fallen(self):
+        # C121 1804/3: debris falls forever below the map; the guest replica stops at the protocol bound.
+        key = "0000000000001234"
+        for d, z in ((self.h, -173570.), (self.g, -97049.)):
+            d["shared"]["objects"]["bodies"][key] = dict(available=True, retired=False, topology=key, flags=0,
+                                                         pose=[267., -586., z] + [0.] * 6)
+        self.assertEqual(self.result()["status"], "PARTIAL_EQUAL")
+        # Still in the world on one peer: a real pose difference.
+        self.g["shared"]["objects"]["bodies"][key]["pose"][2] = 12.
+        result = self.result()
+        self.assertEqual(result["status"], "DIFF")
+        self.assertEqual(result["differences"][0]["key"], "shared.objects.bodies." + key + ".pose")
+        # Fallen on both, but retired on one peer only: lifecycle still compared.
+        self.g["shared"]["objects"]["bodies"][key]["pose"][2] = -97049.
+        self.g["shared"]["objects"]["bodies"][key]["retired"] = True
+        self.assertEqual(self.result()["differences"][0]["key"], "shared.objects.bodies." + key + ".retired")
+
     def test_local_object_culling_does_not_change_shared_lifecycle(self):
         body_key="0000000000001234"
         object_key=body_key+":2"
