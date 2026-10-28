@@ -45,7 +45,7 @@ def validate(d, role=None):
     errors = []
     if not isinstance(d, dict):
         return ["snapshot is not an object"]
-    if d.get("schema") != SCHEMA or d.get("protocol") != 27:
+    if d.get("schema") != SCHEMA or d.get("protocol") != 32:
         errors.append("unsupported schema/protocol")
     if role and d.get("role") != role:
         errors.append("wrong peer role")

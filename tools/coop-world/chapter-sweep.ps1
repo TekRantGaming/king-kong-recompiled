@@ -93,7 +93,7 @@ if ($ResumeManifest) {
     $resumePath=[IO.Path]::GetFullPath($ResumeManifest)
     if (-not $resumePath.StartsWith("$coopRoot\runs\",[StringComparison]::OrdinalIgnoreCase)) { throw 'Resume manifest must be a private co-op run.' }
     $prior=Get-Content -LiteralPath $resumePath -Raw | ConvertFrom-Json
-    if ($prior.source_branch -notin @('coop-c86','coop-c87','coop-c99')) { throw 'Only a C86, C87 or C99 sweep may be resumed.' }
+    if ($prior.source_branch -notin @('coop-c86','coop-c87','coop-c99','coop-c112')) { throw 'Only a C86, C87, C99 or C112 sweep may be resumed.' }
     # A service interruption can leave 'running' after the approved runner is
     # gone. Retrying still goes through that runner and its normal slot checks.
     $scenariosToRun=@($prior.runs | Where-Object { $_.status -in @('pending','running','blocked-task-stop','blocked-deadline','blocked-disk-space','waiting-runner','stopped','error') })
@@ -117,7 +117,7 @@ $manifest = [ordered]@{
     object_trace = [bool]$ObjectTrace
     vegetation_census = [bool]$VegetationCensus
     source_branch = $sourceBranch; source_dirty = $sourceDirty; exe_sha256 = $exeSha
-    protocol = 27; snapshot_schema = 1; fault_profile = 'bad_wifi'; fault_seeds = @(86,86)
+    protocol = 32; snapshot_schema = 1; fault_profile = 'bad_wifi'; fault_seeds = @(86,86)
     scenarios = $rules; resumed_from = $ResumeManifest
     harness_sha256 = $toolHashes; harness_sources = $harnessDir
 }
@@ -159,7 +159,7 @@ try {
             $scenario="entry-$($record.entry)-start-$($record.start)"
             $evidence=[ordered]@{ entry=$record.entry; start=$record.start; level=$record.level; policy=$record.policy
                 load_proof=$record.load_proof; source_commit=$sourceCommit; source_branch=$sourceBranch; source_dirty=$sourceDirty
-                exe_sha256=$exeSha; exe_path=$exePath; protocol=27; snapshot_schema=1; fault_profile='bad_wifi'; seconds=$record.seconds
+                exe_sha256=$exeSha; exe_path=$exePath; protocol=32; snapshot_schema=1; fault_profile='bad_wifi'; seconds=$record.seconds
                 fault_seeds=@(86,86); port=27080; roles=@('host','guest'); scenario=$scenario; flags=$hostArgs; runner=$runner
                 harness_sha256=$toolHashes; harness_sources=$harnessDir }
             $dirtyText=($sourceDirty -join ';')
