@@ -354,6 +354,10 @@ void ArmedCopySource() {
   const uint8_t copyable[]{1,1};
   Check(puppet::PreferArmedCopySource(sources,0,copyable)==1,"partner copy uses a body that can show the gun");
 }
+void InvisibleGun() {
+  // Twin invisible_gun lets a body without gun geometry (V-Rex slot 8) aim an unseen gun.
+  Check(puppet::BodyGun(0,2)==0 && puppet::BodyGun(1u<<2,2)==2,"gun clips only on a body that draws the gun");
+}
 void ShotValidation() {
   const EnemyWorld w{101,1,1}; InventoryState inventory{w,100,1}; inventory.ammo[0]=50;
   const PlayerPose peer{100,101,0,0,0};
@@ -730,6 +734,7 @@ int main(int argc,char** argv) {
   else if(name=="false_quiet") FalseQuiet();
   else if(name=="unarmed_gait") UnarmedGait();
   else if(name=="armed_copy_source") ArmedCopySource();
+  else if(name=="invisible_gun") InvisibleGun();
   else if(name=="shot_validator") ShotValidation();
   else if(name=="session_epoch") SessionEpoch();
   else if(name=="projectile_source") ProjectileSource();

@@ -367,18 +367,20 @@ uint8_t WeaponModels(const uint8_t* b,const Rig& r) {
 }
 // The gun this body really shows for the partner's weapon, or 0 (empty hands).
 uint8_t BodyGun(const uint8_t* b,const Rig& r,uint8_t weapon) {
-  return coop::puppet::BodyGun(BodyWeapon(b,r),WeaponModels(b,r),weapon);
+  return coop::puppet::BodyGun(WeaponModels(b,r),weapon);
 }
 uint8_t AnimationSupport(const uint8_t* b, const Rig& r, uint8_t weapon) {
   if (Load32(b,r.vars) != 0) return 0;
-  const auto held=BodyWeapon(b,r);
+  BodyWeapon(b,r);  // dev log of the H bank only; the model decides
   const auto models=WeaponModels(b,r);
-  // A body whose own model draws a gun counts as armed even while its H bank
-  // is empty, so selection prefers it before the partner picks a gun up.
-  const bool gun=(held>=1 && held<=4) || models;
-  if (held>=1 && held<=4) weapon=uint8_t(held);
-  else if (!coop::puppet::BodyGun(0,models,weapon))
+  // Armed means the body's own model draws a gun, even while its H bank is
+  // empty, so selection prefers it before the partner picks a gun up. A body
+  // that draws no gun never earns the fire bit from reused gesture IDs.
+  const bool gun=models!=0;
+  if (!coop::puppet::BodyGun(models,weapon)) {
+    weapon=0;
     for (uint8_t w=1;w<=4;++w) if ((models>>w)&1) { weapon=w; break; }
+  }
   const bool gait = LoadedItem(b,r,0).has_value() && LoadedItem(b,r,10).has_value();
   const bool fire = coop::puppet::FireAction(weapon,false,
       [&](uint16_t action) { return LoadedItem(b,r,action); }).has_value();

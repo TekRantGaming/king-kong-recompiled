@@ -634,8 +634,8 @@ void PuppetPolicies() {
       AnimationWeapon(4,2)==4 && AnimationWeapon(6,0)==6 && AnimationWeapon(0,2)==0,
       "unarmed donor never plays unrelated gun IDs; native armed and held item banks remain usable");
   // C106: a model with drawn guns counts as armed even while its H bank is empty.
-  Check(BodyGun(0,0,2)==0 && BodyGun(0,1u<<2,2)==2 && BodyGun(0,1u<<2,1)==0 &&
-      BodyGun(3,0,1)==3 && BodyGun(0,0x1E,0)==0 && BodyGun(0,0x1E,6)==0 && BodyGun(9,0,2)==0,
+  Check(BodyGun(0,2)==0 && BodyGun(1u<<2,2)==2 && BodyGun(1u<<2,1)==0 &&
+      BodyGun(0x1E,0)==0 && BodyGun(0x1E,6)==0 && BodyGun(0x1E,4)==4 && BodyGun(1u<<5,5)==0,
       "only a gun the body can really draw enables gun clips, aim and flash");
   {
     std::map<uint32_t,uint32_t> variants{{1000,0x800000},{1024,1100},{1112,1200},{1200,1300},

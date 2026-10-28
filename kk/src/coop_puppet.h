@@ -40,12 +40,14 @@ uint32_t WeaponVariantTemplate(uint32_t part,uint32_t variant,bool drawable,
   if (drawable && (!pointer(mesh,0,4) || !pointer(mesh,4,4))) return 0;
   return source;
 }
-// The gun a body can really show for the partner's weapon: the gun its H bank
-// holds (C95 armed path), else the partner's gun when the body's own model
-// draws it (bit w of models, from WeaponVariantTemplate on tag 125). Zero
-// means empty hands: no gun clips, no aim, no flash on that body.
-inline uint8_t BodyGun(uint32_t held,uint8_t models,uint8_t weapon) {
-  if (held>=1 && held<=4) return uint8_t(held);
+// The gun a body can really show for the partner's weapon: the partner's gun
+// when the body's own model draws it (bit w of models, from
+// WeaponVariantTemplate on tag 125). The H bank is no proof: V-Rex crew slot 8
+// holds a pistol in its bank but its tag 125 part has no template list, so the
+// C95 bank test gave it an aiming grip around an invisible gun (C106 run
+// c106-vrex1-a). Zero means empty hands: no gun clips, no aim, no flash.
+inline uint8_t BodyGun(uint8_t models,uint8_t weapon) {
+  if (COOP_MUT_IF("invisible_gun")) return weapon>=1 && weapon<=4 ? weapon : 0;
   return weapon>=1 && weapon<=4 && ((models>>weapon)&1) ? weapon : 0;
 }
 // Native animation-event lookup (823F8FB0) reads layer+4 -> descriptor+0
