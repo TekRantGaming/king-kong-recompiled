@@ -2451,6 +2451,26 @@ REX_HOOK_RAW(sub_826D3568) { kk::coop::SupportTrigger(ctx,base,true); }
 REX_HOOK_RAW(sub_82860678) { kk::coop::SupportPhysics(ctx,base); }
 #if defined(KK_DEV_TOOLS)
 REX_HOOK_RAW(sub_825E7348) { kk::coop::RaftWait(ctx,base); }
+// C125: observe the native impulse without changing it, including NaNs made
+// by the old relay's zero planar direction. Only explicit object traces log.
+REX_EXTERN(__imp__sub_824AA588);
+REX_HOOK_RAW(sub_824AA588) {
+  using namespace kk::hfr;
+  const auto actor=ctx.r3.u32,sp=ctx.r1.u32;
+  const bool trace=std::getenv("KK_DEV_OBJECTS")!=nullptr;
+  const float dx=trace ? LoadF(base,sp+80):0,dy=trace ? LoadF(base,sp+84):0;
+  __imp__sub_824AA588(ctx,base);
+  if (trace && kk::coop::PoseAddress(actor,32) && (Load32(base,actor)&0x10000000)) {
+    const auto link=Load32(base,actor+20);
+    const auto motion=kk::coop::PoseAddress(link,12) ? Load32(base,link+8):0;
+    const auto body=kk::coop::PoseAddress(motion,120) ? Load32(base,motion+116):0;
+    if (kk::coop::PoseAddress(body,244)) {
+      const float x=LoadF(base,body+232),y=LoadF(base,body+236),z=LoadF(base,body+240);
+      REXLOG_INFO("KK dev barrier impulse: actor={:08X} direction=({},{}) velocity=({},{},{}) finite={}",
+          actor,dx,dy,x,y,z,std::isfinite(x)&&std::isfinite(y)&&std::isfinite(z));
+    }
+  }
+}
 // Diagnostics only: snapshot -> universe restores (death retry, menu restore).
 REX_EXTERN(__imp__sub_82413080);
 REX_HOOK_RAW(sub_82413080) {
