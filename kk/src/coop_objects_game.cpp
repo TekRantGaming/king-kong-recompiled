@@ -85,6 +85,7 @@ constexpr uint32_t kDoorGamePtr=0x82CC8F40;
 struct Binding : objects::Binding {
   struct Support {
     std::vector<uint32_t> parts,all;
+    std::set<uint32_t> local; // C105: members left to their own native motion.
     uint64_t topology=0,tick=0;
     uint32_t definition=0;
     uint32_t phase=0;

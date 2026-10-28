@@ -80,7 +80,16 @@ void PrepareSupport(const uint8_t* b,Binding& o) {
   s.eligible=terminated && !s.parts.empty() && mode>=1 && mode<=3 &&
       !(Load32(b,o.actor)&0x400001) &&
       (tree || (!Load32(b,o.vars+2496) && !Load32(b,o.vars+2256) && !Load32(b,o.vars+3368)));
-  for (const auto actor:s.all) s.eligible&=UnitBody(b,actor);
+  // C105: a member without a rigid unit ODE body (no physics record, a scaled
+  // mesh, a disabled or attached piece) no longer withdraws its whole root. The
+  // host still owns the root's trigger and End, the guest replays them through
+  // its own native Wait and End, and only that member keeps its own native
+  // motion instead of host poses. Personal pickups and humans still refuse.
+  for (const auto actor:s.all) {
+    const auto member=objects::ClassifySupportMember(PersonalOrHuman(b,actor),Physics(b,actor)!=0,UnitBody(b,actor));
+    if (member==objects::SupportMember::Refuse) s.eligible=false;
+    else if (member==objects::SupportMember::Local) s.local.insert(actor);
+  }
   // A host can first bind after a native loader has already advanced the root.
   // Retain a generic collapse plus the final physical outcome in that case.
   if (Track(b,o.ai,tree ? 0x826E7BF0 : 0x826F1E08)) s.phase=1;
@@ -88,8 +97,14 @@ void PrepareSupport(const uint8_t* b,Binding& o) {
   if (tree && Load32(b,o.vars+0x930) && !Track(b,o.ai,0x826E6390) &&
       !Track(b,o.ai,0x826E78F0) && !Track(b,o.ai,0x826E7BF0)) s.phase=2;
   if (s.phase) s.event.trigger=1;
-  if (Trace()) REXLOG_INFO("KK dev object support profile: role={} id={:016X} family={} mode={} parts={} members={} eligible={}",
-      state.host ? "host" : "guest",o.source,tree ? "tree" : "ode",mode,s.parts.size(),s.all.size(),s.eligible);
+  if (Trace()) REXLOG_INFO("KK dev object support profile: role={} id={:016X} family={} mode={} parts={} members={} eligible={} local={}",
+      state.host ? "host" : "guest",o.source,tree ? "tree" : "ode",mode,s.parts.size(),s.all.size(),s.eligible,s.local.size());
+  // The contract fields that decide eligibility, so that an excluded root
+  // names its exact condition (C99 could not capture this for level 101).
+  if (Trace()) REXLOG_INFO("KK dev object support contract: role={} id={:016X} terminated={} type={:08X} remove-all={:08X} watch={:08X} partner={:08X} refs={:08X}/{:08X}/{:08X}",
+      state.host ? "host" : "guest",o.source,terminated,Load32(b,o.actor),
+      tree ? 0u : Load32(b,o.vars+2496),tree ? 0u : Load32(b,o.vars+2256),tree ? 0u : Load32(b,o.vars+3368),
+      Load32(b,o.vars+(tree ? 0x7C4 : 2500)),Load32(b,o.vars+(tree ? 0x7F0 : 2504)),tree ? 0u : Load32(b,o.vars+2548));
 #if defined(KK_DEV_TOOLS)
   if (Trace()) REXLOG_INFO("KK dev object support activation contract: role={} id={:016X} push={} strength={} throw={:08X} speed={} end-delay={}",
       state.host ? "host" : "guest",o.source,Load32(b,o.vars+(tree ? 0x794 : 2436)),LoadF(b,o.vars+(tree ? 0x798 : 2440)),
@@ -159,7 +174,13 @@ void FreezeSupport(const uint8_t* b) {
     auto* o=Match(root.source,ObjectKind::Ode); if (!o) o=Match(root.source,ObjectKind::Tree);
     if (!o || !o->support.eligible) continue;
     o->support.topology=objects::RootTopology(root,ids);
+    unsigned driven=0;
     for (const auto actor:root.parts) {
+      // A local member keeps its own native motion; it never becomes a body
+      // that receives or publishes host poses (UnitBody is per actor, so every
+      // root that aliases it agrees).
+      if (o->support.local.contains(actor)) continue;
+      ++driven;
       auto [it,added]=state.bodies.try_emplace(actor);
       auto& p=it->second;
       if (added) {
@@ -169,8 +190,9 @@ void FreezeSupport(const uint8_t* b) {
       }
       if (std::find(p.roots.begin(),p.roots.end(),o->actor)==p.roots.end()) p.roots.push_back(o->actor);
     }
-    if (Trace()) REXLOG_INFO("KK dev object support bound: role={} id={:016X} topology={:016X} family={} members={} phase={}",
-        state.host ? "host" : "guest",o->source,o->support.topology,uint8_t(o->kind),root.parts.size(),o->support.phase);
+    if (Trace()) REXLOG_INFO("KK dev object support bound: role={} id={:016X} topology={:016X} family={} members={} driven={} local={} phase={}",
+        state.host ? "host" : "guest",o->source,o->support.topology,uint8_t(o->kind),root.parts.size(),driven,
+        root.parts.size()-driven,o->support.phase);
   }
   if (Trace()) REXLOG_INFO("KK dev object support bodies: role={} canonical={} roots={}",state.host ? "host" : "guest",state.bodies.size(),roots.size());
 }

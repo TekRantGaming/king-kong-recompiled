@@ -35,6 +35,7 @@
     "event_owner_cap": "event_owner_cap",
     "event_vision_guard": "event_vision_guard",
     "event_network_defer": "event_network_defer",
-    "unarmed_gait": "unarmed_gait"
+    "unarmed_gait": "unarmed_gait",
+    "support_member_personal": "support_member"
   }
 }
