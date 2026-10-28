@@ -5,6 +5,7 @@
 #include <cstdint>
 #include <optional>
 #include <span>
+#include "coop_mut.h"
 
 namespace kk::coop::puppet {
 enum class HumanKind { Unknown, Ally, Background };
@@ -122,5 +123,28 @@ inline std::optional<std::size_t> SelectBody(std::span<const AutoCandidate> cand
     if (better) best = i;
   }
   return best;
+}
+// C106: a story copy leaves its source in place, so the source's mission,
+// script and cinematic state carry no story risk (the same rule as the tier C
+// copy). Among the intact humans the caller marks copyable, prefer a body
+// whose own model can show a gun (support bit 1): a partner who picks up a
+// gun later then shows it on both screens. Ann, the dead and the grabbed are
+// never sources. Never trades away gait support; returns pick otherwise.
+inline std::size_t PreferArmedCopySource(std::span<const AutoCandidate> candidates, std::size_t pick,
+                                         std::span<const uint8_t> copyable) {
+  if (pick >= candidates.size() || candidates.size() != copyable.size()) return pick;
+  if ((candidates[pick].animation_support & 1) || COOP_MUT_IF("armed_copy_source")) return pick;
+  std::optional<std::size_t> best;
+  for (std::size_t i = 0; i < candidates.size(); ++i) {
+    const auto& c = candidates[i];
+    if (i == pick || !copyable[i] || !c.natural_h || c.hero || c.ann || c.dead || c.grabbed ||
+        !c.rig_valid || !c.stable || !(c.animation_support & 1) ||
+        (c.animation_support & 4) < (candidates[pick].animation_support & 4)) continue;
+    if (!best) { best = i; continue; }
+    const auto& b = candidates[*best];
+    if (c.animation_support != b.animation_support ? c.animation_support > b.animation_support :
+        BodyScore(c) > BodyScore(b) || (BodyScore(c) == BodyScore(b) && c.actor < b.actor)) best = i;
+  }
+  return best ? *best : pick;
 }
 }  // namespace kk::coop::puppet

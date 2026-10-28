@@ -43,6 +43,8 @@
     "rebirth_any_source": "rebirth_adoption",
     "rebirth_reuse": "rebirth_adoption",
     "support_member_personal": "support_member",
-    "support_delayed_watch": "support_delayed_watch"
+    "support_delayed_watch": "support_delayed_watch",
+    "armed_copy_source": "armed_copy_source",
+    "invisible_gun": "invisible_gun"
   }
 }

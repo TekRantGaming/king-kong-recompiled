@@ -13,6 +13,7 @@
 #include "coop_rebirth.h"
 #include "coop_revive.h"
 #include "coop_support.h"
+#include "coop_partner_selection.h"
 #include <algorithm>
 #include <map>
 #include <vector>
@@ -396,6 +397,19 @@ void RebirthAdoption() {
   Check(o && o->id==other.id && !adoption.Pending(),"the other template adopts its own identity");
   adoption.Remember(other); adoption.Clear();
   Check(!adoption.Pending(),"a new world forgets every identity");
+}
+void ArmedCopySource() {
+  // Twin armed_copy_source keeps unarmed Carl as the copy source.
+  puppet::AutoCandidate carl; carl.actor=110; carl.natural_h=true; carl.rig_valid=true; carl.stable=true;
+  carl.script_evidence_complete=true; carl.script_reference=true; carl.animation_support=4;
+  auto crew=carl; crew.actor=111; crew.animation_support=5;
+  const puppet::AutoCandidate sources[]{carl,crew};
+  const uint8_t copyable[]{1,1};
+  Check(puppet::PreferArmedCopySource(sources,0,copyable)==1,"partner copy uses a body that can show the gun");
+}
+void InvisibleGun() {
+  // Twin invisible_gun lets a body without gun geometry (V-Rex slot 8) aim an unseen gun.
+  Check(puppet::BodyGun(0,2)==0 && puppet::BodyGun(1u<<2,2)==2,"gun clips only on a body that draws the gun");
 }
 void ShotValidation() {
   const EnemyWorld w{101,1,1}; InventoryState inventory{w,100,1}; inventory.ammo[0]=50;
@@ -818,6 +832,8 @@ int main(int argc,char** argv) {
   else if(name=="false_quiet") FalseQuiet();
   else if(name=="unarmed_gait") UnarmedGait();
   else if(name=="rebirth_adoption") RebirthAdoption();
+  else if(name=="armed_copy_source") ArmedCopySource();
+  else if(name=="invisible_gun") InvisibleGun();
   else if(name=="shot_validator") ShotValidation();
   else if(name=="session_epoch") SessionEpoch();
   else if(name=="projectile_source") ProjectileSource();

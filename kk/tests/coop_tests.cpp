@@ -633,6 +633,31 @@ void PuppetPolicies() {
   Check(AnimationWeapon(2,0)==0 && AnimationWeapon(4,0)==0 &&
       AnimationWeapon(4,2)==4 && AnimationWeapon(6,0)==6 && AnimationWeapon(0,2)==0,
       "unarmed donor never plays unrelated gun IDs; native armed and held item banks remain usable");
+  // C106: a model with drawn guns counts as armed even while its H bank is empty.
+  Check(BodyGun(0,2)==0 && BodyGun(1u<<2,2)==2 && BodyGun(1u<<2,1)==0 &&
+      BodyGun(0x1E,0)==0 && BodyGun(0x1E,6)==0 && BodyGun(0x1E,4)==4 && BodyGun(1u<<5,5)==0,
+      "only a gun the body can really draw enables gun clips, aim and flash");
+  {
+    std::map<uint32_t,uint32_t> variants{{1000,0x800000},{1024,1100},{1112,1200},{1200,1300},
+        {1316,1400},{1304,1416},{1312,2},{1400,1500},{1408,2000},
+        {2020,2100},{2100,2200},{2200,2300},{2204,2400}};
+    const auto range=[](uint32_t p,uint32_t bytes) { return p>=1000 && p<=2500 && bytes<=2500-p; };
+    const auto word=[&](uint32_t p) { return variants.count(p) ? variants.at(p) : 0u; };
+    const auto pointer=[&](uint32_t p,uint32_t offset,uint32_t bytes) {
+      const auto it=variants.find(p+offset);
+      return p && it!=variants.end() && range(it->second,bytes) ? it->second : 0u;
+    };
+    Check(WeaponVariantTemplate(1000,1,true,word,pointer,range)==2000 &&
+        WeaponVariantTemplate(1000,0,false,word,pointer,range)==1500 &&
+        !WeaponVariantTemplate(1000,0,true,word,pointer,range) &&
+        !WeaponVariantTemplate(1000,2,true,word,pointer,range),
+        "template lookup separates drawn guns, empty entries and out of range variants");
+    variants[1312]=33;
+    Check(!WeaponVariantTemplate(1000,1,true,word,pointer,range),
+        "malformed template count never reaches its entries");
+    variants[1312]=2; variants[1000]=0;
+    Check(!WeaponVariantTemplate(1000,1,true,word,pointer,range),"a part without a template list draws no gun");
+  }
   Check(HumanAction(6,false,false,false)==96 && HumanAction(6,false,false,false,true)==75 &&
       HumanAction(7,true,false,false,true)==11,"native spear and bone aim preserves the moving gait");
   AnimationDrive aimed; PlayerPose aim_pose; aim_pose.time=1; aim_pose.weapon=2; aim_pose.aiming=1;
@@ -832,6 +857,28 @@ void PartnerSelection() {
   distant_record.cinematic = true;
   const AutoCandidate state_rank[]{story, distant_record};
   Check(SelectBody(state_rank) == 0, "avoid a cinematic even if its mission reference is farther away");
+  {
+    // C106: story copies prefer a source whose model draws guns (Carl has none).
+    auto carl=story; carl.actor=110; carl.animation_support=4; carl.mission_distance=30;
+    auto crew=story; crew.actor=111; crew.animation_support=5; crew.mission_distance=2; crew.cinematic=true;
+    const AutoCandidate sources[]{carl,crew,spare};
+    const uint8_t all[]{1,1,1}, failed[]{1,0,1}, two[]{1,1};
+    Check(SelectBody(sources)==2,"safe spare still wins the normal selection");
+    Check(PreferArmedCopySource(sources,0,all)==1,"a story copy takes the armed source over unarmed Carl");
+    Check(PreferArmedCopySource(sources,0,failed)==0,"a failed armed copy falls back to the chosen source");
+    Check(PreferArmedCopySource(sources,1,all)==1,"an armed choice is kept");
+    auto still=crew; still.animation_support=1;
+    const AutoCandidate no_gait[]{carl,still};
+    Check(PreferArmedCopySource(no_gait,0,two)==0,"never trade loaded walking clips for a gun");
+    auto busy=crew; busy.current_script_use=true;
+    const AutoCandidate scripted[]{carl,busy};
+    Check(PreferArmedCopySource(scripted,0,two)==1,"a copy may come from a human the story is using");
+    auto ann=crew; ann.ann=true;
+    const AutoCandidate protected_sources[]{carl,ann};
+    Check(PreferArmedCopySource(protected_sources,0,two)==0,"Ann and other rejected humans are never copy sources");
+    const uint8_t short_flags[]{1};
+    Check(PreferArmedCopySource(sources,0,short_flags)==0,"mismatched flags keep the original pick");
+  }
   auto native = spare; native.natural_h = false; native.other_human = true;
   Check(!PreferStoryCopy(native, false), "PNJInd fallback is not sent through the H-only copy path");
   const AutoCandidate human_fallback[]{native, story};
