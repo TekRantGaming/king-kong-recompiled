@@ -33,14 +33,53 @@ inline bool DetectStarted(uint32_t before,uint32_t result,bool loop_program) {
 }
 // Only reliable host activation evidence can arm a shared Jack-volume detector.
 // Never skip a missing activation or infer one from an idle checksum baseline.
+// SSDetect counts a run when it arms (state word 1); the start follows about
+// 0.1 s later on its next pass. 303 checkpoint 5 (C114): the host arms an NPC
+// order detector and the native program is cancelled before that start, so
+// the run executed no callback. The ordered host stream proves it: Armed with
+// no start evidence before a checksum or before the next contiguous Armed.
+// Such runs are not progress the guest lacks, and they never block following
+// a later host arm. A stalled host arm (no start within kStoryArmFollow
+// seconds of its hint) is not followed: the guest waits for that run's start
+// or for the next host arm.
+constexpr double kStoryArmFollow=1.5;
+inline bool StoryStartEvidence(StoryPhase phase) {
+  return phase==StoryPhase::Started || phase==StoryPhase::Advance || phase==StoryPhase::Finished ||
+      phase==StoryPhase::SnapshotLoop || phase==StoryPhase::SnapshotFinished || phase==StoryPhase::Stopped;
+}
 struct ActivationGate {
   uint32_t armed=0;
-  void Observe(const StoryEvent& e) {
-    if (e.phase==StoryPhase::Armed || e.phase==StoryPhase::Started || e.phase==StoryPhase::Advance ||
-        e.phase==StoryPhase::Finished || e.phase==StoryPhase::SnapshotLoop || e.phase==StoryPhase::SnapshotFinished)
-      armed=std::max(armed,e.run);
+  uint32_t unstarted_from=0; // first run of a chain of armed runs; 0 when armed itself started
+  uint32_t skip_from=0;      // runs skip_from .. armed-1 are proven armed and never started
+  double armed_at=0;         // local receive time of the latest Armed
+  void Observe(const StoryEvent& e,double now=0) {
+    if (e.phase==StoryPhase::Armed) {
+      if (e.run<=armed) return; // duplicate or stale evidence never rewinds
+      // Only a contiguous arm over an unstarted run extends the proof;
+      // unseen runs, or a run that started, may have executed callbacks.
+      const bool chain=unstarted_from && armed && e.run==armed+1;
+      skip_from=chain ? unstarted_from : 0;
+      unstarted_from=chain ? unstarted_from : e.run;
+      armed=e.run; armed_at=now;
+    } else if (StoryStartEvidence(e.phase)) {
+      if (e.run>armed) { armed=e.run; skip_from=0; }
+      if (e.run==armed) unstarted_from=0;
+    }
   }
-  bool CanArm(uint32_t local) const { return local!=UINT32_MAX && armed==local+1; }
+  bool Started() const { return armed && !unstarted_from; }
+  // The guest at local may arm, taking run armed: runs local+1 .. armed-1
+  // are proven never started, and the armed run is fresh or has started.
+  bool CanArm(uint32_t local,double now=0) const {
+    if (local==UINT32_MAX || local>=armed) return false;
+    if (armed!=local+1 && (COOP_MUT_IF("cancelled_rearm") || !skip_from || skip_from>local+1)) return false;
+    return Started() || COOP_MUT_IF("cancelled_stale_follow") || (now>=armed_at && now-armed_at<=kStoryArmFollow);
+  }
+  // The host run that actually started (or loaded), for comparing a checksum
+  // captured at host_run. Never lowers a run with any start evidence.
+  uint32_t HostActive(uint32_t host_run) const {
+    if (COOP_MUT_IF("cancelled_activation")) return host_run;
+    return host_run && host_run==armed && unstarted_from ? unstarted_from-1 : host_run;
+  }
 };
 // A loaded record is already shared, including scripts armed or looping before
 // our hooks saw them. Baseline never emits a story transition.
@@ -58,6 +97,22 @@ struct Cursor {
 // Runs order activations; record numbers only order work within the same run.
 struct Progress : Cursor {
   uint32_t started=0, finished=0;
+  uint32_t armed_from=0; // first locally armed run not yet started
+  bool Pending() const { return armed_from && started<armed_from && armed_from<=run; }
+  // A local SSDetect arm. next is normally run+1; a proven cancelled host
+  // chain may make it the host's armed run.
+  void Arm(uint32_t next) { if (!Pending()) armed_from=run+1; run=next; }
+  // Activation bookkeeping aligned from host evidence, not a local arm.
+  void Align(uint32_t r) { run=r; armed_from=0; }
+  // Executed or executing activation, for world comparisons.
+  uint32_t Active() const { return Pending() ? armed_from-1 : run; }
+  // Authority side: a guest request for run requested. Host runs from
+  // requested on that armed and never started executed no callback, so the
+  // request is for the next activation that can really start (run+1).
+  bool Requestable(uint32_t requested) const {
+    if (run==UINT32_MAX || !requested) return false;
+    return requested==run+1 || (!COOP_MUT_IF("cancelled_request") && Pending() && requested>=armed_from && requested<=run);
+  }
   bool Reached(const StoryEvent& e) const {
     if (run!=e.run) return run>e.run;
     switch (e.phase) {

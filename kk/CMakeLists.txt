@@ -397,7 +397,7 @@ if(KK_DEV_TOOLS)
             digest_compare false_quiet shot_validator session_epoch udp_duplicate udp_order
             projectile_source impact_selector grab_feedback attack_sound grab_start native_script_target
             bat_contact_sound raptor_camera raptor_bite_sound centipede_contact_sound body_hit_class after_contact_sound
-            story_native_stop
+            story_native_stop cancelled_activation
             event_pause event_dispatch event_owner_cap event_vision_guard event_network_defer
             unarmed_gait rebirth_adoption placement_floor placement_sight placement_side placement_wait void_guard
             support_member support_delayed_watch armed_copy_source invisible_gun)
