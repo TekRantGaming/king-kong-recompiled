@@ -12,7 +12,7 @@ inline bool LoopEvent(const StoryEvent& e) {
   return e.phase==StoryPhase::Advance || e.phase==StoryPhase::Finished;
 }
 inline bool RetirableWait(uint32_t callback,bool started=false) {
-  return callback==0x82501D50 || callback==0x82501A30 || callback==0x8250B9D8 || callback==0x82449CD0 ||
+  return callback==0x82501D50 || callback==0x82501A30 || callback==0x8250B9D8 || callback==0x82449CD0 || callback==0x82466878 ||
       (callback==0x8250BED8 && started);
 }
 inline bool NativeStopMatches(const StoryEvent& event,uint32_t generation,uint32_t level,

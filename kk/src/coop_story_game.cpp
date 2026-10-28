@@ -35,6 +35,7 @@ REX_EXTERN(__imp__sub_82501A30);
 REX_EXTERN(__imp__sub_82501D50);
 REX_EXTERN(__imp__sub_82449EB0);
 REX_EXTERN(__imp__sub_82449CD0);
+REX_EXTERN(__imp__sub_82466878);
 REX_EXTERN(__imp__sub_826F9DC0);
 REX_EXTERN(__imp__sub_82713A58);
 REX_EXTERN(__imp__sub_8250B9D8);
@@ -1239,6 +1240,17 @@ void HostPivotWait(PPCContext& ctx,uint8_t* b,uint32_t payload) {
   ctx.r3.u32=passed ? 1:0;
   if (passed) Note("host volume wait",Event(*s,StoryPhase::Advance,index),"same host activation completed; native result target retained");
 }
+void HostScreenWait(PPCContext& ctx,uint8_t* b,uint32_t payload) {
+  auto* s=CinematicRecord(ctx,b,payload,0x82466878,true);
+  if (!s) return;
+  // Keep the native projection, occlusion, timer and temporary context writes.
+  // A guest camera must not issue the following NPC order before this same
+  // authored host record completed. No timer, camera or NPC state is copied.
+  const auto index=Load32(b,s->binding.vars+19812);
+  const bool passed=s->hints.Passed(s->run,index);
+  ctx.r3.u32=passed ? 1:0;
+  if (passed) Note("host screen wait",Event(*s,StoryPhase::Advance,index),"native visibility poll retained; same host activation completed");
+}
 bool HostCinematicSpeech(PPCContext& ctx,uint8_t* b) {
   const auto payload=ctx.r3.u32;
   auto* s=CinematicRecord(ctx,b,payload,0x8250BED8);
@@ -1294,6 +1306,11 @@ REX_HOOK_RAW(sub_82501D50) {
 }
 REX_HOOK_RAW(sub_82449CD0) {
   if (!kk::coop::HostAnimationWait(ctx,base)) __imp__sub_82449CD0(ctx,base);
+}
+REX_HOOK_RAW(sub_82466878) {
+  const auto payload=ctx.r3.u32;
+  __imp__sub_82466878(ctx,base);
+  kk::coop::HostScreenWait(ctx,base,payload);
 }
 REX_HOOK_RAW(sub_82449EB0) {
   const auto payload=ctx.r3.u32;

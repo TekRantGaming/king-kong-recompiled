@@ -74,6 +74,7 @@ void NativeRetirement() {
   Check(allowed(event),"actual native retirement can stop the same local cinematic wait");
   Check(!allowed(event,4) && !allowed(event,3,8),"retirement cannot cross an activation or skip a local callback");
   Check(!allowed(event,3,7,0x8250C2C8),"retirement cannot discard an NPC order with side effects");
+  Check(allowed(event,3,7,0x82466878),"an observed host retirement may release the same local visibility wait");
   Check(!story::NativeStopMatches(event,2,203,event.source,event.script,3,7,0x8250BED8),
       "retirement cannot discard unissued native speech");
   Check(story::NativeStopMatches(event,2,203,event.source,event.script,3,7,0x8250BED8,true),
