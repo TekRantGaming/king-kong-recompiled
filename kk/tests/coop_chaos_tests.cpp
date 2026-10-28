@@ -904,6 +904,10 @@ void RejoinLoad() {
       ++words[bank+13504];
       Check(!RejoinEquipmentMatches(equipment,bank,[&](uint32_t a){return words.at(a);}),
           "native equipment drift is detected before Loaded");
+      auto retry=words;
+      RestoreRejoinAfterLoad(equipment,bank,[&](uint32_t a,uint32_t x){words[a]=x;},[&]{retry=words;});
+      Check(words[bank+13504]==38 && retry[bank+13504]==38 && retry[bank+13432]==0,
+          "after the native loader both live equipment and the retry snapshot contain host stock");
     }
     Message loaded; loaded.type=MessageType::Loaded; loaded.flow=guest.View().world;
     Check(loaded.flow.start==1,"Loaded acknowledges identity, not the native checkpoint");

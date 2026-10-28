@@ -627,7 +627,7 @@ bool SessionBeforeGo(PPCContext& ctx,uint8_t* base,uint32_t g) {
   }
   return false;
 }
-void SessionAfterGo(uint8_t* base,uint32_t g,bool loaded) {
+void SessionAfterGo(PPCContext& ctx,uint8_t* base,uint32_t g,bool loaded) {
   if (launched && loaded) { mirror_gate.Loaded(); mirror_deferred_logged=false; }
   if (launched && loaded && private_load) StoryLoaded(base);
   if (independent_load && loaded) {
@@ -668,6 +668,19 @@ void SessionAfterGo(uint8_t* base,uint32_t g,bool loaded) {
   // uni_go has returned, but ES_EnterMap has not run yet. Check the point it
   // will read before acknowledging the shared world identity to the partner.
   const bool rejoin=v.start.rejoin && v.start.generation==v.world.generation;
+  if (rejoin && native_level==v.world.level && native_point==point) {
+    // uni_go restores and reinitializes the universe. In a surviving guest
+    // process it can replace the inventory written by AskLoad with the old
+    // native checkpoint stock. Install the host stock after that boundary,
+    // then take the retry snapshot before any ES_EnterMap or player AI runs.
+    if (!RejoinEquipmentMatches(v.start,g,[base](uint32_t a){return hfr::Load32(base,a);}))
+      REXLOG_INFO("KK co-op rejoin: native loader replaced equipment role={} weapon={} magazines={}/{}/{}/{}; restoring host stock",
+          v.host ? "host":"guest",hfr::Load32(base,g+13128),hfr::Load32(base,g+13432),
+          hfr::Load32(base,g+13504),hfr::Load32(base,g+13576),hfr::Load32(base,g+13648));
+    RestoreRejoinAfterLoad(v.start,g,[base](uint32_t a,uint32_t value){hfr::Store32(base,a,value);},[&]{
+      const auto saved=ctx; __imp__sub_82413190(ctx,base); ctx=saved;
+    });
+  }
   const bool equipment_ok=!rejoin || RejoinEquipmentMatches(v.start,g,
       [base](uint32_t a){return hfr::Load32(base,a);});
   if (native_level!=v.world.level || native_point!=point || !equipment_ok) {

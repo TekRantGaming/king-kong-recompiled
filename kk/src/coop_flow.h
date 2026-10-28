@@ -145,6 +145,12 @@ bool RejoinEquipmentMatches(const SessionStart& start,uint32_t g,Load load) {
     if (load(g+13432+i*72)!=start.stock[i] || load(g+14880+i*72)!=start.stock[i+4]) return false;
   return true;
 }
+template<class Store,class Snapshot>
+void RestoreRejoinAfterLoad(const SessionStart& start,uint32_t g,Store store,Snapshot snapshot) {
+  if (COOP_MUT_IF("rejoin_after_load")) return;
+  RestoreRejoinEquipment(start,g,store);
+  snapshot();
+}
 // Continuous evidence only; loading, stale poses or solo policy reset the timer.
 class BehindRule {
  public:

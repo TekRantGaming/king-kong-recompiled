@@ -34,7 +34,7 @@ bool CameraConnectionReady();
 void ApplySessionSettings();  // transient host settings after mods, never persisted
 // Game-thread control at the synchronous uni_go load boundary.
 bool SessionBeforeGo(PPCContext& ctx, uint8_t* base, uint32_t g);
-void SessionAfterGo(uint8_t* base, uint32_t g, bool loaded);
+void SessionAfterGo(PPCContext& ctx, uint8_t* base, uint32_t g, bool loaded);
 void SessionCheckpoint(uint32_t level, uint32_t checkpoint);
 void SessionNativeCheckpointPass();  // game thread: native ES_CheckPoint ran (C123 mirror gate)
 void SessionAiPass();                // game thread: one main world AI pass
