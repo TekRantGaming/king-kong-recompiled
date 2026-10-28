@@ -18,5 +18,7 @@ void ObjectsEnqueued(const ObjectEnqueue& input,const uint8_t* base);
 void ObjectsFirearm(const PPCContext& input,const uint8_t* base);
 #if defined(KK_DEV_TOOLS)
 void ObjectsDevCamera(PPCContext& ctx,uint8_t* base,uint32_t actor,uint32_t caller);
+// Persistent progress bits (door endpoints, leaves): hash and set list for diagnostics.
+void ObjectsDevProgressBits(const uint8_t* base,const char* where);
 #endif
 }

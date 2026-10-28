@@ -20,6 +20,7 @@
 #include <set>
 #include <atomic>
 #include <cstdio>
+#include <string>
 
 REX_EXTERN(__imp__sub_824ADD48);
 REX_EXTERN(__imp__sub_82448E08);
@@ -1326,11 +1327,29 @@ void DoorInit(PPCContext& ctx,uint8_t* b) {
   __imp__sub_82574D80(ctx,b);
 #if defined(KK_DEV_TOOLS)
   if (trace_init && Ptr(b,Ptr(b,actor,24,8),4,88)==ai && Vars(b,ai,ObjectKind::Door)==vars && Ptr(b,actor,12,64)==matrix)
-    REXLOG_INFO("KK dev door init outcome: role={} level={} id={:016X} flags={:08X} capability={} progress={} loop={} scheduled={} native-result={}",
-        state.host ? "host":"guest",state.level,trace_source,Load32(b,actor+4),Load32(b,vars+588),LoadF(b,vars+1084),
-        Track(b,ai,0x8256C3F8),DoorScheduled(b,ai),ctx.r3.u32);
+  {
+    const auto cap=Load32(b,vars+588),bank=Load32(b,kDoorGamePtr);
+    const int bit=cap>=201 && cap<1500 && PoseAddress(bank,(771+(cap>>5))*4) ? int((Load32(b,bank+(770+(cap>>5))*4)>>(cap&31))&1) : -1;
+    REXLOG_INFO("KK dev door init outcome: role={} level={} id={:016X} flags={:08X} capability={} progress={} loop={} scheduled={} native-result={} progress-bit={}",
+        state.host ? "host":"guest",state.level,trace_source,Load32(b,actor+4),cap,LoadF(b,vars+1084),
+        Track(b,ai,0x8256C3F8),DoorScheduled(b,ai),ctx.r3.u32,bit);
+  }
 #endif
 }
+#if defined(KK_DEV_TOOLS)
+void DevProgressBits(const uint8_t* b,const char* where) {
+  const auto bank=Load32(b,kDoorGamePtr);
+  if (!PoseAddress(bank,(770+48)*4)) { REXLOG_INFO("KK dev progress bits: where={} bank={:08X} unreadable",where,bank); return; }
+  uint64_t hash=1469598103934665603ull; unsigned count=0; std::string set;
+  for (unsigned w=0;w<48;++w) {
+    const auto word=Load32(b,bank+(770+w)*4);
+    hash=(hash^word)*1099511628211ull;
+    for (unsigned i=0;i<32;++i) if (word&(1u<<i)) { ++count; if (set.size()<400) set+=std::to_string(w*32+i)+","; }
+  }
+  REXLOG_INFO("KK dev progress bits: where={} role={} generation={} bank={:08X} hash={:016X} count={} set={}",
+      where,state.host ? "host":"guest",state.generation,bank,hash,count,set);
+}
+#endif
 #if defined(KK_DEV_TOOLS)
 void ScanInventory(PPCContext& ctx,uint8_t* b,uint32_t w) {
   static const bool enabled=std::getenv("KK_DEV_OBJECTS_SCAN")!=nullptr;
@@ -2176,6 +2195,9 @@ void ObjectsDestroy(PPCContext& ctx,uint8_t* b) {
   __imp__sub_82714E40(ctx,b);
 }
 
+#if defined(KK_DEV_TOOLS)
+void ObjectsDevProgressBits(const uint8_t* b,const char* where) { DevProgressBits(b,where); }
+#endif
 void ObjectsLoaded(uint8_t* b) {
   if (!REXCVAR_GET(kk_coop_enabled) || !SessionInProcess()) { state={}; return; }
   const auto v=SessionFlowSnapshot(); const auto epoch=StorySessionEpoch();
@@ -2199,6 +2221,9 @@ void ObjectsLoaded(uint8_t* b) {
   state.census_until=Now()+10; state.next_census=state.next_full=state.next_sample=0;
   Census(b);
   REXLOG_INFO("KK co-op objects: baseline role={} generation={} level={} objects={} private={}",state.host ? "host" : "guest",state.generation,state.level,state.bindings.size(),same);
+#if defined(KK_DEV_TOOLS)
+  if (Trace()) DevProgressBits(b,"baseline");
+#endif
 }
 void ObjectsBeforeAi(PPCContext& ctx,uint8_t* b,uint32_t w) {
   state.ready=false;
@@ -2408,4 +2433,12 @@ REX_HOOK_RAW(sub_826D3568) { kk::coop::SupportTrigger(ctx,base,true); }
 REX_HOOK_RAW(sub_82860678) { kk::coop::SupportPhysics(ctx,base); }
 #if defined(KK_DEV_TOOLS)
 REX_HOOK_RAW(sub_825E7348) { kk::coop::RaftWait(ctx,base); }
+// Diagnostics only: snapshot -> universe restores (death retry, menu restore).
+REX_EXTERN(__imp__sub_82413080);
+REX_HOOK_RAW(sub_82413080) {
+  const auto lr=uint32_t(ctx.lr);
+  if (std::getenv("KK_DEV_OBJECTS")) { REXLOG_INFO("KK dev universe restore: lr={:08X}",lr); kk::coop::ObjectsDevProgressBits(base,"restore-before"); }
+  __imp__sub_82413080(ctx,base);
+  if (std::getenv("KK_DEV_OBJECTS")) kk::coop::ObjectsDevProgressBits(base,"restore-after");
+}
 #endif

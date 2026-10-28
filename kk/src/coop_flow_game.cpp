@@ -14,6 +14,7 @@
 #include "menu_scene.h"
 #include "coop_handover.h"
 #include "coop_resume.h"
+#include "coop_objects_game.h"
 #include <random>
 #include <rex/cvar.h>
 #include <rex/hook.h>
@@ -226,6 +227,9 @@ void AskLoad(PPCContext& ctx,uint8_t* base,uint32_t g,const FlowView& v) {
   behind=BehindRule{};
   recorded_checkpoint=v.world.start;
   REXLOG_INFO("KK co-op flow: load generation {} level {} start {}",v.world.generation,v.world.level,v.world.start);
+#if defined(KK_DEV_TOOLS)
+  if (std::getenv("KK_DEV_OBJECTS")) ObjectsDevProgressBits(base,"ask-load");
+#endif
 }
 }
 int SessionCheats() { return session_cheats.load(); }
@@ -858,6 +862,9 @@ void SessionReloadFrame(uint8_t* base) {
   hfr::Store32(base,0x82CCAA80,0); hfr::Store32(base,0x82CCBFD4,0);
   Send(MessageType::ReloadRequest,v.world);
   REXLOG_INFO("KK co-op flow: death/reload fallback, both reload the host checkpoint");
+#if defined(KK_DEV_TOOLS)
+  if (std::getenv("KK_DEV_OBJECTS")) ObjectsDevProgressBits(base,"reload-fallback");
+#endif
 }
 void RejoinBackToMenu() { rejoin_cancel=true; }
 #if defined(KK_DEV_TOOLS)
