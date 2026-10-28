@@ -467,6 +467,37 @@ void GrabFeedback() {
   p.peer_grab_incarnation=8;
   Check(!combat::NativeGrabOwnerReleased(p,world,9,source,2,7),"release from a prior local life is ignored");
 }
+void CentipedeContactSound() {
+  using F=EnemyFamily;
+  for (const uint32_t caller:{0x825BCE30u,0x825BD000u,0x825BD358u})
+    Check(combat::CentipedeContactSound(F::Centipede,caller,8),"leap sound8 directly before a contact builder admitted");
+  for (const uint32_t caller:{0x825BBE78u,0x825BC0B8u,0x825BC0DCu,0x825BE0A0u})
+    Check(!combat::CentipedeContactSound(F::Centipede,caller,8),"other centipede cues have no contact after them");
+  Check(!combat::CentipedeContactSound(F::Centipede,0x825BCE30,5),"other resources excluded");
+  Check(!combat::CentipedeContactSound(F::Scorpion,0x825BCE30,8),"other family cannot use a centipede cue");
+  DamageEvent d{{303,4,5},9,7,{123,4,F::Centipede},0x1001,10,{1,0,0}};
+  d.attack_sound=true; d.generation=2; d.time=10;
+  Check(ValidDamageEvent(d) && combat::NativeAttackSoundResource(d)==8,"actual leap contact4097/10 can carry native resource8");
+  d.magnitude=5; Check(combat::NativeAttackSound(d),"leap contact4097/5 is a native cue pair");
+  d.flags=3; d.magnitude=10; Check(combat::NativeAttackSound(d),"leap contact3/10 is a native cue pair");
+  d.flags=0x1001; d.magnitude=6; Check(!combat::NativeAttackSound(d) && !ValidDamageEvent(d),"other centipede pairs cannot carry a cue");
+  d.magnitude=10; d.projectile=true; d.surface=0;
+  Check(!combat::NativeAttackSound(d),"a projectile impact is not the leap contact");
+  d.projectile=false; d.surface=UINT32_MAX;
+  Check(combat::AttackSoundObserved(d,d.enemy,2,9.95,10,false),"recent leap cue matches exact attack source");
+  Check(!combat::AttackSoundObserved(d,d.enemy,2,9.8,10,false),"a later contact cannot borrow an old cue");
+  Message m; m.type=MessageType::DamageEvent; m.epoch=9; m.damage=d;
+  std::vector<uint8_t> wire; Message decoded;
+  Check(Encode(m,wire) && Decode(wire,decoded) && decoded.damage.attack_sound &&
+      combat::NativeAttackSoundResource(decoded.damage)==8,"leap cue survives the real damage codec with its hit");
+}
+void BodyHitClass() {
+  using B=combat::BodyHit;
+  Check(combat::ClassifyBodyHit(true,true,true)==B::Relayed,"audited owned enemy hit is relayed");
+  Check(combat::ClassifyBodyHit(true,true,false)==B::EnemyHere,"unaudited producer of an owned enemy is counted, not relayed");
+  Check(combat::ClassifyBodyHit(true,false,false)==B::EnemyRemote,"replica source is counted, not relayed");
+  Check(combat::ClassifyBodyHit(false,false,false)==B::World,"world hazard on the body stays in this world");
+}
 void Profiles() {
   // 40 seeds per profile, 200 real core scenarios. Virtual time, real loopback
   // sockets, real framing/ACKs/nonces, independent peer clocks, no game process.
@@ -512,6 +543,8 @@ int main(int argc,char** argv) {
   else if(name=="bat_contact_sound") BatContactSound();
   else if(name=="raptor_camera") RaptorCamera();
   else if(name=="raptor_bite_sound") RaptorBiteSound();
+  else if(name=="centipede_contact_sound") CentipedeContactSound();
+  else if(name=="body_hit_class") BodyHitClass();
   else if(name=="udp_duplicate" || name=="udp_order") Reliable();
   else { std::fprintf(stderr,"unknown test\n"); return 2; }
   std::printf("PASS [%s]\n",test_name); return 0;

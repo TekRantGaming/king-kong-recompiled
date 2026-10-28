@@ -51,13 +51,37 @@ inline bool NativeAttackSound(const DamageEvent& d) {
   // Scorpion82616490 plays sound8 immediately before producing5/10.
   // Bat82652FF8 plays sound10 immediately after its player contact2/2.
   // Raptor8256D2F0 creates attached sound7 after its native bite geometry.
+  // Centipede PNJ_Scolo_ETAT_Attaque825BB868 plays sound8, rate limited by
+  // V+6380, immediately before its leap contact3/10,4097/10 or4097/5.
   return !d.projectile && ((d.enemy.family==EnemyFamily::Scorpion && d.flags==5 && d.magnitude==10) ||
       (d.enemy.family==EnemyFamily::Bat && d.flags==2 && d.magnitude==2) ||
-      (d.enemy.family==EnemyFamily::Raptor && d.flags==0x4104 && d.magnitude==1000));
+      (d.enemy.family==EnemyFamily::Raptor && d.flags==0x4104 && d.magnitude==1000) ||
+      (d.enemy.family==EnemyFamily::Centipede && ((d.flags==3 && d.magnitude==10) ||
+        (d.flags==0x1001 && (d.magnitude==10 || d.magnitude==5)))));
 }
 inline uint32_t NativeAttackSoundResource(const DamageEvent& d) {
   return NativeAttackSound(d) ? (d.enemy.family==EnemyFamily::Bat ? 10:
       d.enemy.family==EnemyFamily::Raptor ? 7:8):0;
+}
+inline bool CentipedeContactSound(EnemyFamily family,uint32_t caller,uint32_t resource) {
+  if (COOP_MUT_IF("centipede_contact_sound")) return true;
+  // Only the three sound8 calls directly ahead of the leap contact builders
+  // (825BCE78/825BCEB0, 825BD03C, 825BD394). Its other cues (sounds4 and5 at
+  // 825BBE78, 825BC0B8, 825BC0DC, 825BE0A0) have no contact after them.
+  return family==EnemyFamily::Centipede && resource==8 &&
+      (caller==0x825BCE30 || caller==0x825BD000 || caller==0x825BD358);
+}
+// What a native type4 event aimed at the leased partner body is. The body is
+// always protected; only Relayed reaches the partner. The other classes are
+// counted. Jack's only damage consumer H_exec_ch_Stimulus_Paf826A0920 takes
+// type4 alone (type9 only drives AI hiding), so a world hazard reaches each
+// player through that player's own native world copy, never through a relay.
+enum class BodyHit : uint8_t { Relayed, EnemyHere, EnemyRemote, World };
+inline BodyHit ClassifyBodyHit(bool bound,bool runs_here,bool audited) {
+  if (COOP_MUT_IF("body_hit_class")) return bound ? BodyHit::Relayed : BodyHit::World;
+  if (audited) return BodyHit::Relayed;
+  if (!bound) return BodyHit::World;
+  return runs_here ? BodyHit::EnemyHere : BodyHit::EnemyRemote;
 }
 inline bool RaptorBiteSound(EnemyFamily family,uint32_t caller,uint32_t resource,uint32_t selector) {
   if (COOP_MUT_IF("raptor_bite_sound")) return true;

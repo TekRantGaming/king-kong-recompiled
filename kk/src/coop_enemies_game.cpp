@@ -532,6 +532,8 @@ struct State {
   std::optional<PlayerStatus> sent_status;
   double next_status_time = 0, partner_status_time = -1;
   uint64_t hits_produced = 0, hits_queued = 0, hits_native = 0, hits_refused = 0;
+  // Protected partner body hits that were not relayed, by combat::BodyHit.
+  uint64_t body_enemy_here = 0, body_enemy_remote = 0, body_world = 0;
   bool shooting = false, shot_resolved = false;
   ShotIntent shot;
   InventoryState shot_inventory;
@@ -3316,10 +3318,11 @@ void AfterAi(PPCContext& ctx, uint8_t* b, uint32_t w) {
           uint16_t(binding.id.family), actor, target, target == hero ? "local" : body && target == body ? "partner" : "other",
           s.targets_host, s.targets_guest, s.link.role == Role::Host ? "host" : "guest");
     }
-    REXLOG_INFO("COOP COMBAT level={} start={} targets-host={} targets-guest={} hits-host={} hits-guest={} guest-native-queued={} refused={} body={:08X}",
+    REXLOG_INFO("COOP COMBAT level={} start={} targets-host={} targets-guest={} hits-host={} hits-guest={} guest-native-queued={} refused={} body={:08X} body-unrelayed-enemy-here={} body-unrelayed-enemy-remote={} body-world={}",
         s.identity.level, s.identity.start, s.targets_host, s.targets_guest,
         s.link.role==Role::Host ? s.hits_host+s.hits_native : s.hits_produced,
-        s.link.role==Role::Host ? s.hits_produced : s.hits_host+s.hits_native, s.hits_native, s.hits_refused, body);
+        s.link.role==Role::Host ? s.hits_produced : s.hits_host+s.hits_native, s.hits_native, s.hits_refused, body,
+        s.body_enemy_here, s.body_enemy_remote, s.body_world);
   }
 #endif
   {
@@ -3893,6 +3896,25 @@ bool EnemyDamageEnqueue(PPCContext& ctx, uint8_t* b, uint32_t body) {
         combat::NativeHit(binding->second.id.family, damage.flags, damage.magnitude,damage.projectile);
     const bool ready=EnemyPartnerCombatReady(), wire_valid=ValidDamageEvent(damage);
     const bool qualified = audited && ready && wire_valid;
+    {
+      const auto* owner_authority=binding!=s.bindings.end() ? AuthorityFor(binding->second.id):nullptr;
+      const auto hit_class=combat::ClassifyBodyHit(binding!=s.bindings.end(),
+          owner_authority && owner_authority->Runs(Side()),audited);
+      if (hit_class==combat::BodyHit::EnemyHere) ++s.body_enemy_here;
+      else if (hit_class==combat::BodyHit::EnemyRemote) ++s.body_enemy_remote;
+      else if (hit_class==combat::BodyHit::World) ++s.body_world;
+#if defined(KK_DEV_TOOLS)
+      // One line per distinct producer and class, so an unrelayed enemy attack
+      // form or a world hazard is named by its native caller in the logs.
+      static std::set<uint64_t> producers;
+      const uint64_t key=uint64_t(uint32_t(ctx.lr))<<8|uint8_t(hit_class);
+      if (hit_class!=combat::BodyHit::Relayed && producers.size()<64 && producers.insert(key).second)
+        REXLOG_INFO("COOP BODYHIT class={} caller={:08X} source={:08X} family={} flags={:08X} magnitude={} enemy-here={} enemy-remote={} world={}",
+            hit_class==combat::BodyHit::EnemyHere ? "enemy-here":hit_class==combat::BodyHit::EnemyRemote ? "enemy-remote":"world",
+            uint32_t(ctx.lr),source,binding==s.bindings.end() ? 0:uint16_t(binding->second.id.family),
+            damage.flags,damage.magnitude,s.body_enemy_here,s.body_enemy_remote,s.body_world);
+#endif
+    }
 #if defined(KK_DEV_TOOLS)
     if (audited && damage.projectile && Load32(b,payload+96)!=damage.surface) {
       static unsigned selectors=0;
@@ -4232,6 +4254,18 @@ REX_HOOK_RAW(sub_823FCF58) {
 #endif
       break;
     }
+    return;
+  }
+  if (kk::coop::combat::CentipedeContactSound(kk::coop::EnemyFamily::Centipede,caller,resource)) {
+    const auto* owner=kk::coop::CombatOwner(base,kk::coop::EnemyFamily::Centipede);
+    if (!owner || owner->actor!=actor) return;
+    const auto* authority=kk::coop::AuthorityFor(owner->id);
+    kk::coop::Get().sting_sounds[kk::coop::Canonical(owner->id)]={authority->generation,kk::coop::Now(),false};
+#if defined(KK_DEV_TOOLS)
+    static unsigned lines=0;
+    if (lines++<64) REXLOG_INFO("COOP SOUND owner native-centipede-leap source={:08X} generation={} code=8 created=true caller={:08X}",
+        actor,authority->generation,caller);
+#endif
     return;
   }
   if (resource!=8) return;

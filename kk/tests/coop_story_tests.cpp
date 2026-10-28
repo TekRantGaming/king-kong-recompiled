@@ -19,7 +19,7 @@ Message Packet(MessageType type=MessageType::StoryEvent,uint32_t number=1) {
 }
 std::vector<uint8_t> Wire(const Message& m) { std::vector<uint8_t> bytes; Check(Encode(m,bytes),"valid fixture encodes"); return bytes; }
 void Codec() {
-  static_assert(kProtocolVersion==30);
+  static_assert(kProtocolVersion==31);
   static_assert(uint16_t(MessageType::StoryEvent)==29 && uint16_t(MessageType::TriggerRequest)==30);
   for (auto phase : {StoryPhase::Armed,StoryPhase::Started,StoryPhase::Advance,StoryPhase::Finished,StoryPhase::Recovery,StoryPhase::Checksum}) {
     for (auto type : {MessageType::StoryEvent,MessageType::TriggerRequest}) {
