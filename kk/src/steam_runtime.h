@@ -36,6 +36,7 @@ struct SteamSessionView {
   std::optional<CheatSet> host_cheats;
   std::string partner_name;
   uint64_t epoch = 0;
+  uint64_t enemy_bytes = 0;
 };
 // Construction/configuration never loads Steam. First Open/Create/Accept starts a single
 // joined worker which owns init, every flat call, callbacks, lobby and CoopSession until shutdown.

@@ -48,7 +48,7 @@ bool ValidPose(const PlayerPose& p) {
       std::abs(p.vx) < 1000 && std::abs(p.vy) < 1000 && std::abs(p.pitch) <= 1.571f &&
       p.weapon <= 10 && p.crouched <= 1 && p.airborne <= 1 && p.aiming <= 1 && p.fire_weapon <= 4 && (!p.fire || p.fire_weapon);
 }
-bool ReasonValid(RejectReason r) { return r >= RejectReason::Protocol && r <= RejectReason::Handshake; }
+bool ReasonValid(RejectReason r) { return r >= RejectReason::Protocol && r <= RejectReason::ActorReplication; }
 void WriteWorld(Writer& w, const EnemyWorld& v) { w.U(v.level, 4); w.U(v.start, 4); w.U(v.serial, 4); }
 EnemyWorld ReadWorld(Reader& r) { return {uint32_t(r.U(4)), uint32_t(r.U(4)), uint32_t(r.U(4))}; }
 void WriteEnemy(Writer& w, const EnemyState& e) {
@@ -59,6 +59,8 @@ void WriteEnemy(Writer& w, const EnemyState& e) {
   w.U(uint8_t(e.owner), 1); w.U(e.generation, 4);
   w.U(std::bit_cast<uint32_t>(e.secondary_life), 4);
   w.U(e.birth_spawner,8); w.U(e.birth_template,1); w.U(e.birth_point,1);
+  w.U(std::bit_cast<uint32_t>(e.animation_time),4); w.U(e.actor_flags,4);
+  w.U(e.target,1); w.U(e.target_crew,1);
 }
 EnemyState ReadEnemy(Reader& r) {
   EnemyState e;
@@ -73,6 +75,8 @@ EnemyState ReadEnemy(Reader& r) {
   e.owner = EnemyOwner(r.U(1)); e.generation = uint32_t(r.U(4));
   e.secondary_life = std::bit_cast<float>(uint32_t(r.U(4)));
   e.birth_spawner=r.U(8); e.birth_template=uint8_t(r.U(1)); e.birth_point=uint8_t(r.U(1));
+  e.animation_time=std::bit_cast<float>(uint32_t(r.U(4))); e.actor_flags=uint32_t(r.U(4));
+  e.target=uint8_t(r.U(1)); e.target_crew=uint8_t(r.U(1));
   return e;
 }
 bool Point(ShotVector p) {
@@ -236,6 +240,9 @@ bool ValidShotReceipt(const ShotReceipt& r) {
 }
 bool ValidEnemy(const EnemyState& e) {
   return e.id.source && ValidEnemyFamily(e.id.family) &&
+      std::isfinite(e.animation_time) && e.animation_time>=-1 && e.animation_time<3600 &&
+      !(e.actor_flags & ~0x00200001u) && e.target<=3 && e.target_crew<=12 &&
+      (e.target==3 || !e.target_crew) &&
       std::isfinite(e.x) && std::isfinite(e.y) && std::isfinite(e.z) && std::isfinite(e.facing) &&
       std::isfinite(e.life) && std::abs(e.x) < 1000000 && std::abs(e.y) < 1000000 &&
       std::abs(e.z) < 1000000 && std::abs(e.facing) <= 3.1416f && std::abs(e.life) < 1000000 &&
@@ -451,6 +458,7 @@ bool Encode(const Message& m, std::vector<uint8_t>& out) {
       break;
     case MessageType::Hello:
       payload.U(m.hello.protocol, 2);
+      if (m.hello.protocol>=33) payload.U(m.hello.actor_replication,1);
       if (!payload.Text(m.hello.version) || !payload.Text(m.hello.build) || !payload.Text(m.hello.gameplay_digest))
         return false;
       if (m.display_name.size() > kMaxDisplayNameBytes || SanitizeDisplayName(m.display_name) != m.display_name)
@@ -488,12 +496,29 @@ bool Encode(const Message& m, std::vector<uint8_t>& out) {
           m.enemies.time >= 1e12 || m.enemies.enemies.size() > kMaxEnemyBatch) return false;
       WriteWorld(payload, m.enemies.world);
       payload.U(std::bit_cast<uint64_t>(m.enemies.time), 8);
-      payload.U(m.enemies.enemies.size(), 2);
+      payload.U(m.enemies.enemies.size() | (m.enemies.compressed ? 0x8000:0), 2);
+      {
+      std::vector<uint8_t> previous;
       for (size_t i = 0; i < m.enemies.enemies.size(); ++i) {
         const auto& e = m.enemies.enemies[i];
         if (!ValidEnemy(e)) return false;
         for (size_t j = 0; j < i; ++j) if (m.enemies.enemies[j].id == e.id) return false;
-        WriteEnemy(payload, e);
+        if (!m.enemies.compressed || !i) {
+          const auto start=payload.bytes.size(); WriteEnemy(payload,e);
+          previous.assign(payload.bytes.begin()+start,payload.bytes.end());
+        } else {
+          Writer row; WriteEnemy(row,e);
+          for (size_t block=0;block<kEnemyStateBytes;block+=8) {
+            uint8_t mask=0;
+            for (size_t bit=0;bit<8 && block+bit<kEnemyStateBytes;++bit)
+              if (row.bytes[block+bit]!=previous[block+bit]) mask|=uint8_t(1u<<bit);
+            payload.U(mask,1);
+            for (size_t bit=0;bit<8 && block+bit<kEnemyStateBytes;++bit)
+              if (mask&(1u<<bit)) payload.U(row.bytes[block+bit],1);
+          }
+          previous=std::move(row.bytes);
+        }
+      }
       }
       break;
     case MessageType::EnemyEvent:
@@ -680,6 +705,9 @@ bool Decode(std::span<const uint8_t> bytes, Message& out) {
       break;
     case MessageType::Hello: {
       m.hello.protocol = uint16_t(r.U(2));
+      if (m.hello.protocol>=33) {
+        const auto mode=r.U(1); if (mode>1) return false; m.hello.actor_replication=mode!=0;
+      }
       if (!r.Text(m.hello.version) || !r.Text(m.hello.build) || !r.Text(m.hello.gameplay_digest)) return false;
       const size_t n = size_t(r.U(1));
       if (!r.ok || !n || n > kMaxDisplayNameBytes || n > bytes.size()-r.at) return false;
@@ -727,11 +755,30 @@ bool Decode(std::span<const uint8_t> bytes, Message& out) {
     case MessageType::HelloAck: case MessageType::Bye: break;
     case MessageType::EnemySnapshot: {
       m.enemies.world = ReadWorld(r); m.enemies.time = std::bit_cast<double>(r.U(8));
-      const size_t count = size_t(r.U(2));
+      const auto encoded_count=r.U(2);
+      const size_t count = size_t(encoded_count&0x7FFF);
+      m.enemies.compressed=(encoded_count&0x8000)!=0;
       if (!ValidEnemyWorld(m.enemies.world) || !std::isfinite(m.enemies.time) || m.enemies.time < 0 ||
-          m.enemies.time >= 1e12 || count > kMaxEnemyBatch || count * kEnemyStateBytes != bytes.size() - r.at) return false;
+          m.enemies.time >= 1e12 || count > kMaxEnemyBatch ||
+          (!m.enemies.compressed && count * kEnemyStateBytes != bytes.size() - r.at)) return false;
+      std::vector<uint8_t> previous;
       for (size_t i = 0; i < count; ++i) {
-        auto e = ReadEnemy(r); if (!ValidEnemy(e)) return false;
+        EnemyState e;
+        if (!m.enemies.compressed || !i) {
+          const auto start=r.at; e=ReadEnemy(r);
+          if (!r.ok) return false;
+          previous.assign(bytes.begin()+start,bytes.begin()+r.at);
+        } else {
+          auto row=previous;
+          for (size_t block=0;block<kEnemyStateBytes;block+=8) {
+            const auto mask=r.U(1),bits=std::min(size_t(8),kEnemyStateBytes-block);
+            if (mask>>bits) return false;
+            for (size_t bit=0;bit<bits;++bit) if (mask&(1u<<bit)) row[block+bit]=uint8_t(r.U(1));
+          }
+          if (!r.ok) return false;
+          Reader expanded{row}; e=ReadEnemy(expanded); previous=std::move(row);
+        }
+        if (!ValidEnemy(e)) return false;
         for (const auto& prior : m.enemies.enemies) if (prior.id == e.id) return false;
         m.enemies.enemies.push_back(e);
       }
@@ -772,6 +819,7 @@ bool Decode(std::span<const uint8_t> bytes, Message& out) {
 
 RejectReason CheckCompatibility(const Compatibility& a, const Compatibility& b) {
   if (a.protocol != b.protocol) return RejectReason::Protocol;
+  if (a.actor_replication != b.actor_replication) return RejectReason::ActorReplication;
   if (a.version != b.version) return RejectReason::Version;
   if (a.build != b.build) return RejectReason::Build;
   if (a.gameplay_digest != b.gameplay_digest) return RejectReason::GameplayMods;

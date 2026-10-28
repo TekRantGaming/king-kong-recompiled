@@ -455,7 +455,7 @@ struct SteamRuntime::Impl
   }
   LobbyKeys ReadKeys(uint64_t lobby) {
     LobbyKeys keys;
-    for (const char* key : {kProductKey, "kkrc_protocol", "kkrc_version", "kkrc_build", "kkrc_mods"})
+    for (const char* key : {kProductKey, "kkrc_protocol", "kkrc_version", "kkrc_build", "kkrc_mods", "kkrc_actors"})
       keys[key] = Text(api.SteamAPI_ISteamMatchmaking_GetLobbyData(matchmaking, lobby, key));
     return keys;
   }
@@ -876,6 +876,7 @@ struct SteamRuntime::Impl
     SteamSessionView view{session->SessionRole(), session->State(), session->Rejection(), session->Stats(), pose, session->Partner(now), now};
     view.local_failure = failure; view.poses = session->Poses();
     view.enemies = session->Enemies(now); view.enemies_sent = session->EnemiesSent();
+    view.enemy_bytes=session->EnemyBytes();
     view.shots_sent = session->ShotsSent();
     view.host_cheats = session->HostCheats();
     view.partner_name = session->PartnerName();

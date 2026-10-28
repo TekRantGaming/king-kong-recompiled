@@ -14,7 +14,8 @@ bool BoundedValue(const std::string& s) {
 LobbyKeys EncodeLobbyKeys(const Compatibility& c) {
   if (!c.protocol || !BoundedValue(c.version) || !BoundedValue(c.build) || !BoundedValue(c.gameplay_digest)) return {};
   return {{kProductKey, kProductValue}, {"kkrc_protocol", std::to_string(c.protocol)},
-      {"kkrc_version", c.version}, {"kkrc_build", c.build}, {"kkrc_mods", c.gameplay_digest}};
+      {"kkrc_version", c.version}, {"kkrc_build", c.build}, {"kkrc_mods", c.gameplay_digest},
+      {"kkrc_actors",c.actor_replication ? "1":"0"}};
 }
 bool DecodeLobbyKeys(const LobbyKeys& keys, Compatibility& out) {
   auto get = [&](const char* key) -> std::string { auto i = keys.find(key); return i == keys.end() ? "" : i->second; };
@@ -22,6 +23,9 @@ bool DecodeLobbyKeys(const LobbyKeys& keys, Compatibility& out) {
   unsigned p = 0;
   const auto result = std::from_chars(protocol.data(), protocol.data() + protocol.size(), p);
   Compatibility c{uint16_t(p), get("kkrc_version"), get("kkrc_build"), get("kkrc_mods")};
+  const auto actors=get("kkrc_actors");
+  if (!actors.empty() && actors!="0" && actors!="1") return false;
+  c.actor_replication=actors=="1";
   if (get(kProductKey) != kProductValue || protocol.empty() || protocol.size() > 5 || !p || p > 65535 ||
       result.ec != std::errc{} || result.ptr != protocol.data() + protocol.size() ||
       !BoundedValue(c.version) || !BoundedValue(c.build) || !BoundedValue(c.gameplay_digest)) return false;

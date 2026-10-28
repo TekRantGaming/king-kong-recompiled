@@ -1,6 +1,7 @@
 #pragma once
 
 #include "coop_protocol.h"
+#include "coop_actor_replication.h"
 #include <algorithm>
 #include <cmath>
 #include <deque>
@@ -67,12 +68,14 @@ inline uint32_t TerminalState(EnemyFamily f) {
 // Reserve life==0 for the observed MORT track. A +1 representation retains
 // the actual zero-health value on replicas without announcing an early death.
 inline float ReplicatedLife(EnemyFamily f, uint32_t state, float native) {
+  if (f==EnemyFamily::Human) return state==0x826B95A0 ? 0.f:native+2.f;
   if (StateLife(f)) return state == TerminalState(f) ? 0.f : 1.f;
   if (f == EnemyFamily::VRex)
     return !std::isfinite(native) ? native : state == TerminalState(f) ? 0.f : std::max(0.f,native)+1.f;
   return native;
 }
 inline float NativeLife(EnemyFamily f, float replicated) {
+  if (f==EnemyFamily::Human) return replicated-2.f;
   return f == EnemyFamily::VRex ? std::max(0.f,replicated-1.f) : replicated;
 }
 inline uint32_t LifeOffset(EnemyFamily f) {
@@ -94,6 +97,7 @@ inline uint32_t LifeOffset(EnemyFamily f) {
     case EnemyFamily::SwampCrawler: return 32; // SC_ETAT_paf 82440948.
     case EnemyFamily::Spider: return 1616;     // Init copies authored V+1612 here.
     case EnemyFamily::Prey: return 8;          // PNJ_EatMe_check_paf 8242D248.
+    case EnemyFamily::Independent: return 4;  // PNJInd_Check_Paf 826D3B20.
     default: return 0;
   }
 }
@@ -270,7 +274,7 @@ struct Counters { uint64_t sent = 0; uint32_t matched = 0, unmatched = 0, driven
 class Channel {
  public:
   void Clear() { *this = {}; }
-  void Publish(const Frame& frame) {
+  void Publish(const Frame& frame,bool replication=false) {
     if (!ValidEnemyWorld(frame.world) || !std::isfinite(frame.time) || frame.time < 0 || frame.time >= 1e12 ||
         frame.records.size() > kMaxEnemies) return;
     if (frame.world != world_) { Clear(); world_ = frame.world; }
@@ -283,6 +287,7 @@ class Channel {
       });
     };
     std::erase_if(local_, [&](const auto& entry) { return !retained(entry.first, entry.second.enemy.generation); });
+    std::erase_if(sent_, [&](const auto& entry) { return !retained(entry.first, entry.second.enemy.generation); });
     std::erase_if(pending_, [&](const auto& e) { return !retained(e.enemy.id, e.enemy.generation); });
     for (const auto& r : frame.records) {
       if (!ValidEnemy(r.enemy)) continue;
@@ -291,6 +296,8 @@ class Channel {
         if (it->second.kind != EnemyEventKind::Removed && r.kind == EnemyEventKind::Removed) {
           Queue(r.enemy, EnemyEventKind::Removed); it->second.kind = EnemyEventKind::Removed;
         }
+        if (replication && it->second.kind!=EnemyEventKind::Removed && r.enemy.life<=0)
+          it->second.enemy=r.enemy;
         continue;
       }
       if (it == local_.end()) {
@@ -308,18 +315,24 @@ class Channel {
   }
   const EnemyEvent* Event() const { return pending_.empty() ? nullptr : &pending_.front(); }
   void SentEvent() { pending_.pop_front(); }
-  std::vector<EnemySnapshot> Snapshots() const {
+  std::vector<EnemySnapshot> Snapshots(bool delta=false) {
     std::vector<EnemySnapshot> out;
     if (!ValidEnemyWorld(world_)) return out;
-    out.push_back({world_, time_, {}});
+    out.push_back({world_, time_, {},delta});
     for (const auto& [id, r] : local_) {
       if (r.kind == EnemyEventKind::Removed) continue;
-      if (out.back().enemies.size() == kMaxEnemyBatch) out.push_back({world_, time_, {}});
+      if (delta) {
+        const auto previous=sent_.find(id);
+        if (previous!=sent_.end() && time_-previous->second.time<actors::kRefresh &&
+            actors::Same(previous->second.enemy,r.enemy)) continue;
+        sent_[id]={time_,r.enemy};
+      }
+      if (out.back().enemies.size() == (delta ? 10:kMaxEnemyBatch)) out.push_back({world_, time_, {},delta});
       out.back().enemies.push_back(r.enemy);
     }
     return out;
   }
-  void Receive(const Message& m, double now) {
+  void Receive(const Message& m, double now,bool replication=false) {
     const bool event = m.type == MessageType::EnemyEvent;
     const auto w = event ? m.enemy_event.world : m.enemies.world;
     if (!ValidEnemyWorld(w)) return;
@@ -361,7 +374,12 @@ class Channel {
       }
       if (r.seen && int32_t(m.sequence - r.sequence) <= 0) return;
       r.seen = true; r.sequence = m.sequence;
-      if (r.terminal) return;
+      if (r.terminal) {
+        if (replication && r.record.kind!=EnemyEventKind::Removed && e.life<=0) {
+          r.record.enemy=e; r.received=now;
+        }
+        return;
+      }
       r.record = {e, e.life <= 0 ? EnemyEventKind::Died : EnemyEventKind::Spawned};
       r.received = now;
       if (e.life <= 0) { r.terminal = true; return; }
@@ -372,7 +390,7 @@ class Channel {
     if (event) push(m.enemy_event.enemy, m.enemy_event.kind, 0);
     else for (const auto& e : m.enemies.enemies) push(e, EnemyEventKind::Spawned, m.enemies.time);
   }
-  Frame Sample(double now) const {
+  Frame Sample(double now, bool replication=false) const {
     Frame out{world_, now, {}};
     for (const auto& [id, r] : remote_) {
       // Terminal events persist until unload. Live positions expire after 500 ms.
@@ -386,16 +404,24 @@ class Channel {
           const auto& a = r.history[i-1]; const auto& b = r.history[i];
           if (target > b.time) { record.enemy = b.enemy; continue; }
           const float t = float(std::clamp((target-a.time)/(b.time-a.time), 0., 1.));
-          record.enemy = a.enemy;
-          record.enemy.x += (b.enemy.x-a.enemy.x)*t; record.enemy.y += (b.enemy.y-a.enemy.y)*t;
-          record.enemy.z += (b.enemy.z-a.enemy.z)*t;
-          record.enemy.facing = std::remainder(a.enemy.facing + std::remainder(b.enemy.facing-a.enemy.facing, 6.2831853f)*t, 6.2831853f);
+          if (replication) record.enemy=actors::Interpolate(a.enemy,b.enemy,t);
+          else {
+            record.enemy = a.enemy;
+            record.enemy.x += (b.enemy.x-a.enemy.x)*t; record.enemy.y += (b.enemy.y-a.enemy.y)*t;
+            record.enemy.z += (b.enemy.z-a.enemy.z)*t;
+            record.enemy.facing = std::remainder(a.enemy.facing + std::remainder(b.enemy.facing-a.enemy.facing, 6.2831853f)*t, 6.2831853f);
+          }
           break;
         }
+        const bool same_clip=record.enemy.action==r.record.enemy.action && record.enemy.item==r.record.enemy.item;
         // Discrete life/action/state always use newest authoritative sample.
         record.enemy.life = r.record.enemy.life; record.enemy.action = r.record.enemy.action;
         record.enemy.secondary_life = r.record.enemy.secondary_life;
         record.enemy.item = r.record.enemy.item; record.enemy.state = r.record.enemy.state;
+        record.enemy.actor_flags=r.record.enemy.actor_flags; record.enemy.target=r.record.enemy.target;
+        record.enemy.target_crew=r.record.enemy.target_crew;
+        if (!same_clip)
+          record.enemy.animation_time=r.record.enemy.animation_time;
       }
       out.records.push_back(record);
     }
@@ -416,6 +442,7 @@ class Channel {
   double time_ = 0;
   std::map<EnemyId, Record> local_;
   std::map<EnemyId, Remote> remote_;
+  std::map<EnemyId, SampleEntry> sent_;
   std::deque<EnemyEvent> pending_;
 };
 } // namespace kk::coop::enemies

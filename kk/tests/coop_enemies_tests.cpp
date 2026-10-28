@@ -127,7 +127,7 @@ void ExpandedFamilies() {
     Check(frame.records.size()==1 && frame.records[0].enemy.life==0,
         "expanded family death wins over a delayed live snapshot");
   }
-  auto invalid=Enemy(); invalid.id.family=EnemyFamily(uint16_t(EnemyFamily::NativeKna)+1);
+  auto invalid=Enemy(); invalid.id.family=EnemyFamily(uint16_t(EnemyFamily::Independent)+1);
   Check(!ValidEnemy(invalid),"unrecognized families still refuse");
   Check(StateLife(EnemyFamily::SwampCrawlerSmall) && StateLife(EnemyFamily::Pny) &&
       !LifeOffset(EnemyFamily::SwampCrawlerSmall) && !LifeOffset(EnemyFamily::Pny),

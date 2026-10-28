@@ -68,6 +68,7 @@ struct EnemyLink {
   // Enemy driving also needs a fresh worker view; story continuity only needs
   // the actual session state. A native frame stall is not a transport loss.
   SessionState session_state = SessionState::Idle;
+  uint64_t bytes = 0;
   bool SessionConnected() const { return session_state == SessionState::Connected; }
 };
 EnemyLink EnemyLinkSnapshot();
