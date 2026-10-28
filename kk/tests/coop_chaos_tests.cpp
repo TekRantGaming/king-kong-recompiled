@@ -6,6 +6,10 @@
 #include "coop_ownership.h"
 #include "coop_story.h"
 #include "coop_desync.h"
+#include "coop_event_budget.h"
+#include <algorithm>
+#include <map>
+#include <vector>
 #include <cstdio>
 #include <cstdlib>
 #include <limits>
@@ -137,6 +141,138 @@ void DigestCompare() {
   Check(q.Compare(other)==story::Checksums::Result::Mismatch,"different digest must be detected");
   Check(q.Compare(other)==story::Checksums::Result::Ignored,"reply consumed once");
   Check(q.Remember(e,2) && q.Compare(e)==story::Checksums::Result::Match,"equal digests match");
+}
+// C101: native event pool model (8271E4E8 allocate, 8271E600 age, 8271E450
+// visit) and the bat vision list of 8262FE20, to replay the 26 Oct 21:03 crash:
+// a co-op publisher kept making 0.001 s type 1 events while the game's pause
+// stopped all ageing; after Resume a bat appended them all to a list of 74.
+namespace eb=kk::coop::event_budget;
+struct PoolModel {
+  struct Entry { uint32_t flags=4, owner=0, generation=0; float time=0; };
+  std::vector<Entry> entries; std::vector<uint32_t> free_list;
+  uint32_t capacity=512, generation=0; bool paused=false;
+  bool Allocate(uint32_t owner,float time,uint32_t& index) {
+    if (free_list.empty() && entries.size()==capacity) return false;
+    if (!free_list.empty()) { index=free_list.back(); free_list.pop_back(); }
+    else { index=uint32_t(entries.size()); entries.push_back({}); }
+    entries[index]={1,owner,++generation,time}; return true;
+  }
+  void Age(float dt) {
+    if (paused) return;
+    for (uint32_t i=0;i<entries.size();++i) {
+      auto& e=entries[i]; if (e.flags&4) continue;
+      if ((e.flags&1) && !(e.flags&2)) { e.flags&=~1u; continue; }
+      e.time-=dt; if (e.time<=0) e.flags|=2;
+      if (e.flags&2) { e.generation=0; e.flags|=4; free_list.push_back(i); }
+    }
+  }
+  // Guest memory image read through the shipping reader (coop_stimulus_debug.h).
+  eb::BucketCount Count(uint32_t owner) const {
+    constexpr uint32_t base=0x50000000;
+    std::map<uint32_t,uint32_t> m;
+    const uint32_t table=kk::coop::stimulus_debug::kPools+16;
+    m[table]=base; m[table+8]=uint32_t(entries.size()); m[table+12]=capacity;
+    for (uint32_t i=0;i<entries.size();++i) {
+      const auto a=base+i*kk::coop::stimulus_debug::kStride;
+      m[a]=entries[i].flags; m[a+8]=entries[i].owner; m[a+112]=entries[i].generation;
+    }
+    return eb::Count([&](uint32_t p) { const auto it=m.find(p); return it==m.end() ? 0u : it->second; },1,owner);
+  }
+  // 8262FE20 appends each visible event at 2492+8n with no bound (n from 2484).
+  uint32_t BatScan(std::vector<uint32_t>& vars) const {
+    uint32_t n=0;
+    for (uint32_t i=0;i<entries.size();++i) {
+      if (entries[i].flags&5) continue;
+      const auto at=(eb::kVisionListFirst+8*n)/4;
+      if (at+1<vars.size()) { vars[at]=(1u<<24)|i; vars[at+1]=entries[i].generation; }
+      ++n;
+    }
+    return n;
+  }
+};
+struct PauseRun {
+  uint32_t publishes=0, paused_publishes=0, undispatched_publishes=0, max_visible=0, max_owner=0, scans=0, skipped=0;
+  bool player_intact=true, overflow=false;
+};
+enum class Phase { Play, Pause, PauseExempt, Frozen, ZeroDt };
+constexpr uint32_t kBody=0x43566000, kPlayer=0x82001234;
+// legacy=true is the 26a publisher: one event every frame, no gates.
+PauseRun RunPhases(std::initializer_list<std::pair<Phase,unsigned>> phases,bool legacy,bool guard=false) {
+  PoolModel pool; PauseRun r;
+  std::vector<uint32_t> vars(8800/4,0);
+  for (const auto& [phase,frames]:phases) for (unsigned f=0;f<frames;++f) {
+    pool.paused=phase==Phase::Pause || phase==Phase::PauseExempt;
+    const bool body_runs=phase==Phase::Play || phase==Phase::PauseExempt || phase==Phase::ZeroDt;
+    const bool bat_runs=phase==Phase::Play || phase==Phase::ZeroDt;
+    const float dt=phase==Phase::ZeroDt ? 0.f : 1.f/120;
+    if (bat_runs) {
+      // The bat's reflex runs inside the AI pass, before this frame's ageing.
+      vars[3108/4]=kPlayer;
+      const auto visible=pool.Count(0).enumerable;
+      r.max_visible=std::max(r.max_visible,visible); ++r.scans;
+      if (guard && !eb::VisionScanSafe(visible)) ++r.skipped;
+      else { const auto n=pool.BatScan(vars); r.overflow|=n>eb::kVisionListRoom; }
+      r.player_intact&=vars[3108/4]==kPlayer;
+    }
+    // The co-op stand-in publisher runs after the AI pass on every frame.
+    const auto owned=pool.Count(kBody).owner_live;
+    r.max_owner=std::max(r.max_owner,owned);
+    const bool publish=legacy || eb::DecidePublish({pool.paused,body_runs,owned})==eb::Decision::Publish;
+    uint32_t index=0;
+    if (publish && pool.Allocate(kBody,.001f,index)) {
+      ++r.publishes; if (pool.paused) ++r.paused_publishes; if (!body_runs) ++r.undispatched_publishes;
+    }
+    pool.Age(dt);
+  }
+  return r;
+}
+// 26 Oct timeline: play, 3.79 s pause page, Resume.
+constexpr unsigned kPauseFrames=455;
+void EventPause() {
+  const auto legacy=RunPhases({{Phase::Play,600},{Phase::Pause,kPauseFrames},{Phase::Play,120}},true);
+  Check(legacy.overflow && !legacy.player_intact && legacy.max_visible>77,
+      "model reproduces the 21:03 overflow: the 26a publisher floods the bat list past the player pointer");
+  const auto fixed=RunPhases({{Phase::Play,600},{Phase::Pause,kPauseFrames},{Phase::Play,120}},false);
+  Check(fixed.publishes>=700,"gated publisher still publishes on every played frame");
+  Check(fixed.paused_publishes==0,"nothing is published while the world pause stops ageing");
+  Check(!fixed.overflow && fixed.player_intact && fixed.max_visible<=eb::kOwnerLiveLimit,
+      "after Resume the bat sees at most the native live count and its player pointer survives");
+  // A body exempt from the freeze (flag 08000000) is still dispatched while paused.
+  const auto exempt=RunPhases({{Phase::Play,120},{Phase::PauseExempt,kPauseFrames},{Phase::Play,120}},false);
+  Check(exempt.paused_publishes==0,"a dispatched body publishes nothing while the pool is paused");
+  std::printf("event_pause legacy visible=%u fixed publishes=%u visible=%u exempt paused-publishes=%u\n",
+      legacy.max_visible,fixed.publishes,fixed.max_visible,exempt.paused_publishes);
+}
+void EventDispatch() {
+  // A scripted freeze with ageing still on: the native publisher would not run.
+  const auto r=RunPhases({{Phase::Play,120},{Phase::Frozen,240},{Phase::Play,120}},false);
+  Check(r.undispatched_publishes==0,"no stand-in publish on frames the scheduler did not dispatch the body");
+  Check(r.publishes>=230,"dispatched frames still publish");
+}
+void EventOwnerCap() {
+  // Time scale zero: ageing runs but nothing expires, body and bats dispatched.
+  const auto r=RunPhases({{Phase::Play,60},{Phase::ZeroDt,300},{Phase::Play,60}},false);
+  Check(r.max_owner<=eb::kOwnerLiveLimit,"live partner events never exceed the native count");
+  Check(!r.overflow && r.player_intact,"bat list stays inside its room with zero frame time");
+}
+void EventVisionGuard() {
+  Check(eb::VisionScanSafe(eb::kVisionListRoom) && !eb::VisionScanSafe(eb::kVisionListRoom+1),
+      "vision guard boundary is the list room of 74");
+  // Second line: the 26a publisher with the guard alone keeps the player pointer.
+  const auto r=RunPhases({{Phase::Play,120},{Phase::Pause,kPauseFrames},{Phase::Play,60}},true,true);
+  Check(r.skipped>0 && !r.overflow && r.player_intact,"guard skips an overflowing scan and the player pointer survives");
+}
+void EventNetworkDefer() {
+  // Peer shots and relayed damage arriving during a pause wait in their queue.
+  PoolModel pool; pool.paused=true; unsigned queued=0,published=0;
+  const auto drain=[&] {
+    if (eb::DeferWhilePaused(pool.paused)) return;
+    uint32_t i=0; while (queued && pool.Allocate(kBody,.0001f,i)) { --queued; ++published; }
+  };
+  for (unsigned f=0;f<kPauseFrames;++f) { ++queued; drain(); }  // worst case: one peer shot per frame
+  Check(published==0,"network events wait while the pool does not age");
+  pool.paused=false; drain();
+  Check(published>0,"deferred network events run after Resume");
 }
 void FalseQuiet() {
   desync::Guard g; desync::Evidence quiet;
@@ -319,6 +455,11 @@ int main(int argc,char** argv) {
   else if(name=="shot_validator") ShotValidation();
   else if(name=="session_epoch") SessionEpoch();
   else if(name=="udp_duplicate" || name=="udp_order") Reliable();
+  else if(name=="event_pause") EventPause();
+  else if(name=="event_dispatch") EventDispatch();
+  else if(name=="event_owner_cap") EventOwnerCap();
+  else if(name=="event_vision_guard") EventVisionGuard();
+  else if(name=="event_network_defer") EventNetworkDefer();
   else { std::fprintf(stderr,"unknown test\n"); return 2; }
   std::printf("PASS [%s]\n",test_name); return 0;
 }

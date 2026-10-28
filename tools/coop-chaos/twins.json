@@ -16,6 +16,11 @@
     "session_epoch": "session_epoch",
     "story_world": "story_world",
     "story_duplicate": "story_duplicate",
-    "false_quiet": "false_quiet"
+    "false_quiet": "false_quiet",
+    "event_pause_gate": "event_pause",
+    "event_dispatch_gate": "event_dispatch",
+    "event_owner_cap": "event_owner_cap",
+    "event_vision_guard": "event_vision_guard",
+    "event_network_defer": "event_network_defer"
   }
 }

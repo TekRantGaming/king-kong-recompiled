@@ -14,6 +14,7 @@
 #include "coop_partner_body.h"
 #include "coop_world_snapshot.h"
 #include "coop_stimulus_debug.h"
+#include "coop_event_budget.h"
 #include <algorithm>
 #include <bit>
 #include <rex/logging.h>
@@ -92,6 +93,7 @@ REX_EXTERN(__imp__sub_8271E4E8);
 REX_EXTERN(__imp__sub_825491B0);
 REX_EXTERN(__imp__sub_8271ECF8);
 REX_EXTERN(__imp__sub_82663550);
+REX_EXTERN(__imp__sub_8262FE20);
 REX_EXTERN(__imp__sub_8241F0A8);
 #endif
 #if defined(KK_DEV_TOOLS)
@@ -516,6 +518,7 @@ struct State {
   std::optional<PlayerStatus> sent_status;
   double next_status_time = 0, partner_status_time = -1;
   uint64_t hits_produced = 0, hits_queued = 0, hits_native = 0, hits_refused = 0;
+  uint64_t events_deferred = 0; bool events_paused = false; // C101
   bool shooting = false, shot_resolved = false;
   ShotIntent shot;
   InventoryState shot_inventory;
@@ -1810,6 +1813,8 @@ void CombatBeforeAi(PPCContext& ctx, uint8_t* b) {
   }
   {
     while (!s.pending_damage.empty()) {
+      // C101: relayed damage makes a native type 4 event; wait while paused.
+      if (event_budget::DeferWhilePaused(Load32(b,event_budget::kPoolPauseWord)!=0)) break;
       const auto& entry = s.pending_damage.front();
       // Wait briefly for the normal enemy matcher, without advancing replay.
       if ((!s.aliases.contains(entry.message.damage.enemy) || !s.link.partner) && combat::Fresh(entry.received, Now())) break;
@@ -2574,6 +2579,15 @@ void OwnerShots(PPCContext& ctx, uint8_t* b) {
           receipt.number,receipt.reason==ShotReject::None,receipt.queued,ShotRejectName(receipt.reason));
     }
   }
+  // C101: peer shots make native type 2/21/4 events. While the world is
+  // paused those never age, so leave the intents in their bounded queue.
+  const bool paused=event_budget::DeferWhilePaused(Load32(b,event_budget::kPoolPauseWord)!=0);
+  if (paused!=s.events_paused) {
+    s.events_paused=paused;
+    REXLOG_INFO("KK co-op events: world {}, peer shots and relayed damage {} (deferred frames so far {})",
+        paused ? "paused" : "resumed", paused ? "wait" : "run again", s.events_deferred);
+  }
+  if (paused) { ++s.events_deferred; return; }
   for (const auto& received : TakeShotIntents()) {
     const auto& shot = received.intent;
     auto reason = s.shot_validator.Validate(received, s.identity, received.peer ? received.peer : s.link.partner, Now());
@@ -3772,4 +3786,23 @@ REX_HOOK_RAW(sub_8243A3C0) {
 REX_HOOK_RAW(sub_82634428) {
   kk::coop::ObjectsFirearm(ctx,base);
   if (!kk::coop::ForwardShotEvent(ctx, base)) __imp__sub_82634428(ctx, base);
+}
+
+// C101 second line of defence. BC_exec_check_vision appends every visible type 1
+// event to a list with room for 74 (vars+2492, count +2484) and no bound. Never
+// run it when more are visible; the native scan would overwrite the bat's own
+// state and player pointer (26 Oct 21:03 crash, guest 0100005C).
+REX_HOOK_RAW(sub_8262FE20) {
+  if (REXCVAR_GET(kk_coop_enabled)) {
+    namespace eb=kk::coop::event_budget;
+    const auto count=eb::Count([&](uint32_t p) { return kk::hfr::Load32(base,p); },1,0);
+    if (count.valid && !eb::VisionScanSafe(count.enumerable)) {
+      static unsigned logged=0;
+      if (logged++<16) REXLOG_WARN("KK co-op bat vision: scan skipped, {} visible type 1 events exceed its list of {} (actor={:08X})",
+          count.enumerable,eb::kVisionListRoom,kk::hfr::Load32(base,0x82CCBF6C));
+      ctx.r3.u64=0;
+      return;
+    }
+  }
+  __imp__sub_8262FE20(ctx,base);
 }
