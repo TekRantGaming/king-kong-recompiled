@@ -4560,6 +4560,9 @@ void ActorNativeAudit(const uint8_t* b) {
   const auto dir=std::filesystem::absolute(path).lexically_normal();
   if (!dir.generic_string().starts_with("F:/kk-native-coop/") && !dir.generic_string().starts_with("f:/kk-native-coop/")) return;
   auto& s=Get(); std::vector<world::Json> rows;
+  PlayerPose local;
+  const auto hero=Ptr(b,Load32(b,0x82CCBF7C),12,64);
+  if (hero) { local.x=LoadF(b,hero+48); local.y=LoadF(b,hero+52); local.z=LoadF(b,hero+56); }
   for (const auto& [actor,binding]:s.bindings) {
     Binding observed; EnemyState e;
     if (!ValidBinding(b,binding) || !Read(b,actor,observed,e)) continue;
@@ -4569,6 +4572,7 @@ void ActorNativeAudit(const uint8_t* b) {
     const auto cell=LifeCell(b,binding);
     rows.push_back(world::Json::Object({{"id",world::Hex(id.source)},{"sequence",id.sequence},
         {"family",uint16_t(binding.id.family)},{"bound",id.source!=0},
+        {"relevant",!hero || actors::Relevant(e,local) || (s.link.partner && actors::Relevant(e,*s.link.partner))},
         {"x",e.x},{"y",e.y},{"z",e.z},{"facing",e.facing},{"life",e.life},
         {"native_health",cell ? world::Json(LoadF(b,cell)):world::Json()},
         {"action",e.action},{"item",e.item},{"animation_time",animation},
@@ -4577,6 +4581,7 @@ void ActorNativeAudit(const uint8_t* b) {
   }
   const double utc=std::chrono::duration<double>(std::chrono::system_clock::now().time_since_epoch()).count();
   const auto record=world::Json::Object({{"role",s.link.role==Role::Host ? "host":"guest"},
+      {"protocol",kProtocolVersion},
       {"epoch",world::Hex(s.link.epoch)},{"level",s.identity.level},{"start",s.identity.start},{"visit",s.identity.serial},
       {"native_time",now},{"utc",utc},{"replication",Replication()},{"rows",world::Json::Array(rows)}});
   try {
