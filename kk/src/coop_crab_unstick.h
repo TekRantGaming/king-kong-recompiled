@@ -16,13 +16,22 @@
 //     vars+2040 instead; CR_ETAT_FIGHT clears vars+4424 right after that check.
 // This watch finds a crab held like that (game time, so a pause does not count) and asks for that native give up.
 // Only with a partner body (co-op); single player is unchanged.
+//
+// C118: the same hold with a PLAYER target (c111-guestdie-fix4-20261028-103642, 116 s): the crab kept the host,
+// 2.5 m away and out of its 2.25 m player reach (vars+1408), while the partner body stood 1.3 m from it, pressed
+// into its side. A crab keeps a sub 1 target while it exists, so it never takes the closer player. Here only the
+// target release word is written: CR_exec_CHECK_Target keeps a sub 1 target only while vars+4424 is zero, the
+// candidate gate fn_82463A58 refuses the object named there, and CR_ETAT_FIGHT clears it right after the check.
+// The check then takes vars+2040, which the co-op target hook already sets to the nearer player. The crew give up
+// words (vars+3532 zone, vars+4420) stay as they are, since the game never gives up a player.
 namespace kk::coop::crab_unstick {
 
 constexpr float kStuckSeconds = 6.0f;   // the reported stalls lasted 22 to 65 s
 constexpr float kMoveLimit = 0.5f;      // planar metres the crab may drift and still count as held
 constexpr float kPlayerNear = 3.0f;     // a player this close (crab centre) is in the way and reachable
 constexpr float kRangeMargin = 0.25f;   // beyond the crab's own reach for this target
-constexpr uint32_t kVarsTarget = 1056, kVarsSub = 3496, kVarsNpcRange = 1412;
+constexpr float kPlayerRangeMargin = 0.1f;  // C118: held crabs sat 2.36 to 2.6 m from a player, reach 2.25 m
+constexpr uint32_t kVarsTarget = 1056, kVarsSub = 3496, kVarsNpcRange = 1412, kVarsPlayerRange = 1408;
 constexpr uint32_t kVarsZone = 3532, kVarsGaveUp = 4420, kVarsExcluded = 4424;
 
 struct Sample {
@@ -31,6 +40,8 @@ struct Sample {
   uint32_t target = 0, hero = 0, body = 0;
   float distance = 0, range = 0;  // to its target; vars+1412
   float player_near = 1e9f;       // nearest of host and partner body
+  float player_range = 0;         // vars+1408, the reach for a player target
+  float other_player = 1e9f;      // with a player target: the other player (host or partner body)
 };
 struct Watch {
   uint32_t target = 0;
@@ -41,11 +52,19 @@ inline bool PlayerTarget(const Sample& s) {
   if (COOP_MUT_IF("crab_unstick_player_target")) return false;
   return s.target == s.hero || (s.body && s.target == s.body);
 }
+// C118: held on one player while the other player is closer and next to it.
+inline bool PlayerHeld(const Sample& s) {
+  if (!s.body && !COOP_MUT_IF("crab_unstick_single_player")) return false;
+  if (s.sub != 1 || !s.target || !PlayerTarget(s)) return false;
+  if (COOP_MUT_IF("crab_player_any_other")) return s.distance > s.player_range + kPlayerRangeMargin;
+  return s.distance > s.player_range + kPlayerRangeMargin && s.other_player < s.distance && s.other_player <= kPlayerNear;
+}
 // One crab frame. True when the crab should give its target up now.
 inline bool Step(Watch& w, const Sample& s) {
-  const bool held = s.sub == 1 && s.target && !PlayerTarget(s) &&
-                    (s.body || COOP_MUT_IF("crab_unstick_single_player")) &&
-                    s.distance > s.range + kRangeMargin && s.player_near <= kPlayerNear;
+  const bool held = (s.sub == 1 && s.target && !PlayerTarget(s) &&
+                     (s.body || COOP_MUT_IF("crab_unstick_single_player")) &&
+                     s.distance > s.range + kRangeMargin && s.player_near <= kPlayerNear) ||
+                    (PlayerHeld(s) && !COOP_MUT_IF("crab_player_unstick_off"));
   if (!held || w.target != s.target || s.now < w.since) {
     w = {held ? s.target : 0u, s.now, s.x, s.y};
     return false;
@@ -62,6 +81,13 @@ inline bool Step(Watch& w, const Sample& s) {
 struct GiveUp { uint32_t zone = 1, gave_up = 1, excluded = 0; };
 inline GiveUp NativeGiveUp(uint32_t target) {
   GiveUp g; g.excluded = COOP_MUT_IF("crab_unstick_no_exclude") ? 0u : target;
+  return g;
+}
+// C118: for a player target only the release word changes; the zone and crew give up words are kept as read.
+inline GiveUp PlayerRelease(uint32_t target, uint32_t zone_now, uint32_t gave_up_now) {
+  GiveUp g{zone_now, gave_up_now, target};
+  if (COOP_MUT_IF("crab_player_release_zone")) g.zone = 1;
+  if (COOP_MUT_IF("crab_player_no_exclude")) g.excluded = 0;
   return g;
 }
 

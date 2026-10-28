@@ -1054,6 +1054,35 @@ void CrabUnstick() {
   const auto g=cu::NativeGiveUp(kCrew);
   Check(g.excluded==kCrew && g.zone==1 && g.gave_up==1,"the give up writes what the game's own crew give up writes");
 }
+// C118: the c111-guestdie-fix4 stall, replayed once a frame: crab 43E36CD0 kept the host 2.5 m away (player reach
+// 2.25 m) for 116 s while the partner body stood 1.3 m from it.
+void CrabPlayerUnstick() {
+  namespace cu=crab_unstick;
+  constexpr uint32_t kHero=0x4191125C, kBody=0x43E1CAD0;
+  auto stalled=[&](float now) {
+    cu::Sample s; s.now=now; s.x=338.4f; s.y=229.9f; s.sub=1; s.target=kHero; s.hero=kHero; s.body=kBody;
+    s.distance=2.5f; s.range=2.5f; s.player_range=2.25f; s.player_near=1.3f; s.other_player=1.3f; return s;
+  };
+  auto run=[&](auto make,float seconds) {
+    cu::Watch w; int fired=0; float first=-1;
+    for (int f=0;f<=int(seconds*30);++f) { const float t=40.f+f/30.f; if (cu::Step(w,make(t))) { ++fired; if (first<0) first=t-40.f; } }
+    return std::pair<int,float>{fired,first};
+  };
+  const auto held=run(stalled,116.f);
+  Check(held.first>=1 && held.second>=cu::kStuckSeconds && held.second<cu::kStuckSeconds+0.1f,"a crab held on the host with the partner pressed against it lets go after six seconds");
+  Check(run([&](float t){ auto s=stalled(t); s.target=kBody; s.distance=2.6f; return s; },20.f).first>=1,"the same hold on the partner body lets go too");
+  // Single player: no partner body, nothing changes.
+  Check(run([&](float t){ auto s=stalled(t); s.body=0; s.other_player=1e9f; return s; },20.f).first==0,"single player crabs keep their player");
+  // Within its player reach the native melee runs.
+  Check(run([&](float t){ auto s=stalled(t); s.distance=2.3f; return s; },20.f).first==0,"a crab within reach of its player keeps it");
+  // The other player farther than the target: nothing closer to take (C111 fix6, crew follower in the way).
+  Check(run([&](float t){ auto s=stalled(t); s.distance=2.8f; s.other_player=3.6f; s.player_near=2.8f; return s; },20.f).first==0,"a crab with the other player farther away keeps its target");
+  Check(run([&](float t){ auto s=stalled(t); s.distance=4.f; s.other_player=3.5f; return s; },20.f).first==0,"a crab with the other player beyond three metres keeps its target");
+  // A crab that keeps moving is not held.
+  Check(run([&](float t){ auto s=stalled(t); s.x=330.f+(t-40.f)*1.2f; return s; },20.f).first==0,"a crab that keeps moving keeps its player");
+  const auto g=cu::PlayerRelease(kHero,0,0);
+  Check(g.excluded==kHero && g.zone==0 && g.gave_up==0,"a player release writes only the release word and keeps the crew give up words");
+}
 }
 int main(int argc,char** argv) {
   if(argc!=2) { std::fprintf(stderr,"choose one named chaos test\n"); return 2; }
@@ -1104,6 +1133,7 @@ int main(int argc,char** argv) {
   else if(name=="human_return") HumanReturn();
   else if(name=="human_set_track") HumanSetTrack();
   else if(name=="crab_unstick") CrabUnstick();
+  else if(name=="crab_player_unstick") CrabPlayerUnstick();
   else { std::fprintf(stderr,"unknown test\n"); return 2; }
   std::printf("PASS [%s]\n",test_name); return 0;
 }

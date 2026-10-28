@@ -1177,9 +1177,10 @@ void DevCrabFightProbe(PPCContext& ctx, uint8_t* b) {
 // C117 (coop_crab_unstick.h): a crab held against the players while it charges a crew member out of reach.
 thread_local uint32_t crab_give_up = 0;
 struct CrabGiveUpScope { ~CrabGiveUpScope() { crab_give_up = 0; } };
-struct CrabHeld { crab_unstick::Watch watch; float distance = 0, player_near = 0; uint32_t pending = 0, wait = 0; };
+struct CrabHeld { crab_unstick::Watch watch; float distance = 0, player_near = 0; uint32_t pending = 0, wait = 0; bool player = false; };
 std::map<uint32_t,CrabHeld>& CrabWatches() { static std::map<uint32_t,CrabHeld> m; return m; }
-void CrabUnstickStep(const uint8_t* b, uint32_t actor, uint32_t vars, uint32_t hero) {
+void CrabUnstickStep(const uint8_t* b, const Binding& binding, uint32_t hero) {
+  const auto actor=binding.actor, vars=binding.vars;
   namespace cu=crab_unstick;
   const auto body=kk::PartnerBodyCombatActor(b);
   auto& watches=CrabWatches();
@@ -1194,9 +1195,14 @@ void CrabUnstickStep(const uint8_t* b, uint32_t actor, uint32_t vars, uint32_t h
   s.sub=Load32(b,vars+cu::kVarsSub); s.target=target; s.hero=hero; s.body=body;
   s.distance=tm ? std::hypot(LoadF(b,tm+48)-s.x,LoadF(b,tm+52)-s.y) : 0.f;
   s.range=LoadF(b,vars+cu::kVarsNpcRange);
+  // fn_82451BA0: the player reach (vars+1408) when the target is the cached player CR_ETAT_FIGHT will see, else 1412.
+  s.player_range=LoadF(b,vars+(target==CrabSelectedPlayer(b,binding,hero) ? cu::kVarsPlayerRange : cu::kVarsNpcRange));
   for (const auto player : {hero,body}) {
     const auto pm=player && PoseAddress(player,32) ? Ptr(b,player,12,64) : 0;
-    if (pm) s.player_near=std::min(s.player_near,std::hypot(LoadF(b,pm+48)-s.x,LoadF(b,pm+52)-s.y));
+    if (!pm) continue;
+    const float d=std::hypot(LoadF(b,pm+48)-s.x,LoadF(b,pm+52)-s.y);
+    s.player_near=std::min(s.player_near,d);
+    if ((target==hero || target==body) && player!=target) s.other_player=d;
   }
   auto& held=watches[actor];
   if (held.pending && held.wait && --held.wait==0) {
@@ -1207,7 +1213,10 @@ void CrabUnstickStep(const uint8_t* b, uint32_t actor, uint32_t vars, uint32_t h
           actor,held.pending,target,target==hero ? "host" : target==body ? "partner" : target ? "other" : "none",results);
     held.pending=0;
   }
-  if (cu::Step(held.watch,s)) { crab_give_up=actor; held.distance=s.distance; held.player_near=s.player_near; }
+  if (cu::Step(held.watch,s)) {
+    crab_give_up=actor; held.distance=s.distance; held.player=cu::PlayerTarget(s);
+    held.player_near=held.player ? s.other_player : s.player_near;
+  }
 }
 void CrabFight(PPCContext& ctx, uint8_t* b) {
 #if defined(KK_DEV_TOOLS)
@@ -1216,7 +1225,7 @@ void CrabFight(PPCContext& ctx, uint8_t* b) {
   const auto* owner=CombatOwner(b,EnemyFamily::Crab);
   const auto hero=Load32(b,0x82CCBF7C);
   CrabGiveUpScope give_up_scope;
-  if (owner) CrabUnstickStep(b,owner->actor,owner->vars,hero);
+  if (owner) CrabUnstickStep(b,*owner,hero);
   if (!owner || Load32(b,owner->vars+2040)!=hero) { __imp__sub_8265BF60(ctx,b); return; }
   const auto binding=*owner;
   CrabFightGuard guard{b,binding,hero,crab_player_scope};
@@ -1238,7 +1247,10 @@ void CrabPlayerTarget(PPCContext& ctx, uint8_t* b) {
   if (crab_give_up && crab_give_up==binding.actor) {
     crab_give_up=0;
     given_up=Load32(b,binding.vars+crab_unstick::kVarsTarget);
-    const auto g=crab_unstick::NativeGiveUp(given_up);
+    const bool player=CrabWatches()[binding.actor].player;
+    const auto g=player ? crab_unstick::PlayerRelease(given_up,Load32(b,binding.vars+crab_unstick::kVarsZone),
+                                                      Load32(b,binding.vars+crab_unstick::kVarsGaveUp))
+                        : crab_unstick::NativeGiveUp(given_up);
     Store32(b,binding.vars+crab_unstick::kVarsZone,g.zone);
     Store32(b,binding.vars+crab_unstick::kVarsGaveUp,g.gave_up);
     Store32(b,binding.vars+crab_unstick::kVarsExcluded,g.excluded);
@@ -1249,8 +1261,9 @@ void CrabPlayerTarget(PPCContext& ctx, uint8_t* b) {
     auto& held=CrabWatches()[binding.actor];
     held.pending=given_up; held.wait=15;
     if (lines++<200)
-      REXLOG_INFO("COOP CRAB unstick actor={:08X} gave-up={:08X} preferred={:08X} hero={:08X} body={:08X} distance={:.2f} player-near={:.2f} n={}",
-          binding.actor,given_up,nearest,Load32(b,0x82CCBF7C),kk::PartnerBodyCombatActor(b),held.distance,held.player_near,lines);
+      REXLOG_INFO("COOP CRAB unstick actor={:08X} kind={} gave-up={:08X} preferred={:08X} hero={:08X} body={:08X} distance={:.2f} player-near={:.2f} n={}",
+          binding.actor,held.player ? "player":"crew",given_up,nearest,Load32(b,0x82CCBF7C),kk::PartnerBodyCombatActor(b),
+          held.distance,held.player_near,lines);
   }
 #if defined(KK_DEV_TOOLS)
   static std::map<uint32_t,std::pair<double,unsigned>> samples;
