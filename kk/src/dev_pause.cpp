@@ -83,12 +83,13 @@ void DevPageRuns(const char* name, uint8_t* base) {
 }
 }  // namespace kk
 
-// Page switch requests: sub_826FA3B0(mode, page) from a page script.
-REX_EXTERN(__imp__sub_826FA3B0);
-REX_HOOK_RAW(sub_826FA3B0) {
+// Page switch requests: sub_826FA3B0(mode, page) from a page script. The
+// hook itself lives in coop_human_guard.cpp (null state guard, all builds).
+namespace kk {
+void DevPageSwitch(PPCContext& ctx) {
   if (kk::pause::Tracing())
     REXLOG_INFO("KK dev page: switch r3={} r4={:08X} lr={:08X}", int32_t(ctx.r3.u32), ctx.r4.u32, uint32_t(ctx.lr));
-  __imp__sub_826FA3B0(ctx, base);
 }
+}  // namespace kk
 
 #endif

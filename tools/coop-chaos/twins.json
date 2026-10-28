@@ -51,6 +51,10 @@
     "support_delayed_watch": "support_delayed_watch",
     "armed_copy_source": "armed_copy_source",
     "invisible_gun": "invisible_gun",
-    "digest_retired": "digest_retired"
+    "digest_retired": "digest_retired",
+    "human_return_skip_fill": "human_return",
+    "human_return_default_only": "human_return",
+    "human_return_keep_native": "human_return",
+    "human_set_track_guard": "human_set_track"
   }
 }
