@@ -33,7 +33,22 @@ inline bool NativeScorpionGrabStart(const DamageEvent& d) {
 inline bool NativeAttackSound(const DamageEvent& d) {
   if (COOP_MUT_IF("attack_sound")) return true;
   // Scorpion82616490 plays sound8 immediately before producing5/10.
-  return d.enemy.family==EnemyFamily::Scorpion && !d.projectile && d.flags==5 && d.magnitude==10;
+  // Bat82652FF8 plays sound10 immediately after its player contact2/2.
+  return !d.projectile && ((d.enemy.family==EnemyFamily::Scorpion && d.flags==5 && d.magnitude==10) ||
+      (d.enemy.family==EnemyFamily::Bat && d.flags==2 && d.magnitude==2));
+}
+inline uint32_t NativeAttackSoundResource(const DamageEvent& d) {
+  return NativeAttackSound(d) ? (d.enemy.family==EnemyFamily::Bat ? 10:8):0;
+}
+inline bool BatContactSound(const DamageEvent& d,EnemyId source,uint32_t generation,
+                            uint32_t caller,uint32_t resource,double now) {
+  if (COOP_MUT_IF("bat_contact_sound")) return true;
+  // Only the successful sound call immediately following the actual player
+  // contact may annotate that still unsent event. The separate grab cue at
+  //8265408C is not evidence of a player strike.
+  return !d.attack_sound && d.enemy.family==EnemyFamily::Bat && NativeAttackSound(d) &&
+      d.enemy==source && d.generation==generation && caller==0x82654038 && resource==10 &&
+      Fresh(d.time,now) && now-d.time<=.1;
 }
 inline bool AttackSoundObserved(const DamageEvent& d,EnemyId source,uint32_t generation,
                                 double observed,double now,bool consumed) {

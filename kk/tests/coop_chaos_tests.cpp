@@ -335,6 +335,24 @@ void ProfileScenario(const char* name,uint32_t seed) {
   std::printf("actual-core profile=%s seed=%u story=%u poses=%llu/%llu converged=yes native-hooks=absent\n",name,seed,applied,
       (unsigned long long)p.host.Poses().received,(unsigned long long)p.guest.Poses().received);
 }
+void BatContactSound() {
+  DamageEvent d{{302,9,5},9,7,{123,4,EnemyFamily::Bat},2,2,{1,0,0}};
+  d.generation=2; d.time=10;
+  Check(combat::NativeAttackSoundResource(d)==10,"native bat contact selects its own resource");
+  Check(combat::BatContactSound(d,d.enemy,2,0x82654038,10,10.01),"successful contact cue can annotate actual unsent hit");
+  auto other=d.enemy; ++other.source;
+  Check(!combat::BatContactSound(d,other,2,0x82654038,10,10.01),"other source cannot lend contact sound");
+  Check(!combat::BatContactSound(d,d.enemy,3,0x82654038,10,10.01),"new owner cannot annotate old hit");
+  Check(!combat::BatContactSound(d,d.enemy,2,0x8265408C,10,10.01),"grab cue cannot annotate a player strike");
+  Check(!combat::BatContactSound(d,d.enemy,2,0x82654038,14,10.01),"approach cue is not contact sound");
+  Check(!combat::BatContactSound(d,d.enemy,2,0x82654038,10,10.2),"old hit cannot acquire later sound");
+  Check(!combat::BatContactSound(d,d.enemy,2,0x82654038,10,9.99),"future hit refused");
+  d.attack_sound=true;
+  Check(ValidDamageEvent(d),"observed bat contact sound fits damage wire");
+  Check(!combat::BatContactSound(d,d.enemy,2,0x82654038,10,10.01),"same cue cannot annotate the hit twice");
+  d.flags=512; d.magnitude=99;
+  Check(!ValidDamageEvent(d) && !combat::NativeAttackSoundResource(d),"bat feeding is not a player strike cue");
+}
 void NativeScriptTarget() {
   Check(combat::NativePlayerScriptTarget(10,20,10,20),"native authored player may follow accepted peer");
   Check(combat::NativePlayerScriptTarget(20,10,10,20),"reverse player choice retained");
@@ -452,6 +470,7 @@ int main(int argc,char** argv) {
   else if(name=="attack_sound") AttackSound();
   else if(name=="grab_start") GrabStart();
   else if(name=="native_script_target") NativeScriptTarget();
+  else if(name=="bat_contact_sound") BatContactSound();
   else if(name=="udp_duplicate" || name=="udp_order") Reliable();
   else { std::fprintf(stderr,"unknown test\n"); return 2; }
   std::printf("PASS [%s]\n",test_name); return 0;

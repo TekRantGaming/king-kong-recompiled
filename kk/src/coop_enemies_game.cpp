@@ -1063,6 +1063,7 @@ void BatPlayerTarget(PPCContext& ctx, uint8_t* b) {
 #endif
   if (accepted) Store32(b,owner->vars+848,other);
 }
+thread_local uint32_t bat_contact_actor=0;
 void BatPlayerFight(PPCContext& ctx, uint8_t* b, void (*native)(PPCContext&,uint8_t*)) {
   const auto* owner=CombatOwner(b,EnemyFamily::Bat);
   const auto hero=Load32(b,0x82CCBF7C),body=kk::PartnerBodyCombatActor(b);
@@ -1080,6 +1081,11 @@ void BatPlayerFight(PPCContext& ctx, uint8_t* b, void (*native)(PPCContext&,uint
         Store32(base,binding.vars+3108,hero);
     }
   } restore{b,binding,hero};
+  struct ContactScope {
+    uint32_t previous;
+    ~ContactScope() { bat_contact_actor=previous; }
+  } contact_scope{bat_contact_actor};
+  if (native==__imp__sub_82652FF8) bat_contact_actor=binding.actor;
   Store32(b,binding.vars+3108,body);
 #if defined(KK_DEV_TOOLS)
   const bool entry=native==__imp__sub_82658ED8 && Load32(b,binding.vars+3084)!=17;
@@ -1961,9 +1967,10 @@ bool NativeDamage(PPCContext& ctx, uint8_t* b, const DamageEvent& d) {
   s.injecting_damage = false;
   const bool queued=Load32(b,result)!=UINT32_MAX && Load32(b,result+4)!=0;
   if (queued && d.attack_sound && combat::NativeAttackSound(d)) {
-    ctx.r3.u64=source->actor; ctx.r4.u64=8; __imp__sub_823FCF58(ctx,b);
-    REXLOG_INFO("COOP SOUND guest native-sting source={:08X} number={} code=8 created={} native-hit-queued=true",
-        source->actor,d.number,ctx.r3.s32!=-1);
+    const auto resource=combat::NativeAttackSoundResource(d);
+    ctx.r3.u64=source->actor; ctx.r4.u64=resource; __imp__sub_823FCF58(ctx,b);
+    REXLOG_INFO("COOP SOUND guest native-attack source={:08X} family={} number={} code={} created={} native-hit-queued=true",
+        source->actor,uint16_t(d.enemy.family),d.number,resource,ctx.r3.s32!=-1);
   }
   for (unsigned i = 0; i < 4; ++i) Store32(b, globals[i], saved[i]);
   return queued;
@@ -3828,7 +3835,11 @@ bool EnemyDamageEnqueue(PPCContext& ctx, uint8_t* b, uint32_t body) {
     bool queued = false;
     if (qualified) {
       Message m; m.type = MessageType::DamageEvent; m.epoch = s.combat_epoch; m.damage = damage;
-      if (s.outgoing_damage.empty() && SubmitCombat(m, Now())) { queued = true; ++s.hits_queued; }
+      // Bat contact produces its sound immediately after its hit. Defer this
+      // one native call until the next normal flush so that an actual successful
+      // sound creation can annotate the unsent hit. Other attacks keep their path.
+      const bool defer_sound=source==bat_contact_actor && damage.enemy.family==EnemyFamily::Bat && combat::NativeAttackSound(damage);
+      if (s.outgoing_damage.empty() && !defer_sound && SubmitCombat(m, Now())) { queued = true; ++s.hits_queued; }
       else if (s.outgoing_damage.size() < combat::kQueueLimit) { s.outgoing_damage.push_back({m, Now()}); queued = true; }
       if (queued) ++s.next_damage;
       if (queued && damage.attack_sound) sound->second.consumed=true;
@@ -4105,9 +4116,27 @@ REX_HOOK_RAW(sub_82548BC0) {
 REX_HOOK_RAW(sub_8271E450) { kk::coop::FilterPeerGrabQuery(ctx,base,false); }
 REX_HOOK_RAW(sub_8271E290) { kk::coop::FilterPeerGrabQuery(ctx,base,true); }
 REX_HOOK_RAW(sub_823FCF58) {
-  const auto actor=ctx.r3.u32,resource=ctx.r4.u32;
+  const auto actor=ctx.r3.u32,resource=ctx.r4.u32,caller=uint32_t(ctx.lr);
   __imp__sub_823FCF58(ctx,base);
-  if (resource!=8 || ctx.r3.s32==-1) return;
+  if (ctx.r3.s32==-1) return;
+  if (resource==10 && caller==0x82654038 && actor==kk::coop::bat_contact_actor) {
+    const auto* owner=kk::coop::CombatOwner(base,kk::coop::EnemyFamily::Bat);
+    if (!owner || owner->actor!=actor) return;
+    const auto* authority=kk::coop::AuthorityFor(owner->id);
+    auto& outgoing=kk::coop::Get().outgoing_damage;
+    for (auto it=outgoing.rbegin();it!=outgoing.rend();++it) {
+      auto& d=it->message.damage;
+      if (it->message.type!=kk::coop::MessageType::DamageEvent ||
+          !kk::coop::combat::BatContactSound(d,kk::coop::Canonical(owner->id),authority->generation,caller,resource,kk::coop::Now())) continue;
+      d.attack_sound=true;
+#if defined(KK_DEV_TOOLS)
+      REXLOG_INFO("COOP SOUND owner native-contact source={:08X} number={} generation={} code=10 created=true native-hit-unsent=true",actor,d.number,authority->generation);
+#endif
+      break;
+    }
+    return;
+  }
+  if (resource!=8) return;
   const auto* owner=kk::coop::CombatOwner(base,kk::coop::EnemyFamily::Scorpion);
   if (!owner || owner->actor!=actor) return;
   const auto* authority=kk::coop::AuthorityFor(owner->id);
