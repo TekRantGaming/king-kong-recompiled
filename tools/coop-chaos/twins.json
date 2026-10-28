@@ -45,6 +45,7 @@
     "support_member_personal": "support_member",
     "support_delayed_watch": "support_delayed_watch",
     "armed_copy_source": "armed_copy_source",
-    "invisible_gun": "invisible_gun"
+    "invisible_gun": "invisible_gun",
+    "reload_mark": "reload_mark"
   }
 }
