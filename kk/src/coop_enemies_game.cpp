@@ -2005,7 +2005,9 @@ void Replicas(PPCContext& ctx, uint8_t* b, bool drive) {
     }
     auto& authority = a->second;
     if (!authority.Accepts(r.enemy) || authority.owner == Side() || authority.Frozen()) continue;
-    authority.Observe(r.latest.id.source ? r.latest : r.enemy);
+    const auto& latest=r.latest.id.source ? r.latest:r.enemy;
+    if (Replication() && authority.dead && latest.life<=0) authority.last=latest;
+    else authority.Observe(latest);
     if (r.kind == EnemyEventKind::Removed) {
       // Death and retirement are separate reliable boundaries. A zero-life
       // replica still runs its corpse script until its owner removes the root.

@@ -1,11 +1,17 @@
 #pragma once
 #include "coop_protocol.h"
 #include "coop_mut.h"
+#include <algorithm>
 #include <cmath>
 
 namespace kk::coop::actors {
 constexpr float kRadius = 160.f, kSnapDistance = 5.f;
 constexpr double kInterval = .05, kBuffer = .1, kRefresh = .25;
+inline double SmoothClock(double previous,double observed,double elapsed) {
+  if (COOP_MUT_IF("actor_clock_filter")) return observed;
+  const double limit=std::max(0.,elapsed)*.05;
+  return previous+std::clamp((observed-previous)*.1,-limit,limit);
+}
 // Only native runtime flags, never component ownership or scheduler marks.
 constexpr uint32_t kFlagsMask = 0x00200001; // hidden (8270BED8), collision (8284BDA8).
 inline bool IndependentTrack(uint32_t fn) {

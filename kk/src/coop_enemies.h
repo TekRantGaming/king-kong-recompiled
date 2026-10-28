@@ -388,6 +388,9 @@ class Channel {
       r.received = now;
       if (e.life <= 0) { r.terminal = true; return; }
       if (!r.history.empty() && time <= r.history.back().time) return;
+      const double observed=now-time;
+      r.clock_offset=r.clock_seen ? actors::SmoothClock(r.clock_offset,observed,now-r.clock_at):observed;
+      r.clock_seen=true; r.clock_at=now;
       r.history.push_back({time, e});
       while (r.history.size() > 8) r.history.pop_front();
     };
@@ -402,7 +405,8 @@ class Channel {
       Record record = r.record;
       record.latest = r.record.enemy;
       if (!r.terminal) {
-        const double target = r.history.back().time + (now-r.received) - .1;
+        const double target = replication && r.clock_seen ? now-r.clock_offset-actors::kBuffer :
+            r.history.back().time + (now-r.received) - .1;
         record.enemy = r.history.front().enemy;
         record.source_time=r.history.front().time;
         for (size_t i = 1; i < r.history.size(); ++i) {
@@ -442,8 +446,9 @@ class Channel {
   struct Remote {
     Record record;
     double received = 0;
+    double clock_offset = 0,clock_at = 0;
     uint32_t sequence = 0;
-    bool seen = false, terminal = false;
+    bool seen = false, terminal = false, clock_seen = false;
     std::deque<SampleEntry> history;
   };
   EnemyWorld world_;

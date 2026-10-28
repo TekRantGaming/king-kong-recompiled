@@ -90,6 +90,11 @@ void ActorInterpolation() {
   Check(sample.records.size()==1 && std::abs(sample.records[0].enemy.x-1)<.001f,"100 ms buffer interpolates between host samples");
   Check(std::abs(sample.records[0].enemy.animation_time-1.1f)<.001f,"animation time follows buffered position");
   Check(std::abs(sample.records[0].source_time-1000.1)<.001,"native audit identifies the buffered source time");
+  const auto before=c.Sample(10.29,true).records[0].source_time;
+  m.sequence=3; m.enemies.time=1000.25; m.enemies.enemies[0].x=2.5f;
+  m.enemies.enemies[0].animation_time=1.25f; c.Receive(m,10.30);
+  Check(c.Sample(10.30,true).records[0].source_time>=before,
+      "a delayed packet cannot move the actor clock backward");
   b.x=20;
   Check(actors::Interpolate(a,b,.5f).x==20,"teleports beyond 5 m snap instead of crossing geometry");
   b.x=2; b.action=77;
