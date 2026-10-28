@@ -343,9 +343,14 @@ class Channel {
       // Reliable death/removal wins over any late unreliable live snapshot or spawn event.
       if (event) {
         if (kind == EnemyEventKind::Spawned && r.terminal) return;
+        if (r.record.kind==EnemyEventKind::Removed && r.terminal && kind!=EnemyEventKind::Removed) return;
         if (kind != EnemyEventKind::Spawned || e.life <= 0) {
+          const bool died=r.terminal && r.record.kind==EnemyEventKind::Died;
           r.terminal = true;
-          r.record.enemy = e; r.record.enemy.life = 0;
+          r.record.enemy = e;
+          // Scripted retirement also removes living templates. It must not
+          // synthesize a kill, while a previously confirmed death stays dead.
+          if (kind==EnemyEventKind::Died || died || e.life<=0) r.record.enemy.life=0;
           if (r.record.kind != EnemyEventKind::Removed) r.record.kind = kind;
           r.received = now;
           return;

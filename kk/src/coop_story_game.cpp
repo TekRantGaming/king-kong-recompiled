@@ -2,6 +2,7 @@
 // with bounded host volume activation and cinematic completion gates.
 #include "coop_story_game.h"
 #include "coop_objects_game.h"
+#include "coop_enemies_game.h"
 #include "coop_story.h"
 #include "coop_desync_game.h"
 #include "coop_runtime.h"
@@ -21,6 +22,7 @@
 #include <set>
 
 REX_EXTERN(__imp__sub_82454690);
+REX_EXTERN(__imp__sub_82499030);
 REX_EXTERN(__imp__sub_82476848);
 REX_EXTERN(__imp__sub_8244F0E8);
 REX_EXTERN(__imp__sub_824FC2D0);
@@ -30,10 +32,19 @@ REX_EXTERN(__imp__sub_82543CA0);
 REX_EXTERN(__imp__sub_826F9E70);
 REX_EXTERN(__imp__sub_82847478);
 REX_EXTERN(__imp__sub_82501A30);
+REX_EXTERN(__imp__sub_82501D50);
+REX_EXTERN(__imp__sub_82449EB0);
+REX_EXTERN(__imp__sub_82449CD0);
+REX_EXTERN(__imp__sub_82466878);
+REX_EXTERN(__imp__sub_826F9DC0);
+REX_EXTERN(__imp__sub_82713A58);
 REX_EXTERN(__imp__sub_8250B9D8);
 REX_EXTERN(__imp__sub_8250BED8);
 #if defined(KK_DEV_TOOLS)
-namespace kk { void DevTrigPivotResult(uint8_t*,uint32_t,uint32_t,uint32_t); }
+namespace kk {
+void DevTrigPivotResult(uint8_t*,uint32_t,uint32_t,uint32_t);
+void DevTrigScreenResult(uint8_t*,uint32_t,uint32_t,uint32_t);
+}
 #endif
 
 namespace kk::coop {
@@ -50,6 +61,9 @@ struct Script : story::Progress {
   std::optional<StoryEvent> request;
   double request_until=0;
   story::Hints hints;
+  std::optional<StoryEvent> native_stop;
+  std::optional<StoryEvent> native_finish;
+  double next_native_stop=0;
   story::Lag lag;
   bool exact=false;
   bool saw_detect=false, saw_loop=false;
@@ -325,6 +339,13 @@ bool HeroPivot(const uint8_t* b,uint32_t payload) {
       Tracks(b,ai,0x826718B8) && Ptr(b,hero,12,64) && Load32(b,payload+8)==hero &&
       !Load32(b,payload+96) && !Load32(b,payload+100);
 }
+bool SharedPivot(const uint8_t* b,uint32_t payload) {
+  if (!PoseAddress(payload,108) || !PoseAddress(Load32(b,payload+4),32) ||
+      Load32(b,payload+96) || Load32(b,payload+100)) return false;
+  const auto selected=Load32(b,payload+8);
+  const auto target=selected ? selected:Load32(b,0x82CCBF7C);
+  return PoseAddress(target,32) && Ptr(b,target,12,64);
+}
 bool SharedDetector(const uint8_t* b,const Script& s) {
   return Load32(b,s.binding.vars+20)==kPivot && HeroPivot(b,s.binding.vars+88);
 }
@@ -591,6 +612,13 @@ void ChecksumFrame(uint8_t* b,double now) {
       }
       auto& s=scripts.at(bind->actor);
       s.activation.Observe(e);
+      if (e.phase==StoryPhase::Stopped) {
+        // A real native host retirement is separate from successful callback
+        // completion. Keep it pending until this guest reaches that same wait.
+        if (e.run>=s.run) s.native_stop=e;
+        Note("native retirement recorded",e);
+        ordered.Applied(now); continue;
+      }
       if (e.phase==StoryPhase::Recovery) {
         Note("legacy recovery hint ignored",e,"only persistent checksum lag requests recovery");
         ordered.Applied(now); continue;
@@ -637,12 +665,27 @@ void ChecksumFrame(uint8_t* b,double now) {
   auto it=scripts.upper_bound(checksum_actor);
   for (unsigned budget=0;it!=scripts.end() && budget<16;++it,++budget) {
     if (outgoing.size()>=kStoryQueue/2 || number==UINT32_MAX) break;
-    const auto& s=it->second;
+    auto& s=it->second;
+    // A native one-shot finish can remove the actor from the current census.
+    // Retain that observed boundary for private guest reloads in this world.
+    if (s.native_finish && s.native_finish->run==s.run && now>=s.next_native_stop) {
+      if (Emit(*s.native_finish)) s.next_native_stop=now+3;
+    }
     const auto* bind=story::Match(s.binding.source,s.binding.script,bindings);
     if (!bind || bind->actor!=it->first || Vars(b,bind->ai,19824)!=bind->vars || Shape(b,bind->vars)!=bind->script) {
       checksum_actor=it->first; continue;
     }
-    auto e=Event(s,StoryPhase::Checksum,Load32(b,bind->vars+19812)); e.number=number+1;
+    const auto index=Load32(b,bind->vars+19812);
+    // NPC callbacks can clear/disable this loop externally while leaving its
+    // cursor on an unfinished read-only wait. Observe that actual transition
+    // and retain it reliably, without inventing a successful NPC order.
+    if (!s.exact && s.saw_loop && s.started==s.run && index<kStoryRecords &&
+        (Load32(b,bind->actor+4)&0x400000) && !Tracks(b,bind->ai,kLoop) &&
+        story::RetirableWait(Load32(b,bind->vars+924+180*index),Load32(b,bind->vars+1092+180*index)!=0) && now>=s.next_native_stop) {
+      auto stopped=Event(s,StoryPhase::Stopped,index);
+      if (Emit(stopped)) { s.next_native_stop=now+3; Note("native retirement observed",stopped,"own loop cleared and inactive at the same native wait"); }
+    }
+    auto e=Event(s,StoryPhase::Checksum,index); e.number=number+1;
     if (!ValidStoryEvent(e)) { checksum_actor=it->first; continue; }
     if (!checksums.Remember(e,now)) break;
     if (!Emit(e)) break;
@@ -911,16 +954,16 @@ bool StoryDetect(PPCContext& ctx,uint8_t* b) {
     }
     // The predicate itself is read-only apart from its local result word.
     // Mixed action chains still execute entirely through their own native loop;
-    // only their noninverted Jack-volume activation is shared. Always run
+    // noninverted player and NPC volume activations follow the host. Always run
     // SSDetect itself so its native checkpoint claim, removal and completion
     // bit bookkeeping remain intact, including persistent programs.
-    if (!host && !s->exact && Load32(b,vars+20)==kPivot && HeroPivot(b,vars+88) &&
+    if (!host && !s->exact && Load32(b,vars+20)==kPivot && SharedPivot(b,vars+88) &&
         story::DetectIdle(before)) {
       if (s->activation.CanArm(s->run)) {
         forced_pivot=vars+88;
         Note("host volume activation",Event(*s,StoryPhase::Armed,kDetectRecord),"native mixed chain and persistence retained");
       } else {
-        Request(ctx,b,*s);
+        if (HeroPivot(b,vars+88)) Request(ctx,b,*s);
         blocked_pivot=vars+88;
       }
     }
@@ -975,6 +1018,23 @@ bool StoryLoop(PPCContext& ctx,uint8_t* b) {
   s->checkpoint_omitted=false; s->checkpoint_covered.reset(); s->checkpoint_finished.reset();
   if (!s->saw_loop) { s->saw_loop=true; Note("native loop scheduled",Event(*s,StoryPhase::Advance,Load32(b,s->binding.vars+19812))); }
   const auto vars=s->binding.vars,before=Load32(b,vars+19812);
+  if (!host && s->native_stop) {
+    const auto stop=*s->native_stop;
+    if (stop.run<s->run) s->native_stop.reset();
+    else if (story::NativeStopMatches(stop,generation,level,s->binding.source,s->binding.script,s->run,before,
+        before<kStoryRecords ? Load32(b,vars+924+180*before):0,
+        before<kStoryRecords && Load32(b,vars+1092+180*before)!=0)) {
+      // This is the actual local SSLoop dispatcher context. Clear its own
+      // track and use the native activity API. Leave cursor, NPC flags and
+      // completion counters untouched, just as on the stopped host.
+      const auto saved=ctx;
+      __imp__sub_826F9DC0(ctx,b);
+      ctx.r3.u32=s->binding.actor; ctx.r4.u32=1; __imp__sub_82713A58(ctx,b);
+      ctx=saved; ctx.r3.u32=0;
+      s->native_stop.reset(); Note("native retirement applied",stop,"same native wait; local track and activity retired");
+      return true;
+    }
+  }
   if (host || !s->exact) {
     __imp__sub_82454690(ctx,b);
     if (failed) return true;
@@ -1035,6 +1095,47 @@ bool StoryLoop(PPCContext& ctx,uint8_t* b) {
   Store32(b,vars+19816,1); // native waiting result; no guest-local callback is run
   return true;
 }
+bool StoryFinish(PPCContext& ctx,uint8_t* b) {
+  if (!Ensure(b) || failed || snapshot_waiting) return false;
+  auto* s=Current(b);
+  if (!s || !s->saw_loop || !s->run || s->started!=s->run || s->finished!=s->run ||
+      Load32(b,s->binding.vars)!=0) return false;
+  const auto index=Load32(b,s->binding.vars+19812);
+  if (index>=kStoryRecords || Load32(b,s->binding.vars+924+180*index)) return false;
+#if defined(KK_DEV_TOOLS)
+  // A bounded control of the native timing uses the same binary and oracle.
+  // This switch and its trace are absent from the shipping executable.
+  static const bool native_control=std::getenv("KK_DEV_STORY_FINISH_NATIVE_CONTROL")!=nullptr;
+#else
+  constexpr bool native_control=false;
+#endif
+  auto ended=Event(*s,StoryPhase::Stopped,index);
+  if (!host && !native_control) {
+    if (!s->native_stop || !story::NativeStopMatches(*s->native_stop,generation,level,
+        s->binding.source,s->binding.script,s->run,index,0,false,true)) {
+      ctx.r3.u32=0;
+      return true;
+    }
+    ended=*s->native_stop;
+    s->native_stop.reset();
+  }
+  const auto actor=s->binding.actor;
+  const auto before=Load32(b,actor+4);
+  __imp__sub_82499030(ctx,b);
+  if (host) {
+    // No arbitrary activity bit is copied. Each peer executes its own complete
+    // native PRG_SSFin, including its destruction event and component cleanup.
+    s->native_finish=ended;
+    if (Emit(ended)) s->next_native_stop=Now()+3;
+  }
+  Note(host ? "native finish observed":"native finish applied",ended,
+      native_control ? "native timing control; host cleanup gate disabled":"same completed one-shot program; native cleanup retained");
+#if defined(KK_DEV_TOOLS)
+  REXLOG_INFO("KK dev story finish: role={} source={:016X} actor={:08X} before={:08X} after={:08X} result={} native-control={}",
+      host ? "host":"guest",ended.source,actor,before,Load32(b,actor+4),ctx.r3.u32,native_control);
+#endif
+  return true;
+}
 bool ConvergeFlagWait(uint8_t* b,uint32_t payload) {
   if (!Ensure(b) || host || failed) return false;
   auto* s=Current(b);
@@ -1055,7 +1156,7 @@ bool ConvergeFlagWait(uint8_t* b,uint32_t payload) {
       "host passed same activation; single-target read-only 0x100 wait stalled >20 seconds");
   return true;
 }
-Script* CinematicRecord(const PPCContext& ctx,uint8_t* b,uint32_t payload,uint32_t fn) {
+Script* CinematicRecord(const PPCContext& ctx,uint8_t* b,uint32_t payload,uint32_t fn,bool initial=false) {
   if (!Ensure(b) || host || failed || snapshot_waiting) return nullptr;
   // SSLoop caches its vars in nonvolatile r31 and writes this record's owner.
   // NPC message callbacks may change the global target AI within that loop.
@@ -1070,28 +1171,88 @@ Script* CinematicRecord(const PPCContext& ctx,uint8_t* b,uint32_t payload,uint32
       Vars(b,binding.ai,19824)!=binding.vars || Shape(b,binding.vars)!=binding.script) return nullptr;
   // Run 1 may have begun before the shared baseline. Do not infer an unseen
   // host activation or apply this to another native caller's payload.
-  if (!s || s->exact || !s->saw_loop || s->run<=1) return nullptr;
+  if (!s || s->exact || !s->saw_loop || !s->run || (!initial && s->run<=1)) return nullptr;
   const auto index=Load32(b,s->binding.vars+19812);
   return index<kStoryRecords && payload==s->binding.vars+992+180*index &&
       Load32(b,payload-68)==fn ? s:nullptr;
 }
-bool HostCinematicWait(PPCContext& ctx,uint8_t* b) {
+bool HostNpcWait(PPCContext& ctx,uint8_t* b,uint32_t fn) {
   const auto payload=ctx.r3.u32;
-  auto* s=CinematicRecord(ctx,b,payload,0x8250B9D8);
+  auto* s=CinematicRecord(ctx,b,payload,fn,true);
   if (!s) return false;
   const auto index=Load32(b,s->binding.vars+19812);
-  // WaitScript consumes the NPC-ready flags when it succeeds. Keep that native
-  // completion behind the host boundary; do not consume them speculatively.
   if (!s->hints.Passed(s->run,index)) { ctx.r3.u32=0; return true; }
-  const auto flags=Load32(b,payload+84);
-  // Decomp: bits 1/2 test local Jack distance and local camera projection.
-  // Host already passed these tests. The native four-NPC-ready test and its
-  // completion writes still run locally, with the authored flags restored.
-  Store32(b,payload+84,flags&~3u);
-  __imp__sub_8250B9D8(ctx,b);
-  Store32(b,payload+84,flags);
-  if (ctx.r3.u32) Note("host cinematic wait",Event(*s,StoryPhase::Advance,index),"local view gates covered; native NPC completion retained");
+  std::vector<uint32_t> extensions;
+  const bool capability=fn==0x82501A30;
+  const bool cinematic=fn==0x8250B9D8;
+  if (capability && !Ptr(b,Load32(b,payload+4),24,42)) return false;
+  for (unsigned off=(capability || cinematic) ? 8:4;off<=20;off+=4) {
+    const auto actor=Load32(b,payload+off);
+    if (!actor) continue;
+    const auto ext=Ptr(b,actor,24,42);
+    if (!ext || !Ptr(b,ext,4,88)) return false;
+    extensions.push_back(ext);
+  }
+  // The host passed this exact authored record in this activation. Reproduce
+  // its native success acknowledgement on local NPCs, without manufacturing
+  // a ready bit, copying a cursor, moving an NPC or issuing its order twice.
+  for (const auto ext:extensions) {
+    const auto flags=Load16(b,ext+40);
+    b[ext+40]=uint8_t(((flags|0x1000)&~0x2000u)>>8);
+    b[ext+41]=uint8_t(flags);
+  }
+  if (cinematic) {
+    // WaitScript's successful branch advances its own debounce timer and
+    // local state word after acknowledging the four optional NPCs. The host
+    // has already passed its distance/view gates. No local failure sound runs.
+    const bool started=Load32(b,payload+100)!=0;
+    const auto dt=LoadF(b,0x82C636E0);
+    StoreF(b,payload+36,started ? LoadF(b,payload+36)+dt:0);
+    StoreF(b,payload+40,started ? LoadF(b,payload+40)+dt:0);
+    Store32(b,payload+100,1);
+  }
+  ctx.r3.u32=1;
+  Note("host NPC wait",Event(*s,StoryPhase::Advance,index),"same host activation completed; native local acknowledgement retained");
   return true;
+}
+bool HostCinematicWait(PPCContext& ctx,uint8_t* b) {
+  return HostNpcWait(ctx,b,0x8250B9D8);
+}
+bool HostAnimationWait(PPCContext& ctx,uint8_t* b) {
+  auto* s=CinematicRecord(ctx,b,ctx.r3.u32,0x82449CD0,true);
+  if (!s) return false;
+  // This exact native predicate only reads the actor's action, variant and
+  // frame. It has no completion writes. Local animation cannot start the next
+  // authored order before its host record has actually completed.
+  const auto index=Load32(b,s->binding.vars+19812);
+  const bool passed=s->hints.Passed(s->run,index);
+  ctx.r3.u32=passed ? 1:0;
+  if (passed) Note("host animation wait",Event(*s,StoryPhase::Advance,index),"read-only native action/frame predicate follows the same host activation");
+  return true;
+}
+void HostPivotWait(PPCContext& ctx,uint8_t* b,uint32_t payload) {
+  auto* s=CinematicRecord(ctx,b,payload,kPivot,true);
+  if (!s || !SharedPivot(b,payload)) return;
+  // This native predicate only writes its result target. A guest NPC can enter
+  // the volume earlier than its host counterpart. Keep the authored local
+  // callback, but gate its result on this same host activation and record.
+  const auto index=Load32(b,s->binding.vars+19812);
+  const bool passed=s->hints.Passed(s->run,index);
+  const auto selected=Load32(b,payload+8);
+  Store32(b,payload+20,passed ? (selected ? selected:Load32(b,0x82CCBF7C)):0);
+  ctx.r3.u32=passed ? 1:0;
+  if (passed) Note("host volume wait",Event(*s,StoryPhase::Advance,index),"same host activation completed; native result target retained");
+}
+void HostScreenWait(PPCContext& ctx,uint8_t* b,uint32_t payload) {
+  auto* s=CinematicRecord(ctx,b,payload,0x82466878,true);
+  if (!s) return;
+  // Keep the native projection, occlusion, timer and temporary context writes.
+  // A guest camera must not issue the following NPC order before this same
+  // authored host record completed. No timer, camera or NPC state is copied.
+  const auto index=Load32(b,s->binding.vars+19812);
+  const bool passed=s->hints.Passed(s->run,index);
+  ctx.r3.u32=passed ? 1:0;
+  if (passed) Note("host screen wait",Event(*s,StoryPhase::Advance,index),"native visibility poll retained; same host activation completed");
 }
 bool HostCinematicSpeech(PPCContext& ctx,uint8_t* b) {
   const auto payload=ctx.r3.u32;
@@ -1109,13 +1270,58 @@ bool HostCinematicSpeech(PPCContext& ctx,uint8_t* b) {
 }
 } // namespace kk::coop
 
+namespace kk::coop {
+void StoryCapability(PPCContext& ctx,uint8_t* b,uint32_t payload,bool any) {
+  if (!Ensure(b) || failed || snapshot_waiting || !PoseAddress(payload,108) || Load32(b,payload+100)) return;
+  auto* s=Current(b);
+  const auto fn=any ? 0x82449EB0u:0x82449F18u;
+  if (!s || payload!=s->binding.vars+88 || Load32(b,s->binding.vars+20)!=fn) return;
+  const auto target=Load32(b,payload+4),hero=Load32(b,0x82CCBF7C);
+  if (host) {
+    if (ctx.r3.u32 || (target && target!=hero)) return;
+    const auto caps=EnemyPartnerCapabilities();
+    const auto mask=Load32(b,payload+84);
+    if (!caps || !mask || mask>0xffff || !(any ? (*caps&mask)!=0 : (*caps&mask)==mask)) return;
+    Store32(b,payload+20,hero); ctx.r3.u32=1;
+  } else {
+    // Host Arms this same script before the native persistent detector starts
+    // it. An idle checksum alone never authorizes capability completion.
+    const bool arm=s->activation.CanArm(s->run);
+    Store32(b,payload+20,arm ? (target ? target:hero):0); ctx.r3.u32=arm ? 1:0;
+  }
+}
+}
+
 REX_HOOK_RAW(sub_82476848) {
   if (!kk::coop::StoryDetect(ctx,base)) __imp__sub_82476848(ctx,base);
 }
+REX_HOOK_RAW(sub_82499030) {
+  if (!kk::coop::StoryFinish(ctx,base)) __imp__sub_82499030(ctx,base);
+}
 REX_HOOK_RAW(sub_82501A30) {
+  if (kk::coop::HostNpcWait(ctx,base,0x82501A30)) return;
   const auto payload=ctx.r3.u32;
   __imp__sub_82501A30(ctx,base);
   if (!ctx.r3.u32 && kk::coop::ConvergeFlagWait(base,payload)) ctx.r3.u32=1;
+}
+REX_HOOK_RAW(sub_82501D50) {
+  if (!kk::coop::HostNpcWait(ctx,base,0x82501D50)) __imp__sub_82501D50(ctx,base);
+}
+REX_HOOK_RAW(sub_82449CD0) {
+  if (!kk::coop::HostAnimationWait(ctx,base)) __imp__sub_82449CD0(ctx,base);
+}
+REX_HOOK_RAW(sub_82466878) {
+  const auto payload=ctx.r3.u32,lr=uint32_t(ctx.lr);
+  __imp__sub_82466878(ctx,base);
+  kk::coop::HostScreenWait(ctx,base,payload);
+#if defined(KK_DEV_TOOLS)
+  kk::DevTrigScreenResult(base,payload,lr,ctx.r3.u32);
+#endif
+}
+REX_HOOK_RAW(sub_82449EB0) {
+  const auto payload=ctx.r3.u32;
+  __imp__sub_82449EB0(ctx,base);
+  kk::coop::StoryCapability(ctx,base,payload,true);
 }
 REX_HOOK_RAW(sub_8250B9D8) {
   if (!kk::coop::HostCinematicWait(ctx,base)) __imp__sub_8250B9D8(ctx,base);
@@ -1127,10 +1333,11 @@ REX_HOOK_RAW(sub_8244F0E8) {
   const auto rec=ctx.r3.u32,lr=uint32_t(ctx.lr);
   __imp__sub_8244F0E8(ctx,base);
   if (kk::coop::forced_pivot==rec) {
-    kk::hfr::Store32(base,rec+20,kk::hfr::Load32(base,0x82CCBF7C)); ctx.r3.u32=1;
+    const auto selected=kk::hfr::Load32(base,rec+8);
+    kk::hfr::Store32(base,rec+20,selected ? selected:kk::hfr::Load32(base,0x82CCBF7C)); ctx.r3.u32=1;
   } else if (kk::coop::blocked_pivot==rec) {
     kk::hfr::Store32(base,rec+20,0); ctx.r3.u32=0;
-  }
+  } else kk::coop::HostPivotWait(ctx,base,rec);
 #if defined(KK_DEV_TOOLS)
   kk::DevTrigPivotResult(base,rec,lr,ctx.r3.u32);
 #endif

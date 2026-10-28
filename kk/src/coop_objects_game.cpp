@@ -28,6 +28,7 @@ REX_EXTERN(__imp__sub_82552200);
 REX_EXTERN(__imp__sub_82515CF0);
 REX_EXTERN(__imp__sub_82516128);
 REX_EXTERN(__imp__sub_8271CCB8);
+REX_EXTERN(__imp__sub_82714E40);
 REX_EXTERN(__imp__sub_8270FA58);
 REX_EXTERN(__imp__sub_8270F918);
 REX_EXTERN(__imp__sub_8270FCE0);
@@ -105,6 +106,7 @@ struct Binding : objects::Binding {
   float driven_position=-1;
   ObjectState last;
   bool sent=false,lever_logged=false;
+  bool native_retired=false;
   bool fire_request=false;
   bool fire_path_refused=false;
   double next_ignite=0;
@@ -119,6 +121,7 @@ struct Binding : objects::Binding {
 #endif
 };
 struct State {
+  std::map<uint32_t,std::array<uint32_t,3>> destroyed_doors;
   struct Body {
     uint32_t actor=0,matrix=0,link=0,physics=0,body=0;
     uint64_t source=0,topology=0;
@@ -216,7 +219,8 @@ bool Track(const uint8_t* b,uint32_t ai,uint32_t fn) {
 }
 ObjectKind Family(const uint8_t* b,uint32_t ai) {
   if (Track(b,ai,0x82507798) || Track(b,ai,0x82516128) || Track(b,ai,0x82515CF0)) return ObjectKind::Breakable;
-  if (Track(b,ai,0x82551ED8) || Track(b,ai,0x82574D80) || Track(b,ai,0x8256C3F8) || Track(b,ai,0x82543478)) return ObjectKind::Door;
+  if (Track(b,ai,0x82551ED8) || Track(b,ai,0x82574D80) || Track(b,ai,0x8256C3F8) || Track(b,ai,0x82543478) ||
+      objects::DefaultTrack([&](uint32_t a){return Load32(b,a);},ai,0x82574D80)) return ObjectKind::Door;
   if (Track(b,ai,0x825FAF58) || Track(b,ai,0x8260F858)) return ObjectKind::Fire;
   if (Track(b,ai,0x825FD388) || Track(b,ai,0x825E7348) || Track(b,ai,0x8260C988) || Track(b,ai,0x82604E68)) return ObjectKind::Raft;
   if (Track(b,ai,0x826EA1A0) || Track(b,ai,0x826F0E10) || Track(b,ai,0x826F1E08) || Track(b,ai,0x826F4948)) return ObjectKind::Ode;
@@ -309,6 +313,8 @@ void Census(const uint8_t* b) {
     const auto vars=Vars(b,ai,kind); if (!vars) continue;
     if (kind==ObjectKind::Fire && !FireContract(b,vars)) continue;
     Binding o; o.actor=actor; o.ai=ai; o.vars=vars; o.matrix=matrix; o.kind=kind;
+    if (const auto gone=state.destroyed_doors.find(actor);gone!=state.destroyed_doors.end())
+      o.native_retired=gone->second==std::array<uint32_t,3>{ai,vars,matrix};
     o.x=LoadF(b,matrix+48); o.y=LoadF(b,matrix+52); o.z=LoadF(b,matrix+56);
     const auto asset=state.file_keys.find(actor);
     const auto direct=PoseAddress(actor,36) ? enemies::ObjectFileKey(Load32(b,actor+32)):0;
@@ -386,6 +392,7 @@ ObjectState Sample(const uint8_t* b,const Binding& o) {
     }
     s.position=LoadF(b,o.vars+1084); s.seconds=LoadF(b,o.vars+552);
     if (DoorScheduled(b,o.ai)) s.value|=kDoorScheduled;
+    if (o.native_retired) s.value|=kDoorRetired;
   }
   return s;
 }
@@ -697,6 +704,7 @@ bool PrepareDoorGeometry(PPCContext& ctx,uint8_t* b,const Binding& o) {
 }
 void RefreshDoor(PPCContext& ctx,uint8_t* b,Binding& o,const ObjectState& s,bool own_track=true) {
   if (Load32(b,0x82CCBF64)!=o.ai || Load32(b,0x82CCBF6C)!=o.actor) return;
+  if (o.native_retired) return;
   const bool ended=!(s.value&kDoorScheduled) && DoorScheduled(b,o.ai);
   if (!ended && LoadF(b,o.vars+1084)==s.position && o.driven_position==s.position &&
       (s.position!=1 || Load32(b,o.vars+1096)==1)) return;
@@ -791,7 +799,7 @@ void IdleDoors(PPCContext& ctx,uint8_t* b) {
   // A validated installed-lever hold may still complete their own one-way
   // endpoint. The native update retains transforms, collision, grid and caps.
   for (auto& [actor,o] : state.bindings) {
-    if (o.kind!=ObjectKind::Door || !Valid(b,o) || Match(o.source,o.kind)!=&o ||
+    if (o.kind!=ObjectKind::Door || o.native_retired || !Valid(b,o) || Match(o.source,o.kind)!=&o ||
         Load32(b,o.vars)!=2 || Load32(b,o.vars+568)!=1 || Load32(b,o.vars+572)!=0 ||
         !Lever(b,o,0)) continue;
     bool ready=true;
@@ -805,6 +813,48 @@ void IdleDoors(PPCContext& ctx,uint8_t* b) {
     if (state.host) OpenHeldDoor(ctx,b,o,false);
     else RefreshDoor(ctx,b,o,*authority,false);
     Store32(b,0x82CCBF64,ai); Store32(b,0x82CCBF6C,current_actor);
+  }
+}
+void RetireDoors(PPCContext& ctx,uint8_t* b) {
+  const auto stop=[&](const Binding& o) {
+    const auto saved=ctx;
+    constexpr uint32_t globals[]{0x82CCBF58,0x82CCBF5C,0x82CCBF60,0x82CCBF64,0x82CCBF68,0x82CCBF6C,0x82CCBF70};
+    uint32_t values[7]; for (unsigned i=0;i<7;++i) values[i]=Load32(b,globals[i]);
+    Store32(b,0x82CCBF64,o.ai); Store32(b,0x82CCBF68,o.ai);
+    Store32(b,0x82CCBF6C,o.actor); Store32(b,0x82CCBF70,o.actor);
+    EndDoorTracks(ctx,b,o);
+    for (unsigned i=0;i<7;++i) Store32(b,globals[i],values[i]);
+    ctx=saved;
+  };
+  for (auto& [actor,o]:state.bindings) {
+    if (o.kind!=ObjectKind::Door || !Valid(b,o) || Match(o.source,o.kind)!=&o) continue;
+    if (DoorScheduled(b,o.ai) && objects::CompletedDormantDoor([&](uint32_t a){return Load32(b,a);},
+        [&](uint32_t a){return LoadF(b,a);},actor,o.vars)) {
+      stop(o);
+      if (state.host) Observe(b,o);
+      REXLOG_INFO("KK co-op door controller retirement: role={} id={:016X} native-checkpoint-endpoint=true",
+          state.host ? "host":"guest",o.source);
+    }
+    if (o.native_retired) { if (DoorScheduled(b,o.ai)) stop(o); continue; }
+    if (state.host) continue;
+    const auto* authority=state.replica.Find(o.kind,o.source);
+    if (!authority || !(authority->value&kDoorRetired)) continue;
+    const auto sp=ctx.r1.u32;
+    if ((sp&15) || sp<0x40014000 || sp>=0xA0000000) continue;
+    const PPCContext saved=ctx; uint8_t scratch[16384]; const auto start=sp-sizeof(scratch);
+    std::memcpy(scratch,b+start,sizeof(scratch)); ctx.r1.u64=start+12288;
+    std::memset(b+ctx.r1.u32,0,4096); Store32(b,ctx.r1.u32,sp);
+    constexpr uint32_t globals[]{0x82CCBF58,0x82CCBF5C,0x82CCBF60,0x82CCBF64,0x82CCBF68,0x82CCBF6C,0x82CCBF70};
+    uint32_t values[7]; for (unsigned i=0;i<7;++i) values[i]=Load32(b,globals[i]);
+    Store32(b,0x82CCBF64,o.ai); Store32(b,0x82CCBF68,o.ai);
+    Store32(b,0x82CCBF6C,actor); Store32(b,0x82CCBF70,actor);
+    RefreshDoor(ctx,b,o,*authority,false);
+    stop(o);
+    ctx.r3.u32=actor; __imp__sub_82714E40(ctx,b);
+    o.native_retired=true;
+    for (unsigned i=0;i<7;++i) Store32(b,globals[i],values[i]);
+    std::memcpy(b+start,scratch,sizeof(scratch)); ctx=saved;
+    REXLOG_INFO("KK co-op door retirement: id={:016X} native=true",o.source);
   }
 }
 void Door(PPCContext& ctx,uint8_t* b) {
@@ -2079,6 +2129,49 @@ void ObjectsEnqueued(const ObjectEnqueue& input,const uint8_t* b) {
       state.host ? "host" : "guest",o.source,Load32(b,input.output),Load32(b,input.output+4),flags,magnitude,input.seconds,input.caller);
 }
 
+void ObjectsDestroy(PPCContext& ctx,uint8_t* b) {
+  if (EnemyHoldDestroy(ctx,b)) return;
+  const auto actor=ctx.r3.u32;
+  if (state.ready && Shared()) {
+    const auto it=state.bindings.find(actor);
+    if (it!=state.bindings.end() && it->second.kind==ObjectKind::Door &&
+        Valid(b,it->second) && Match(it->second.source,it->second.kind)==&it->second) {
+      auto& o=it->second;
+      if (!state.host) {
+        const auto* authority=state.replica.Find(o.kind,o.source);
+        if (authority && !(authority->value&kDoorRetired)) {
+          ctx.r3.u32=actor==Load32(b,0x82CCBF6C) ? 1:0;
+          return;
+        }
+      } else if (state.number!=UINT32_MAX && (state.outcomes.contains(o.source) || state.outcomes.size()<objects::kCensus)) {
+        // Snapshot before the native destroy callback can retire components.
+        // This is an explicit native removal, not an inferred closed track.
+        auto terminal=Sample(b,o); terminal.value|=kDoorRetired;
+        if (ValidObjectState(terminal)) {
+          o.last=terminal; o.sent=true; terminal.number=++state.number;
+          state.pending[o.source]=state.outcomes[o.source]=terminal;
+        }
+      }
+    }
+  }
+  EnemyDestroying(ctx,b);
+  // Hidden plus inactive is also used for dormant templates. Only this actual
+  // native destroy call certifies retirement, including before shared census.
+  if (REXCVAR_GET(kk_coop_enabled) && SessionInProcess() && state.epoch &&
+      state.world==Load32(b,0x828E8388) && state.destroyed_doors.size()<objects::kCensus) {
+    const auto ai=Ptr(b,Ptr(b,actor,24,8),4,88),matrix=Ptr(b,actor,12,64);
+    if (matrix && Family(b,ai)==ObjectKind::Door) {
+      const auto vars=Vars(b,ai,ObjectKind::Door);
+      if (vars) {
+        state.destroyed_doors[actor]={ai,vars,matrix};
+        if (auto it=state.bindings.find(actor);it!=state.bindings.end() && Components(b,it->second))
+          it->second.native_retired=true;
+      }
+    }
+  }
+  __imp__sub_82714E40(ctx,b);
+}
+
 void ObjectsLoaded(uint8_t* b) {
   if (!REXCVAR_GET(kk_coop_enabled) || !SessionInProcess()) { state={}; return; }
   const auto v=SessionFlowSnapshot(); const auto epoch=StorySessionEpoch();
@@ -2092,6 +2185,7 @@ void ObjectsLoaded(uint8_t* b) {
   state.bindings.clear(); state.retired.clear(); state.pending.clear(); state.outgoing.clear(); state.ready=false;
   state.identities.Clear();
   state.bodies.clear(); state.support_frozen=false;
+  state.destroyed_doors.clear();
   state.census_started=false;
 #if defined(KK_DEV_TOOLS)
   state.pickups.clear(); state.debug_sources.clear();
@@ -2133,6 +2227,7 @@ void ObjectsBeforeAi(PPCContext& ctx,uint8_t* b,uint32_t w) {
 void ObjectsAfterAi(PPCContext& ctx,uint8_t* b,uint32_t w) {
   if (!state.ready || w!=state.world || !Shared()) return;
   ReplayBreakables(ctx,b);
+  RetireDoors(ctx,b);
   IdleDoors(ctx,b);
   ReplayFires(ctx,b);
 #if defined(KK_DEV_TOOLS)
@@ -2282,6 +2377,9 @@ void ObjectsAfterAi(PPCContext& ctx,uint8_t* b,uint32_t w) {
   }
 }
 } // namespace kk::coop
+#if !defined(KK_DEV_TOOLS)
+REX_HOOK_RAW(sub_82714E40) { kk::coop::ObjectsDestroy(ctx,base); }
+#endif
 REX_HOOK_RAW(sub_824ADD48) { kk::coop::Damage(ctx,base); }
 REX_HOOK_RAW(sub_8256C3F8) { kk::coop::Door(ctx,base); }
 REX_HOOK_RAW(sub_82552200) { kk::coop::DoorUpdate(ctx,base); }

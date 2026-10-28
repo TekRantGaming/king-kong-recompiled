@@ -58,6 +58,7 @@ void WriteEnemy(Writer& w, const EnemyState& e) {
   for (float v : {e.spawn_x, e.spawn_y, e.spawn_z}) w.U(std::bit_cast<uint32_t>(v), 4);
   w.U(uint8_t(e.owner), 1); w.U(e.generation, 4);
   w.U(std::bit_cast<uint32_t>(e.secondary_life), 4);
+  w.U(e.birth_spawner,8); w.U(e.birth_template,1); w.U(e.birth_point,1);
 }
 EnemyState ReadEnemy(Reader& r) {
   EnemyState e;
@@ -71,6 +72,7 @@ EnemyState ReadEnemy(Reader& r) {
   e.spawn_z = std::bit_cast<float>(uint32_t(r.U(4)));
   e.owner = EnemyOwner(r.U(1)); e.generation = uint32_t(r.U(4));
   e.secondary_life = std::bit_cast<float>(uint32_t(r.U(4)));
+  e.birth_spawner=r.U(8); e.birth_template=uint8_t(r.U(1)); e.birth_point=uint8_t(r.U(1));
   return e;
 }
 bool Point(ShotVector p) {
@@ -167,7 +169,7 @@ bool ValidObjectState(const ObjectState& s) {
       ((s.value==0 && s.position==0 && s.seconds==0) ||
        (s.value==1 && (s.seconds==-1 || (s.seconds>0 && s.seconds<=3600))) ||
        (s.value==2 && s.seconds==0));
-  return s.kind==ObjectKind::Door && s.value<=511 && s.position>=0 && s.position<=1 &&
+  return s.kind==ObjectKind::Door && s.value<=1023 && s.position>=0 && s.position<=1 &&
       s.seconds>=0 && s.seconds<=3600;
 }
 bool ValidObjectRequest(const ObjectState& s) {
@@ -191,6 +193,8 @@ bool ValidStartPlan(const StartPlan& p) {
   return false;
 }
 bool ValidStoryEvent(const StoryEvent& e) {
+  if (e.phase==StoryPhase::Stopped)
+    return e.generation && e.level && e.level<=100000 && e.number && e.source && e.script && e.run && e.record<kStoryRecords;
   if (e.phase>=StoryPhase::SnapshotRequest && e.phase<=StoryPhase::SnapshotEnd) {
     if (!e.generation || !e.level || e.level>100000 || !e.number || !e.source || !e.script ||
         !e.run || e.record>kStoryRecords) return false;
@@ -237,7 +241,9 @@ bool ValidEnemy(const EnemyState& e) {
       std::abs(e.z) < 1000000 && std::abs(e.facing) <= 3.1416f && std::abs(e.life) < 1000000 &&
       Point({e.spawn_x, e.spawn_y, e.spawn_z}) && e.owner <= EnemyOwner::Guest &&
       std::isfinite(e.secondary_life) && e.secondary_life >= 0 && e.secondary_life < 1000000 &&
-      (e.id.family == EnemyFamily::Scorpion || e.secondary_life == 0);
+      (e.id.family == EnemyFamily::Scorpion || e.secondary_life == 0) &&
+      (e.birth_spawner ? e.id.sequence && e.birth_template<19 && e.birth_point<16 :
+          !e.birth_template && !e.birth_point);
 }
 bool ValidOwnershipChange(const OwnershipChange& c) {
   if (!ValidEnemyWorld(c.world) || !ValidEnemy(c.enemy) || c.owner > EnemyOwner::Guest ||
@@ -400,7 +406,8 @@ bool Encode(const Message& m, std::vector<uint8_t>& out) {
       payload.U(m.player_status.grab_kind,1);
       payload.U(m.player_status.peer_grab_incarnation,8); payload.U(m.player_status.peer_grab_number,4);
       payload.U(m.player_status.peer_grab_enemy.source,8); payload.U(m.player_status.peer_grab_enemy.sequence,4);
-      payload.U(uint16_t(m.player_status.peer_grab_enemy.family),2); payload.U(m.player_status.peer_grab_generation,4); break;
+      payload.U(uint16_t(m.player_status.peer_grab_enemy.family),2); payload.U(m.player_status.peer_grab_generation,4);
+      payload.U(m.player_status.capabilities,2); break;
     case MessageType::Cheats:
       if (!ValidCheatSet(m.cheats)) return false;
       payload.U(m.cheats.bits, 2); break;
@@ -623,6 +630,7 @@ bool Decode(std::span<const uint8_t> bytes, Message& out) {
       m.player_status.peer_grab_incarnation=r.U(8); m.player_status.peer_grab_number=uint32_t(r.U(4));
       m.player_status.peer_grab_enemy.source=r.U(8); m.player_status.peer_grab_enemy.sequence=uint32_t(r.U(4));
       m.player_status.peer_grab_enemy.family=EnemyFamily(r.U(2)); m.player_status.peer_grab_generation=uint32_t(r.U(4));
+      m.player_status.capabilities=uint16_t(r.U(2));
       if (!ValidPlayerStatus(m.player_status)) return false;
       break;
     case MessageType::Cheats:

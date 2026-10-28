@@ -100,6 +100,18 @@ template<class Read,class ReadHalf> uint32_t OdeEndProgram(Read read,ReadHalf ha
       !PoseAddress(end,24) || read(end+20)!=0x826F4948) return 0;
   return end;
 }
+// A persistent one-way lever controller can be hidden/inactive after its own
+// endpoint while its stale native loop still exists. Its checkpoint initializer
+// clears that loop on another peer. Retire only the already completed local
+// controller, with the real persistent bit, rather than copying track counters.
+template<class Read,class Float> bool CompletedDormantDoor(Read read,Float number,uint32_t actor,uint32_t vars) {
+  if (!PoseAddress(actor,32) || !PoseAddress(vars,1340) || !(read(actor+4)&0x00400000) ||
+      read(vars)!=2 || read(vars+568)!=1 || read(vars+572) || !read(vars+584) ||
+      number(vars+1084)!=1.f || read(vars+1096)!=1) return false;
+  const auto cap=read(vars+588),bank=read(0x82CC8F40);
+  return cap>=201 && cap<1500 && PoseAddress(bank,(771+(cap>>5))*4) &&
+      (read(bank+(770+(cap>>5))*4)&(1u<<(cap&31)));
+}
 // Native stop 826F9DC0 supports five slots. Never use an outer actor's current
 // index, an unrelated track or a malformed scheduler range for a side call.
 template<class Read,class ReadHalf> std::vector<unsigned> DoorSlots(Read read,ReadHalf half,uint32_t ai) {

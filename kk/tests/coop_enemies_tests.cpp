@@ -166,6 +166,19 @@ void ExpandedFamilies() {
 }
 void Wire() {
   Message out;
+  auto birth=Enemy(321,7); birth.birth_spawner=12345; birth.birth_template=18; birth.birth_point=15;
+  auto birth_packet=Packet(Event(birth,EnemyEventKind::Spawned));
+  Check(Decode(birth_packet,out) && out.enemy_event.enemy.birth_spawner==12345 &&
+      out.enemy_event.enemy.birth_template==18 && out.enemy_event.enemy.birth_point==15,
+      "birth round trip keeps authored numeric provenance");
+  auto invalid_birth=birth; invalid_birth.birth_template=19;
+  Check(!ValidEnemy(invalid_birth),"birth template cannot escape the authored 19 slots");
+  invalid_birth=birth; invalid_birth.birth_point=16;
+  Check(!ValidEnemy(invalid_birth),"birth point cannot escape the local 16 slots");
+  invalid_birth=birth; invalid_birth.id.sequence=0;
+  Check(!ValidEnemy(invalid_birth),"authored root cannot masquerade as a generated birth");
+  invalid_birth=birth; invalid_birth.birth_spawner=0;
+  Check(!ValidEnemy(invalid_birth),"birth metadata needs an authored spawner");
   for (bool event : {false, true}) {
     auto m = event ? Event(Enemy(), EnemyEventKind::Died) : Snapshot(Enemy());
     auto bytes = Packet(m);
@@ -237,9 +250,14 @@ void LifecycleAndInterpolation() {
   Check(receiver.Sample(1.8).records.empty(), "stale live state expires");
   receiver.Receive(Event(b, EnemyEventKind::Removed), 2);
   receiver.Receive(Snapshot(a, 1001, 12), 2.1); receiver.Receive(Event(a, EnemyEventKind::Spawned), 2.2);
+  auto late_death=a; late_death.life=0; receiver.Receive(Event(late_death,EnemyEventKind::Died),2.3);
   sampled = receiver.Sample(20);
-  Check(sampled.records.size() == 1 && sampled.records[0].kind == EnemyEventKind::Removed && sampled.records[0].enemy.life == 0,
-      "terminal event persists and wins over delayed live packets");
+  Check(sampled.records.size() == 1 && sampled.records[0].kind == EnemyEventKind::Removed && sampled.records[0].enemy.life == b.life,
+      "retirement preserves native health and wins over delayed live and death packets");
+  Channel corpse;
+  corpse.Receive(Event(late_death,EnemyEventKind::Died),1);
+  corpse.Receive(Event(b,EnemyEventKind::Removed),2);
+  Check(corpse.Sample(20).records[0].enemy.life==0,"retirement never resurrects an already confirmed death");
   receiver.Receive(Snapshot(Enemy(555), 1, 13, 2), 21);
   receiver.Receive(Snapshot(a, 1002, 14, 1), 21.01);
   Check(receiver.Sample(21.02).world.serial == 2 && receiver.Sample(21.02).records[0].enemy.id.source == 555, "late world cannot roll load backward");
@@ -284,7 +302,7 @@ void ScorpionDamagePools() {
   Check(commit && Near(commit->enemy.life, 24) && Near(commit->enemy.secondary_life, 3), "handover preserves both damaged pools");
   Message wire; wire.type = MessageType::OwnershipChange; wire.epoch = 1; wire.ownership = *commit;
   Check(Decode(Packet(wire), decoded) && Near(decoded.ownership.enemy.secondary_life, 3), "handover wire retains secondary health");
-  auto malformed = Packet(Snapshot(b)); malformed[malformed.size()-4] = 0x7f; malformed[malformed.size()-3] = 0xc0;
+  auto malformed = Packet(Snapshot(b)); malformed[malformed.size()-14] = 0x7f; malformed[malformed.size()-13] = 0xc0;
   Check(!Decode(malformed, decoded), "nonfinite wire secondary health refused");
   Check(owner.Commit(*commit) && guest.Commit(*commit), "both sides commit damaged scorpion");
   auto final = guest.last; final.life = 18; final.secondary_life = 2;
@@ -688,7 +706,7 @@ void OwnershipWire() {
                    phase == OwnershipPhase::Matched ? EnemyOwner::Host : EnemyOwner::Guest, Enemy()};
     if (phase == OwnershipPhase::Commit) { m.ownership.enemy.owner = EnemyOwner::Guest; m.ownership.enemy.generation = 1; }
     auto bytes = Packet(m); Message out;
-    Check(bytes.size() == 104 && Decode(bytes, out) && Packet(out) == bytes, "ownership phase round trip with final state");
+    Check(bytes.size() == kHeaderBytes+18+kEnemyStateBytes && Decode(bytes, out) && Packet(out) == bytes, "ownership phase round trip with final state");
     for (size_t n = 0; n < bytes.size(); ++n) {
       Message sentinel; sentinel.sequence = 77;
       Check(!Decode(std::span(bytes.data(), n), sentinel) && sentinel.sequence == 77, "ownership truncations preserve output");

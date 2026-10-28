@@ -5,6 +5,7 @@ namespace kk::coop {
 void ObjectsLoaded(uint8_t* base);
 void ObjectsBeforeAi(PPCContext& ctx,uint8_t* base,uint32_t world);
 void ObjectsAfterAi(PPCContext& ctx,uint8_t* base,uint32_t world);
+void ObjectsDestroy(PPCContext& ctx,uint8_t* base);
 // Observe the final, filtered local gameplay pad. Never writes native input.
 void ObjectsPad(uint32_t user,const uint8_t* state,bool connected);
 struct ObjectEnqueue {

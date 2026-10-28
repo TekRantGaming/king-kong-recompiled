@@ -11,6 +11,18 @@ inline bool Observing(uint32_t generation, uint32_t level, bool playing) {
 inline bool LoopEvent(const StoryEvent& e) {
   return e.phase==StoryPhase::Advance || e.phase==StoryPhase::Finished;
 }
+inline bool RetirableWait(uint32_t callback,bool started=false) {
+  return callback==0x82501D50 || callback==0x82501A30 || callback==0x8250B9D8 || callback==0x82449CD0 || callback==0x82466878 ||
+      (callback==0x8250BED8 && started);
+}
+inline bool NativeStopMatches(const StoryEvent& event,uint32_t generation,uint32_t level,
+    uint64_t source,uint64_t script,uint32_t run,uint32_t record,uint32_t callback,bool started=false,
+    bool finished=false) {
+  if (COOP_MUT_IF("story_native_stop")) return true;
+  return event.phase==StoryPhase::Stopped && ValidStoryEvent(event) &&
+      event.generation==generation && event.level==level && event.source==source && event.script==script &&
+      event.run==run && event.record==record && (RetirableWait(callback,started) || (!callback && finished));
+}
 // 8271D1D8 and 826F9E70 initialize a native program's state word to -1.
 // SSDetect treats only 1 as armed. Starting replaces that word with the new
 // program's initial state, so its final value need not be zero.

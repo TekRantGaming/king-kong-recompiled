@@ -11,6 +11,8 @@
 //               ES_CheckPoint hook (port-traces/patches/pause_hooks.patch).
 // Lines start with "KK dev bug". All addresses are the 360 build's (kk-decomp data/names.tsv).
 #if defined(KK_DEV_TOOLS)
+#include "coop_enemies_game.h"
+#include "coop_objects_game.h"
 
 #include <algorithm>
 #include <cmath>
@@ -312,6 +314,7 @@ REX_HOOK_RAW(sub_82508C00) {
 // waves: Spawner_loop runs every frame for every spawner.
 REX_EXTERN(__imp__sub_826E1EE8);
 REX_HOOK_RAW(sub_826E1EE8) {
+  if (kk::coop::EnemySpawnerStep(ctx,base)) return;
   if (!kk::bugtrace::Waves()) {
     __imp__sub_826E1EE8(ctx, base);
     return;
@@ -365,7 +368,7 @@ REX_EXTERN(__imp__sub_82714E40);
 REX_HOOK_RAW(sub_82714E40) {
   using namespace kk::bugtrace;
   if (!Waves()) {
-    __imp__sub_82714E40(ctx, base);
+    kk::coop::ObjectsDestroy(ctx, base);
     return;
   }
   const uint32_t obj = ctx.r3.u32;
@@ -379,7 +382,7 @@ REX_HOOK_RAW(sub_82714E40) {
   const uint32_t ext = W(base, obj + 0x18);
   const bool dead_before = (H(base, ext + 0x28) & 0x8000) != 0;
   const std::string t2 = TrackName(base, AiOf(base, obj), 2);
-  __imp__sub_82714E40(ctx, base);
+  kk::coop::ObjectsDestroy(ctx, base);
   if (!spawner) return;
   const bool dead_after = (H(base, ext + 0x28) & 0x8000) != 0;
   const bool skipped = (flags & 0x400000) || (flags & 0x4000000);

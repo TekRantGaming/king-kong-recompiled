@@ -12,7 +12,9 @@
 
 namespace kk::coop {
 constexpr uint32_t kMagic = 0x4B4B4331;  // KKC1, network byte order throughout
-constexpr uint16_t kProtocolVersion = 31; // Audited native centipede, crab and small crawler cues may accompany their real hits.
+// 32: union of 31 (audited native attack cues, scorpion grab status) and 27 (native authored birth provenance,
+// player capabilities, door retirement, story Stopped phase).
+constexpr uint16_t kProtocolVersion = 32;
 constexpr size_t kMaxDisplayNameBytes = 32;
 // Valid UTF-8, no controls or invisible direction/line formatting, bounded at a codepoint.
 // Empty or wholly invalid input becomes "Partner". Never log the input or result.
@@ -31,6 +33,7 @@ enum class MessageType : uint16_t {
 
 enum class ObjectKind : uint8_t { Breakable=1, Door=2, Fire=3, Raft=4, Ode=5, Tree=6, SupportBody=7 };
 constexpr uint32_t kDoorScheduled=0x100;
+constexpr uint32_t kDoorRetired=0x200;
 constexpr uint32_t kObjectHitFlags=0x00FFFFFF;
 constexpr size_t kObjectQueue=256,kObjectCensus=2048;
 // source hashes immutable authored position and native family. Scope is
@@ -92,7 +95,7 @@ inline bool IsObjectMessage(MessageType t) {
 // It never executes a native callback. Recovery is retained for old v11 codecs;
 // C46 uses persistent local checksum evidence and soft catch-up instead.
 enum class StoryPhase : uint8_t { Armed = 1, Started, Advance, Finished, Recovery, Checksum,
-  SnapshotRequest, SnapshotBegin, SnapshotIdle, SnapshotLoop, SnapshotFinished, SnapshotEnd };
+    SnapshotRequest, SnapshotBegin, SnapshotIdle, SnapshotLoop, SnapshotFinished, SnapshotEnd, Stopped };
 // Snapshot markers reuse source as a private-load token and script as count+1
 // (Request uses script=1). Entries use the existing script identity/run/cursor.
 // Begin/entries/End share the host's ordered reliable stream, including any
@@ -228,6 +231,8 @@ struct EnemyState {
   EnemyOwner owner = EnemyOwner::Host;
   uint32_t generation = 0; // Authority generation, independent of actor/spawn sequence.
   float secondary_life = 0; // Scorpion type-2048 pool; firearm life is at V+5444.
+  uint64_t birth_spawner = 0; // Authored identity, never an address. Zero for authored roots.
+  uint8_t birth_template = 0, birth_point = 0; // Two fallback / 17 wave slots and 16 local points.
 };
 // Prepare freezes both copies; Ready returns the old owner's final pose. Only
 // the host's Commit changes authority. Matched confirms a usable guest binding.
@@ -240,7 +245,7 @@ struct OwnershipChange {
   EnemyState enemy; // last state, tagged with the OLD owner/generation until Commit
 };
 bool ValidOwnershipChange(const OwnershipChange& change);
-constexpr size_t kEnemyStateBytes = 62, kMaxEnemyBatch = 15, kMaxEnemies = 512;
+constexpr size_t kEnemyStateBytes = 72, kMaxEnemyBatch = 13, kMaxEnemies = 512;
 
 struct ShotVector { float x = 0, y = 0, z = 0; };
 enum class PlayerCondition : uint8_t { Alive = 1, Hurt, Dead };
@@ -275,6 +280,7 @@ struct PlayerStatus {
   uint32_t peer_grab_number = 0; // First real damage event of the latest outgoing grab episode.
   EnemyId peer_grab_enemy{}; // Empty after the owner natively releases that episode.
   uint32_t peer_grab_generation = 0;
+  uint16_t capabilities = 0; // Own Jack's native extension flags, scoped by world and incarnation.
 };
 bool ValidDamageEvent(const DamageEvent& damage);
 bool ValidPlayerStatus(const PlayerStatus& status);

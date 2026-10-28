@@ -19,7 +19,7 @@ Message Damage(uint32_t number = 1, uint64_t life = 11) {
 }
 Message Status(uint32_t number = 1, uint64_t life = 11, PlayerCondition condition = PlayerCondition::Alive) {
   Message m; m.type = MessageType::PlayerStatus; m.epoch = 90;
-  m.player_status = {World(), life, number, 0, condition}; return m;
+  m.player_status = {World(), life, number, 0, condition}; m.player_status.capabilities = 0x1234; return m;
 }
 std::vector<uint8_t> Packet(const Message& m) {
   std::vector<uint8_t> out; Check(Encode(m, out), "fixture encodes"); return out;
@@ -53,10 +53,11 @@ void StimulusDiagnostics() {
   Check(!ReadPool(u32, 1).valid, "record span overflow refused");
 }
 void Codecs() {
-  static_assert(kProtocolVersion == 31);
+  static_assert(kProtocolVersion == 32);
   for (const auto& m : {Damage(), Status()}) {
     const auto bytes = Packet(m); Message out;
-    Check(bytes.size() == (m.type == MessageType::DamageEvent ? 120u : 103u), "fixed bounded wire length");
+    // Protocol 32: status = 103 (31, grab fields) + 2 (27, capabilities); damage unchanged from 31.
+    Check(bytes.size() == (m.type == MessageType::DamageEvent ? 120u : 105u), "fixed bounded wire length");
     Check(bytes[4] == 0 && bytes[5] == kProtocolVersion && bytes[7] == uint16_t(m.type), "current protocol byte order");
     Check(Decode(bytes, out) && Packet(out) == bytes, "canonical combat round trip");
     for (size_t n = 0; n < bytes.size(); ++n) {
@@ -72,6 +73,13 @@ void Codecs() {
     p.peer_grab_incarnation=15; p.peer_grab_number=8; p.peer_grab_enemy={456,2,EnemyFamily::Scorpion}; p.peer_grab_generation=4;
     const auto wire=Packet(active); Message decoded;
     Check(Decode(wire,decoded) && Packet(decoded)==wire,"native holder values survive status codec");
+    p.capabilities=0xA5C3;
+    const auto both=Packet(active);
+    Check(both.size()==wire.size() && Decode(both,decoded) && decoded.player_status.capabilities==0xA5C3 &&
+        decoded.player_status.grab_enemy==p.grab_enemy && decoded.player_status.peer_grab_generation==4 &&
+        both[both.size()-2]==0xA5 && both[both.size()-1]==0xC3,
+        "protocol 32 status keeps grab fields and capabilities, capabilities last");
+    p.capabilities=0x1234;
     auto malformed=wire; malformed[53]=2;
     Check(!Decode(malformed,decoded),"grab readiness is a canonical boolean");
     auto bad=active; bad.player_status.grab_enemy.family=EnemyFamily::Raptor;
@@ -202,7 +210,7 @@ void Codecs() {
   m = Status(); m.player_status.incarnation = 0; Check(!Encode(m, out), "zero status life refused");
   auto wire = Packet(Damage()); wire[69] = 7; Message decoded; // last byte of magnitude
   Check(!Decode(wire, decoded), "malformed wire magnitude refused");
-  wire = Packet(Status()); wire.back() = 99; Check(!Decode(wire, decoded), "malformed wire condition refused");
+  wire = Packet(Status()); wire[kHeaderBytes+28] = 99; Check(!Decode(wire, decoded), "malformed wire condition refused");
 }
 void Replay() {
   for (const auto track : {0x8258C5F8u,0x824DF570u}) {

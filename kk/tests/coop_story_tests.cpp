@@ -19,9 +19,9 @@ Message Packet(MessageType type=MessageType::StoryEvent,uint32_t number=1) {
 }
 std::vector<uint8_t> Wire(const Message& m) { std::vector<uint8_t> bytes; Check(Encode(m,bytes),"valid fixture encodes"); return bytes; }
 void Codec() {
-  static_assert(kProtocolVersion==31);
+  static_assert(kProtocolVersion == 32);
   static_assert(uint16_t(MessageType::StoryEvent)==29 && uint16_t(MessageType::TriggerRequest)==30);
-  for (auto phase : {StoryPhase::Armed,StoryPhase::Started,StoryPhase::Advance,StoryPhase::Finished,StoryPhase::Recovery,StoryPhase::Checksum}) {
+  for (auto phase : {StoryPhase::Armed,StoryPhase::Started,StoryPhase::Advance,StoryPhase::Finished,StoryPhase::Recovery,StoryPhase::Checksum,StoryPhase::Stopped}) {
     for (auto type : {MessageType::StoryEvent,MessageType::TriggerRequest}) {
       if (type==MessageType::TriggerRequest && !ValidStoryRequest(phase)) continue;
       auto m=Packet(type); m.story=Event(0x12345678,phase);
@@ -65,6 +65,38 @@ void Codec() {
     Message sentinel; sentinel.sequence=19;
     Check(!Decode(bytes,sentinel) && sentinel.sequence==19,"decoder also rejects zero scalar/identity fields atomically");
   }
+}
+void NativeRetirement() {
+  auto event=Event(3,StoryPhase::Stopped);
+  const auto allowed=[&](const StoryEvent& e,uint32_t run=3,uint32_t record=7,uint32_t fn=0x8250B9D8) {
+    return story::NativeStopMatches(e,2,203,event.source,event.script,run,record,fn);
+  };
+  Check(allowed(event),"actual native retirement can stop the same local cinematic wait");
+  Check(!allowed(event,4) && !allowed(event,3,8),"retirement cannot cross an activation or skip a local callback");
+  Check(!allowed(event,3,7,0x8250C2C8),"retirement cannot discard an NPC order with side effects");
+  Check(allowed(event,3,7,0x82466878),"an observed host retirement may release the same local visibility wait");
+  Check(!story::NativeStopMatches(event,2,203,event.source,event.script,3,7,0x8250BED8),
+      "retirement cannot discard unissued native speech");
+  Check(story::NativeStopMatches(event,2,203,event.source,event.script,3,7,0x8250BED8,true),
+      "a host stopped speech wait retires only after its local native speech was issued");
+  Check(!story::NativeStopMatches(event,2,203,event.source,event.script,3,7,0),
+      "a terminator needs observed local completion before native cleanup");
+  Check(story::NativeStopMatches(event,2,203,event.source,event.script,3,7,0,false,true),
+      "host native cleanup can release the same completed local terminator");
+  Check(!story::NativeStopMatches(event,2,203,event.source,event.script,4,7,0,false,true),
+      "native cleanup cannot release another activation's terminator");
+  Check(!story::NativeStopMatches(event,2,203,event.source,event.script,3,8,0,false,true),
+      "native cleanup cannot skip a different local terminal record");
+  for (unsigned field=0;field<5;++field) {
+    auto stale=event;
+    if (field==0) ++stale.generation;
+    if (field==1) ++stale.level;
+    if (field==2) ++stale.source;
+    if (field==3) ++stale.script;
+    if (field==4) stale.phase=StoryPhase::Checksum;
+    Check(!allowed(stale),"retirement needs exact world, native identity and explicit stopped evidence");
+  }
+  Check(!ValidStoryRequest(StoryPhase::Stopped),"guest cannot author native host retirement");
 }
 void HostActivation() {
   Check(story::FileSource(123,0x12345678) && story::FileSource(123,0x12345678)!=story::FileSource(123,0x12345679),"script BIG keys distinguish colocated native controllers");
@@ -490,4 +522,4 @@ void TransportAndMailbox() {
   Check(CheckCompatibility(hc.compatibility,old)==RejectReason::Protocol,"v12 peers rejected at handshake");
 }
 }
-int main() { HostActivation(); Codec(); Ordering(); Requests(); Identity(); LoadBaselineAndChecksums(); LenientConvergence(); PersistentLagAndSoftFix(); PrivateSnapshots(); TransportAndMailbox(); std::puts("co-op story tests passed"); }
+int main() { HostActivation(); Codec(); NativeRetirement(); Ordering(); Requests(); Identity(); LoadBaselineAndChecksums(); LenientConvergence(); PersistentLagAndSoftFix(); PrivateSnapshots(); TransportAndMailbox(); std::puts("co-op story tests passed"); }
