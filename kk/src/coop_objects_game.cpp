@@ -2108,6 +2108,19 @@ world::Json world::ObjectSnapshot(const uint8_t* b,world::Capture& capture) {
   return Json::Object({{"rows",Json::Object(rows)},{"bodies",Json::Object(bodies)}});
 }
 #endif
+std::vector<WorldProbe> ObjectsWorldDigest(const uint8_t* b) {
+  std::vector<WorldProbe> out;
+  if (!b || !state.ready || !Shared()) return out;
+  for (const auto& [actor,o]:state.bindings) {
+    if (!Valid(b,o) || Match(o.source,o.kind)!=&o) continue;
+    const auto v=Sample(b,o);
+    // Countdown, native pointers, personal pickups and moving physics are not
+    // shared equality. Record only each supported controller's native outcome.
+    if (!ValidObjectState(v)) continue;
+    out.push_back({o.source,WorldArea::Objects,v.value,v.position,0,0});
+  }
+  return out;
+}
 void ObjectsPad(uint32_t user,const uint8_t* pad,bool connected) {
   if (user) return;
   use_until.store(connected && pad && pad[7]>30 && pad[6]<=30 ? Now()+.2 : 0,std::memory_order_relaxed);

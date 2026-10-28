@@ -2666,8 +2666,31 @@ void PartnerBodyPoseBlended(PPCContext& ctx,uint8_t* b,uint32_t actor) {
   }
 #endif
 }
-#if defined(KK_DEV_TOOLS)
-// C118 dev probe: where every observed level human stands (crew followers, donors). Read only.
+  std::vector<coop::WorldProbe> PartnerNpcDigest(const uint8_t* b) {
+    auto& s=Get();
+    std::map<uint64_t,coop::WorldProbe> rows;
+    std::set<uint64_t> ambiguous;
+    if (!b || !s.Environment(b,s.world)) return {};
+    for (const auto& [actor,obs]:s.humans) {
+      // Human type and the native character bank slot identify a character.
+      // Never identify an NPC by an allocation address, moving position or table order.
+      if (actor==s.hero || actor==s.selected.actor || IsSpawned(actor)) continue;
+      Rig r;
+      if (!obs.bound || !ReadRig(b,actor,r) || !Same(r,obs.rig)) continue;
+      const auto type=Load32(b,r.vars),slot=Load32(b,r.vars+4);
+      if (type>16 || slot>=64) continue;
+      const uint64_t id=(uint64_t(type+1)<<32)|(slot+1);
+      const uint32_t value=uint32_t(r.dead_track) | (uint32_t(r.cinematic)<<1) | (uint32_t(r.grabbed)<<2);
+      if (!rows.emplace(id,coop::WorldProbe{id,coop::WorldArea::Npcs,value,r.pos.x,r.pos.y,r.pos.z}).second)
+        ambiguous.insert(id);
+    }
+    for (auto id:ambiguous) rows.erase(id);
+    std::vector<coop::WorldProbe> out;
+    for (const auto& [id,row]:rows) out.push_back(row);
+    return out;
+  }
+  #if defined(KK_DEV_TOOLS)
+  // C118 dev probe: where every observed level human stands (crew followers, donors). Read only.
 void DevHumanPositions(const uint8_t* b, const std::function<void(uint32_t, float, float, float)>& f) {
   for (const auto& [actor, obs] : Get().humans) {
     const auto m = Ptr(b, actor, 12, 80);

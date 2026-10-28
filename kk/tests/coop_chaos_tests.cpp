@@ -1150,6 +1150,23 @@ void GuestProbe() {
   Check(header(true)==0 && faults==0,"with the probe the fix6 chain stops before the unmapped layer");
 }
 }
+void DigestQuietProgress() {
+  desync::Guard g; desync::Evidence e; e.quiet=true;
+  Check(g.Observe(1,101,1,e,1)==desync::Tier::None,"first health sample waits");
+  ++e.progress; Check(g.Observe(1,101,1,e,4)==desync::Tier::None,"second health sample waits");
+  ++e.progress; Check(g.Observe(1,101,1,e,7)==desync::Tier::Quiet,"story progress cannot starve health repair");
+}
+void DigestProbes() {
+  const std::vector<WorldProbe> host{{1,WorldArea::Npcs,0,1,2,3},{2,WorldArea::Objects,0,0,0,0}};
+  auto local=host;
+  Check(desync::CompareProbes(host,local)==std::array<uint64_t,2>{0,0},"equal native probes match");
+  local[0].x+=6; local[1].value=1;
+  Check(desync::CompareProbes(host,local)==std::array<uint64_t,2>{1,1},"NPC position and object outcome drift are separate");
+  local=host; local[0].x+=.5f; local[1].x+=.01f;
+  Check(desync::CompareProbes(host,local)==std::array<uint64_t,2>{0,0},"small moving and controller differences have tolerance");
+  Check(desync::CompareProbes(host,{})==std::array<uint64_t,2>{1,1},"missing local native identities are visible");
+  Check(desync::CompareProbes({},host)==std::array<uint64_t,2>{1,1},"extra local native identities are visible");
+}
 int main(int argc,char** argv) {
   if(argc!=2) { std::fprintf(stderr,"choose one named chaos test\n"); return 2; }
   test_name=argv[1]; const std::string_view name(test_name);
@@ -1162,6 +1179,8 @@ int main(int argc,char** argv) {
   else if(name=="story_native_stop") NativeStopScope();
   else if(name=="cancelled_activation") CancelledActivation();
   else if(name=="digest_compare") DigestCompare();
+  else if(name=="digest_quiet_progress") DigestQuietProgress();
+  else if(name=="digest_probes") DigestProbes();
   else if(name=="false_quiet") FalseQuiet();
   else if(name=="unarmed_gait") UnarmedGait();
   else if(name=="rebirth_adoption") RebirthAdoption();

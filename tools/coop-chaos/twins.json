@@ -12,6 +12,8 @@
     "udp_duplicate": "udp_duplicate",
     "udp_order": "udp_order",
     "digest_compare": "digest_compare",
+    "digest_quiet_progress": "digest_quiet_progress",
+    "digest_probe_skip": "digest_probes",
     "shot_validator": "shot_validator",
     "session_epoch": "session_epoch",
     "story_world": "story_world",

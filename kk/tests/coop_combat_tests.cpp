@@ -53,7 +53,7 @@ void StimulusDiagnostics() {
   Check(!ReadPool(u32, 1).valid, "record span overflow refused");
 }
 void Codecs() {
-  static_assert(kProtocolVersion == 32);
+  static_assert(kProtocolVersion == 33);
   for (const auto& m : {Damage(), Status()}) {
     const auto bytes = Packet(m); Message out;
     // Protocol 32: status = 103 (31, grab fields) + 2 (27, capabilities); damage unchanged from 31.

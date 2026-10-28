@@ -4314,12 +4314,13 @@ std::vector<WorldEnemy> EnemyWorldDigest(const uint8_t* b) {
       if (Read(b,actor,observed,current)) {
         e.life=current.life;
         e.secondary_life=current.secondary_life;
+        e.x=current.x; e.y=current.y; e.z=current.z;
       }
       break;
     }
     if (!ValidEnemy(e)) continue;
     if (a->dead || r.kind==EnemyEventKind::Died) e.life=std::min(0.f,e.life);
-    out.push_back({Canonical(local),a->owner,a->generation,e.life,e.secondary_life});
+    out.push_back({Canonical(local),a->owner,a->generation,e.life,e.secondary_life,e.x,e.y,e.z});
   }
   return out;
 }
@@ -4335,6 +4336,7 @@ desync::Evidence EnemyCompareDigest(uint8_t* b,const desync::State& state,bool r
 #else
     (void)why;
 #endif
+    ++result.differences;
     result.structural=true; result.progress=Mix(Mix(result.progress,id.source),id.sequence);
     if (!anchor.source || id<anchor) {
       anchor=id;
@@ -4358,6 +4360,8 @@ desync::Evidence EnemyCompareDigest(uint8_t* b,const desync::State& state,bool r
     Binding observed; EnemyState current;
     if (!Read(b,binding->actor,observed,current)) continue;
     const float life=current.life,secondary=current.secondary_life;
+    if (rough(h.life,life) || rough(h.secondary_life,secondary) ||
+        std::hypot(h.x-current.x,h.y-current.y,h.z-current.z)>5.f) ++result.differences;
     if (!rough(h.life,life) && !rough(h.secondary_life,secondary)) continue;
     // Digest values can be old by the time the sweep completes. Repair only
     // from the normal fresh replicated stream, preserving terminal-event wins.
@@ -4367,7 +4371,13 @@ desync::Evidence EnemyCompareDigest(uint8_t* b,const desync::State& state,bool r
     if (!latest || (auth->second.dead && latest->enemy.life>0) || !s.link.connected || Now()-s.link.remote.time>.5 ||
         (!rough(latest->enemy.life,life) && !rough(latest->enemy.secondary_life,secondary))) continue;
     result.quiet=true;
-    if (reconcile) WriteLife(b,*binding,latest->enemy);
+    if (reconcile) {
+      WriteLife(b,*binding,latest->enemy);
+      Binding check_binding; EnemyState after;
+      const bool read=Read(b,binding->actor,check_binding,after);
+      REXLOG_INFO("KK co-op sync repair: enemy={:016X}/{}/{} health-before={} host={} health-after={} read={}",
+          h.id.source,h.id.sequence,uint16_t(h.id.family),life,latest->enemy.life,read ? after.life:-1.f,read);
+    }
   }
   std::set<EnemyId> host_ids;
   for (const auto& h:state.enemies) host_ids.insert(h.id);
