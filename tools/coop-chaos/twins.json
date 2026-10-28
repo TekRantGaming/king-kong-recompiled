@@ -56,6 +56,10 @@
     "human_return_default_only": "human_return",
     "human_return_keep_native": "human_return",
     "human_set_track_guard": "human_set_track",
-    "reload_mark": "reload_mark"
+    "reload_mark": "reload_mark",
+    "crab_unstick_player_target": "crab_unstick",
+    "crab_unstick_single_player": "crab_unstick",
+    "crab_unstick_ignore_move": "crab_unstick",
+    "crab_unstick_no_exclude": "crab_unstick"
   }
 }

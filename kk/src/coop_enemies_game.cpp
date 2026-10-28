@@ -16,7 +16,9 @@
 #include "coop_stimulus_debug.h"
 #include "coop_event_budget.h"
 #include "coop_rebirth.h"
+#include "coop_crab_unstick.h"
 #include <algorithm>
+#include <array>
 #include <bit>
 #include <rex/logging.h>
 #include <chrono>
@@ -1068,6 +1070,21 @@ void DevCrabFightProbe(PPCContext& ctx, uint8_t* b) {
       Load32(b,vars+276),LoadF(b,vars+280),Load32(b,vars+1404),Load32(b,vars+1044),Load32(b,vars+1464),attackers,ray,
       ray==0 ? "" : ray==hero ? "(hero)" : body && ray==body ? "(body)" : ray==target ? "(target)" : ray==actor ? "(self)" : "",
       child,mouth);
+  // C117 evidence: where the crab, its target, the local Jack and the partner body stand, and how far the
+  // crab moved since its last line (a crab that animates but does not move is blocked).
+  {
+    static std::map<uint32_t,std::array<float,2>> last;
+    auto at=[&](uint32_t o,float& x,float& y,float& z) {
+      const auto m=o && PoseAddress(o,32) ? Ptr(b,o,12,64) : 0;
+      x=m ? LoadF(b,m+48):0; y=m ? LoadF(b,m+52):0; z=m ? LoadF(b,m+56):0; return m!=0; };
+    float cx,cy,cz,tx,ty,tz,hx,hy,hz,bx,by,bz;
+    at(actor,cx,cy,cz); at(target,tx,ty,tz); at(hero,hx,hy,hz); const bool hb=at(body,bx,by,bz);
+    auto& p=last[actor]; const float moved=std::hypot(cx-p[0],cy-p[1]); p={cx,cy};
+    REXLOG_INFO("COOP CRAB fight where actor={:08X} crab=({:.2f},{:.2f},{:.2f}) target=({:.2f},{:.2f},{:.2f}) hero=({:.2f},{:.2f},{:.2f}) body=({:.2f},{:.2f},{:.2f}) d-hero={:.2f} d-body={:.2f} body-to-target={:.2f} hero-to-target={:.2f} moved={:.2f} i1404={} i3496={}",
+        actor,cx,cy,cz,tx,ty,tz,hx,hy,hz,bx,by,bz,std::hypot(hx-cx,hy-cy),hb ? std::hypot(bx-cx,by-cy):-1.f,
+        hb && target ? std::hypot(bx-tx,by-ty):-1.f,target ? std::hypot(hx-tx,hy-ty):-1.f,moved,
+        Load32(b,vars+1404),Load32(b,vars+3496));
+  }
   // fn_82463A58 candidate predicate for the local Jack, and its parts.
   uint32_t hero_ok=0, hero_tokens=0, hero_zone=0;
   if (hero && PoseAddress(hero,32)) {
@@ -1134,12 +1151,41 @@ void DevCrabFightProbe(PPCContext& ctx, uint8_t* b) {
   }
 }
 #endif
+// C117 (coop_crab_unstick.h): a crab held against the players while it charges a crew member out of reach.
+thread_local uint32_t crab_give_up = 0;
+struct CrabGiveUpScope { ~CrabGiveUpScope() { crab_give_up = 0; } };
+struct CrabHeld { crab_unstick::Watch watch; float distance = 0, player_near = 0; };
+std::map<uint32_t,CrabHeld>& CrabWatches() { static std::map<uint32_t,CrabHeld> m; return m; }
+void CrabUnstickStep(const uint8_t* b, uint32_t actor, uint32_t vars, uint32_t hero) {
+  namespace cu=crab_unstick;
+  const auto body=kk::PartnerBodyCombatActor(b);
+  auto& watches=CrabWatches();
+  if (!body) { if (!watches.empty()) watches.clear(); return; }
+  if (watches.size()>=64 && !watches.contains(actor)) watches.clear();
+  const auto target=Load32(b,vars+cu::kVarsTarget);
+  const auto own=Ptr(b,actor,12,64), tm=target && PoseAddress(target,32) ? Ptr(b,target,12,64) : 0;
+  if (!own) return;
+  cu::Sample s;
+  s.now=LoadF(b,0x82CCAE1C)-LoadF(b,0x82CCC02C);
+  s.x=LoadF(b,own+48); s.y=LoadF(b,own+52);
+  s.sub=Load32(b,vars+cu::kVarsSub); s.target=target; s.hero=hero; s.body=body;
+  s.distance=tm ? std::hypot(LoadF(b,tm+48)-s.x,LoadF(b,tm+52)-s.y) : 0.f;
+  s.range=LoadF(b,vars+cu::kVarsNpcRange);
+  for (const auto player : {hero,body}) {
+    const auto pm=player && PoseAddress(player,32) ? Ptr(b,player,12,64) : 0;
+    if (pm) s.player_near=std::min(s.player_near,std::hypot(LoadF(b,pm+48)-s.x,LoadF(b,pm+52)-s.y));
+  }
+  auto& held=watches[actor];
+  if (cu::Step(held.watch,s)) { crab_give_up=actor; held.distance=s.distance; held.player_near=s.player_near; }
+}
 void CrabFight(PPCContext& ctx, uint8_t* b) {
 #if defined(KK_DEV_TOOLS)
   DevCrabFightProbe(ctx,b);
 #endif
   const auto* owner=CombatOwner(b,EnemyFamily::Crab);
   const auto hero=Load32(b,0x82CCBF7C);
+  CrabGiveUpScope give_up_scope;
+  if (owner) CrabUnstickStep(b,owner->actor,owner->vars,hero);
   if (!owner || Load32(b,owner->vars+2040)!=hero) { __imp__sub_8265BF60(ctx,b); return; }
   const auto binding=*owner;
   CrabFightGuard guard{b,binding,hero,crab_player_scope};
@@ -1156,7 +1202,25 @@ void CrabPlayerTarget(PPCContext& ctx, uint8_t* b) {
   const auto original = Load32(b,binding.vars+2040);
   const auto nearest = NearestPlayer(ctx,b,binding,original,true);
   Store32(b,binding.vars+2040,nearest);
+  // C117: inside this crab's CR_ETAT_FIGHT only, ask for the native crew give up (see coop_crab_unstick.h).
+  uint32_t given_up=0;
+  if (crab_give_up && crab_give_up==binding.actor) {
+    crab_give_up=0;
+    given_up=Load32(b,binding.vars+crab_unstick::kVarsTarget);
+    const auto g=crab_unstick::NativeGiveUp(given_up);
+    Store32(b,binding.vars+crab_unstick::kVarsZone,g.zone);
+    Store32(b,binding.vars+crab_unstick::kVarsGaveUp,g.gave_up);
+    Store32(b,binding.vars+crab_unstick::kVarsExcluded,g.excluded);
+  }
   __imp__sub_82634978(ctx,b);
+  if (given_up) {
+    static unsigned lines=0;
+    const auto& held=CrabWatches()[binding.actor];
+    if (lines++<200)
+      REXLOG_INFO("COOP CRAB unstick actor={:08X} gave-up={:08X} new-target={:08X} preferred={:08X} hero={:08X} body={:08X} distance={:.2f} player-near={:.2f} n={}",
+          binding.actor,given_up,Load32(b,binding.vars+crab_unstick::kVarsTarget),nearest,Load32(b,0x82CCBF7C),
+          kk::PartnerBodyCombatActor(b),held.distance,held.player_near,lines);
+  }
 #if defined(KK_DEV_TOOLS)
   static std::map<uint32_t,std::pair<double,unsigned>> samples;
   if (samples.size()<32 || samples.contains(binding.actor)) {
@@ -5065,10 +5129,12 @@ REX_HOOK_RAW(sub_82696A28) {
   // Controlled C88 encounter fixture: story allies otherwise kill the test
   // enemies before the guest can reach them. This never changes player fire,
   // creature attacks, collision, damage, life or the shipping build.
-  static const bool hold_npcs=[] {
-    const auto* value=std::getenv("KK_DEV_NPC_HOLD_FIRE"); return value && std::strcmp(value,"1")==0;
+  // 1: co-op runs only. 2 (C117): also single player, to compare the same fixture without a partner.
+  static const int hold_npcs=[] {
+    const auto* value=std::getenv("KK_DEV_NPC_HOLD_FIRE");
+    return !value ? 0 : std::strcmp(value,"1")==0 ? 1 : std::strcmp(value,"2")==0 ? 2 : 0;
   }();
-  if (hold_npcs && kk::coop::EnemyConnectionReady()) {
+  if (hold_npcs==2 || (hold_npcs==1 && kk::coop::EnemyConnectionReady())) {
     const auto actor=kk::hfr::Load32(base,0x82CCBF6C), hero=kk::hfr::Load32(base,0x82CCBF7C);
     const auto ai=kk::coop::Ptr(base,kk::coop::Ptr(base,actor,24,8),4,88);
     const auto hero_ai=kk::coop::Ptr(base,kk::coop::Ptr(base,hero,24,8),4,88);

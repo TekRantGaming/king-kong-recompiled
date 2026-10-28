@@ -10,6 +10,7 @@
 #include "coop_stimulus_debug.h"
 #include "coop_event_budget.h"
 #include "coop_human_return.h"
+#include "coop_crab_unstick.h"
 #include "coop_puppet.h"
 #include "coop_rebirth.h"
 #include "coop_revive.h"
@@ -1015,6 +1016,44 @@ void Outages() {
   Check(long_cut.host.State()==SessionState::Ended && long_cut.guest.State()==SessionState::Ended,"long disconnect cleanly ends both sessions");
   Check(long_cut.a->SimulationStats().dropped && long_cut.b->SimulationStats().dropped,"both disconnect directions exercised");
 }
+// C117: the c115-beach-a stall, replayed once a frame (30 fps of game time): crab 43BBD098 charging crew member
+// 41CF5310 3.75 m away, wedged 1.9 m from the host and 1.2 m from the partner body.
+void CrabUnstick() {
+  namespace cu=crab_unstick;
+  constexpr uint32_t kHero=0x418CD984, kBody=0x43BD2F10, kCrew=0x41CF5310;
+  auto stalled=[&](float now) {
+    cu::Sample s; s.now=now; s.x=336.593f; s.y=230.893f; s.sub=1; s.target=kCrew; s.hero=kHero; s.body=kBody;
+    s.distance=3.75f; s.range=2.5f; s.player_near=1.2f; return s;
+  };
+  auto run=[&](auto make,float seconds) {
+    cu::Watch w; int fired=0; float first=-1;
+    for (int f=0;f<=int(seconds*30);++f) { const float t=40.f+f/30.f; if (cu::Step(w,make(t))) { ++fired; if (first<0) first=t-40.f; } }
+    return std::pair<int,float>{fired,first};
+  };
+  const auto held=run(stalled,65.f);
+  Check(held.first>=1 && held.second>=cu::kStuckSeconds && held.second<cu::kStuckSeconds+0.1f,"a crab held against the players gives up after six seconds");
+  Check(held.first<=65/int(cu::kStuckSeconds),"a crab still held asks again only once per six seconds");
+  // The same crab charging its own player target is native play: never touched.
+  Check(run([&](float t){ auto s=stalled(t); s.target=kHero; return s; },20.f).first==0,"a crab after the host is left alone");
+  Check(run([&](float t){ auto s=stalled(t); s.target=kBody; return s; },20.f).first==0,"a crab after the partner body is left alone");
+  // Single player (no partner body) is unchanged.
+  Check(run([&](float t){ auto s=stalled(t); s.body=0; return s; },20.f).first==0,"single player crabs are never changed");
+  // A crab chasing a crew member that runs away keeps moving: no give up.
+  Check(run([&](float t){ auto s=stalled(t); s.x=330.f+(t-40.f)*1.2f; return s; },20.f).first==0,"a crab that keeps moving keeps its target");
+  // Within reach of its crew target the native grab runs: no give up.
+  Check(run([&](float t){ auto s=stalled(t); s.distance=2.6f; return s; },20.f).first==0,"a crab within reach of its target keeps it");
+  // No player close by: nothing in the way that it could attack instead.
+  Check(run([&](float t){ auto s=stalled(t); s.player_near=5.f; return s; },20.f).first==0,"a crab with no player next to it keeps its target");
+  // A short hold (a roar or a grab start) is native.
+  { cu::Watch w; int fired=0; for (int f=0;f<150;++f) fired+=cu::Step(w,stalled(40.f+f/30.f)); Check(fired==0,"five seconds held is not enough"); }
+  // A new target starts the clock again.
+  { cu::Watch w; int fired=0;
+    for (int f=0;f<150;++f) fired+=cu::Step(w,stalled(40.f+f/30.f));
+    for (int f=150;f<300;++f) { auto s=stalled(40.f+f/30.f); s.target=0x41AB3E80; fired+=cu::Step(w,s); }
+    Check(fired==0,"switching to another crew member restarts the six seconds"); }
+  const auto g=cu::NativeGiveUp(kCrew);
+  Check(g.excluded==kCrew && g.zone==1 && g.gave_up==1,"the give up writes what the game's own crew give up writes");
+}
 }
 int main(int argc,char** argv) {
   if(argc!=2) { std::fprintf(stderr,"choose one named chaos test\n"); return 2; }
@@ -1064,6 +1103,7 @@ int main(int argc,char** argv) {
   else if(name=="support_delayed_watch") SupportDelayedWatch();
   else if(name=="human_return") HumanReturn();
   else if(name=="human_set_track") HumanSetTrack();
+  else if(name=="crab_unstick") CrabUnstick();
   else { std::fprintf(stderr,"unknown test\n"); return 2; }
   std::printf("PASS [%s]\n",test_name); return 0;
 }
