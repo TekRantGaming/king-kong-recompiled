@@ -681,6 +681,22 @@ void PuppetPolicies() {
     current=(uint32_t(stable->clip.action)<<8)|stable->clip.item;
   }
   Check(ChooseGait(3,0,0,false,similar,current)->clip.action==15,"sustained faster travel can change gait");
+  // An armed crew donor loads its gun walks next to the empty hand ones.
+  const Gait crew[] = {{{150,0,2.2f},0,false},{{163,0,3.5f},0,false},{{166,0,2},0,false},
+      {{165,0,2.4f},0,false},{{11,0,1.2f},0,false},{{15,0,1.4f},0,false}};
+  Check(ChooseGait(2.2f,0,0,false,crew)->clip.action==150,"armed partner keeps the donor's native gun walk");
+  for (const float v : {.5f,1.4f,2.2f,3.5f,6.f}) {
+    const auto empty=ChooseGait(v,0,0,false,crew,UINT32_MAX,true);
+    Check(empty && !HeldItemAction(empty->clip.action),"empty hands never walk with a gun grip or raised arms");
+  }
+  Check(!ChooseGait(2,0,0,false,std::span(crew,4),UINT32_MAX,true),
+      "only gun walks loaded: empty hands keep the native idle family instead");
+  for (const uint16_t a : {0,10,11,12,15,27,41,51}) Check(!HeldItemAction(a),"native empty hand clips stay usable");
+  for (const uint16_t a : {145,146,147,148,143,144,96,75,150,160,163,165,167,36,37,42,52})
+    Check(HeldItemAction(a),"native weapon idle, aim and walk families are recognised");
+  const Action crew_seen[] = {{147,0,0},{150,0,2.2f},{0,0,0},{11,0,1.1f}};
+  Check(ChooseAction(0,crew_seen,true)->action==0 && ChooseAction(2,crew_seen,true)->action==11 &&
+      ChooseAction(0,crew_seen)->action==147,"empty hands skip the donor's observed armed idle and walk");
   Check(ChooseAction(.09f, observed)->action == 41, "observed idle below threshold");
   Check(ChooseAction(.1f, observed)->action == 22, "threshold chooses observed moving tuple");
   Check(ChooseAction(1.2f, observed)->action == 22, "walk uses closest observed speed");
