@@ -16,6 +16,13 @@ inline bool DamageClock(double hit_time, double host_pose_time) {
       hit_time >= host_pose_time-kMaxAge && hit_time <= host_pose_time+.5;
 }
 enum class GrabFeedback { Pending, Accepted, Release };
+inline bool NativeScorpionGrabStart(const DamageEvent& d) {
+  if (COOP_MUT_IF("grab_start")) return true;
+  // Scorpion82616490 uses3/10 for a player body and256/0 for an NPC body.
+  // Both are real grab starts. Preserve the zero scalar NPC reaction.
+  return d.enemy.family==EnemyFamily::Scorpion && !d.projectile &&
+      ((d.flags==3 && d.magnitude==10) || (d.flags==256 && !d.magnitude));
+}
 inline bool NativeAttackSound(const DamageEvent& d) {
   if (COOP_MUT_IF("attack_sound")) return true;
   // Scorpion82616490 plays sound8 immediately before producing5/10.

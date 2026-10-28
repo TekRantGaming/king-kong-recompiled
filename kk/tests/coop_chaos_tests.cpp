@@ -335,6 +335,19 @@ void ProfileScenario(const char* name,uint32_t seed) {
   std::printf("actual-core profile=%s seed=%u story=%u poses=%llu/%llu converged=yes native-hooks=absent\n",name,seed,applied,
       (unsigned long long)p.host.Poses().received,(unsigned long long)p.guest.Poses().received);
 }
+void GrabStart() {
+  DamageEvent d{{204,3,5},9,7,{123,4,EnemyFamily::Scorpion},3,10,{1,0,0}};
+  Check(combat::NativeScorpionGrabStart(d),"player body native start recognized");
+  d.flags=256; d.magnitude=0;
+  Check(combat::NativeScorpionGrabStart(d) && ValidDamageEvent(d),"NPC body zero scalar start recognized without new damage");
+  d.flags=5; d.magnitude=10; Check(!combat::NativeScorpionGrabStart(d),"sting cannot invent a new grab");
+  d.flags=512; d.magnitude=0; Check(!combat::NativeScorpionGrabStart(d),"timeout cannot invent a new grab");
+  d.flags=256; d.magnitude=1; Check(!combat::NativeScorpionGrabStart(d),"unknown NPC start magnitude refused");
+  d.flags=3; d.magnitude=10; d.projectile=true;
+  Check(!combat::NativeScorpionGrabStart(d),"projectile is not a grab start");
+  d.projectile=false; d.enemy.family=EnemyFamily::Raptor;
+  Check(!combat::NativeScorpionGrabStart(d),"other families require their own native grab adapter");
+}
 void AttackSound() {
   DamageEvent d{{204,3,5},9,7,{123,4,EnemyFamily::Scorpion},5,10,{1,0,0}};
   d.attack_sound=true;
@@ -428,6 +441,7 @@ int main(int argc,char** argv) {
   else if(name=="impact_selector") ImpactSelector();
   else if(name=="grab_feedback") GrabFeedback();
   else if(name=="attack_sound") AttackSound();
+  else if(name=="grab_start") GrabStart();
   else if(name=="udp_duplicate" || name=="udp_order") Reliable();
   else { std::fprintf(stderr,"unknown test\n"); return 2; }
   std::printf("PASS [%s]\n",test_name); return 0;

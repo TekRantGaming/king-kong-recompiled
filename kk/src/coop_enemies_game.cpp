@@ -1819,13 +1819,14 @@ bool LocalNativeGrabDamage(PPCContext& ctx,uint8_t* b,const DamageEvent& d,const
                           uint32_t hero,uint32_t ai,uint32_t vars) {
   if (!LocalNativeGrabEnabled() || source.id.family!=EnemyFamily::Scorpion || d.projectile) return true;
   auto& s=Get(); auto& g=s.local_native_grab;
-  const bool start=d.flags==3 && d.magnitude==10;
-  const bool follow=(d.flags==5 && d.magnitude==10) || ((d.flags==256 || d.flags==512) && !d.magnitude);
+  const bool start=combat::NativeScorpionGrabStart(d);
+  const bool follow=(d.flags==5 && d.magnitude==10) || (d.flags==512 && !d.magnitude);
   if (!start && !follow) return true;
   if (start) {
     const auto* authority=AuthorityFor(source.id);
     if (!authority || authority->dead || authority->last.life<=0) return false;
     if (g.hero==hero && g.ai==ai && g.vars==vars && g.source.actor==source.actor &&
+        g.source.id==source.id && g.ownership_generation==d.generation &&
         g.incarnation==s.incarnation && !g.ended && LocalNativeGrabRecord(b).valid) return true;
     if (LocalNativeGrabRecord(b).valid) return false; // Preserve an existing native claim.
     const auto init=Ptr(b,0x82CC8C58,0,24);
@@ -1845,6 +1846,7 @@ bool LocalNativeGrabDamage(PPCContext& ctx,uint8_t* b,const DamageEvent& d,const
     return accepted;
   }
   const bool active=g.hero==hero && g.ai==ai && g.vars==vars && g.source.actor==source.actor &&
+      g.source.id==source.id && g.ownership_generation==d.generation &&
       g.incarnation==s.incarnation && !g.ended && LocalNativeGrabRecord(b).valid;
   if (!active) {
     static unsigned lines=0;
@@ -3829,7 +3831,7 @@ bool EnemyDamageEnqueue(PPCContext& ctx, uint8_t* b, uint32_t body) {
       else if (s.outgoing_damage.size() < combat::kQueueLimit) { s.outgoing_damage.push_back({m, Now()}); queued = true; }
       if (queued) ++s.next_damage;
       if (queued && damage.attack_sound) sound->second.consumed=true;
-      if (queued && binding->second.id.family==EnemyFamily::Scorpion && damage.flags==3 && damage.magnitude==10 && !damage.projectile) {
+      if (queued && combat::NativeScorpionGrabStart(damage)) {
         auto& grab=s.peer_grab;
         const auto offer=PeerGrabRecord(b);
         if (grab.actor==body && grab.client_ready && offer.valid && offer.target==source &&
