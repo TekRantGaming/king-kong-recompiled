@@ -4180,7 +4180,15 @@ std::vector<WorldEnemy> EnemyWorldDigest(const uint8_t* b) {
 desync::Evidence EnemyCompareDigest(uint8_t* b,const desync::State& state,bool reconcile) {
   desync::Evidence result;
   EnemyId anchor;
-  const auto missing=[&](EnemyId id) {
+  const auto missing=[&](EnemyId id,const char* why) {
+#if defined(KK_DEV_TOOLS)
+    // C108: name the identity behind a structural digest drift (each once).
+    static std::set<std::pair<EnemyId,std::string>> logged;
+    if (logged.size()<64 && logged.insert({id,why}).second)
+      REXLOG_INFO("ENEMIES digest structural id={:016X}/{}/{} reason={}",id.source,id.sequence,uint16_t(id.family),why);
+#else
+    (void)why;
+#endif
     result.structural=true; result.progress=Mix(Mix(result.progress,id.source),id.sequence);
     if (!anchor.source || id<anchor) {
       anchor=id;
@@ -4197,7 +4205,7 @@ desync::Evidence EnemyCompareDigest(uint8_t* b,const desync::State& state,bool r
     // Host digests never override guest-owned AI or an in-flight ownership change.
     if (h.owner!=EnemyOwner::Host) continue;
     const auto* binding=CanonicalBinding(b,h.id);
-    if (!binding) { if (h.life>0) missing(h.id); continue; }
+    if (!binding) { if (h.life>0) missing(h.id,"host-alive-guest-unbound"); continue; }
     const auto auth=s.authority.find(h.id);
     if (auth==s.authority.end() || auth->second.owner!=h.owner || auth->second.generation!=h.generation ||
         auth->second.Frozen()) continue;
@@ -4221,8 +4229,12 @@ desync::Evidence EnemyCompareDigest(uint8_t* b,const desync::State& state,bool r
     const auto id=Canonical(binding.id); const auto auth=s.authority.find(id);
     if (!id.source || host_ids.contains(id) || auth==s.authority.end() || auth->second.dead ||
         auth->second.owner!=EnemyOwner::Host || auth->second.Frozen() || !ValidBinding(b,binding)) continue;
+    const auto local=s.records.find(binding.id);
+    const bool retired=s.retirement_applied.contains(binding.id) ||
+        (local!=s.records.end() && local->second.kind==EnemyEventKind::Removed);
     Binding observed; EnemyState current;
-    if (Read(b,actor,observed,current) && current.life>0) missing(id);
+    if (Read(b,actor,observed,current) && desync::GuestOnlyAliveIsDrift(false,retired,current.life>0))
+      missing(id,"guest-alive-host-absent");
   }
   return result;
 }
@@ -4549,6 +4561,8 @@ std::optional<ShotVector> EnemyAimTarget(const uint8_t* b, ShotVector origin) {
     if (family && unsigned(binding.id.family)!=family) continue;
     const auto* a = AuthorityFor(binding.id);
     if (!a || a->dead || a->last.life <= 0 || !ValidBinding(b, binding)) continue;
+    if (s.retirement_applied.contains(binding.id)) continue;  // C108: never aim at a retired replica
+    if (const auto r = s.records.find(binding.id); r != s.records.end() && r->second.kind == EnemyEventKind::Removed) continue;
     const auto m = binding.matrix;
     ShotVector point = Vector(b, m+48);
     point.z += (binding.id.family == EnemyFamily::Raptor ? 1.2f : .4f)+height;
