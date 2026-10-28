@@ -12,6 +12,7 @@
 // and gives drive mode a stationary target at that creation point.
 #include "coop_partner_body.h"
 #include "coop_world_snapshot.h"
+#include "coop_event_budget.h"
 #if defined(KK_DEV_TOOLS)
 #include "art.h"
 #include "dev_puppet_mesh.h"
@@ -458,6 +459,10 @@ struct State {
   bool finish_pending = false, measure = false, transition_pending = false;
   bool partner_eligible = false, prepared = false;
   bool combat_publishing = false;
+  // C101: s.held at the last perception publish (native dispatch cadence).
+  uint64_t published_held = 0;
+  uint64_t publish_counts[4] = {};
+  Clock::time_point publish_log_at{};
   bool selected_copy = false;
   int selected_tier = -1;
   unsigned missing_action_kind = 0;
@@ -747,7 +752,7 @@ bool PartnerReady(const uint8_t* b, uint32_t w) {
     s.partner_eligible = true;
     s.attempted = s.terminal = false;
     s.finish_pending = s.measure = false;
-    s.held = s.passed = s.updates = 0;
+    s.held = s.passed = s.updates = s.published_held = 0;
     s.updated_frame = ~uint64_t{0};
     s.missing_action_kind = 0;
     s.max_late_error = s.max_forward_error = 0;
@@ -1983,6 +1988,29 @@ void PartnerBodyBeforeAi(PPCContext& ctx, uint8_t* b, uint32_t w) {
   s.prepared = true;
 }
 
+// C101: the native H publisher runs inside the body's own AI dispatch, which
+// is held. Stand in for it only on frames the scheduler offered that dispatch
+// (none while the world is paused), only while the pool ages its events, and
+// never beyond the native number of live events. See coop_event_budget.h.
+static coop::event_budget::Decision PartnerPublishDecision(const uint8_t* b, const Rig& rig) {
+  namespace eb = coop::event_budget;
+  auto& s = Get();
+  const auto bucket = Load32(b, rig.vars+4);
+  const auto count = eb::Count([&](uint32_t p) { return Load32(b, p); }, bucket >= 1 && bucket <= 12 ? bucket : 1, rig.actor);
+  const eb::PublishInput in{Load32(b, eb::kPoolPauseWord) != 0, s.held != s.published_held,
+      count.valid ? count.owner_live : eb::kOwnerLiveLimit};
+  const auto d = eb::DevReplay26a() ? eb::Decision::Publish : eb::DecidePublish(in);
+  ++s.publish_counts[unsigned(d)];
+  const auto now = Clock::now();
+  if (d != eb::Decision::Publish && d != eb::Decision::NotDispatched && now >= s.publish_log_at) {
+    s.publish_log_at = now + std::chrono::seconds(5);
+    REXLOG_INFO("KK co-op partner perception: held reason={} body={:08X} live={} visible={} counts publish={} paused={} not-dispatched={} owner-full={}",
+        eb::DecisionName(d), rig.actor, count.owner_live, count.enumerable, s.publish_counts[0], s.publish_counts[1],
+        s.publish_counts[2], s.publish_counts[3]);
+  }
+  return d;
+}
+
 void PartnerBodyAfterAi(PPCContext& ctx, uint8_t* b, uint32_t w) {
   if (!Enabled()) return;
   auto& s = Get();
@@ -2174,9 +2202,11 @@ void PartnerBodyAfterAi(PPCContext& ctx, uint8_t* b, uint32_t w) {
   // Full H Post/AI remains held. Refresh only its audited perception publisher
   // under the body's native context, after committing the driven transform.
   const auto link = coop::EnemyLinkSnapshot();
+  const auto publish = PartnerPublishDecision(b, rig);
   if (Opt().partner && !s.humans.at(rig.actor).other_human && link.connected && coop::EnemyPartnerCombatReady() &&
       Range(rig.vars, 5152) && Range(Load32(b, 0x82CC9C30), 7144) &&
-      Load32(b, rig.vars+4) >= 1 && Load32(b, rig.vars+4) <= 12) {
+      Load32(b, rig.vars+4) >= 1 && Load32(b, rig.vars+4) <= 12 && publish == coop::event_budget::Decision::Publish) {
+    s.published_held = s.held;
     Scratch scratch(ctx, b);
     constexpr uint32_t globals[] = {0x82CCBF64, 0x82CCBF68, 0x82CCBF6C, 0x82CCBF70};
     uint32_t saved[4];

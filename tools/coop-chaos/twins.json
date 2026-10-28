@@ -29,6 +29,11 @@
     "centipede_contact_sound": "centipede_contact_sound",
     "body_hit_class": "body_hit_class",
     "after_contact_sound": "after_contact_sound",
-    "story_native_stop": "story_native_stop"
+    "story_native_stop": "story_native_stop",
+    "event_pause_gate": "event_pause",
+    "event_dispatch_gate": "event_dispatch",
+    "event_owner_cap": "event_owner_cap",
+    "event_vision_guard": "event_vision_guard",
+    "event_network_defer": "event_network_defer"
   }
 }
