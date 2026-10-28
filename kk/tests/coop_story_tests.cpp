@@ -78,6 +78,14 @@ void NativeRetirement() {
       "retirement cannot discard unissued native speech");
   Check(story::NativeStopMatches(event,2,203,event.source,event.script,3,7,0x8250BED8,true),
       "a host stopped speech wait retires only after its local native speech was issued");
+  Check(!story::NativeStopMatches(event,2,203,event.source,event.script,3,7,0),
+      "a terminator needs observed local completion before native cleanup");
+  Check(story::NativeStopMatches(event,2,203,event.source,event.script,3,7,0,false,true),
+      "host native cleanup can release the same completed local terminator");
+  Check(!story::NativeStopMatches(event,2,203,event.source,event.script,4,7,0,false,true),
+      "native cleanup cannot release another activation's terminator");
+  Check(!story::NativeStopMatches(event,2,203,event.source,event.script,3,8,0,false,true),
+      "native cleanup cannot skip a different local terminal record");
   for (unsigned field=0;field<5;++field) {
     auto stale=event;
     if (field==0) ++stale.generation;

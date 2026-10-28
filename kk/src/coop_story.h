@@ -16,11 +16,12 @@ inline bool RetirableWait(uint32_t callback,bool started=false) {
       (callback==0x8250BED8 && started);
 }
 inline bool NativeStopMatches(const StoryEvent& event,uint32_t generation,uint32_t level,
-    uint64_t source,uint64_t script,uint32_t run,uint32_t record,uint32_t callback,bool started=false) {
+    uint64_t source,uint64_t script,uint32_t run,uint32_t record,uint32_t callback,bool started=false,
+    bool finished=false) {
   if (COOP_MUT_IF("story_native_stop")) return true;
   return event.phase==StoryPhase::Stopped && ValidStoryEvent(event) &&
       event.generation==generation && event.level==level && event.source==source && event.script==script &&
-      event.run==run && event.record==record && RetirableWait(callback,started);
+      event.run==run && event.record==record && (RetirableWait(callback,started) || (!callback && finished));
 }
 // 8271D1D8 and 826F9E70 initialize a native program's state word to -1.
 // SSDetect treats only 1 as armed. Starting replaces that word with the new

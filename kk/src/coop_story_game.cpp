@@ -22,6 +22,7 @@
 #include <set>
 
 REX_EXTERN(__imp__sub_82454690);
+REX_EXTERN(__imp__sub_82499030);
 REX_EXTERN(__imp__sub_82476848);
 REX_EXTERN(__imp__sub_8244F0E8);
 REX_EXTERN(__imp__sub_824FC2D0);
@@ -57,6 +58,7 @@ struct Script : story::Progress {
   double request_until=0;
   story::Hints hints;
   std::optional<StoryEvent> native_stop;
+  std::optional<StoryEvent> native_finish;
   double next_native_stop=0;
   story::Lag lag;
   bool exact=false;
@@ -660,6 +662,11 @@ void ChecksumFrame(uint8_t* b,double now) {
   for (unsigned budget=0;it!=scripts.end() && budget<16;++it,++budget) {
     if (outgoing.size()>=kStoryQueue/2 || number==UINT32_MAX) break;
     auto& s=it->second;
+    // A native one-shot finish can remove the actor from the current census.
+    // Retain that observed boundary for private guest reloads in this world.
+    if (s.native_finish && s.native_finish->run==s.run && now>=s.next_native_stop) {
+      if (Emit(*s.native_finish)) s.next_native_stop=now+3;
+    }
     const auto* bind=story::Match(s.binding.source,s.binding.script,bindings);
     if (!bind || bind->actor!=it->first || Vars(b,bind->ai,19824)!=bind->vars || Shape(b,bind->vars)!=bind->script) {
       checksum_actor=it->first; continue;
@@ -1084,6 +1091,47 @@ bool StoryLoop(PPCContext& ctx,uint8_t* b) {
   Store32(b,vars+19816,1); // native waiting result; no guest-local callback is run
   return true;
 }
+bool StoryFinish(PPCContext& ctx,uint8_t* b) {
+  if (!Ensure(b) || failed || snapshot_waiting) return false;
+  auto* s=Current(b);
+  if (!s || !s->saw_loop || !s->run || s->started!=s->run || s->finished!=s->run ||
+      Load32(b,s->binding.vars)!=0) return false;
+  const auto index=Load32(b,s->binding.vars+19812);
+  if (index>=kStoryRecords || Load32(b,s->binding.vars+924+180*index)) return false;
+#if defined(KK_DEV_TOOLS)
+  // A bounded control of the native timing uses the same binary and oracle.
+  // This switch and its trace are absent from the shipping executable.
+  static const bool native_control=std::getenv("KK_DEV_STORY_FINISH_NATIVE_CONTROL")!=nullptr;
+#else
+  constexpr bool native_control=false;
+#endif
+  auto ended=Event(*s,StoryPhase::Stopped,index);
+  if (!host && !native_control) {
+    if (!s->native_stop || !story::NativeStopMatches(*s->native_stop,generation,level,
+        s->binding.source,s->binding.script,s->run,index,0,false,true)) {
+      ctx.r3.u32=0;
+      return true;
+    }
+    ended=*s->native_stop;
+    s->native_stop.reset();
+  }
+  const auto actor=s->binding.actor;
+  const auto before=Load32(b,actor+4);
+  __imp__sub_82499030(ctx,b);
+  if (host) {
+    // No arbitrary activity bit is copied. Each peer executes its own complete
+    // native PRG_SSFin, including its destruction event and component cleanup.
+    s->native_finish=ended;
+    if (Emit(ended)) s->next_native_stop=Now()+3;
+  }
+  Note(host ? "native finish observed":"native finish applied",ended,
+      native_control ? "native timing control; host cleanup gate disabled":"same completed one-shot program; native cleanup retained");
+#if defined(KK_DEV_TOOLS)
+  REXLOG_INFO("KK dev story finish: role={} source={:016X} actor={:08X} before={:08X} after={:08X} result={} native-control={}",
+      host ? "host":"guest",ended.source,actor,before,Load32(b,actor+4),ctx.r3.u32,native_control);
+#endif
+  return true;
+}
 bool ConvergeFlagWait(uint8_t* b,uint32_t payload) {
   if (!Ensure(b) || host || failed) return false;
   auto* s=Current(b);
@@ -1231,6 +1279,9 @@ void StoryCapability(PPCContext& ctx,uint8_t* b,uint32_t payload,bool any) {
 
 REX_HOOK_RAW(sub_82476848) {
   if (!kk::coop::StoryDetect(ctx,base)) __imp__sub_82476848(ctx,base);
+}
+REX_HOOK_RAW(sub_82499030) {
+  if (!kk::coop::StoryFinish(ctx,base)) __imp__sub_82499030(ctx,base);
 }
 REX_HOOK_RAW(sub_82501A30) {
   if (kk::coop::HostNpcWait(ctx,base,0x82501A30)) return;
