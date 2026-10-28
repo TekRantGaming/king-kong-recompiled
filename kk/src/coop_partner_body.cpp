@@ -163,11 +163,12 @@ bool Range(uint32_t p, uint32_t bytes) {
 // Opens a probe for one alias check and logs what it refused.
 class ProbeScope {
  public:
-  explicit ProbeScope(const char* stage) : stage_(stage), was_(guest_probe) {
+  explicit ProbeScope(const char* stage, bool quiet = false) : stage_(stage), quiet_(quiet), was_(guest_probe) {
     guest_probe = {}; guest_probe.on = true;
   }
   ~ProbeScope() {
-    if (guest_probe.unreadable || DevC119Replay())
+    static unsigned quiet_logged = 0;
+    if ((guest_probe.unreadable && (!quiet_ || quiet_logged++ < 20)) || (DevC119Replay() && !quiet_))
       REXLOG_INFO("PUPPET alias probe stage={} actors={} spans={} unreadable={} first={:08X}+{} replay={}",
           stage_, actors, guest_probe.spans, guest_probe.unreadable, guest_probe.first, guest_probe.first_bytes,
           DevC119Replay());
@@ -176,6 +177,7 @@ class ProbeScope {
   unsigned actors = 0;
  private:
   const char* stage_;
+  bool quiet_;
   GuestProbe was_;
 };
 uint32_t Ptr(const uint8_t* b, uint32_t p, uint32_t offset, uint32_t bytes) {
@@ -1713,6 +1715,19 @@ void CensusAndSelect(PPCContext& ctx, uint8_t* b, uint32_t w) {
   uint32_t begin, end;
   const bool jack_ok = ReadRig(b, s.hero, jack);
   if (!Table(b, w, begin, end)) { s.Abort("active-table-unavailable"); return; }
+#if defined(KK_DEV_TOOLS)
+  // C119 dev hammer: KK_DEV_C119_SCAN=1 runs the SpawnCopy alias read (ReadRig
+  // on every active actor) every frame, so a chain into unmapped memory shows
+  // in seconds instead of once per copy. With KK_DEV_C119_REPLAY=1 it faults.
+  static const bool scan = [] { const char* v = std::getenv("KK_DEV_C119_SCAN"); return v && v[0] == '1'; }();
+  if (scan) {
+    static unsigned frames = 0, hits = 0;
+    ProbeScope probe("scan", true);
+    for (uint32_t p = begin; p < end; p += 8) { Rig r; ++probe.actors; ReadRig(b, Load32(b, p), r); }
+    ++frames; hits += guest_probe.unreadable != 0;
+    if (frames % 600 == 0) REXLOG_INFO("PUPPET C119 scan frames={} frames-with-unreadable={} actors={}", frames, hits, probe.actors);
+  }
+#endif
   const auto now = Clock::now();
   const bool log = s.census_at == Clock::time_point{} || now - s.census_at >= std::chrono::seconds(1);
   if (log) {
