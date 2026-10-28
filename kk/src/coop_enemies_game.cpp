@@ -3753,13 +3753,17 @@ revive::Probe ProbeSpot(PPCContext& ctx,uint8_t* b,Scratch& scratch,uint32_t wor
 }
 revive::Placement placement;
 revive::VoidGuard void_guard;
-bool LegacyPlacement() {
+// Dev only, for before/after counts in one binary: 1 = the old unchecked spot,
+// 2 = the old spot with the void guard armed (proves the guard in game).
+int LegacyPlacement() {
 #if defined(KK_DEV_TOOLS)
-  // Dev only, for before/after counts in one binary: the old unchecked spot.
-  static const bool legacy=[] { const char* v=std::getenv("KK_DEV_REVIVE_LEGACY"); return v && std::strcmp(v,"1")==0; }();
+  static const int legacy=[] {
+    const char* v=std::getenv("KK_DEV_REVIVE_LEGACY");
+    return !v ? 0 : std::strcmp(v,"1")==0 ? 1 : std::strcmp(v,"2")==0 ? 2 : 0;
+  }();
   return legacy;
 #else
-  return false;
+  return 0;
 #endif
 }
 void NativeTeleport(PPCContext& ctx,uint8_t* b,uint32_t hero,const ShotVector& position,float facing) {
@@ -3794,10 +3798,12 @@ revive::Place ReviveTeleport(PPCContext& ctx,uint8_t* b,const PlayerPose& partne
   const auto matrix=Ptr(b,h->hero,12,64);
   const ShotVector before=Vector(b,matrix+48);
   const bool grounded=LoadF(b,h->vars+kAirTime)<.1f && !Load32(b,h->vars+kVoid);
-  if (LegacyPlacement()) {
+  if (const int legacy=LegacyPlacement()) {
     const auto position=revive::Beside(partner);
     NativeTeleport(ctx,b,h->hero,position,partner.facing);
-    REXLOG_INFO("KK co-op placement: legacy dev spot ({:.3f},{:.3f},{:.3f}) unchecked",position.x,position.y,position.z);
+    if (legacy==2) { ResetGround(b,h->vars,position,false); void_guard.Arm(before,grounded,Now()); }
+    REXLOG_INFO("KK co-op placement: legacy dev spot ({:.3f},{:.3f},{:.3f}) unchecked guard={}",position.x,position.y,position.z,
+        void_guard.Armed());
     return revive::Place::Spot;
   }
   const auto body=kk::PartnerBodyCombatActor(b);
