@@ -10,6 +10,7 @@
 #include "coop_stimulus_debug.h"
 #include "coop_event_budget.h"
 #include "coop_puppet.h"
+#include "coop_revive.h"
 #include <algorithm>
 #include <map>
 #include <vector>
@@ -673,6 +674,49 @@ void BodyHitClass() {
   Check(combat::ClassifyBodyHit(true,false,false)==B::EnemyRemote,"replica source is counted, not relayed");
   Check(combat::ClassifyBodyHit(false,false,false)==B::World,"world hazard on the body stays in this world");
 }
+// C104: revive placement and the void safety net.
+revive::Probe GoodSpot(float z) { revive::Probe p; p.floor=true; p.floor_z=z; p.normal_z=1; p.headroom=true; p.sight=true; p.nav=2; return p; }
+void PlacementFloor() {
+  using revive::Verdict;
+  Check(revive::Judge(GoodSpot(5.2f),5,2)==Verdict::Ok,"flat floor within a step by the partner is taken");
+  auto p=GoodSpot(5); p.floor=false;
+  Check(revive::Judge(p,5,2)==Verdict::NoFloor,"a spot with no native floor (void) is refused");
+  Check(revive::Judge(GoodSpot(3.5f),5,2)==Verdict::Step,"a floor 1.5 under the partner (ledge) is refused");
+  p=GoodSpot(5); p.normal_z=.5f; Check(revive::Judge(p,5,2)==Verdict::Steep,"a steep face is refused");
+  p=GoodSpot(5); p.headroom=false; Check(revive::Judge(p,5,2)==Verdict::Head,"a spot inside rock is refused");
+  p=GoodSpot(5); p.nav=int8_t(0x42); Check(revive::Judge(p,5,2)==Verdict::Nav,"blocked nav bits refuse");
+  p=GoodSpot(5); p.nav=0; Check(revive::Judge(p,5,2)==Verdict::Nav && revive::Judge(p,5,0)==Verdict::Ok,"off grid cell only where the partner is off grid too");
+  p=GoodSpot(5); p.nav=3; Check(revive::Judge(p,5,2)==Verdict::Nav && revive::Judge(p,5,3)==Verdict::Ok,"water kind only where the partner stands on it");
+  p=GoodSpot(5); p.nav=1; Check(revive::Judge(p,5,1)==Verdict::Nav,"native blocked cell 1 is refused");
+  PlayerPose peer; peer.x=10; peer.y=20; peer.z=7; peer.facing=0;
+  const auto c=revive::Candidate(peer,6,0);
+  Check(std::abs(c.x-8.5f)<.001f && std::abs(c.y-20)<.001f && c.z==6,"first candidate keeps the old spot behind, on the partner floor");
+  const auto side=revive::Candidate(peer,6,1);
+  Check(std::abs(side.x-10)<.001f && std::abs(side.y-21.5f)<.001f,"second candidate is the partner's left side");
+  Check(std::abs(revive::Candidate(peer,6,8).x-9)<.001f,"second ring is closer");
+}
+void PlacementSight() {
+  auto p=GoodSpot(5); p.sight=false;
+  Check(revive::Judge(p,5,2)==revive::Verdict::Sight,"a wall between the spot and the partner refuses the spot");
+}
+void PlacementWait() {
+  revive::Placement w;
+  Check(w.Step(false,10)==revive::Place::Wait && w.Step(false,10.9)==revive::Place::Wait &&
+      w.Step(false,11.8)==revive::Place::Wait,"no spot yet keeps waiting");
+  Check(w.Step(false,12)==revive::Place::Stay,"two seconds without a spot keeps the native respawn spot");
+  Check(w.Step(false,20)==revive::Place::Wait,"a new attempt starts a new wait");
+  Check(w.Step(true,20.1)==revive::Place::Spot && w.Step(false,30)==revive::Place::Wait,"a found spot ends the attempt");
+  Check(w.Step(false,std::numeric_limits<double>::quiet_NaN())==revive::Place::Wait,"NaN clock waits");
+}
+void VoidGuard() {
+  revive::VoidGuard g; const ShotVector home{1,2,3};
+  g.Arm(home,true,10);
+  Check(!g.Check(false,10.5) && g.Armed(),"no void, no rescue");
+  const auto r=g.Check(true,11);
+  Check(r && r->x==1 && r->z==3 && !g.Armed(),"void after a placement puts Jack back once on the old ground");
+  g.Arm(home,true,10); Check(!g.Check(true,13.5) && !g.Armed(),"guard ends after three seconds");
+  g.Arm(home,false,10); Check(!g.Check(true,10.2),"an airborne old spot is never a rescue target");
+}
 void Profiles() {
   // 40 seeds per profile, 200 real core scenarios. Virtual time, real loopback
   // sockets, real framing/ACKs/nonces, independent peer clocks, no game process.
@@ -733,6 +777,10 @@ int main(int argc,char** argv) {
   else if(name=="centipede_contact_sound") CentipedeContactSound();
   else if(name=="body_hit_class") BodyHitClass();
   else if(name=="after_contact_sound") AfterContactSound();
+  else if(name=="placement_floor") PlacementFloor();
+  else if(name=="placement_sight") PlacementSight();
+  else if(name=="placement_wait") PlacementWait();
+  else if(name=="void_guard") VoidGuard();
   else if(name=="udp_duplicate" || name=="udp_order") Reliable();
   else if(name=="event_pause") EventPause();
   else if(name=="event_dispatch") EventDispatch();

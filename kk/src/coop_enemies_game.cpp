@@ -24,6 +24,7 @@
 #include <limits>
 #include <map>
 #include <set>
+#include <string>
 #include <utility>
 
 REX_EXTERN(__imp__sub_8271D498);
@@ -106,8 +107,8 @@ REX_EXTERN(__imp__sub_8271E450);
 REX_EXTERN(__imp__sub_8271E290);
 REX_EXTERN(__imp__sub_823FCF58);
 REX_EXTERN(__imp__sub_823FCEB0);
-#if defined(KK_DEV_TOOLS)
 REX_EXTERN(__imp__sub_8284D638);
+#if defined(KK_DEV_TOOLS)
 REX_EXTERN(__imp__sub_82663550);
 REX_EXTERN(__imp__sub_8241F0A8);
 REX_EXTERN(__imp__sub_8266D880);
@@ -2143,12 +2144,22 @@ void CombatBeforeAi(PPCContext& ctx, uint8_t* b) {
 #if defined(KK_DEV_TOOLS)
 void DevDie(PPCContext& ctx, uint8_t* b) {
   struct Die {
-    double due=-1, next_log=0; bool done=false, host=false, hurt=false;
-    unsigned queued=0;
+    double due=-1, next_log=0, repeat=0; bool done=false, host=false, hurt=false;
+    unsigned queued=0, deaths=0, limit=1;
     uint32_t world=0, hero=0, vars=0;
     std::optional<PlayerCondition> observed;
     Die() {
       const char* role=std::getenv("KK_DEV_DIE_HOST"); host=role && std::strcmp(role,"1")==0;
+      // C104: KK_DEV_DIE_REPEAT=<seconds> dies again that long after each
+      // death, KK_DEV_DIE_COUNT deaths in all (default 6), for revive counts.
+      if (const char* r=std::getenv("KK_DEV_DIE_REPEAT")) {
+        char* end=nullptr; const double v=std::strtod(r,&end);
+        if (end!=r && !*end && std::isfinite(v) && v>=8 && v<=120) { repeat=v; limit=6; }
+      }
+      if (const char* c=std::getenv("KK_DEV_DIE_COUNT")) {
+        char* end=nullptr; const auto v=std::strtoul(c,&end,10);
+        if (end!=c && !*end && v>=1 && v<=30 && repeat>0) limit=unsigned(v);
+      }
       const char* value=std::getenv("KK_DEV_DIE"); if (!value || !*value) return;
       char* end=nullptr; const double t=std::strtod(value,&end);
       if (end!=value && !*end && std::isfinite(t) && t>=0 && t<=3600) due=t;
@@ -2181,8 +2192,11 @@ void DevDie(PPCContext& ctx, uint8_t* b) {
     die.observed=h->condition;
   }
   if (h->condition==PlayerCondition::Dead) {
-    die.done=true;
-    REXLOG_INFO("KK dev die: native death observed after {} queued bites; inspect PlayerDowned/private-load/teleport/PlayerRevived",die.queued);
+    ++die.deaths;
+    REXLOG_INFO("KK dev die: native death {} of {} observed after {} queued bites; inspect PlayerDowned/private-load/teleport/PlayerRevived",
+        die.deaths,die.limit,die.queued);
+    if (die.deaths>=die.limit) { die.done=true; return; }
+    die.queued=0; die.hurt=false; die.observed.reset(); die.due=t+die.repeat;
     return;
   }
   if (die.queued==1 && h->condition==PlayerCondition::Hurt) die.hurt=true;
@@ -3681,23 +3695,160 @@ bool EnemyDevWorldGenerationDrift() {
 std::optional<PlayerCondition> LocalPlayerCondition(const uint8_t* b) {
   const auto h=ReadHumanStatus(b); return h ? std::optional{h->condition} : std::nullopt;
 }
-bool ReviveTeleport(PPCContext& ctx,uint8_t* b,const PlayerPose& partner) {
-  const auto h=ReadHumanStatus(b);
-  if (!h || h->condition!=PlayerCondition::Alive || !JackReady(b) ||
-      !ControllerSafe(b,h->hero) || !Scratch::CanUse(ctx)) return false;
-  const auto position=revive::Beside(partner);
+namespace {
+// Jack's ground block in H vars (decomp H_exec_read_world 826A1178): 0xB18 air
+// time, 0xB30 last ground position (0xB38 its z, the fall reference) and
+// 0x3C50 the void flag (no floor 8.5 under the fall: death past a fall of 3).
+constexpr uint32_t kAirTime=0xB18,kLastGround=0xB30,kVoid=0x3C50;
+struct NativeHit { uint32_t hit=0; ShotVector point,normal; };
+// Same native general query as DevBaitFloor/BC reflex: 82403E38 with all three
+// query flags; the world scratch 1626C/16278 holds the hit point and normal.
+NativeHit NativeRay(PPCContext& ctx,uint8_t* b,uint32_t world,uint32_t hero,uint32_t from,uint32_t dir) {
+  ctx.r3.u64=hero; ctx.r4.u64=from; ctx.r5.u64=dir;
+  ctx.r6.u64=UINT32_MAX; ctx.r7.u64=2; ctx.r8.u64=0; ctx.r9.u64=1;
+  __imp__sub_82403E38(ctx,b);
+  NativeHit h; h.hit=ctx.r3.u32;
+  if (h.hit) { h.point=Vector(b,world+0x1626C); h.normal=Vector(b,world+0x16278); }
+  return h;
+}
+int8_t NativeNav(PPCContext& ctx,uint8_t* b,Scratch& scratch,uint32_t world,const ShotVector& p) {
+  const auto grid=Ptr(b,world,Load32(b,0x82CCBFC0) ? 560:556,64);
+  if (!grid) return 0;
+  ctx.r3.u64=grid; ctx.r4.u64=scratch.Vec(p.x,p.y,p.z,0x180); __imp__sub_8284D638(ctx,b);
+  return int8_t(ctx.r3.u32&0xFF);
+}
+// Floor under a point, searched from `top` down over `length` (native ray,
+// never Jack or the partner body). nullopt: no face, or the hit is not under it.
+std::optional<ShotVector> NativeFloor(PPCContext& ctx,uint8_t* b,Scratch& scratch,uint32_t world,uint32_t hero,
+    uint32_t body,float x,float y,float top,float length,float& normal_z) {
+  const auto h=NativeRay(ctx,b,world,hero,scratch.Vec(x,y,top,0x100),scratch.Vec(0,0,-length,0x110));
+  if (!h.hit || h.hit==hero || (body && h.hit==body) || !std::isfinite(h.point.z) || !std::isfinite(h.normal.z) ||
+      std::hypot(h.point.x-x,h.point.y-y)>.05f || h.point.z>top+.01f || h.point.z<top-length-.01f) return {};
+  normal_z=h.normal.z;
+  return h.point;
+}
+revive::Probe ProbeSpot(PPCContext& ctx,uint8_t* b,Scratch& scratch,uint32_t world,uint32_t hero,uint32_t body,
+    const ShotVector& spot,const ShotVector& partner_floor) {
+  revive::Probe p;
+  const float top=partner_floor.z+revive::kMaxStep+.2f, length=2*revive::kMaxStep+.4f;
+  const auto floor=NativeFloor(ctx,b,scratch,world,hero,body,spot.x,spot.y,top,length,p.normal_z);
+  if (!floor) return p;
+  p.floor=true; p.floor_z=floor->z;
+  const auto up=NativeRay(ctx,b,world,hero,scratch.Vec(spot.x,spot.y,floor->z+.2f,0x120),scratch.Vec(0,0,1.6f,0x130));
+  p.headroom=!up.hit || (body && up.hit==body);
+  // From the spot toward the partner at chest height, stopping short of the
+  // partner body: a wall or rock between them refuses the spot.
+  const float dx=partner_floor.x-spot.x, dy=partner_floor.y-spot.y, dz=partner_floor.z-floor->z;
+  const float d=std::hypot(dx,dy);
+  const float k=d>.6f ? (d-.5f)/d : 0;
+  const auto sight=NativeRay(ctx,b,world,hero,scratch.Vec(spot.x,spot.y,floor->z+1,0x140),scratch.Vec(dx*k,dy*k,dz*k,0x150));
+  p.sight=!sight.hit || sight.hit==hero || (body && sight.hit==body);
+  p.nav=NativeNav(ctx,b,scratch,world,*floor);
+  return p;
+}
+revive::Placement placement;
+revive::VoidGuard void_guard;
+bool LegacyPlacement() {
+#if defined(KK_DEV_TOOLS)
+  // Dev only, for before/after counts in one binary: the old unchecked spot.
+  static const bool legacy=[] { const char* v=std::getenv("KK_DEV_REVIVE_LEGACY"); return v && std::strcmp(v,"1")==0; }();
+  return legacy;
+#else
+  return false;
+#endif
+}
+void NativeTeleport(PPCContext& ctx,uint8_t* b,uint32_t hero,const ShotVector& position,float facing) {
   Scratch scratch(ctx,b);
   constexpr uint32_t globals[]={0x82CCBF64,0x82CCBF68,0x82CCBF6C,0x82CCBF70};
   uint32_t saved[4]; for (unsigned i=0;i<4;++i) saved[i]=Load32(b,globals[i]);
   const uint32_t trigger=ctx.r1.u32+0x100,dest=trigger+0x20,mat=trigger+0x40;
-  Store32(b,trigger+4,h->hero); Store32(b,trigger+8,dest); Store32(b,dest+12,mat);
-  const float fx=std::cos(partner.facing),fy=std::sin(partner.facing);
+  Store32(b,trigger+4,hero); Store32(b,trigger+8,dest); Store32(b,dest+12,mat);
+  const float fx=std::cos(facing),fy=std::sin(facing);
   StoreF(b,mat,fy); StoreF(b,mat+4,-fx); StoreF(b,mat+16,-fx); StoreF(b,mat+20,-fy);
   StoreF(b,mat+40,1); StoreF(b,mat+60,1);
   StoreF(b,mat+48,position.x); StoreF(b,mat+52,position.y); StoreF(b,mat+56,position.z);
   ctx.r3.u64=trigger; __imp__sub_82538B70(ctx,b);
   for (unsigned i=0;i<4;++i) Store32(b,globals[i],saved[i]);
-  return true;
+}
+// The fall and landing checks measure from 0xB30 (the last ground). After a
+// move it still holds the old spot: a lower new floor reads as a long fall
+// (over 5 hurts, over 8 kills on landing, 826A1178). Native code itself resets
+// 0xB30 to the current position (its 0x1D88 and 0x337C paths); do the same.
+void ResetGround(uint8_t* b,uint32_t vars,const ShotVector& p,bool clear_void) {
+  StoreF(b,vars+kLastGround,p.x); StoreF(b,vars+kLastGround+4,p.y); StoreF(b,vars+kLastGround+8,p.z);
+  if (clear_void) Store32(b,vars+kVoid,0);
+}
+} // namespace
+revive::Place ReviveTeleport(PPCContext& ctx,uint8_t* b,const PlayerPose& partner) {
+  const auto h=ReadHumanStatus(b);
+  const auto world=Load32(b,0x828E8388);
+  if (!h || h->condition!=PlayerCondition::Alive || !JackReady(b) || !PoseAddress(h->vars,kVoid+4) ||
+      !ControllerSafe(b,h->hero) || !Scratch::CanUse(ctx) || !PoseAddress(world,0x16284) ||
+      !std::isfinite(partner.x) || !std::isfinite(partner.y) || !std::isfinite(partner.z) ||
+      !std::isfinite(partner.facing)) return revive::Place::Wait;
+  const auto matrix=Ptr(b,h->hero,12,64);
+  const ShotVector before=Vector(b,matrix+48);
+  const bool grounded=LoadF(b,h->vars+kAirTime)<.1f && !Load32(b,h->vars+kVoid);
+  if (LegacyPlacement()) {
+    const auto position=revive::Beside(partner);
+    NativeTeleport(ctx,b,h->hero,position,partner.facing);
+    REXLOG_INFO("KK co-op placement: legacy dev spot ({:.3f},{:.3f},{:.3f}) unchecked",position.x,position.y,position.z);
+    return revive::Place::Spot;
+  }
+  const auto body=kk::PartnerBodyCombatActor(b);
+  std::optional<ShotVector> chosen; unsigned index=0;
+  revive::Verdict verdicts[revive::kCandidates]{};
+  ShotVector partner_floor{partner.x,partner.y,partner.z};
+  int8_t partner_nav=0; bool partner_grounded=false;
+  {
+    Scratch scratch(ctx,b);
+    float normal=0;
+    // The partner's own floor: up to 0.5 over and 3 under its reported height.
+    if (const auto f=NativeFloor(ctx,b,scratch,world,h->hero,body,partner.x,partner.y,partner.z+.5f,3.5f,normal)) {
+      partner_floor=*f; partner_grounded=true;
+    }
+    partner_nav=NativeNav(ctx,b,scratch,world,partner_floor);
+    for (unsigned i=0;i<revive::kCandidates && !chosen;++i) {
+      const auto spot=revive::Candidate(partner,partner_floor.z,i);
+      const auto probe=ProbeSpot(ctx,b,scratch,world,h->hero,body,spot,partner_floor);
+      verdicts[i]=revive::Judge(probe,partner_floor.z,partner_nav);
+      if (verdicts[i]==revive::Verdict::Ok) { chosen=ShotVector{spot.x,spot.y,probe.floor_z+.1f}; index=i; }
+    }
+  }
+  const auto result=placement.Step(chosen.has_value(),Now());
+  if (result==revive::Place::Wait) return result;
+  std::string refused;
+  for (unsigned i=0;i<(chosen ? index : revive::kCandidates);++i) {
+    if (!refused.empty()) refused+=',';
+    refused+=revive::VerdictName(verdicts[i]);
+  }
+  if (result==revive::Place::Stay) {
+    REXLOG_INFO("KK co-op placement: no safe spot by partner ({:.3f},{:.3f},{:.3f}) floor={} nav={} for {:.0f} s; staying on native spot ({:.3f},{:.3f},{:.3f}) refused={}",
+        partner.x,partner.y,partner.z,partner_grounded,int(partner_nav),revive::kPlaceWait,before.x,before.y,before.z,refused);
+    return result;
+  }
+  NativeTeleport(ctx,b,h->hero,*chosen,partner.facing);
+  ResetGround(b,h->vars,*chosen,false);
+  void_guard.Arm(before,grounded,Now());
+  REXLOG_INFO("KK co-op placement: spot {} radius {:.1f} turn {:.2f} at ({:.3f},{:.3f},{:.3f}) partner ({:.3f},{:.3f},{:.3f}) floor={} nav={} from ({:.3f},{:.3f},{:.3f}) guard={} refused={}",
+      index,revive::kRadii[index/8],revive::kTurns[index%8],chosen->x,chosen->y,chosen->z,partner.x,partner.y,partner.z,
+      partner_grounded,int(partner_nav),before.x,before.y,before.z,void_guard.Armed(),refused.empty() ? "none" : refused);
+  return result;
+}
+void ReviveGuardFrame(PPCContext& ctx,uint8_t* b) {
+  if (!void_guard.Armed()) return;
+  const auto h=ReadHumanStatus(b);
+  if (!h || !PoseAddress(h->vars,kVoid+4) || !Scratch::CanUse(ctx)) return;
+  const bool void_flag=h->condition!=PlayerCondition::Dead && Load32(b,h->vars+kVoid)!=0;
+  const auto rescue=void_guard.Check(void_flag,Now());
+  if (!rescue) return;
+  const auto matrix=Ptr(b,h->hero,12,64);
+  const auto at=Vector(b,matrix+48);
+  const float fall_ref=LoadF(b,h->vars+kLastGround+8);
+  NativeTeleport(ctx,b,h->hero,*rescue,std::atan2(LoadF(b,matrix),-LoadF(b,matrix+4)));
+  ResetGround(b,h->vars,*rescue,true);
+  REXLOG_WARN("KK co-op placement: void under Jack at ({:.3f},{:.3f},{:.3f}) fall-ref={:.3f}; put back on ({:.3f},{:.3f},{:.3f})",
+      at.x,at.y,at.z,fall_ref,rescue->x,rescue->y,rescue->z);
 }
 void EnemyBeforeLoad() {
 #if defined(KK_DEV_TOOLS)

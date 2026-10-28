@@ -917,15 +917,21 @@ bool SessionDevChapterEnd() {
 }
 #endif
 void SessionReviveBeforeAi(PPCContext& ctx,uint8_t* base) {
+  if (REXCVAR_GET(kk_coop_enabled)) ReviveGuardFrame(ctx,base);
   if (catchup_phase==CatchupPhase::Placing) {
     const auto v=SessionFlowSnapshot(); const auto link=EnemyLinkSnapshot();
     if (!REXCVAR_GET(kk_coop_enabled) || stopping || !v.active || v.host || v.phase!=FlowPhase::Playing ||
         v.world.generation!=recovery_generation) { CancelCatchup(); return; }
-    if (!PartnerAliveHere(v,link,Now()) || !ReviveTeleport(ctx,base,*link.partner)) return;
+    if (!PartnerAliveHere(v,link,Now())) return;
+    // Stay: no safe spot by the host; the private load already put the guest
+    // on the host's native checkpoint spot.
+    const auto placed=ReviveTeleport(ctx,base,*link.partner);
+    if (placed==revive::Place::Wait) return;
     catchup_phase=CatchupPhase::None; private_load=false;
     move_offer=false; behind=BehindRule{}; catchup_notice_until=Now()+4;
     ++life_incarnation; life_number=0; life_sent=false; PublishLife(v,false,Now());
-    REXLOG_INFO("KK co-op catch-up: guest placed beside host generation {} level {} checkpoint {}; host never entered a load barrier",
+    REXLOG_INFO("KK co-op catch-up: guest {} generation {} level {} checkpoint {}; host never entered a load barrier",
+        placed==revive::Place::Spot ? "placed beside host" : "kept on the host checkpoint spot",
         v.world.generation,v.world.level,catchup_target);
     catchup_from_guard=false; WorldGuardCompleted(desync::Tier::Reload);
   }
@@ -936,8 +942,12 @@ void SessionReviveBeforeAi(PPCContext& ctx,uint8_t* base) {
     if (!REXCVAR_GET(kk_coop_enabled) || stopping || !launched || !v.active || v.host ||
         v.phase!=FlowPhase::Playing || v.policy!=ChapterPolicy::Together || v.world.generation!=pending_move) {
       pending_move=0;
-    } else if (!recovery.Downed() && !observer::Active() && PartnerAliveHere(v,link,Now()) &&
-        ReviveTeleport(ctx,base,*link.partner)) {
+    } else if (const auto placed=!recovery.Downed() && !observer::Active() && PartnerAliveHere(v,link,Now()) ?
+        ReviveTeleport(ctx,base,*link.partner) : revive::Place::Wait; placed==revive::Place::Stay) {
+      WorldGuardCancelled(desync::Tier::Move);
+      pending_move=0; move_offer=true;
+      REXLOG_INFO("KK co-op story: soft fix deferred, no safe native spot beside host; no reload");
+    } else if (placed==revive::Place::Spot) {
       pending_move=0; move_offer=false; behind=BehindRule{};
       StoryPartnerMoved();
       catchup_notice_until=Now()+4; WorldGuardCompleted(desync::Tier::Move);
@@ -952,11 +962,13 @@ void SessionReviveBeforeAi(PPCContext& ctx,uint8_t* base) {
   const auto v=SessionFlowSnapshot(); const auto link=EnemyLinkSnapshot();
   if (!v.active || v.phase!=FlowPhase::Playing || v.world.generation!=recovery_generation ||
       !PartnerAliveHere(v,link,Now())) { recovery.phase=revive::Phase::ReloadBoth; return; }
-  if (!ReviveTeleport(ctx,base,*link.partner)) return;
+  const auto placed=ReviveTeleport(ctx,base,*link.partner);
+  if (placed==revive::Place::Wait) return;
   recovery.Placed(); private_load=false;
   observer::SetPartnerSpectating(false);
   ++life_incarnation; life_number=0; life_sent=false;
   PublishLife(v,false,Now());
-  REXLOG_INFO("KK co-op revive: native load and teleport complete, 1.5 behind partner at partner height");
+  REXLOG_INFO("KK co-op revive: native load complete, {}",placed==revive::Place::Spot ?
+      "placed on a checked native floor by the partner" : "no safe spot by the partner, kept on the native respawn spot");
 }
 }  // namespace kk::coop
