@@ -60,6 +60,10 @@ REX_EXTERN(__imp__sub_8242DB60);
 REX_EXTERN(__imp__sub_824509E0);
 REX_EXTERN(__imp__sub_8244B9A0);
 REX_EXTERN(__imp__sub_82443F10);
+REX_EXTERN(__imp__sub_8243EB40);
+REX_EXTERN(__imp__sub_8243ED78);
+REX_EXTERN(__imp__sub_826131D8);
+REX_EXTERN(__imp__sub_82613428);
 REX_EXTERN(__imp__sub_825F2890);
 REX_EXTERN(__imp__sub_82617858);
 REX_EXTERN(__imp__sub_82456778);
@@ -1144,27 +1148,35 @@ void NativePlayerReflex(PPCContext& ctx, uint8_t* b, bool kna=false) {
     if (choice.player!=selected) { choice.player=selected; choice.until=Now()+4; }
   }
 }
-void KnaPlayerLaunch(PPCContext& ctx,uint8_t* b) {
-  const auto* owner=CombatOwner(b,EnemyFamily::NativeKna);
+void NativePlayerAuthoredState(PPCContext& ctx,uint8_t* b,bool kna,void (*native)(PPCContext&,uint8_t*)) {
+  const auto* owner=CombatOwner(b,kna ? EnemyFamily::NativeKna:EnemyFamily::Native);
   const auto hero=Load32(b,0x82CCBF7C),body=kk::PartnerBodyCombatActor(b);
-  const auto scripted=owner ? Load32(b,owner->vars+304):0;
-  const auto selected=owner ? Load32(b,owner->vars+4084):0;
-  if (!owner || !body || (scripted!=hero && scripted!=body) || (selected!=hero && selected!=body)) {
-    __imp__sub_82443F10(ctx,b); return;
+  const uint32_t offset=kna ? 304:308;
+  const auto scripted=owner ? Load32(b,owner->vars+offset):0;
+  const auto selected=owner ? Load32(b,owner->vars+(kna ? 4084:4088)):0;
+  if (!owner || !combat::NativePlayerScriptTarget(scripted,selected,hero,body)) {
+    native(ctx,b); return;
   }
   const auto binding=*owner;
-  // KNa has no Na4472 leading cache. Only its temporary authored target is
-  // aligned with the already selected player during the native throw state.
+  // Wait, move and launch reassert their authored player every frame. Keep
+  // their already selected player through the native call without changing
+  // waypoints, state transitions, timing, eligibility or the story record.
   struct Restore {
-    uint8_t* base; Binding binding; uint32_t original,alias;
+    uint8_t* base; Binding binding; uint32_t offset,bytes,original,alias;
     ~Restore() {
-      if (Ptr(base,binding.ai,64,4532)==binding.vars && RetainedDamageSource(base,binding) &&
-          Load32(base,binding.vars+304)==alias)
-        Store32(base,binding.vars+304,original);
+      if (Ptr(base,binding.ai,64,bytes)==binding.vars && RetainedDamageSource(base,binding) &&
+          Load32(base,binding.vars+offset)==alias)
+        Store32(base,binding.vars+offset,original);
     }
-  } restore{b,binding,scripted,selected};
-  Store32(b,binding.vars+304,selected);
-  __imp__sub_82443F10(ctx,b);
+  } restore{b,binding,offset,kna ? 4532u:4492u,scripted,selected};
+  Store32(b,binding.vars+offset,selected);
+  native(ctx,b);
+#if defined(KK_DEV_TOOLS)
+  static unsigned lines=0;
+  if (scripted!=selected && lines++<64 && RetainedDamageSource(b,binding))
+    REXLOG_INFO("COOP PROJECTILE authored-player actor={:08X} family={} authored={:08X} selected={:08X} retained={:08X} native-state-target=true",
+        binding.actor,uint16_t(binding.id.family),scripted,selected,Load32(b,binding.vars+(kna ? 4084:4088)));
+#endif
 }
 void NativePlayerLaunch(PPCContext& ctx,uint8_t* b) {
   const auto* owner=CombatOwner(b,EnemyFamily::Native);
@@ -1186,18 +1198,7 @@ void NativePlayerLaunch(PPCContext& ctx,uint8_t* b) {
     }
     choice.aim_player=selected; choice.aim_time=Now();
   }
-  if (!owner || !body || (scripted!=hero && scripted!=body) || (selected!=hero && selected!=body)) {
-    __imp__sub_82617858(ctx,b); return;
-  }
-  const auto binding=*owner;
-  // Launch reasserts the authored target every frame. Offer its selected
-  // player only during this call, so native aim, leading and previous-position
-  // caches agree. The authored record is restored before any other script runs.
-  Store32(b,binding.vars+308,selected);
-  __imp__sub_82617858(ctx,b);
-  if (Ptr(b,binding.ai,64,4492)==binding.vars && RetainedDamageSource(b,binding) &&
-      Load32(b,binding.vars+308)==selected)
-    Store32(b,binding.vars+308,scripted);
+  NativePlayerAuthoredState(ctx,b,false,__imp__sub_82617858);
 }
 void VRexPlayerTarget(PPCContext& ctx,uint8_t* b) {
   __imp__sub_82456778(ctx,b);
@@ -4216,7 +4217,11 @@ REX_HOOK_RAW(sub_8265BF60) { kk::coop::CrabFight(ctx,base); }
 REX_HOOK_RAW(sub_8266F740) { kk::coop::NativePlayerTarget(ctx,base); }
 REX_HOOK_RAW(sub_824509E0) { kk::coop::NativePlayerTarget(ctx,base,true); }
 REX_HOOK_RAW(sub_8242DB60) { kk::coop::NativePlayerReflex(ctx,base,true); }
-REX_HOOK_RAW(sub_82443F10) { kk::coop::KnaPlayerLaunch(ctx,base); }
+REX_HOOK_RAW(sub_82443F10) { kk::coop::NativePlayerAuthoredState(ctx,base,true,__imp__sub_82443F10); }
+REX_HOOK_RAW(sub_8243EB40) { kk::coop::NativePlayerAuthoredState(ctx,base,true,__imp__sub_8243EB40); }
+REX_HOOK_RAW(sub_8243ED78) { kk::coop::NativePlayerAuthoredState(ctx,base,true,__imp__sub_8243ED78); }
+REX_HOOK_RAW(sub_826131D8) { kk::coop::NativePlayerAuthoredState(ctx,base,false,__imp__sub_826131D8); }
+REX_HOOK_RAW(sub_82613428) { kk::coop::NativePlayerAuthoredState(ctx,base,false,__imp__sub_82613428); }
 REX_HOOK_RAW(sub_824EF8A0) { kk::coop::BatPlayerTarget(ctx,base); }
 REX_HOOK_RAW(sub_82658ED8) { kk::coop::BatPlayerFight(ctx,base,__imp__sub_82658ED8); }
 REX_HOOK_RAW(sub_82652FF8) { kk::coop::BatPlayerFight(ctx,base,__imp__sub_82652FF8); }

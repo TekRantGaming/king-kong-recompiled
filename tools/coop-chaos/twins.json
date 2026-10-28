@@ -21,6 +21,7 @@
     "impact_selector": "impact_selector",
     "grab_feedback": "grab_feedback",
     "attack_sound": "attack_sound",
-    "grab_start": "grab_start"
+    "grab_start": "grab_start",
+    "native_script_target": "native_script_target"
   }
 }

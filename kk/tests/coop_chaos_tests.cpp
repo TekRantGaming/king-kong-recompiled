@@ -335,6 +335,15 @@ void ProfileScenario(const char* name,uint32_t seed) {
   std::printf("actual-core profile=%s seed=%u story=%u poses=%llu/%llu converged=yes native-hooks=absent\n",name,seed,applied,
       (unsigned long long)p.host.Poses().received,(unsigned long long)p.guest.Poses().received);
 }
+void NativeScriptTarget() {
+  Check(combat::NativePlayerScriptTarget(10,20,10,20),"native authored player may follow accepted peer");
+  Check(combat::NativePlayerScriptTarget(20,10,10,20),"reverse player choice retained");
+  Check(!combat::NativePlayerScriptTarget(30,20,10,20),"authored story actor never replaced");
+  Check(!combat::NativePlayerScriptTarget(10,30,10,20),"nonplayer selection never aliased");
+  Check(!combat::NativePlayerScriptTarget(0,20,10,20),"absent authored target never created");
+  Check(!combat::NativePlayerScriptTarget(10,10,10,0),"missing peer cannot alias a script");
+  Check(!combat::NativePlayerScriptTarget(10,10,10,10),"local hero cannot also be peer");
+}
 void GrabStart() {
   DamageEvent d{{204,3,5},9,7,{123,4,EnemyFamily::Scorpion},3,10,{1,0,0}};
   Check(combat::NativeScorpionGrabStart(d),"player body native start recognized");
@@ -442,6 +451,7 @@ int main(int argc,char** argv) {
   else if(name=="grab_feedback") GrabFeedback();
   else if(name=="attack_sound") AttackSound();
   else if(name=="grab_start") GrabStart();
+  else if(name=="native_script_target") NativeScriptTarget();
   else if(name=="udp_duplicate" || name=="udp_order") Reliable();
   else { std::fprintf(stderr,"unknown test\n"); return 2; }
   std::printf("PASS [%s]\n",test_name); return 0;

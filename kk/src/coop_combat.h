@@ -16,6 +16,13 @@ inline bool DamageClock(double hit_time, double host_pose_time) {
       hit_time >= host_pose_time-kMaxAge && hit_time <= host_pose_time+.5;
 }
 enum class GrabFeedback { Pending, Accepted, Release };
+inline bool NativePlayerScriptTarget(uint32_t authored,uint32_t selected,uint32_t hero,uint32_t body) {
+  if (COOP_MUT_IF("native_script_target")) return true;
+  // An authored nonplayer target belongs to the story. Only alias an existing
+  // player target to the player already accepted by the native selector.
+  return hero && body && hero!=body && (authored==hero || authored==body) &&
+      (selected==hero || selected==body);
+}
 inline bool NativeScorpionGrabStart(const DamageEvent& d) {
   if (COOP_MUT_IF("grab_start")) return true;
   // Scorpion82616490 uses3/10 for a player body and256/0 for an NPC body.
