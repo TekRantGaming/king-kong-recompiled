@@ -6,6 +6,7 @@
 #include "coop_ownership.h"
 #include "coop_story.h"
 #include "coop_desync.h"
+#include "coop_puppet.h"
 #include <cstdio>
 #include <cstdlib>
 #include <limits>
@@ -146,6 +147,14 @@ void FalseQuiet() {
   Check(g.Observe(1,101,1,quiet,300)==desync::Tier::None &&
       g.Observe(1,101,1,quiet,303)==desync::Tier::None &&
       g.Observe(1,101,1,quiet,306)==desync::Tier::Quiet,"repeated actual drift reaches quiet repair");
+}
+void UnarmedGait() {
+  // An armed crew donor loads gun walks beside its empty hand walk.
+  const puppet::Gait crew[]={{{150,0,2.2f},0,false},{{165,0,2.4f},0,false},{{11,0,1.2f},0,false}};
+  for(const float v:{.6f,1.2f,2.2f,2.4f,4.f}) {
+    const auto g=puppet::ChooseGait(v,0,0,false,crew,UINT32_MAX,true);
+    Check(g && !puppet::HeldItemAction(g->clip.action),"empty hands never walk with a gun grip or raised arms");
+  }
 }
 void ShotValidation() {
   const EnemyWorld w{101,1,1}; InventoryState inventory{w,100,1}; inventory.ammo[0]=50;
@@ -316,6 +325,7 @@ int main(int argc,char** argv) {
   else if(name=="story_world") StoryWorld();
   else if(name=="digest_compare") DigestCompare();
   else if(name=="false_quiet") FalseQuiet();
+  else if(name=="unarmed_gait") UnarmedGait();
   else if(name=="shot_validator") ShotValidation();
   else if(name=="session_epoch") SessionEpoch();
   else if(name=="udp_duplicate" || name=="udp_order") Reliable();

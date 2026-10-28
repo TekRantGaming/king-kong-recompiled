@@ -2,6 +2,7 @@
 
 // Pure policy shared by the shipping/dev driver and SDK/game-free unit tests.
 #include "coop_session.h"
+#include "coop_mut.h"
 #include <algorithm>
 #include <array>
 #include <cstddef>
@@ -158,7 +159,7 @@ inline std::optional<GaitChoice> ChooseGait(float vx, float vy, float view, bool
   std::optional<GaitChoice> best;
   float score=1000;
   for (const auto& gait : gaits) {
-    if (unarmed && HeldItemAction(gait.clip.action)) continue;
+    if (unarmed && HeldItemAction(gait.clip.action) && !COOP_MUT_IF("unarmed_gait")) continue;
     if (gait.crouched!=crouched || !std::isfinite(gait.clip.speed) || gait.clip.speed<kIdleSpeed) continue;
     const float error=std::abs(std::remainder(direction-view-gait.yaw,6.283185307f));
     // Keep the current clip through small speed/direction changes. Network
