@@ -9,6 +9,7 @@
 #include "coop_combat.h"
 #include "coop_stimulus_debug.h"
 #include "coop_event_budget.h"
+#include "coop_human_return.h"
 #include "coop_puppet.h"
 #include <algorithm>
 #include <map>
@@ -326,6 +327,58 @@ void EventNetworkDefer() {
   Check(published==0,"network events wait while the pool does not age");
   pool.paused=false; drain();
   Check(published>0,"deferred network events run after Resume");
+}
+// C110: model of a human AI's track 2 through suivi, help, frappe (826A3818)
+// and ai_set_track (826FA3B0), replaying the c104-legacy302 06:23:56 crash.
+namespace hr=kk::coop::human_return;
+struct HumanModel {
+  static constexpr uint32_t kSuivi=0x43000010, kHelp=0x43000020, kFrappe=0x43000030, kDefault=0x43000040;
+  uint32_t track2=kSuivi, afc=0, b04=0, friend_object=0, state=0;
+  bool crashed=false, fill=true, guard=true;
+  // ai_set_track: an equal function returns early, else the new one is read.
+  void SetTrack(uint32_t fn) {
+    if (guard && hr::SetTrackRefused(2,fn,track2)) return;
+    if (track2==fn) return;
+    track2=fn; if (!fn) crashed=true;
+  }
+  void Suivi() { if (state!=hr::kStateSuivi) { state=hr::kStateSuivi; friend_object=0; afc=kSuivi; } }
+  void Help(uint32_t jack) { state=hr::kStateHelp; friend_object=jack; SetTrack(kFrappe); }  // forced strike
+  void FrappeEnd() {
+    if (fill) {
+      const auto f=hr::FrappeFill({friend_object,b04,afc,kDefault});
+      if (f.needed) (f.slot==hr::kVarsB04 ? b04 : afc)=f.value;
+    }
+    uint32_t next;
+    if (friend_object) { next=b04; friend_object=0; } else next=afc;
+    state=hr::kStateFrappe; SetTrack(next);
+  }
+};
+void HumanReturn() {
+  constexpr uint32_t kJack=0x418E6EBC;
+  {  // fresh checkpoint load: never hit, 0xB04 empty. Native: crash.
+    HumanModel legacy; legacy.fill=false; legacy.guard=false;
+    legacy.Suivi(); legacy.Help(kJack); legacy.FrappeEnd();
+    Check(legacy.crashed,"model replays the native null return of a strike from help");
+  }
+  HumanModel h; h.guard=false; h.Suivi(); h.Help(kJack); h.FrappeEnd();
+  Check(!h.crashed && h.track2!=0,"a strike from help after a fresh load goes back to a real state");
+  Check(h.track2==HumanModel::kSuivi,"the strike goes back to the follow state help itself returns to");
+  HumanModel lone; lone.guard=false; lone.FrappeEnd();
+  Check(!lone.crashed && lone.track2==HumanModel::kDefault,"no saved state at all takes the native default");
+  // A native saved state is never replaced.
+  const auto keep=hr::FrappeFill({kJack,0x43000050,HumanModel::kSuivi,HumanModel::kDefault});
+  Check(!keep.needed,"a saved 0xB04 state is left as the game wrote it");
+  const auto keep_afc=hr::FrappeFill({0,0,HumanModel::kSuivi,HumanModel::kDefault});
+  Check(!keep_afc.needed,"a saved 0xAFC state is left as the game wrote it");
+  const auto none=hr::FrappeFill({kJack,0,0,0});
+  Check(!none.needed,"nothing is written while the native default is not loaded");
+}
+void HumanSetTrack() {
+  HumanModel h; h.fill=false; h.Suivi(); h.Help(0x418E6EBC); h.FrappeEnd();
+  Check(!h.crashed && h.track2==HumanModel::kFrappe,"the guard refuses the null state and the human keeps its strike");
+  Check(!hr::SetTrackRefused(2,0,0),"a null state on an empty track is native (early return)");
+  Check(!hr::SetTrackRefused(2,HumanModel::kSuivi,HumanModel::kFrappe),"a real state change always runs");
+  Check(!hr::SetTrackRefused(5,0,HumanModel::kFrappe),"tracks past the five native ones are not judged");
 }
 void FalseQuiet() {
   desync::Guard g; desync::Evidence quiet;
@@ -739,6 +792,8 @@ int main(int argc,char** argv) {
   else if(name=="event_owner_cap") EventOwnerCap();
   else if(name=="event_vision_guard") EventVisionGuard();
   else if(name=="event_network_defer") EventNetworkDefer();
+  else if(name=="human_return") HumanReturn();
+  else if(name=="human_set_track") HumanSetTrack();
   else { std::fprintf(stderr,"unknown test\n"); return 2; }
   std::printf("PASS [%s]\n",test_name); return 0;
 }

@@ -35,6 +35,7 @@ set(KINGKONG_SOURCES
     src/coop_nametag.cpp
     src/coop_observer.cpp
     src/coop_enemies_game.cpp
+    src/coop_human_guard.cpp
     src/steam_runtime.cpp
     src/steam_lobby.cpp
     src/steam_transport.cpp
@@ -399,7 +400,7 @@ if(KK_DEV_TOOLS)
             bat_contact_sound raptor_camera raptor_bite_sound centipede_contact_sound body_hit_class after_contact_sound
             story_native_stop
             event_pause event_dispatch event_owner_cap event_vision_guard event_network_defer
-            unarmed_gait)
+            unarmed_gait human_return human_set_track)
         add_test(NAME coop-chaos-${case} COMMAND kk-chaos-tests ${case})
         set_tests_properties(coop-chaos-${case} PROPERTIES TIMEOUT 180 RUN_SERIAL TRUE ENVIRONMENT "COOP_MUT=")
     endforeach()
