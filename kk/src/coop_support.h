@@ -1,5 +1,6 @@
 #pragma once
 #include "coop_objects.h"
+#include "coop_mut.h"
 
 namespace kk::coop::objects {
 inline bool SupportRoot(ObjectKind kind) { return kind==ObjectKind::Ode || kind==ObjectKind::Tree; }
@@ -16,6 +17,26 @@ inline bool RigidSupportBasis(const std::array<float,9>& m) {
   }
   const auto determinant=m[0]*(m[4]*m[8]-m[5]*m[7])-m[1]*(m[3]*m[8]-m[5]*m[6])+m[2]*(m[3]*m[7]-m[4]*m[6]);
   return std::isfinite(determinant) && determinant>0;
+}
+// C105: how one authored ODE or tree member takes part in a shared collapse.
+// Drive: a rigid unit ODE body that the guest moves to the host's poses.
+// Local: no physics record or no rigid unit body; the root still follows the
+// host's trigger and End, but this member keeps its own native motion.
+// Refuse: a personal pickup or a human, never part of a shared support.
+enum class SupportMember : uint8_t { Drive, Local, Refuse };
+inline SupportMember ClassifySupportMember(bool personal,bool physics,bool rigid_unit) {
+  if (personal && !COOP_MUT_IF("support_member_personal")) return SupportMember::Refuse;
+  return physics && rigid_unit ? SupportMember::Drive : SupportMember::Local;
+}
+// C105: ODE Active runs one authored delayed watch (vars 0x8CC, function at
+// 0x8D0) after 0x980 seconds. A guest skips native Active, so it runs that
+// watch itself. Only the three native trigger actions that show, hide or switch
+// authored objects (one, or up to five) are allowed; any other callback keeps
+// the root native.
+constexpr uint32_t kTrigSetActiveAndVisible=0x8250EDE8,kTrigSetActivity=0x8250EE50,kTrigActifVisibleMultiple=0x8250ECF0;
+inline bool SupportDelayedWatchAllowed(uint32_t fn) {
+  if (COOP_MUT_IF("support_delayed_watch")) return fn!=0;
+  return fn==0 || fn==kTrigSetActiveAndVisible || fn==kTrigSetActivity || fn==kTrigActifVisibleMultiple;
 }
 struct PartRoot {
   uint64_t source=0;

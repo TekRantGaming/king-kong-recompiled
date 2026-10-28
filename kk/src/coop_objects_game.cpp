@@ -61,6 +61,9 @@ REX_EXTERN(__imp__sub_8270FB68);
 REX_EXTERN(__imp__sub_82744978);
 REX_EXTERN(__imp__sub_82744988);
 REX_EXTERN(__imp__sub_82860678);
+REX_EXTERN(__imp__sub_8250EDE8);
+REX_EXTERN(__imp__sub_8250EE50);
+REX_EXTERN(__imp__sub_8250ECF0);
 #if defined(KK_DEV_TOOLS)
 REX_EXTERN(__imp__sub_8271FB98);
 REX_EXTERN(__imp__sub_82715AC8);
@@ -85,6 +88,7 @@ constexpr uint32_t kDoorGamePtr=0x82CC8F40;
 struct Binding : objects::Binding {
   struct Support {
     std::vector<uint32_t> parts,all;
+    std::set<uint32_t> local; // C105: members left to their own native motion.
     uint64_t topology=0,tick=0;
     uint32_t definition=0;
     uint32_t phase=0;

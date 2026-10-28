@@ -79,8 +79,17 @@ void PrepareSupport(const uint8_t* b,Binding& o) {
   const auto mode=Load32(b,o.vars+(tree ? 0x52C : 0));
   s.eligible=terminated && !s.parts.empty() && mode>=1 && mode<=3 &&
       !(Load32(b,o.actor)&0x400001) &&
-      (tree || (!Load32(b,o.vars+2496) && !Load32(b,o.vars+2256) && !Load32(b,o.vars+3368)));
-  for (const auto actor:s.all) s.eligible&=UnitBody(b,actor);
+      (tree || (!Load32(b,o.vars+2496) && objects::SupportDelayedWatchAllowed(Load32(b,o.vars+2256)) && !Load32(b,o.vars+3368)));
+  // C105: a member without a rigid unit ODE body (no physics record, a scaled
+  // mesh, a disabled or attached piece) no longer withdraws its whole root. The
+  // host still owns the root's trigger and End, the guest replays them through
+  // its own native Wait and End, and only that member keeps its own native
+  // motion instead of host poses. Personal pickups and humans still refuse.
+  for (const auto actor:s.all) {
+    const auto member=objects::ClassifySupportMember(PersonalOrHuman(b,actor),Physics(b,actor)!=0,UnitBody(b,actor));
+    if (member==objects::SupportMember::Refuse) s.eligible=false;
+    else if (member==objects::SupportMember::Local) s.local.insert(actor);
+  }
   // A host can first bind after a native loader has already advanced the root.
   // Retain a generic collapse plus the final physical outcome in that case.
   if (Track(b,o.ai,tree ? 0x826E7BF0 : 0x826F1E08)) s.phase=1;
@@ -88,8 +97,14 @@ void PrepareSupport(const uint8_t* b,Binding& o) {
   if (tree && Load32(b,o.vars+0x930) && !Track(b,o.ai,0x826E6390) &&
       !Track(b,o.ai,0x826E78F0) && !Track(b,o.ai,0x826E7BF0)) s.phase=2;
   if (s.phase) s.event.trigger=1;
-  if (Trace()) REXLOG_INFO("KK dev object support profile: role={} id={:016X} family={} mode={} parts={} members={} eligible={}",
-      state.host ? "host" : "guest",o.source,tree ? "tree" : "ode",mode,s.parts.size(),s.all.size(),s.eligible);
+  if (Trace()) REXLOG_INFO("KK dev object support profile: role={} id={:016X} family={} mode={} parts={} members={} eligible={} local={}",
+      state.host ? "host" : "guest",o.source,tree ? "tree" : "ode",mode,s.parts.size(),s.all.size(),s.eligible,s.local.size());
+  // The contract fields that decide eligibility, so that an excluded root
+  // names its exact condition (C99 could not capture this for level 101).
+  if (Trace()) REXLOG_INFO("KK dev object support contract: role={} id={:016X} terminated={} type={:08X} remove-all={:08X} watch={:08X} partner={:08X} refs={:08X}/{:08X}/{:08X}",
+      state.host ? "host" : "guest",o.source,terminated,Load32(b,o.actor),
+      tree ? 0u : Load32(b,o.vars+2496),tree ? 0u : Load32(b,o.vars+2256),tree ? 0u : Load32(b,o.vars+3368),
+      Load32(b,o.vars+(tree ? 0x7C4 : 2500)),Load32(b,o.vars+(tree ? 0x7F0 : 2504)),tree ? 0u : Load32(b,o.vars+2548));
 #if defined(KK_DEV_TOOLS)
   if (Trace()) REXLOG_INFO("KK dev object support activation contract: role={} id={:016X} push={} strength={} throw={:08X} speed={} end-delay={}",
       state.host ? "host" : "guest",o.source,Load32(b,o.vars+(tree ? 0x794 : 2436)),LoadF(b,o.vars+(tree ? 0x798 : 2440)),
@@ -159,7 +174,13 @@ void FreezeSupport(const uint8_t* b) {
     auto* o=Match(root.source,ObjectKind::Ode); if (!o) o=Match(root.source,ObjectKind::Tree);
     if (!o || !o->support.eligible) continue;
     o->support.topology=objects::RootTopology(root,ids);
+    unsigned driven=0;
     for (const auto actor:root.parts) {
+      // A local member keeps its own native motion; it never becomes a body
+      // that receives or publishes host poses (UnitBody is per actor, so every
+      // root that aliases it agrees).
+      if (o->support.local.contains(actor)) continue;
+      ++driven;
       auto [it,added]=state.bodies.try_emplace(actor);
       auto& p=it->second;
       if (added) {
@@ -169,8 +190,9 @@ void FreezeSupport(const uint8_t* b) {
       }
       if (std::find(p.roots.begin(),p.roots.end(),o->actor)==p.roots.end()) p.roots.push_back(o->actor);
     }
-    if (Trace()) REXLOG_INFO("KK dev object support bound: role={} id={:016X} topology={:016X} family={} members={} phase={}",
-        state.host ? "host" : "guest",o->source,o->support.topology,uint8_t(o->kind),root.parts.size(),o->support.phase);
+    if (Trace()) REXLOG_INFO("KK dev object support bound: role={} id={:016X} topology={:016X} family={} members={} driven={} local={} phase={}",
+        state.host ? "host" : "guest",o->source,o->support.topology,uint8_t(o->kind),root.parts.size(),driven,
+        root.parts.size()-driven,o->support.phase);
   }
   if (Trace()) REXLOG_INFO("KK dev object support bodies: role={} canonical={} roots={}",state.host ? "host" : "guest",state.bodies.size(),roots.size());
 }
@@ -255,6 +277,26 @@ void SupportTrigger(PPCContext& ctx,uint8_t* b,bool tree) {
   }
   ctx.r3.u64=0;
 }
+// ode_state_active 826F1E08: once 0x980 seconds have passed since Wait's own
+// start time 0x9BC, it runs the delayed watch at 0x8CC (function 0x8D0, payload
+// 0x914) and clears the function. The guest skips native Active, so it runs the
+// same step with its own clock and its own authored payload. Eligibility only
+// admits the show/hide and activity trigger actions (SupportDelayedWatchAllowed).
+void GuestDelayedWatch(PPCContext& ctx,uint8_t* b,const Binding& o) {
+  const auto fn=Load32(b,o.vars+0x8D0);
+  if (!fn || !objects::SupportDelayedWatchAllowed(fn)) return;
+  const float now=LoadF(b,0x82CCAE1C)-LoadF(b,0x82CCC02C);
+  if (!(now-LoadF(b,o.vars+0x9BC)>LoadF(b,o.vars+0x980))) return;
+  const PPCContext saved=ctx;
+  ctx.r3.u64=o.vars+0x914;
+  if (fn==objects::kTrigSetActiveAndVisible) __imp__sub_8250EDE8(ctx,b);
+  else if (fn==objects::kTrigActifVisibleMultiple) __imp__sub_8250ECF0(ctx,b);
+  else __imp__sub_8250EE50(ctx,b);
+  ctx=saved;
+  Store32(b,o.vars+0x8D0,0);
+  if (Trace()) REXLOG_INFO("KK dev object support delayed watch: role=guest id={:016X} native={:08X} record={:08X} after={:.3f}",
+      o.source,fn,o.vars+0x914,LoadF(b,o.vars+0x980));
+}
 void SupportNative(PPCContext& ctx,uint8_t* b,bool tree,unsigned phase) {
   const auto kind=tree ? ObjectKind::Tree : ObjectKind::Ode;
   auto* o=state.ready && Shared() ? Current(b,kind) : nullptr;
@@ -317,6 +359,7 @@ void SupportNative(PPCContext& ctx,uint8_t* b,bool tree,unsigned phase) {
       if (Trace()) REXLOG_INFO("KK dev object collapse replay: role=guest id={:016X} family={} topology={:016X} trigger={} part={}",
           o->source,uint8_t(kind),s.topology,s.event.trigger,s.event.part);
     } else if (authority->value==2 && s.phase<2) {
+      if (!tree && s.phase==1) GuestDelayedWatch(ctx,b,*o);
       if (!tree && phase==2) {
         // Calling End's body while still scheduled as Active leaves the guest
         // permanently on Active. Native Active uses 826F9F30 with this loaded
@@ -329,7 +372,10 @@ void SupportNative(PPCContext& ctx,uint8_t* b,bool tree,unsigned phase) {
       }
       (tree ? __imp__sub_826D0770 : __imp__sub_826F4948)(ctx,b); s.phase=2;
       if (Trace()) REXLOG_INFO("KK dev object collapse endpoint: role=guest id={:016X} family={} topology={:016X}",o->source,uint8_t(kind),s.topology);
-    } else ctx.r3.u64=0;
+    } else {
+      if (!tree && phase==2 && s.phase==1) GuestDelayedWatch(ctx,b,*o);
+      ctx.r3.u64=0;
+    }
     // Local ODE motion may play the fall, but only the host's active manager
     // may retire pieces, apply environmental hits or start subsequent fires.
     // Otherwise a random guest fall could destroy geometry before its final
@@ -492,6 +538,22 @@ void ReplaySupports(PPCContext& ctx,uint8_t* b) {
       REXLOG_INFO("KK dev object support fixture: role=host id={:016X} mode={} native-trigger-fixture=true",choice->source,fixture_mode);
     }
   }
+  // C105 guest break fixture: the guest sends its OWN part hit request, the same
+  // message ObjectsEnqueued sends for a real guest strike. The host applies it
+  // as a native hit and owns the collapse; the guest never collapses locally.
+  static bool guest_sent=false;
+  if (!state.host && !guest_sent && fixture_at>=0 && DevSupportSource() && kk::DevSecondsSinceMenu()>=fixture_at) {
+    auto* o=Match(DevSupportSource(),ObjectKind::Ode); if (!o) o=Match(DevSupportSource(),ObjectKind::Tree);
+    const auto part=DevSupportPart();
+    if (o && Valid(b,*o) && o->support.eligible && o->support.topology && part<o->support.parts.size()) {
+      unsigned flags=0x00400400,magnitude=11; char tail=0;
+      if (const auto value=std::getenv("KK_DEV_OBJECT_COLLAPSE_HIT"); value && *value &&
+          (std::sscanf(value,"%x,%u%c",&flags,&magnitude,&tail)!=2 || (flags&~kObjectHitFlags) || magnitude>100000)) { guest_sent=true; return; }
+      guest_sent=Request(*o,flags,float(magnitude),.5f,uint8_t(part));
+      REXLOG_INFO("KK dev object support guest hit fixture: role=guest id={:016X} part={} flags={:08X} magnitude={} sent={}",
+          o->source,part,flags,magnitude,guest_sent);
+    }
+  }
 #endif
   for (auto& [actor,o]:state.bindings) {
     if (!objects::SupportRoot(o.kind) || !o.support.topology || !Valid(b,o) || Match(o.source,o.kind)!=&o) continue;
@@ -501,6 +563,8 @@ void ReplaySupports(PPCContext& ctx,uint8_t* b) {
         if (Now()>hit.until) { o.pending_hits.pop_front(); ++state.rejected; continue; }
         if (hit.raw.collapse.part>=o.support.parts.size() || !NativeHit(ctx,b,o,o.actor,o.ai,hit.raw.value,uint32_t(hit.raw.position),hit.raw.seconds,o.support.parts[hit.raw.collapse.part])) break;
         o.pending_hits.pop_front(); ++state.applied; o.support.intent_until=Now()+2;
+        if (Trace()) REXLOG_INFO("KK dev object support partner hit applied: role=host id={:016X} part={} flags={:08X} magnitude={}",
+            o.source,unsigned(hit.raw.collapse.part),hit.raw.value,uint32_t(hit.raw.position));
       }
       if (!o.support.fixture && !o.support.phase && Now()>o.support.intent_until) continue;
     }

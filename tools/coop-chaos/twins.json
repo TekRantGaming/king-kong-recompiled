@@ -41,6 +41,8 @@
     "unarmed_gait": "unarmed_gait",
     "rebirth_dead": "rebirth_adoption",
     "rebirth_any_source": "rebirth_adoption",
-    "rebirth_reuse": "rebirth_adoption"
+    "rebirth_reuse": "rebirth_adoption",
+    "support_member_personal": "support_member",
+    "support_delayed_watch": "support_delayed_watch"
   }
 }

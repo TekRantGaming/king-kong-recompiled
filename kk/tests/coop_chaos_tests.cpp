@@ -12,6 +12,7 @@
 #include "coop_puppet.h"
 #include "coop_rebirth.h"
 #include "coop_revive.h"
+#include "coop_support.h"
 #include <algorithm>
 #include <map>
 #include <vector>
@@ -316,6 +317,26 @@ void EventVisionGuard() {
   // Second line: the 26a publisher with the guard alone keeps the player pointer.
   const auto r=RunPhases({{Phase::Play,120},{Phase::Pause,kPauseFrames},{Phase::Play,60}},true,true);
   Check(r.skipped>0 && !r.overflow && r.player_intact,"guard skips an overflowing scan and the player pointer survives");
+}
+void SupportMember() {
+  using kk::coop::objects::ClassifySupportMember; using kk::coop::objects::SupportMember;
+  // C105: a personal pickup or human member keeps the whole support root out of sync.
+  Check(ClassifySupportMember(true,true,false)==SupportMember::Refuse,"personal or human member refuses the root");
+  Check(ClassifySupportMember(true,false,false)==SupportMember::Refuse,"personal member without physics still refuses");
+  Check(ClassifySupportMember(false,true,true)==SupportMember::Drive,"rigid unit body follows host poses");
+  Check(ClassifySupportMember(false,false,false)==SupportMember::Local,"member without physics keeps native motion");
+  Check(ClassifySupportMember(false,true,false)==SupportMember::Local,"scaled or disabled body keeps native motion");
+}
+void SupportDelayedWatch() {
+  using namespace kk::coop::objects;
+  // C105: the guest may only run the ODE delayed watch for the native show/hide
+  // and activity trigger actions; any other authored callback keeps the root native.
+  Check(SupportDelayedWatchAllowed(0),"a root without a delayed watch stays eligible");
+  Check(SupportDelayedWatchAllowed(kTrigSetActiveAndVisible) && SupportDelayedWatchAllowed(kTrigSetActivity) &&
+      SupportDelayedWatchAllowed(kTrigActifVisibleMultiple),
+      "show, hide and activity trigger actions are allowed");
+  Check(!SupportDelayedWatchAllowed(0x82538AF0),"object reinit callback keeps the root native");
+  Check(!SupportDelayedWatchAllowed(0x8250B9A0),"NPC order callback keeps the root native");
 }
 void EventNetworkDefer() {
   // Peer shots and relayed damage arriving during a pause wait in their queue.
@@ -821,6 +842,8 @@ int main(int argc,char** argv) {
   else if(name=="event_owner_cap") EventOwnerCap();
   else if(name=="event_vision_guard") EventVisionGuard();
   else if(name=="event_network_defer") EventNetworkDefer();
+  else if(name=="support_member") SupportMember();
+  else if(name=="support_delayed_watch") SupportDelayedWatch();
   else { std::fprintf(stderr,"unknown test\n"); return 2; }
   std::printf("PASS [%s]\n",test_name); return 0;
 }
