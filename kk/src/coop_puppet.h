@@ -64,17 +64,31 @@ inline std::size_t FilterActors(std::span<uint32_t> actors, std::span<const uint
   return kept;
 }
 constexpr float kIdleSpeed = .1f;
+// Clips the native H selectors play only while a weapon is held. An empty
+// handed partner must never use them: on an armed donor they hold an
+// invisible gun, and an unarmed bank can reuse the numbers (Ann's 165 raises
+// both arms). npc_idle weapon idles 0x91..0x94, 0x4B..0x4D and 0x60, gun
+// aims 0x8F/0x90/0x92/0x93; npc_walk long gun 0x24/0x25, 0x96, 0xA0..0xA3 and kind 2
+// 0xA4..0xA7 (826A9B30); player_stand/player_walk by kind: 0x28, 0x2A..0x2D,
+// 0x32, 0x34..0x37 (0x29 and 0x33 are the empty hand stand and walk).
+inline bool HeldItemAction(uint16_t action) {
+  return action==36 || action==37 || action==40 || (action>=42 && action<=45) ||
+         action==50 || (action>=52 && action<=55) || (action>=75 && action<=77) ||
+         action==96 || (action>=143 && action<=148) || action==150 ||
+         (action>=160 && action<=167);
+}
 struct Action {
   uint16_t action = 0;
   uint8_t item = 0;
   float speed = 0;  // Native horizontal speed, normalized to the driver's 60 fps layer rate.
   float yaw = 0;    // Natural travel heading relative to body forward, for observed gaits.
 };
-inline std::optional<Action> ChooseAction(float speed, std::span<const Action> observed) {
+inline std::optional<Action> ChooseAction(float speed, std::span<const Action> observed, bool unarmed=false) {
   if (!std::isfinite(speed)) return {};
   speed = std::abs(speed);
   std::optional<Action> best;
   for (const auto& a : observed) {
+    if (unarmed && HeldItemAction(a.action)) continue;
     if (!std::isfinite(a.speed) || a.speed < 0 ||
         (a.speed < kIdleSpeed) != (speed < kIdleSpeed)) continue;
     if (!best || std::abs(a.speed - speed) < std::abs(best->speed - speed)) best = a;
@@ -138,12 +152,13 @@ struct Gait { Action clip; float yaw = 0; bool crouched = false; };
 struct GaitChoice { Action clip; float facing = 0; bool directional = false; };
 inline std::optional<GaitChoice> ChooseGait(float vx, float vy, float view, bool crouched,
                                           std::span<const Gait> gaits,
-                                          uint32_t current = UINT32_MAX) {
+                                          uint32_t current = UINT32_MAX, bool unarmed = false) {
   const float speed=std::hypot(vx,vy), direction=std::atan2(vy,vx);
   if (!std::isfinite(speed) || speed<kIdleSpeed || !std::isfinite(view)) return {};
   std::optional<GaitChoice> best;
   float score=1000;
   for (const auto& gait : gaits) {
+    if (unarmed && HeldItemAction(gait.clip.action)) continue;
     if (gait.crouched!=crouched || !std::isfinite(gait.clip.speed) || gait.clip.speed<kIdleSpeed) continue;
     const float error=std::abs(std::remainder(direction-view-gait.yaw,6.283185307f));
     // Keep the current clip through small speed/direction changes. Network

@@ -2011,10 +2011,11 @@ void PartnerBodyAfterAi(PPCContext& ctx, uint8_t* b, uint32_t w) {
     if (capture_shots && s.animation.new_shot && s.animation_shots<=4) s.capture_left=8;
 #endif
     const bool log_shot = s.animation_shots <= 8 || s.animation_shots%60 == 0;
-    auto choice = coop::puppet::ChooseAction(s.animation.moving ? s.animation.speed : 0, s.observed_motion);
     const bool human = !s.humans.at(rig.actor).other_human && Load32(b,rig.vars) == 0;
     const auto held=human ? BodyWeapon(b,rig) : 0;
     const auto weapon=coop::puppet::AnimationWeapon(p.weapon,uint8_t(held));
+    // Empty hands never borrow the donor's own armed idle or walk clips.
+    auto choice = coop::puppet::ChooseAction(s.animation.moving ? s.animation.speed : 0, s.observed_motion,!weapon);
     const bool firing=s.animation.fire_left>0;
     const auto native = coop::puppet::HumanAction(weapon,s.animation.moving,s.animation.crouched,firing,p.aiming);
     if (human) {
@@ -2026,7 +2027,7 @@ void PartnerBodyAfterAi(PPCContext& ctx, uint8_t* b, uint32_t w) {
       }
       if (s.animation.moving && !firing && !weapon) {
         if (const auto gait=coop::puppet::ChooseGait(s.animation.vx,s.animation.vy,p.facing,s.animation.crouched,
-                                                   s.native_gaits,s.requested_tuple)) {
+                                                   s.native_gaits,s.requested_tuple,true)) {
           choice=gait->clip;
           s.facing={std::cos(gait->facing),std::sin(gait->facing),0};
         } else {
