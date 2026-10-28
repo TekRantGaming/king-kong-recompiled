@@ -119,6 +119,9 @@ struct FlowView {
   revive::PeerLife partner_life;
   bool reconnecting = false, reconnect_expired = false;
   uint32_t rejoin_revision = 0;
+  // This world restarts the previous world's level at a checkpoint after a
+  // coordinated ReloadRequest (death or scripted fail), not a story transition.
+  bool reload = false;
 };
 // Continuous evidence only; loading, stale poses or solo policy reset the timer.
 class BehindRule {
@@ -264,6 +267,9 @@ class SessionFlow {
     view_.status="Loading..."; deadline_=now;
   }
   void World(FlowEvent f, double now) {
+    view_.reload=!COOP_MUT_IF("reload_mark") && reload_from_ && f.generation==reload_from_+1 &&
+        f.level==view_.world.level && f.start==view_.checkpoint;
+    reload_from_=0;
     view_.world=f; view_.completed=f.completed; view_.checkpoint=f.start;
     view_.policy=PolicyFor(f.level); view_.phase=FlowPhase::Loading;
     view_.status="Loading..."; deadline_=now;
@@ -378,6 +384,7 @@ class SessionFlow {
         // Also reject a delayed/accidental peer request while a solo finisher
         // waits. It must not cancel completion or restart the living partner.
         if (DeathRouteFor(view_.policy)==DeathRoute::LocalCheckpoint) return;
+        reload_from_=view_.world.generation;
         if (local) Emit(m.type,view_.world);
         if (view_.host && (view_.phase==FlowPhase::Playing || view_.phase==FlowPhase::Waiting)) {
           auto f=view_.world; ++f.generation; f.start=view_.checkpoint;
@@ -396,6 +403,7 @@ class SessionFlow {
   std::optional<FlowEvent> next_;
   std::deque<Message> outgoing_;
   std::optional<SessionStart> checkpoint_state_;
+  uint32_t reload_from_=0; // generation a coordinated ReloadRequest restarts
   uint32_t reconnects_=0;
   bool guest_rejoining_=false;
   bool rejoin_requested_=false;

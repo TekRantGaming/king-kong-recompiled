@@ -170,6 +170,27 @@ void BarriersAndFollow() {
   f.host.Tick(127); Check(f.host.View().phase==FlowPhase::Failed,"load barrier timeout"); Transfer(f.host,f.guest,127);
   Check(f.guest.View().phase==FlowPhase::Failed,"timeout propagated to peer");
 }
+void ReloadMark() {
+  // C113: only a coordinated ReloadRequest restart of the same level marks the
+  // new world as a reload; both peers then restore their checkpoint snapshot.
+  Flows f; f.Loaded();
+  Check(!f.host.View().reload && !f.guest.View().reload,"session start is not a reload");
+  auto checkpoint=f.host.View().world; checkpoint.start=5;
+  f.host.Local(Event(MessageType::Checkpoint,checkpoint),3); Transfer(f.host,f.guest,3);
+  f.host.Local(Event(MessageType::ReloadRequest,f.host.View().world),4); Transfer(f.host,f.guest,4);
+  Check(f.host.View().world.generation==2 && f.guest.View().world.generation==2 && f.guest.View().world.start==5,"host reload reaches guest");
+  Check(f.host.View().reload && f.guest.View().reload,"host requested reload is marked on both peers");
+  f.Loaded(5);
+  f.guest.Local(Event(MessageType::ReloadRequest,f.guest.View().world),6); Transfer(f.guest,f.host,6); Transfer(f.host,f.guest,6);
+  Check(f.host.View().world.generation==3 && f.host.View().reload && f.guest.View().reload,"guest requested reload is marked on both peers");
+  f.Loaded(7);
+  const auto level=f.host.View().world.level;
+  f.host.Local(Event(MessageType::LevelChange,{3,201,1,0}),8); Transfer(f.host,f.guest,8);
+  Check(f.host.View().world.level!=level && !f.host.View().reload && !f.guest.View().reload,"story transition is not a reload");
+  f.Loaded(9);
+  f.guest.Remote(Event(MessageType::LevelChange,{5,201,1,2}),10);
+  Check(!f.guest.View().reload,"no reload mark without a ReloadRequest");
+}
 void SoloAndObserver() {
   for (int chapter : {0,10,13,14,15,16,17,19,20,21,27,31,32,33,36,38,39}) {
     for (bool guest_first : {false,true}) {
@@ -438,6 +459,7 @@ void CheckpointCatchupTests() {
 }
 int main() {
   CheckpointCatchupTests();
+  ReloadMark();
   Codecs(); LifeObservations(); SaveTransfer(); BarriersAndFollow(); SoloAndObserver(); DeathRouting(); PoliciesAndBehind(); PersonalProgress(); WorkerHandoff();
 #if defined(KK_DEV_TOOLS)
   {

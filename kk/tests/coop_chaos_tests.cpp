@@ -854,6 +854,27 @@ void PlacementWait() {
   Check(w.Step(true,20.1)==revive::Place::Spot && w.Step(false,30)==revive::Place::Wait,"a found spot ends the attempt");
   Check(w.Step(false,std::numeric_limits<double>::quiet_NaN())==revive::Place::Wait,"NaN clock waits");
 }
+void FlowTransfer(SessionFlow& from,SessionFlow& to,double now) {
+  while (!from.Outgoing().empty()) {
+    auto m=from.Outgoing().front(); from.Sent();
+    std::vector<uint8_t> bytes; Message decoded;
+    Check(Encode(m,bytes) && Decode(bytes,decoded),"flow output has valid codec"); to.Remote(decoded,now);
+  }
+}
+void ReloadMarkChaos() {
+  SessionStart s; s.chapter=22; s.level=kChapterRules[22].level; s.start=1; s.save_hash=SessionSaveHash({});
+  SessionFlow host{true},guest{false};
+  Check(host.Begin(s,{},0),"host begins"); FlowTransfer(host,guest,0);
+  const auto loaded=[&](double now) {
+    Message m; m.type=MessageType::Loaded; m.flow=host.View().world; host.Local(m,now); FlowTransfer(host,guest,now);
+    m.flow=guest.View().world; guest.Local(m,now); FlowTransfer(guest,host,now); FlowTransfer(host,guest,now);
+  };
+  loaded(1);
+  Message r; r.type=MessageType::ReloadRequest; r.flow=host.View().world;
+  host.Local(r,2); FlowTransfer(host,guest,2);
+  Check(guest.View().world.generation==2 && guest.View().reload && host.View().reload,
+      "a coordinated reload restores the checkpoint snapshot on both peers");
+}
 void VoidGuard() {
   revive::VoidGuard g; const ShotVector home{1,2,3};
   g.Arm(home,true,10);
@@ -1032,6 +1053,7 @@ int main(int argc,char** argv) {
   else if(name=="placement_side") PlacementSide();
   else if(name=="placement_wait") PlacementWait();
   else if(name=="void_guard") VoidGuard();
+  else if(name=="reload_mark") ReloadMarkChaos();
   else if(name=="udp_duplicate" || name=="udp_order") Reliable();
   else if(name=="event_pause") EventPause();
   else if(name=="event_dispatch") EventDispatch();

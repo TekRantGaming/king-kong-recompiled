@@ -14,6 +14,7 @@
 #include "menu_scene.h"
 #include "coop_handover.h"
 #include "coop_resume.h"
+#include "coop_objects_game.h"
 #include <random>
 #include <rex/cvar.h>
 #include <rex/hook.h>
@@ -28,6 +29,7 @@
 #include <thread>
 
 REX_EXTERN(__imp__sub_82413190);
+REX_EXTERN(__imp__sub_82413080);
 REX_EXTERN(__imp__sub_8241A158);
 namespace kk::coop {
 bool BeginSessionFlow(SessionStart start, std::vector<uint8_t> save);
@@ -183,6 +185,20 @@ FlowView Wait(uint32_t generation, bool load_barrier, bool host_transition=false
 }
 void AskLoad(PPCContext& ctx,uint8_t* base,uint32_t g,const FlowView& v) {
   using namespace hfr;
+  // A coordinated reload (death or scripted fail) restarts the same level at
+  // the host checkpoint. Natively, eng_frame re-inits the universe and IntMIG_init
+  // restores the last checkpoint snapshot (82413080). Here uni_go keeps the
+  // universe as it is now, so without this each peer kept whatever its native
+  // reset path left: the host's eng_frame cleared the persistent progress bits
+  // (G+0xC08) while the guest kept doors opened after the checkpoint (C113,
+  // 1101 door D330B9F0F2305ADF). Both peers restore their own snapshot of the
+  // same checkpoint, so persistent progress matches single player and each other.
+  const bool restore=v.reload && !(v.start.rejoin && v.start.generation==v.world.generation);
+  if (restore) {
+    const auto saved=ctx; __imp__sub_82413080(ctx,base); ctx=saved;
+    REXLOG_INFO("KK co-op flow: reload restores the checkpoint snapshot role={} generation {} level {} start {}",
+        v.host ? "host":"guest",v.world.generation,v.world.level,v.world.start);
+  }
   // ES_enter_map grants the chapter selection's authored equipment only while
   // G+22120 is set. We clear that practice-mode flag below so the campaign can
   // continue. Perform its exact inventory initializer once for the initial
@@ -226,6 +242,9 @@ void AskLoad(PPCContext& ctx,uint8_t* base,uint32_t g,const FlowView& v) {
   behind=BehindRule{};
   recorded_checkpoint=v.world.start;
   REXLOG_INFO("KK co-op flow: load generation {} level {} start {}",v.world.generation,v.world.level,v.world.start);
+#if defined(KK_DEV_TOOLS)
+  if (std::getenv("KK_DEV_OBJECTS")) ObjectsDevProgressBits(base,"ask-load");
+#endif
 }
 }
 int SessionCheats() { return session_cheats.load(); }
@@ -858,6 +877,9 @@ void SessionReloadFrame(uint8_t* base) {
   hfr::Store32(base,0x82CCAA80,0); hfr::Store32(base,0x82CCBFD4,0);
   Send(MessageType::ReloadRequest,v.world);
   REXLOG_INFO("KK co-op flow: death/reload fallback, both reload the host checkpoint");
+#if defined(KK_DEV_TOOLS)
+  if (std::getenv("KK_DEV_OBJECTS")) ObjectsDevProgressBits(base,"reload-fallback");
+#endif
 }
 void RejoinBackToMenu() { rejoin_cancel=true; }
 #if defined(KK_DEV_TOOLS)

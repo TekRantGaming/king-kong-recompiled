@@ -55,6 +55,7 @@
     "human_return_skip_fill": "human_return",
     "human_return_default_only": "human_return",
     "human_return_keep_native": "human_return",
-    "human_set_track_guard": "human_set_track"
+    "human_set_track_guard": "human_set_track",
+    "reload_mark": "reload_mark"
   }
 }
