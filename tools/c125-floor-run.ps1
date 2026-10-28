@@ -3,7 +3,7 @@ param([Parameter(Mandatory)][string]$Name,[int]$Entry=1,[int]$Start=3,
       [string]$Preset='kk-dev-vulkan',[int]$Seconds=130,[int]$Seed=125,
       [ValidateSet('vulkan','d3d12')][string]$Backend='d3d12',[int]$FrameRate=120,
       [int]$FloorAt=15,[switch]$AuditOnly,
-      [string]$Source='',[string]$Walk='21.5:LSUP/2,25:LSLEFT/1,28:LSUP/1',[string]$ExtraEnv='')
+      [string]$Source='',[string]$Walk='21.5:LSUP/2,25:LSLEFT/1,28:LSUP/1',[string]$ExtraEnv='',[string]$JoinPoint='')
 $ErrorActionPreference='Stop'
 $worktree=Split-Path $PSScriptRoot -Parent
 $state='F:\kk-native-coop\codex\state'
@@ -14,6 +14,7 @@ $operator='|KK_DEV_OBJECT_HIT=20'
 $walker="|KK_DEV_OBJECT_HIT=|KK_DEV_SCRIPT=0:SKIP/10,$Walk"
 $hostText="KK_DEV_LAUNCHER_INPUT=wait-home,direct:code:C125AB,direct:host,session:$Entry|$common"
 $joinText="KK_DEV_LAUNCHER_INPUT=wait-home,direct:code:C125AB,direct:join,direct:ready|$common"
+if ($JoinPoint) {$joinText=$joinText.Replace("KK_DEV_OBJECT_FLOOR_POINT=$Point","KK_DEV_OBJECT_FLOOR_POINT=$JoinPoint")}
 if ($Breaker -eq 'host') { $hostText+=$operator; $joinText+=$walker }
 else { $hostText+=$walker; $joinText+=$operator }
 $extra="--kk_shaders_prepared=2.0.0-beta.17;spirv,dxil|--kk_setup_again=false|--kk_toggle_aim=false|--kk_coop_udp_profile=bad_wifi|--kk_coop_udp_seed=$Seed|--native_backend=$Backend|--kk_frame_rate=$FrameRate"
@@ -22,7 +23,7 @@ if ($AuditOnly) {
     $Breaker=$fixture.breaker; $result=0
 } else {
   $fixture=[ordered]@{name=$Name;entry=$Entry;start=$Start;breaker=$Breaker;preset=$Preset;seed=$Seed;
-    point=$Point;object_source=$Source;walk=$Walk;backend=$Backend;frame_rate=$FrameRate;floor_at=$FloorAt;extra_env=$ExtraEnv;
+    point=$Point;join_point=$JoinPoint;object_source=$Source;walk=$Walk;backend=$Backend;frame_rate=$FrameRate;floor_at=$FloorAt;extra_env=$ExtraEnv;
     source_commit=(& git -C $worktree rev-parse HEAD);dirty_paths=@(& git -C $worktree status --short);
     binary_sha256=(Get-FileHash -LiteralPath "$worktree\kk\out\build\$Preset\king_kong.exe").Hash;
     environment=$hostText;join_environment=$joinText;extra=$extra;seconds=$Seconds}
@@ -66,6 +67,8 @@ foreach ($role in 'host','join') {
         impulses=@(LogLines $lines 'barrier impulse:');
         void_deaths=@(LogLines $lines 'native-ground.*condition=\d->3.*void=1').Count;
         deaths=@(LogLines $lines 'native-ground.*condition=\d->3.*void=1');
+        void_flags=@(LogLines $lines 'COOP HEALTH void-probe').Count;
+        rescues=@(LogLines $lines 'co-op placement: void under Jack').Count;
         placements=@(LogLines $lines 'co-op placement:');
         passage=@(LogLines $lines 'object passage:');
         load_released=@(LogLines $lines 'load barrier released').Count;

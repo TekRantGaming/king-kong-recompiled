@@ -70,6 +70,7 @@ REX_EXTERN(__imp__sub_8250ECF0);
 REX_EXTERN(__imp__sub_8271FB98);
 REX_EXTERN(__imp__sub_82715AC8);
 REX_EXTERN(__imp__sub_828007B0);
+REX_EXTERN(__imp__sub_82403E38);
 REX_EXTERN(__imp__sub_827061B0);
 REX_EXTERN(__imp__sub_82408648);
 #endif
@@ -1841,28 +1842,25 @@ void FloorProbe(PPCContext& ctx,uint8_t* b) {
   }
   const auto hero=Load32(b,0x82CCBF7C),ai=Ptr(b,Ptr(b,hero,24,8),4,88),sp=ctx.r1.u32,w=state.world;
   if (!Track(b,ai,0x826718B8) || !PoseAddress(w,0x16300) || (sp&15) || sp<0x40014000 || sp>=0xA0000000) return;
-  const PPCContext saved=ctx; uint8_t scratch[16384],query[0x44],hit[0x40],deferred[0x44];
+  const PPCContext saved=ctx; uint8_t scratch[16384];
   const auto start=sp-sizeof(scratch);
-  std::memcpy(scratch,b+start,sizeof(scratch)); std::memcpy(query,b+0x82977230,sizeof(query));
-  std::memcpy(hit,b+w+0x16268,sizeof(hit)); std::memcpy(deferred,b+w+0x294,sizeof(deferred));
-  constexpr uint32_t counters[]{0x82CCABF4,0x82CCAC00,0x82CCAC04,0x82CCAC08,0x82CCAC0C};
-  uint32_t values[5]; for (unsigned n=0;n<5;++n) values[n]=Load32(b,counters[n]);
+  std::memcpy(scratch,b+start,sizeof(scratch));
   ctx.r1.u64=start+12288; std::memset(b+ctx.r1.u32,0,4096); Store32(b,ctx.r1.u32,sp);
   const auto vectors=ctx.r1.u32+256;
   StoreF(b,vectors,x); StoreF(b,vectors+4,y); StoreF(b,vectors+8,z);
-  StoreF(b,vectors+16,0); StoreF(b,vectors+20,0); StoreF(b,vectors+24,-1);
-  std::memset(b+0x82977230,0,sizeof(query)); Store32(b,0x82977238,hero);
-  ctx.r3.u64=w; ctx.r4.u64=hero; ctx.r5.u64=vectors; ctx.r6.u64=vectors+16;
-  ctx.f1.f64=80; ctx.r8.u64=0xFFFFFFFF; ctx.r9.u64=0; ctx.r10.u64=0;
-  Store32(b,ctx.r1.u32+84,0); Store32(b,ctx.r1.u32+92,0); Store32(b,ctx.r1.u32+100,1);
-  __imp__sub_828007B0(ctx,b);
+  StoreF(b,vectors+16,0); StoreF(b,vectors+20,0); StoreF(b,vectors+24,-80);
+  // Use the same native public query as H ground checks and C104 placement.
+  // The old fixture called the lower level query directly and rolled back
+  // shared world query counters and deferred records. That is not a native
+  // transaction and can leave collision state inconsistent during this pass.
+  ctx.r3.u64=hero; ctx.r4.u64=vectors; ctx.r5.u64=vectors+16;
+  ctx.r6.u64=UINT32_MAX; ctx.r7.u64=2; ctx.r8.u64=0; ctx.r9.u64=1;
+  __imp__sub_82403E38(ctx,b);
   const auto object=ctx.r3.u32;
   const ShotVector floor{LoadF(b,w+0x1626C),LoadF(b,w+0x16270),LoadF(b,w+0x16274)};
   const auto normal=LoadF(b,w+0x16280);
   REXLOG_INFO("KK dev object floor fixture: role={} ray=({:.3f},{:.3f},{:.3f}) hit={:08X} point=({:.3f},{:.3f},{:.3f}) normal-z={:.3f}",
       state.host ? "host" : "guest",x,y,z,object,floor.x,floor.y,floor.z,normal);
-  std::memcpy(b+0x82977230,query,sizeof(query)); std::memcpy(b+w+0x16268,hit,sizeof(hit)); std::memcpy(b+w+0x294,deferred,sizeof(deferred));
-  for (unsigned n=0;n<5;++n) Store32(b,counters[n],values[n]);
   std::memcpy(b+start,scratch,sizeof(scratch)); ctx=saved; probe.done=!scan;
   if (object && object!=hero && object!=kk::PartnerBodyCombatActor(b) && std::isfinite(floor.z) && std::isfinite(normal) && normal>.75f && floor.z<=z && floor.z>z-80 &&
       std::abs(floor.x-x)<.1f && std::abs(floor.y-y)<.1f)
