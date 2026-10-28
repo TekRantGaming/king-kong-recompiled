@@ -15,6 +15,7 @@
 #include "coop_world_snapshot.h"
 #include "coop_stimulus_debug.h"
 #include "coop_event_budget.h"
+#include "coop_rebirth.h"
 #include <algorithm>
 #include <bit>
 #include <rex/logging.h>
@@ -686,6 +687,9 @@ std::optional<EnemyWorld> private_identity;
 struct GuardWorld { EnemyWorld world; uint64_t epoch=0; uint32_t generation=0; };
 std::optional<GuardWorld> guard_world;
 std::map<uint64_t,uint32_t> private_spawner_sequences;
+// C107: living spawned identities of the world before a private reload, for its native rebirths.
+RebirthAdoption private_rebirths;
+unsigned private_rebirths_adopted=0;
 struct PrivateSequences {
   uint32_t shot=0, damage=0;
   uint64_t epoch=0;
@@ -3522,13 +3526,20 @@ void Spawned(const uint8_t* b, uint32_t spawner, uint32_t source, uint32_t actor
   const auto wave_source = wave_index<17 ? wave_templates[wave_index] : 0;
   const auto template_key=SpawnerTemplateKey(sp.key,source,Ptr(b,sp.vars,1592,32),Ptr(b,sp.vars,1776,32),wave_index,wave_source);
   if (!template_key || sp.sequence == UINT32_MAX) return;
-  ++sp.sequence;
   bool is_spawner = false; uint32_t state = 0;
   const auto family = Tracks(b, Ptr(b, Ptr(b, source, 24, 8), 4, 88), state, is_spawner);
-  const auto id = replay_birth ? replay_birth->id : SpawnId(sp.key, template_key, sp.sequence, family);
+  // C107: after a private reload this native rebirth takes over the partner
+  // world's living identity of the same spawner template, without a new sequence.
+  const auto adopted = replay_birth ? std::nullopt :
+      private_rebirths.Take(SpawnId(sp.key, template_key, sp.sequence+1, family));
+  if (!adopted) ++sp.sequence;
+  const auto id = replay_birth ? replay_birth->id : adopted ? adopted->id : SpawnId(sp.key, template_key, sp.sequence, family);
   if (replay_birth && (replay_birth->birth_spawner!=sp.key || id.sequence!=sp.sequence || id.family!=family)) return;
   const auto ai = Ptr(b, Ptr(b, actor, 24, 8), 4, 88), matrix = Ptr(b, actor, 12, 64);
-  if (!id.source || !ai || !matrix || s.records.size()+s.pending.size() >= kMaxEnemies || s.records.contains(id)) return;
+  if (!id.source || !ai || !matrix || s.records.size()+s.pending.size() >= kMaxEnemies || s.records.contains(id)) {
+    if (adopted) private_rebirths.Remember(*adopted);
+    return;
+  }
   // A pooled pointer is a new generation. Preserve a tombstone for its previous ID.
   if (auto old = s.bindings.find(actor); old != s.bindings.end()) {
     auto record = s.records.find(old->second.id);
@@ -3538,7 +3549,17 @@ void Spawned(const uint8_t* b, uint32_t spawner, uint32_t source, uint32_t actor
   // The new copy may join the scheduled AI table on a later pass. Bind only
   // once that exact AI/matrix is observed there, after its normal init.
   s.pending[actor] = {id, ai, matrix, LoadF(b, matrix+48), LoadF(b, matrix+52), LoadF(b, matrix+56)};
-  if (sp.shared_births) {
+  if (adopted) {
+    // Keep the original birth evidence; the partner already holds this identity.
+    auto& pending=s.pending[actor];
+    pending.x=adopted->spawn_x; pending.y=adopted->spawn_y; pending.z=adopted->spawn_z;
+    pending.birth_spawner=adopted->birth_spawner;
+    pending.birth_template=adopted->birth_template; pending.birth_point=adopted->birth_point;
+    ++private_rebirths_adopted;
+    REXLOG_INFO("ENEMIES rebirth adopted role={} spawner={:016X} id={:016X}/{}/{} next-sequence={} left={}",
+        SessionFlowSnapshot().host ? "host":"guest",sp.key,id.source,id.sequence,uint16_t(id.family),
+        sp.sequence+1,private_rebirths.Pending());
+  } else if (sp.shared_births) {
     const auto slot=replay_birth ? replay_birth->birth_template : wave_index<17 ? wave_index+2 : source==Load32(b,sp.vars+1592) ? 0u:1u;
     const auto point=replay_birth ? replay_birth->birth_point : Load32(b,sp.vars+0x1FC0);
     if (point<16) {
@@ -3716,6 +3737,7 @@ void EnemyBeforeLoad() {
   }
   guard_world.reset();
   private_spawner_sequences.clear();
+  private_rebirths.Clear(); private_rebirths_adopted=0;
   private_sequences={};
   private_ownership={};
   if (private_identity) {
@@ -3723,6 +3745,12 @@ void EnemyBeforeLoad() {
     private_sequences={s.next_shot,s.next_damage,s.combat_epoch,s.shot_validator,s.status_replay};
     if (private_identity->level==s.identity.level && private_identity->start==s.identity.start) {
       for (const auto& [actor,sp] : s.spawners) private_spawner_sequences[sp.key]=sp.sequence;
+      // C107: the partner keeps these living spawned enemies through this reload.
+      for (const auto& [id,r] : s.records) {
+        if (r.kind!=EnemyEventKind::Spawned) continue;
+        if (const auto a=s.authority.find(id); a!=s.authority.end() && a->second.dead) continue;
+        private_rebirths.Remember(r.enemy);
+      }
       private_ownership={s.ownership_epoch,s.aliases,s.authority,s.ownership_out,s.committed,s.ownership_in};
     }
   }
@@ -3740,7 +3768,8 @@ void EnemyAfterLoad(const uint8_t* b, uint32_t game) {
   s.game = game;
   // A private player recovery is the same logical world/visit. Native actor
   // pointers are rebuilt, but the living peer's events keep their scope.
-  if (private_identity && private_identity->level==level) {
+  const bool private_world=private_identity && private_identity->level==level;
+  if (private_world) {
     s.identity=*private_identity; s.next_shot=private_sequences.shot;
     s.visits[{s.identity.level,s.identity.start}]=s.identity.serial;
     s.shot_validator=private_sequences.shots;
@@ -3756,6 +3785,8 @@ void EnemyAfterLoad(const uint8_t* b, uint32_t game) {
     }
     s.next_damage=private_sequences.damage; s.combat_epoch=private_sequences.epoch;
     s.status_replay=private_sequences.status;
+    REXLOG_INFO("ENEMIES private reload level={} start={} visit={} rebirths-pending={} reseed={} aliases={}",
+        s.identity.level,s.identity.start,s.identity.serial,private_rebirths.Pending(),s.private_reseed.size(),s.aliases.size());
   }
   else if (const auto flow=SessionFlowSnapshot(); flow.active && flow.start.rejoin &&
       flow.start.generation==flow.world.generation && flow.start.level==level) {
@@ -3764,6 +3795,8 @@ void EnemyAfterLoad(const uint8_t* b, uint32_t game) {
     REXLOG_INFO("KK co-op rejoin: enemy identity level={} start={} visit={}",level,s.identity.start,s.identity.serial);
   }
   else s.identity = {level, start, ++s.visits[{level, start}]};
+  // Rebirths adopt identities only inside the same logical world.
+  if (!private_world) private_rebirths.Clear();
   private_identity.reset();
   private_ownership={};
   s.capture = ValidEnemyWorld(s.identity);
