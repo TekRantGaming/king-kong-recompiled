@@ -877,6 +877,33 @@ void ReloadMarkChaos() {
   Check(guest.View().world.generation==2 && guest.View().reload && host.View().reload,
       "a coordinated reload restores the checkpoint snapshot on both peers");
 }
+// C123: level 201 start 4. The host's own load runs checkpoint 4 -> 3 -> 4 in
+// one frame; the guest got the 3 before its ES_EnterMap pass (AI pass 2),
+// which then picked start point 3's setup. The guest mirror must wait for the
+// guest's own ES_CheckPoint pass (AI pass 3) of this load.
+void MirrorGate() {
+  struct Guest {
+    LoadMirrorGate gate; uint32_t g=4, recorded=4, enter_map_read=0, host=4; unsigned pass=0;
+    void UniGo() { if (host!=recorded && gate.Ready()) { recorded=host; g=host; } }
+    void Ai() {
+      ++pass; gate.AiPass();
+      if (pass==2) enter_map_read=g;          // ES_EnterMap stage 1 reads G+0xC
+      if (pass>=3) gate.NativeCheckpointPass(); // ES_CheckPoint pass
+    }
+    void Frame() { UniGo(); Ai(); }
+  };
+  Guest a; a.gate.Loaded();
+  a.Frame(); a.host=3; a.Frame(); a.host=4; a.Frame(); a.Frame();
+  Check(a.enter_map_read==4,"the start point setup reads the loaded start point, not a transient host checkpoint");
+  Check(a.g==4 && a.recorded==4,"the host's settled checkpoint is mirrored");
+  Guest b; b.gate.Loaded(); b.Frame(); b.host=3; for (int i=0;i<4;++i) b.Frame();
+  Check(b.enter_map_read==4 && b.g==3,"a host checkpoint still reaches the retry point after the native pass");
+  Guest c; c.gate.Loaded(); c.host=5;
+  for (unsigned i=0;i<LoadMirrorGate::kFallbackPasses+1;++i) { c.UniGo(); ++c.pass; c.gate.AiPass(); }
+  Check(c.g==5,"a level without checkpoint objects mirrors after a bounded number of AI passes");
+  Guest d; for (int i=0;i<3;++i) d.Frame(); d.host=6; d.Frame();
+  Check(d.g==6,"without a new load the mirror is immediate");
+}
 void VoidGuard() {
   revive::VoidGuard g; const ShotVector home{1,2,3};
   g.Arm(home,true,10);
@@ -1161,6 +1188,7 @@ int main(int argc,char** argv) {
   else if(name=="placement_wait") PlacementWait();
   else if(name=="void_guard") VoidGuard();
   else if(name=="reload_mark") ReloadMarkChaos();
+  else if(name=="mirror_gate") MirrorGate();
   else if(name=="udp_duplicate" || name=="udp_order") Reliable();
   else if(name=="event_pause") EventPause();
   else if(name=="event_dispatch") EventDispatch();

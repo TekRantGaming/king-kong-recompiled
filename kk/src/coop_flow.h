@@ -170,6 +170,26 @@ class CheckpointCatchup {
   bool attempted_=false;
 };
 
+// C123: the guest mirrors each host checkpoint into its retry point G+0xC.
+// Right after a load, native ES_EnterMap (82643978) reads G+0xC once: only the
+// checkpoint object whose start point equals it runs that start point's setup
+// (activations, placements). Its ES_CheckPoint pass follows one AI pass later.
+// The host's own load can briefly report an older checkpoint (level 201 start 4
+// runs 4 -> 3 -> 4 in one frame), and that message may reach the guest before
+// its ES_EnterMap pass. Hold the mirror until the guest's own first
+// ES_CheckPoint pass of this load, or a bounded number of AI passes.
+class LoadMirrorGate {
+ public:
+  static constexpr unsigned kFallbackPasses=30;
+  void Loaded() { settled_=false; passes_=0; }
+  void NativeCheckpointPass() { settled_=true; }
+  void AiPass() { if (passes_<kFallbackPasses) ++passes_; }
+  bool Ready() const { return COOP_MUT_IF("mirror_gate") || settled_ || passes_>=kFallbackPasses; }
+ private:
+  bool settled_=true;
+  unsigned passes_=0;
+};
+
 // Deterministic controller, owned by one worker through FlowMailbox. No game API,
 // guest memory, filesystem, Steam calls or UI callbacks in this state machine.
 class SessionFlow {

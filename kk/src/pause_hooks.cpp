@@ -952,6 +952,7 @@ REX_HOOK_RAW(sub_826437D0) {
 #if defined(KK_DEV_TOOLS)
   kk::coop::world::CheckpointEntering(base);
 #endif
+  kk::coop::SessionNativeCheckpointPass();
   const uint32_t g = kk::play::Load32(base, kk::play::kGamePtr);
   const int32_t before = g ? int32_t(kk::play::Load32(base, g + 0xC)) : -1;
   [[maybe_unused]] const uint32_t self = kk::play::Load32(base, 0x82CCBF6C);  // the checkpoint object (for dev_bug_trace.cpp)

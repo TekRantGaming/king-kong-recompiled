@@ -50,6 +50,8 @@ std::atomic<bool> catchup_offer{false};
 std::atomic<uint32_t> catchup_request{0};
 std::atomic<double> catchup_notice_until{0};
 CheckpointCatchup catchup;
+LoadMirrorGate mirror_gate;
+bool mirror_deferred_logged=false;
 enum class CatchupPhase { None, Requested, Loading, Placing };
 CatchupPhase catchup_phase=CatchupPhase::None;
 uint32_t catchup_target=0;
@@ -73,6 +75,8 @@ DevFollowHost dev_follow;
 DevFollowResult dev_follow_pad;
 double dev_follow_at=-1, dev_follow_log=0;
 uint32_t dev_follow_generation=0;
+std::optional<FlowEvent> staggered;
+double staggered_at=0, last_checkpoint_send=-1;
 bool DevFollowEnabled() {
   static const bool enabled=[] {
     const char* value=std::getenv("KK_DEV_FOLLOW_HOST");
@@ -558,7 +562,19 @@ bool SessionBeforeGo(PPCContext& ctx,uint8_t* base,uint32_t g) {
     if (v.world.generation>loaded_generation) { AskLoad(ctx,base,g,v); return false; }
     return true;
   }
-  if (!v.host && v.checkpoint!=recorded_checkpoint && v.policy==ChapterPolicy::Together) {
+  // C123: never mirror before this load's native ES_EnterMap pass has read G+0xC.
+#if defined(KK_DEV_TOOLS)
+  // Test aid: KK_DEV_MIRROR_GATE=0 restores the old immediate mirror for before/after runs.
+  static const bool gate_on=[] { const char* s=std::getenv("KK_DEV_MIRROR_GATE"); return !s || std::string_view(s)!="0"; }();
+#else
+  constexpr bool gate_on=true;
+#endif
+  if (!v.host && v.checkpoint!=recorded_checkpoint && v.policy==ChapterPolicy::Together && gate_on && !mirror_gate.Ready()) {
+    if (!mirror_deferred_logged)
+      REXLOG_INFO("KK co-op catch-up: host checkpoint {} mirror waits for this load's native checkpoint pass generation {} level {} start {}",
+          v.checkpoint,v.world.generation,v.world.level,Load32(base,g+12));
+    mirror_deferred_logged=true;
+  } else if (!v.host && v.checkpoint!=recorded_checkpoint && v.policy==ChapterPolicy::Together) {
 #if defined(KK_DEV_TOOLS)
     REXLOG_INFO("KK dev checkpoint trace: guest mirrors host checkpoint generation {} level {} G start point {} -> {} (recorded {})",
         v.world.generation,v.world.level,Load32(base,g+12),v.checkpoint,recorded_checkpoint);
@@ -610,6 +626,7 @@ bool SessionBeforeGo(PPCContext& ctx,uint8_t* base,uint32_t g) {
   return false;
 }
 void SessionAfterGo(uint8_t* base,uint32_t g,bool loaded) {
+  if (launched && loaded) { mirror_gate.Loaded(); mirror_deferred_logged=false; }
   if (launched && loaded && private_load) StoryLoaded(base);
   if (independent_load && loaded) {
     const auto own=*independent_load;
@@ -662,6 +679,14 @@ void SessionAfterGo(uint8_t* base,uint32_t g,bool loaded) {
         released.host ? "host" : "guest",loaded_generation,released.world.level,
         released.policy==ChapterPolicy::Together ? "together" :
         released.policy==ChapterPolicy::SoloRegroup ? "solo-regroup" : "observer");
+#if defined(KK_DEV_TOOLS)
+  // C123 test aid: KK_DEV_RELEASE_DELAY_MS holds this peer after the barrier, as a slow guest frame would.
+  if (const char* s=std::getenv("KK_DEV_RELEASE_DELAY_MS"); s && !released.host) {
+    const int ms=std::clamp(std::atoi(s),0,2000);
+    REXLOG_INFO("KK dev checkpoint trace: guest holds {} ms after the load barrier",ms);
+    std::this_thread::sleep_for(std::chrono::milliseconds(ms));
+  }
+#endif
 }
 void SessionCheckpoint(uint32_t level,uint32_t checkpoint) {
   if (!launched) return;
@@ -675,10 +700,26 @@ void SessionCheckpoint(uint32_t level,uint32_t checkpoint) {
     catchup.NativeCheckpoint(checkpoint);
   }
   if (v.host && v.phase==FlowPhase::Playing && v.world.level==level && checkpoint<=10000) {
+#if defined(KK_DEV_TOOLS)
+    // C123 test aid: KK_DEV_CHECKPOINT_STAGGER=ms holds a host checkpoint sent
+    // within 20 ms of the previous one, as a split bad_wifi delivery would.
+    static const double stagger=[] { const char* s=std::getenv("KK_DEV_CHECKPOINT_STAGGER"); return s ? std::atof(s)/1000 : 0.0; }();
+    const double now=Now();
+    if (stagger>0 && (staggered || now-last_checkpoint_send<.02)) {
+      staggered=FlowEvent{v.world.generation,level,checkpoint,v.completed};
+      if (!staggered_at) staggered_at=now+stagger;
+      REXLOG_INFO("KK dev checkpoint stagger: host checkpoint {} held {:.3f}s",checkpoint,staggered_at-now);
+    } else
+#endif
     Send(MessageType::Checkpoint,{v.world.generation,level,checkpoint,v.completed});
+#if defined(KK_DEV_TOOLS)
+    last_checkpoint_send=Now();
+#endif
     if (v.checkpoint!=checkpoint) StoryHostCheckpoint();
   }
 }
+void SessionNativeCheckpointPass() { mirror_gate.NativeCheckpointPass(); }
+void SessionAiPass() { mirror_gate.AiPass(); }
 void SessionReloadFrame(uint8_t* base) {
 #if defined(KK_DEV_TOOLS)
   dev_follow_at=-1;
@@ -690,6 +731,15 @@ void SessionReloadFrame(uint8_t* base) {
     observer::SetPartnerSpectating(false); return;
   }
   const auto v=SessionFlowSnapshot();
+#if defined(KK_DEV_TOOLS)
+  if (staggered && Now()>=staggered_at) {
+    if (v.host && v.world.generation==staggered->generation) {
+      REXLOG_INFO("KK dev checkpoint stagger: host checkpoint {} sent now",staggered->start);
+      Send(MessageType::Checkpoint,*staggered); last_checkpoint_send=Now();
+    }
+    staggered.reset(); staggered_at=0;
+  }
+#endif
   if (rejoin_cancel.exchange(false)) {
     stopping=true;
     play::ReturnToLauncher("co-op reconnect cancelled","play"); return;

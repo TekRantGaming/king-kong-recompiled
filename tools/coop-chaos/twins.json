@@ -57,6 +57,7 @@
     "human_return_keep_native": "human_return",
     "human_set_track_guard": "human_set_track",
     "reload_mark": "reload_mark",
+    "mirror_gate": "mirror_gate",
     "crab_unstick_player_target": "crab_unstick",
     "crab_unstick_single_player": "crab_unstick",
     "crab_unstick_ignore_move": "crab_unstick",

@@ -5135,7 +5135,7 @@ REX_HOOK_RAW(sub_8271D498) {
   kk::DevSampleTick(&ctx, base, world);
 #endif
   const bool main_pass=uint32_t(ctx.lr)==0x82881CF0;
-  if (main_pass) kk::coop::RestoreRaptorPlayers(base);
+  if (main_pass) { kk::coop::RestoreRaptorPlayers(base); kk::coop::SessionAiPass(); }
 #if defined(KK_DEV_TOOLS)
   if (main_pass) kk::coop::world::CheckpointTrace(base,"before-ai");
 #endif

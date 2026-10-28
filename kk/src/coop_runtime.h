@@ -36,6 +36,8 @@ void ApplySessionSettings();  // transient host settings after mods, never persi
 bool SessionBeforeGo(PPCContext& ctx, uint8_t* base, uint32_t g);
 void SessionAfterGo(uint8_t* base, uint32_t g, bool loaded);
 void SessionCheckpoint(uint32_t level, uint32_t checkpoint);
+void SessionNativeCheckpointPass();  // game thread: native ES_CheckPoint ran (C123 mirror gate)
+void SessionAiPass();                // game thread: one main world AI pass
 void SessionReloadFrame(uint8_t* base);
 void PublishRejoinState(const SessionStart& state);
 void RejoinBackToMenu();
