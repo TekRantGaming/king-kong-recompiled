@@ -2875,12 +2875,23 @@ void ObserveHumanReflex(PPCContext& ctx,uint8_t* b) {
 void ObserveHumanGround(PPCContext& ctx,uint8_t* b) {
   const bool observe=REXCVAR_GET(kk_coop_enabled) && Connected() && Load32(b,0x82CCBF6C)==Load32(b,0x82CCBF7C);
   const auto before=observe ? ReadHumanStatus(b):std::nullopt;
+  const auto void_before=before ? Load32(b,before->vars+15440):0;
   __imp__sub_826A1178(ctx,b);
   const auto after=before ? ReadHumanStatus(b):std::nullopt;
-  if (before && after && before->hero==after->hero && before->vars==after->vars && before->value!=after->value)
-    REXLOG_INFO("COOP HEALTH native-ground role={} level={} condition={}->{} fall={} off-ground-seconds={} ground-kind={} void={} last-floor-z={}",
+  if (!before || !after || before->hero!=after->hero || before->vars!=after->vars) return;
+  if (before->value!=after->value)
+    REXLOG_INFO("COOP HEALTH native-ground role={} level={} condition={}->{} fall={} off-ground-seconds={} ground-kind={} void={} last-floor-z={} pos=({},{},{}) last-floor-xy=({},{}) ground={:08X} partner={:08X}",
         Get().link.role==Role::Host ? "host":"guest",Get().identity.level,uint8_t(before->condition),uint8_t(after->condition),
-        LoadF(b,after->vars+13268),LoadF(b,after->vars+2840),Load32(b,after->vars+2844),Load32(b,after->vars+15440),LoadF(b,after->vars+2872));
+        LoadF(b,after->vars+13268),LoadF(b,after->vars+2840),Load32(b,after->vars+2844),Load32(b,after->vars+15440),LoadF(b,after->vars+2872),
+        LoadF(b,Ptr(b,after->hero,12,64)+48),LoadF(b,Ptr(b,after->hero,12,64)+52),LoadF(b,Ptr(b,after->hero,12,64)+56),
+        LoadF(b,after->vars+2864),LoadF(b,after->vars+2868),Load32(b,after->vars+4008),kk::PartnerBodyCombatActor(b));
+  if (!void_before && Load32(b,after->vars+15440)) {
+    const auto m=Ptr(b,after->hero,12,64);
+    REXLOG_INFO("COOP HEALTH void-probe role={} level={} pos=({},{},{}) last-floor=({},{},{}) fall={} air={} ground={:08X} partner={:08X}",
+        Get().link.role==Role::Host ? "host":"guest",Get().identity.level,LoadF(b,m+48),LoadF(b,m+52),LoadF(b,m+56),
+        LoadF(b,after->vars+2864),LoadF(b,after->vars+2868),LoadF(b,after->vars+2872),
+        LoadF(b,after->vars+13268),LoadF(b,after->vars+2840),Load32(b,after->vars+4008),kk::PartnerBodyCombatActor(b));
+  }
 }
 // The remote body cannot take part in native NPC weapon exchanges. When it
 // overlaps Jack, the interaction ray otherwise selects it in every direction

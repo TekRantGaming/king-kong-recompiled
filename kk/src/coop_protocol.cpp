@@ -1,5 +1,6 @@
 #include "coop_protocol.h"
 #include "coop_combat.h"
+#include "coop_barrier.h"
 
 #include <bit>
 #include <algorithm>
@@ -134,6 +135,9 @@ bool IsFlowMessage(MessageType t) { return (t >= MessageType::SessionStart && t 
 bool ValidObjectState(const ObjectState& s) {
   if (!s.generation || !s.level || s.level>100000 || !s.number || !s.source ||
       !std::isfinite(s.position) || !std::isfinite(s.seconds)) return false;
+  if (s.kind==ObjectKind::Breakable) {
+    if (!barrier::Valid(s.direction) && (s.value || s.direction!=barrier::Direction{})) return false;
+  } else if (s.direction!=barrier::Direction{}) return false;
   if (s.kind!=ObjectKind::Raft && s.raft!=RaftState{}) return false;
   if (s.kind!=ObjectKind::Ode && s.kind!=ObjectKind::Tree && s.collapse!=CollapseState{}) return false;
   if (s.kind!=ObjectKind::SupportBody && s.body!=SupportBodyState{}) return false;
@@ -175,6 +179,7 @@ bool ValidObjectState(const ObjectState& s) {
 bool ValidObjectRequest(const ObjectState& s) {
   if (!s.generation || !s.level || s.level>100000 || !s.number || !s.source ||
       !std::isfinite(s.position) || !std::isfinite(s.seconds)) return false;
+  if (s.kind==ObjectKind::Breakable ? !barrier::Valid(s.direction) : s.direction!=barrier::Direction{}) return false;
   if (s.raft!=RaftState{} || s.body!=SupportBodyState{}) return false;
   if (s.kind==ObjectKind::Ode || s.kind==ObjectKind::Tree) return s.collapse.topology && s.collapse.part<32 &&
       s.collapse.trigger==0 && s.collapse.impulse==std::array<float,6>{} && !(s.value&~kObjectHitFlags) &&
@@ -328,6 +333,10 @@ bool Encode(const Message& m, std::vector<uint8_t>& out) {
       payload.U(m.object.generation,4); payload.U(m.object.level,4); payload.U(m.object.number,4);
       payload.U(m.object.source,8); payload.U(uint8_t(m.object.kind),1); payload.U(m.object.value,4);
       payload.U(std::bit_cast<uint32_t>(m.object.position),4); payload.U(std::bit_cast<uint32_t>(m.object.seconds),4);
+      if (m.object.kind==ObjectKind::Breakable) {
+        const auto direction=COOP_MUT_IF("barrier_wire_direction") ? barrier::Direction{0,1,0}:m.object.direction;
+        for (float v:direction) payload.U(std::bit_cast<uint32_t>(v),4);
+      }
       if (m.object.kind==ObjectKind::Raft) {
         payload.U(m.object.raft.route,8); payload.U(m.object.raft.current,1); payload.U(m.object.raft.next,1);
         for (float v:m.object.raft.pose) payload.U(std::bit_cast<uint32_t>(v),4);
@@ -543,6 +552,8 @@ bool Decode(std::span<const uint8_t> bytes, Message& out) {
       m.object.generation=uint32_t(r.U(4)); m.object.level=uint32_t(r.U(4)); m.object.number=uint32_t(r.U(4));
       m.object.source=r.U(8); m.object.kind=ObjectKind(r.U(1)); m.object.value=uint32_t(r.U(4));
       m.object.position=std::bit_cast<float>(uint32_t(r.U(4))); m.object.seconds=std::bit_cast<float>(uint32_t(r.U(4)));
+      if (m.object.kind==ObjectKind::Breakable)
+        for (float& v:m.object.direction) v=std::bit_cast<float>(uint32_t(r.U(4)));
       if (m.object.kind==ObjectKind::Raft) {
         m.object.raft.route=r.U(8); m.object.raft.current=uint8_t(r.U(1)); m.object.raft.next=uint8_t(r.U(1));
         for (float& v:m.object.raft.pose) v=std::bit_cast<float>(uint32_t(r.U(4)));

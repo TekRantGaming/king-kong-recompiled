@@ -17,6 +17,8 @@
 #include "coop_revive.h"
 #include "coop_support.h"
 #include "coop_partner_selection.h"
+#include "coop_objects.h"
+#include "coop_barrier.h"
 #include <algorithm>
 #include <map>
 #include <vector>
@@ -1111,6 +1113,50 @@ void CrabPlayerUnstick() {
   const auto g=cu::PlayerRelease(kHero,0,0);
   Check(g.excluded==kHero && g.zone==0 && g.gave_up==0,"a player release writes only the release word and keeps the crew give up words");
 }
+void BarrierRelay() {
+  const barrier::Direction input{.6f,-.8f,.25f};
+  Check(!barrier::Valid({}) && !barrier::Valid({0,0,1}),"zero planar directions cannot reach native piece launch");
+  Check(!barrier::Valid({1,0,std::numeric_limits<float>::quiet_NaN()}),"nonfinite hit data is refused");
+  Check(barrier::Resolve({0,0,1},input)==input,"a vertical hit uses the native actor forward fallback");
+  Check(!barrier::Resolve({},{}),"two invalid native directions refuse instead of inventing an impulse");
+  for (uint32_t seed=1;seed<=24;++seed) {
+    UdpSimulation sim; Check(UdpProfile("bad_wifi",sim),"load bad wifi profile"); sim.seed=seed;
+    Pair p(sim); p.Connect();
+    Message request; request.type=MessageType::ObjectRequest; request.epoch=p.host.Epoch();
+    request.object={1,101,1,0xA098251F7A73B76Dull,ObjectKind::Breakable,64,1000,.0001f};
+    request.object.direction=input;
+    Check(p.guest.QueueObjects(request),"guest sends native hit direction through the real object queue");
+    std::vector<Message> received;
+    for (unsigned n=0;n<1900 && received.empty();++n) { p.Step(); received=p.host.TakeObjects(); }
+    Check(received.size()==1 && received[0].object==request.object,"raw hit survives loss and duplicate transport without losing its vector");
+    objects::Requests admission;
+    Check(admission.Admit(received[0].object,1,3) && !admission.Admit(received[0].object,2,3),"duplicate raw hit is not applied twice");
+    Message outcome=request; outcome.type=MessageType::ObjectState;
+    outcome.object.value=100; outcome.object.position=0; outcome.object.seconds=0;
+    Check(p.host.QueueObjects(outcome),"host publishes native damage with its consumed direction");
+    received.clear();
+    for (unsigned n=0;n<1900 && received.empty();++n) { p.Step(); received=p.guest.TakeObjects(); }
+    Check(received.size()==1 && received[0].object==outcome.object,"host direction survives the return path");
+    objects::Replica replica;
+    Check(replica.Observe(received[0].object) && !replica.Observe(received[0].object),"replica consumes an absolute outcome once");
+    const auto* state=replica.Find(ObjectKind::Breakable,outcome.object.source);
+    const auto direction=barrier::Replay(state->direction);
+    Check(direction==input,"native launch receives the original direction rather than a zero or constant");
+    const float inverse=1/std::sqrt(direction[0]*direction[0]+direction[1]*direction[1]);
+    Check(std::isfinite(direction[0]*inverse) && std::isfinite(direction[1]*inverse) && std::isfinite(0.f*inverse),
+        "the native planar normalization keeps every piece velocity finite");
+    objects::Replica reloaded;
+    Check(reloaded.Observe(outcome.object) && barrier::Replay(reloaded.Find(ObjectKind::Breakable,outcome.object.source)->direction)==input,
+        "retained damage after a private load retains the native direction");
+    auto older=outcome.object; older.number=2; older.value=200; older.direction={-1,0,0};
+    Check(replica.Observe(older) && !replica.Observe(outcome.object) && replica.Find(ObjectKind::Breakable,older.source)->direction==older.direction,
+        "stale damage cannot replace the vector of the newer native break");
+    auto invalid=request.object; invalid.direction={0,0,1};
+    Check(!ValidObjectRequest(invalid),"vertical raw hits cannot poison the receiving physics world");
+    invalid=outcome.object; invalid.direction={};
+    Check(!ValidObjectState(invalid),"damage without a usable native impulse cannot be replayed");
+  }
+}
 void GuestProbe() {
   namespace gp=guest_probe;
   // The c118-beach-fix6 host: 64 KB pages committed around the crab blocks,
@@ -1202,6 +1248,7 @@ int main(int argc,char** argv) {
   else if(name=="crab_unstick") CrabUnstick();
   else if(name=="crab_player_unstick") CrabPlayerUnstick();
   else if(name=="guest_probe") GuestProbe();
+  else if(name=="barrier_relay") BarrierRelay();
   else { std::fprintf(stderr,"unknown test\n"); return 2; }
   std::printf("PASS [%s]\n",test_name); return 0;
 }

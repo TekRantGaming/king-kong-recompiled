@@ -2,6 +2,7 @@
 // remain independent. All memory and native calls stay on the AI thread.
 #include "coop_objects_game.h"
 #include "coop_objects.h"
+#include "coop_barrier.h"
 #include "coop_support.h"
 #include "coop_runtime.h"
 #include "coop_pose.h"
@@ -100,6 +101,7 @@ struct Binding : objects::Binding {
   } support;
   uint64_t hold_tick=0;
   uint64_t damage_tick=0;
+  barrier::Direction direction{};
   float x=0,y=0,z=0;
   struct Hit { ObjectState raw; double until=0; };
   std::deque<Hit> pending_hits;
@@ -318,6 +320,10 @@ void Census(const uint8_t* b) {
     const auto vars=Vars(b,ai,kind); if (!vars) continue;
     if (kind==ObjectKind::Fire && !FireContract(b,vars)) continue;
     Binding o; o.actor=actor; o.ai=ai; o.vars=vars; o.matrix=matrix; o.kind=kind;
+    if (kind==ObjectKind::Breakable) {
+      const barrier::Direction forward{-LoadF(b,matrix+16),-LoadF(b,matrix+20),-LoadF(b,matrix+24)};
+      if (barrier::Valid(forward)) o.direction=forward;
+    }
     if (const auto gone=state.destroyed_doors.find(actor);gone!=state.destroyed_doors.end())
       o.native_retired=gone->second==std::array<uint32_t,3>{ai,vars,matrix};
     o.x=LoadF(b,matrix+48); o.y=LoadF(b,matrix+52); o.z=LoadF(b,matrix+56);
@@ -379,7 +385,9 @@ ObjectState Sample(const uint8_t* b,const Binding& o) {
       if (s.value) s.position=Load32(b,o.vars+(o.kind==ObjectKind::Tree ? 0x554 : 0x68C)) ? 1.f : 0.f;
     }
   }
-  else if (o.kind==ObjectKind::Breakable) { s.value=Load32(b,o.vars+552); s.position=float(Load32(b,o.vars+560)); }
+  else if (o.kind==ObjectKind::Breakable) {
+    s.value=Load32(b,o.vars+552); s.position=float(Load32(b,o.vars+560)); s.direction=o.direction;
+  }
   else if (o.kind==ObjectKind::Fire) {
     if (Track(b,o.ai,0x825FAF58)) return s;
     s.position=LoadF(b,o.vars+416); s.seconds=LoadF(b,o.vars+388);
@@ -434,10 +442,11 @@ void Flush() {
     state.pending.erase(it);
   }
 }
-bool Request(const Binding& o,uint32_t value,float position=0,float seconds=0,uint8_t part=255) {
+bool Request(const Binding& o,uint32_t value,float position=0,float seconds=0,uint8_t part=255,barrier::Direction direction={}) {
   if (state.request==UINT32_MAX || state.outgoing.size()>=objects::kQueue) { ++state.rejected; return false; }
   Message m; m.type=MessageType::ObjectRequest; m.epoch=state.epoch;
   m.object={state.generation,state.level,++state.request,o.source,o.kind,value,position,seconds};
+  m.object.direction=direction;
   if (objects::SupportRoot(o.kind)) { m.object.collapse.topology=o.support.topology; m.object.collapse.part=part; }
   if (!ValidObjectRequest(m.object)) { ++state.rejected; return false; }
   state.outgoing.push_back(m); ++state.requested;
@@ -570,6 +579,14 @@ void Receive(const uint8_t* b) {
   }
 }
 bool NativeHit(PPCContext& ctx,uint8_t* b,const Binding& o,uint32_t hero,uint32_t ai,uint32_t flags,uint32_t magnitude,float seconds=.5f,uint32_t target=0,const ShotVector* direction=nullptr) {
+  // The old synthetic vector (0,0,1) becomes NaN in native IOB piece launch.
+  // Raw barrier hits supply their own vector. Preserve the existing support
+  // input contract: ODE has a different consumer and does not use IOB launch.
+  const ShotVector support_direction{0,0,1};
+  if (!direction && o.kind!=ObjectKind::Breakable) direction=&support_direction;
+  const auto forward=direction ? std::optional<ShotVector>{} : NativePoint(ctx,b,hero,__imp__sub_8270FA58);
+  if (!direction && forward) direction=&*forward;
+  if (!direction || (o.kind==ObjectKind::Breakable && !barrier::Valid({direction->x,direction->y,direction->z}))) return false;
   const auto sp=ctx.r1.u32;
   if ((sp&15) || sp<0x40014000 || sp>=0xA0000000) return false;
   constexpr uint32_t pool=0x82C8EF30;
@@ -583,10 +600,7 @@ bool NativeHit(PPCContext& ctx,uint8_t* b,const Binding& o,uint32_t hero,uint32_
   Store32(b,globals[0],ai); Store32(b,globals[1],ai); Store32(b,globals[2],hero); Store32(b,globals[3],hero);
   const auto result=ctx.r1.u32+0x100;
   Store32(b,result,UINT32_MAX); Store32(b,result+4,0);
-  StoreF(b,ctx.r1.u32+80,0); StoreF(b,ctx.r1.u32+84,0); StoreF(b,ctx.r1.u32+88,1);
-  if (direction) {
-    StoreF(b,ctx.r1.u32+80,direction->x); StoreF(b,ctx.r1.u32+84,direction->y); StoreF(b,ctx.r1.u32+88,direction->z);
-  }
+  StoreF(b,ctx.r1.u32+80,direction->x); StoreF(b,ctx.r1.u32+84,direction->y); StoreF(b,ctx.r1.u32+88,direction->z);
   StoreF(b,ctx.r1.u32+96,LoadF(b,o.matrix+48)); StoreF(b,ctx.r1.u32+100,LoadF(b,o.matrix+52)); StoreF(b,ctx.r1.u32+104,LoadF(b,o.matrix+56));
   ctx.r3.u64=result; ctx.r4.s64=-1; ctx.r5.u64=flags; ctx.r6.u64=hero; ctx.r7.u64=0;
   ctx.r8.u64=target ? target : o.actor; ctx.r9.s64=-1; ctx.r10.u64=magnitude; ctx.f1.f64=seconds;
@@ -620,14 +634,25 @@ void Damage(PPCContext& ctx,uint8_t* b) {
       const auto& hit=pending.raw;
       // Use a local obstacle source, never host Jack's interaction state.
       // The original collector owns classification, weak count and part effects.
-      if (!NativeHit(ctx,b,*o,o->actor,o->ai,hit.value,uint32_t(hit.position),hit.seconds)) break;
+      const ShotVector direction{hit.direction[0],hit.direction[1],hit.direction[2]};
+      if (!NativeHit(ctx,b,*o,o->actor,o->ai,hit.value,uint32_t(hit.position),hit.seconds,0,&direction)) break;
       o->pending_hits.pop_front(); ++state.applied;
       if (Trace()) REXLOG_INFO("KK dev object raw replay: id={:016X} flags={:08X} magnitude={} lifetime={:.3f} weak-before={}",
           o->source,hit.value,hit.position,hit.seconds,Load32(b,o->vars+560));
     }
   }
   if (!o || state.host) {
+    const auto vector=ctx.r3.u32;
     __imp__sub_824ADD48(ctx,b);
+    if (o && PoseAddress(output,4) && Load32(b,output) && PoseAddress(vector,12)) {
+      const auto forward=NativePoint(ctx,b,Load32(b,0x82CCBF7C),__imp__sub_8270FA58);
+      const auto direction=barrier::Resolve({LoadF(b,vector),LoadF(b,vector+4),LoadF(b,vector+8)},
+          forward ? barrier::Direction{forward->x,forward->y,forward->z}:barrier::Direction{});
+      if (direction) {
+        o->direction=*direction;
+        for (unsigned i=0;i<3;++i) StoreF(b,vector+4*i,(*direction)[i]);
+      } else { Store32(b,output,0); ++state.rejected; }
+    }
     if (o && Trace() && PoseAddress(output,4) && (Load32(b,output) || weak_before!=Load32(b,o->vars+560)))
       REXLOG_INFO("KK dev object classification: id={:016X} class={} weak={}->{} damage-before={}",
           o->source,Load32(b,output),weak_before,Load32(b,o->vars+560),Load32(b,o->vars+552));
@@ -640,9 +665,10 @@ void Damage(PPCContext& ctx,uint8_t* b) {
   // Do not run the guest's raw collector: its special-hit branch can mutate
   // physics before returning a damage class. Native Go still consumes the
   // host's absolute delta and owns geometry, grid and capability updates.
-  StoreF(b,ctx.r3.u32,0); StoreF(b,ctx.r3.u32+4,0); StoreF(b,ctx.r3.u32+8,0);
   Store32(b,o->vars+560,authority ? uint32_t(authority->position) : 0);
   const auto delta=authority ? objects::DamageDelta(Load32(b,o->vars+552),authority->value) : 0;
+  const auto direction=delta ? barrier::Replay(authority->direction):barrier::Direction{};
+  for (unsigned i=0;i<3;++i) StoreF(b,ctx.r3.u32+4*i,direction[i]);
   Store32(b,output,delta);
   if (delta) ++state.applied;
 }
@@ -896,11 +922,20 @@ void Door(PPCContext& ctx,uint8_t* b) {
 }
 void Breakable(PPCContext& ctx,uint8_t* b) {
   auto* o=state.ready && Shared() ? Current(b,ObjectKind::Breakable) : nullptr;
+  const auto before=o && Trace() ? Load32(b,o->vars+552):0;
   if (o) o->damage_tick=state.ai_tick;
   __imp__sub_82515CF0(ctx,b);
   // Capture the final native damage in the same call, before a later frame
   // retires an exploded obstacle from the full registry.
   if (o && state.host && Components(b,*o)) Observe(b,*o);
+  if (o && Trace() && Components(b,*o) && before!=Load32(b,o->vars+552)) {
+    const auto cap=Load32(b,o->vars+564),bank=Load32(b,0x82CC92F8);
+    const bool saved=cap>=201 && cap<1500 && PoseAddress(bank,(771+(cap>>5))*4) &&
+        (Load32(b,bank+(770+(cap>>5))*4)&(1u<<(cap&31)));
+    REXLOG_INFO("KK dev barrier consequences: role={} id={:016X} damage={}->{} maximum={} nav-tag={} extension={:04X} flags={:08X} capability={} saved={}",
+        state.host ? "host":"guest",o->source,before,Load32(b,o->vars+552),Load32(b,o->vars+556),Load32(b,o->vars+576),
+        Load16(b,Load32(b,o->actor+24)+40),Load32(b,o->actor+4),cap,saved);
+  }
 #if defined(KK_DEV_TOOLS)
   if (o && !state.host && Components(b,*o)) if (const auto* s=state.replica.Find(o->kind,o->source))
     if (s->value && Load32(b,o->vars+552)>=s->value) state.observed_change=true;
@@ -940,6 +975,7 @@ void ReplayBreakables(PPCContext& ctx,uint8_t* b) {
     const bool terminal=track->init && result==1 && objects::BreakableCheckpointGone(
         [&](uint32_t a){ return Load32(b,a); },o.actor,o.vars);
     if (terminal) {
+      o.direction=s->direction;
       Store32(b,o.vars+552,s->value); Store32(b,o.vars+560,uint32_t(s->position)); ++state.applied;
     }
     for (unsigned i=0;i<7;++i) Store32(b,globals[i],values[i]);
@@ -961,6 +997,7 @@ void BreakableInit(PPCContext& ctx,uint8_t* b) {
   if (o && !state.host && ctx.r3.u32==1 && Components(b,*o) &&
       objects::BreakableCheckpointGone([&](uint32_t a){ return Load32(b,a); },o->actor,o->vars)) {
     if (const auto* s=state.replica.Find(o->kind,o->source)) {
+      o->direction=s->direction;
       Store32(b,o->vars+552,s->value); Store32(b,o->vars+560,uint32_t(s->position));
 #if defined(KK_DEV_TOOLS)
       if (s->value) state.observed_change=true;
@@ -1827,7 +1864,7 @@ void FloorProbe(PPCContext& ctx,uint8_t* b) {
   std::memcpy(b+0x82977230,query,sizeof(query)); std::memcpy(b+w+0x16268,hit,sizeof(hit)); std::memcpy(b+w+0x294,deferred,sizeof(deferred));
   for (unsigned n=0;n<5;++n) Store32(b,counters[n],values[n]);
   std::memcpy(b+start,scratch,sizeof(scratch)); ctx=saved; probe.done=!scan;
-  if (object && std::isfinite(floor.z) && std::isfinite(normal) && normal>.75f && floor.z<=z && floor.z>z-80 &&
+  if (object && object!=hero && object!=kk::PartnerBodyCombatActor(b) && std::isfinite(floor.z) && std::isfinite(normal) && normal>.75f && floor.z<=z && floor.z>z-80 &&
       std::abs(floor.x-x)<.1f && std::abs(floor.y-y)<.1f)
     if (kk::DevTeleportJack(ctx,b,hero,{floor.x,floor.y,floor.z+.2f},0,1)) probe.done=true;
 }
@@ -2170,7 +2207,17 @@ void ObjectsEnqueued(const ObjectEnqueue& input,const uint8_t* b) {
   const auto& o=*target;
   const auto flags=Load32(b,payload+88),magnitude=Load32(b,payload+92);
   if ((flags&~kObjectHitFlags) || magnitude>100000 || !std::isfinite(input.seconds) || input.seconds<0 || input.seconds>2) return;
-  if (!state.host) Request(o,flags,float(magnitude),input.seconds,part);
+  if (!state.host) {
+    barrier::Direction direction{};
+    if (o.kind==ObjectKind::Breakable) {
+      const auto matrix=Ptr(b,hero,12,64);
+      const auto resolved=barrier::Resolve({LoadF(b,payload+24),LoadF(b,payload+28),LoadF(b,payload+32)},
+          matrix ? barrier::Direction{-LoadF(b,matrix+16),-LoadF(b,matrix+20),-LoadF(b,matrix+24)}:barrier::Direction{});
+      if (!resolved) { ++state.rejected; return; }
+      direction=*resolved;
+    }
+    Request(o,flags,float(magnitude),input.seconds,part,direction);
+  }
   if (Trace()) REXLOG_INFO("KK dev object raw hit: role={} id={:016X} handle={:08X}/{} flags={:08X} magnitude={} lifetime={:.3f} caller={:08X}",
       state.host ? "host" : "guest",o.source,Load32(b,input.output),Load32(b,input.output+4),flags,magnitude,input.seconds,input.caller);
 }

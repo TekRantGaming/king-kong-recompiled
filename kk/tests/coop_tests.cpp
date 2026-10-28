@@ -82,7 +82,7 @@ struct Pair {
   }
 };
 void Protocol() {
-  static_assert(kProtocolVersion == 32);
+  static_assert(kProtocolVersion == 33);
   constexpr std::array types{MessageType::Hello, MessageType::HelloAck, MessageType::Reject,
       MessageType::Ping, MessageType::Pong, MessageType::PlayerPose, MessageType::Bye,
       MessageType::EnemySnapshot, MessageType::EnemyEvent, MessageType::ShotIntent,
@@ -120,6 +120,7 @@ void Protocol() {
     input.camera.generation=9; input.camera.level=101; input.camera.cut=1;
     input.story={9,101,1,123,456,1,kStoryRecords,StoryPhase::Armed};
     input.object={9,101,1,123,ObjectKind::Breakable,1};
+    input.object.direction={1,0,0};
     input.shot_receipt={{101,1,1},1,ShotReject::Origin,false};
     input.digest.generation=9; input.digest.level=101; input.digest.sweep=1;
     input.digest.enemy_world={101,0,1};

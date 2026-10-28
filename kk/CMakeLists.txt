@@ -402,7 +402,7 @@ if(KK_DEV_TOOLS)
             event_pause event_dispatch event_owner_cap event_vision_guard event_network_defer
             unarmed_gait rebirth_adoption placement_floor placement_sight placement_side placement_wait void_guard
             support_member support_delayed_watch armed_copy_source invisible_gun digest_retired
-            human_return human_set_track reload_mark mirror_gate crab_unstick crab_player_unstick guest_probe)
+            human_return human_set_track reload_mark mirror_gate crab_unstick crab_player_unstick guest_probe barrier_relay)
         add_test(NAME coop-chaos-${case} COMMAND kk-chaos-tests ${case})
         set_tests_properties(coop-chaos-${case} PROPERTIES TIMEOUT 180 RUN_SERIAL TRUE ENVIRONMENT "COOP_MUT=")
     endforeach()

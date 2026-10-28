@@ -31,6 +31,7 @@ inline Message SteamProbeMessage(MessageType type) {
   m.camera.generation=1; m.camera.level=101; m.camera.cut=1; m.camera.time=1;
   m.story={1,101,1,123,456,1,kStoryRecords,StoryPhase::Armed};
   m.object={1,101,1,123,ObjectKind::Breakable,1};
+  m.object.direction={1,0,0};
   m.digest.generation=1; m.digest.level=101; m.digest.sweep=1;
   m.digest.enemy_world={101,0,1};
   m.digest.script_count=kDigestScriptsPerPage; m.digest.enemy_count=kDigestEnemiesPerPage;

@@ -12,9 +12,8 @@
 
 namespace kk::coop {
 constexpr uint32_t kMagic = 0x4B4B4331;  // KKC1, network byte order throughout
-// 32: union of 31 (audited native attack cues, scorpion grab status) and 27 (native authored birth provenance,
-// player capabilities, door retirement, story Stopped phase).
-constexpr uint16_t kProtocolVersion = 32;
+// 33: native barrier hit direction, retained with damage and raw requests.
+constexpr uint16_t kProtocolVersion = 33;
 constexpr size_t kMaxDisplayNameBytes = 32;
 // Valid UTF-8, no controls or invisible direction/line formatting, bounded at a codepoint.
 // Empty or wholly invalid input becomes "Partner". Never log the input or result.
@@ -79,6 +78,7 @@ struct ObjectState {
   RaftState raft; // Appends58 bytes. Raft value2 withdraws with zero scalars/default raft data. No raft requests.
   CollapseState collapse;
   SupportBodyState body;
+  std::array<float,3> direction{}; // Breakable only. Native hit vector, not a pose or a pointer.
   auto operator<=>(const ObjectState&) const = default;
 };
 bool ValidObjectState(const ObjectState& object);
