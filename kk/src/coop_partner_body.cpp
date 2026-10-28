@@ -1805,9 +1805,18 @@ void CensusAndSelect(PPCContext& ctx, uint8_t* b, uint32_t w) {
       if (coop::puppet::PreferStoryCopy(facts[pick-candidates.data()],
               s.humans.at(pick->rig.actor).story_copy_failed) && Registered(b, w, pick->rig.actor)) {
         std::vector<uint8_t> copyable(candidates.size());
-        for (std::size_t i = 0; i < candidates.size(); ++i)
-          copyable[i] = !s.humans.at(candidates[i].rig.actor).story_copy_failed &&
-              Registered(b, w, candidates[i].rig.actor);
+        // Same source rules as the tier C copy below: intact, stable, not retired.
+        for (std::size_t i = 0; i < candidates.size(); ++i) {
+          const auto& c = candidates[i];
+          const auto& o = s.humans.at(c.rig.actor);
+          copyable[i] = !*c.reason && !o.other_human && !o.story_copy_failed && o.stable >= 1 &&
+              !s.retired.count(c.rig.actor) && Registered(b, w, c.rig.actor);
+#if defined(KK_DEV_TOOLS)
+          REXLOG_INFO("PUPPET story-copy source actor={:08X} slot={} copyable={} animations={} tier={} reason={}",
+              c.rig.actor, Load32(b, c.rig.vars+4), copyable[i], facts[i].animation_support,
+              coop::puppet::BodyTier(facts[i]), *c.reason ? c.reason : "ok");
+#endif
+        }
         const std::size_t before = pick-candidates.data();
         const auto armed = coop::puppet::PreferArmedCopySource(facts, before, copyable);
         if (armed != before) {

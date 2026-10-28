@@ -862,17 +862,20 @@ void PartnerSelection() {
     auto carl=story; carl.actor=110; carl.animation_support=4; carl.mission_distance=30;
     auto crew=story; crew.actor=111; crew.animation_support=5; crew.mission_distance=2; crew.cinematic=true;
     const AutoCandidate sources[]{carl,crew,spare};
-    const uint8_t all[]{1,1,1}, failed[]{1,0,1};
+    const uint8_t all[]{1,1,1}, failed[]{1,0,1}, two[]{1,1};
     Check(SelectBody(sources)==2,"safe spare still wins the normal selection");
     Check(PreferArmedCopySource(sources,0,all)==1,"a story copy takes the armed source over unarmed Carl");
     Check(PreferArmedCopySource(sources,0,failed)==0,"a failed armed copy falls back to the chosen source");
     Check(PreferArmedCopySource(sources,1,all)==1,"an armed choice is kept");
     auto still=crew; still.animation_support=1;
     const AutoCandidate no_gait[]{carl,still};
-    Check(PreferArmedCopySource(no_gait,0,all)==0,"never trade loaded walking clips for a gun");
+    Check(PreferArmedCopySource(no_gait,0,two)==0,"never trade loaded walking clips for a gun");
+    auto busy=crew; busy.current_script_use=true;
+    const AutoCandidate scripted[]{carl,busy};
+    Check(PreferArmedCopySource(scripted,0,two)==1,"a copy may come from a human the story is using");
     auto ann=crew; ann.ann=true;
     const AutoCandidate protected_sources[]{carl,ann};
-    Check(PreferArmedCopySource(protected_sources,0,all)==0,"Ann and other rejected humans are never copy sources");
+    Check(PreferArmedCopySource(protected_sources,0,two)==0,"Ann and other rejected humans are never copy sources");
     const uint8_t short_flags[]{1};
     Check(PreferArmedCopySource(sources,0,short_flags)==0,"mismatched flags keep the original pick");
   }
