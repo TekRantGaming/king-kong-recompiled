@@ -2144,11 +2144,20 @@ void CombatBeforeAi(PPCContext& ctx, uint8_t* b) {
 void DevDie(PPCContext& ctx, uint8_t* b) {
   struct Die {
     double due=-1, next_log=0; bool done=false, host=false, hurt=false;
-    unsigned queued=0;
+    unsigned queued=0, deaths=0, limit=1;
     uint32_t world=0, hero=0, vars=0;
     std::optional<PlayerCondition> observed;
+    // C110: KK_DEV_C110_REVIVE_BITE=1 bites again in the first frame Jack is
+    // alive in a new world after each death (the c104-legacy302 06:23:52
+    // timing: a bite queued in the revive frame), KK_DEV_DIE_COUNT deaths.
+    bool revive_bite=false, wait_new_world=false;
     Die() {
       const char* role=std::getenv("KK_DEV_DIE_HOST"); host=role && std::strcmp(role,"1")==0;
+      if (const char* r=std::getenv("KK_DEV_C110_REVIVE_BITE")) { revive_bite=std::strcmp(r,"1")==0; if (revive_bite) limit=6; }
+      if (const char* c=std::getenv("KK_DEV_DIE_COUNT")) {
+        char* end=nullptr; const auto v=std::strtoul(c,&end,10);
+        if (end!=c && !*end && v>=1 && v<=60 && revive_bite) limit=unsigned(v);
+      }
       const char* value=std::getenv("KK_DEV_DIE"); if (!value || !*value) return;
       char* end=nullptr; const double t=std::strtod(value,&end);
       if (end!=value && !*end && std::isfinite(t) && t>=0 && t<=3600) due=t;
@@ -2171,8 +2180,18 @@ void DevDie(PPCContext& ctx, uint8_t* b) {
       flow.policy!=ChapterPolicy::Together || !DevWorld(b,world)) return;
   const auto h=ReadHumanStatus(b);
   if (!h) return;
+  if (die.wait_new_world) {
+    if ((world==die.world && h->hero==die.hero && h->vars==die.vars) || h->condition!=PlayerCondition::Alive) return;
+    die.wait_new_world=false; die.queued=0; die.hurt=false; die.observed.reset(); die.due=t;
+    REXLOG_INFO("KK dev die: C110 revive bite armed world={:08X} hero={:08X} cycle {} of {}",world,h->hero,die.deaths+1,die.limit);
+  }
   if (die.queued && (die.world!=world || die.hero!=h->hero || die.vars!=h->vars)) {
-    die.done=true; REXLOG_WARN("KK dev die: stopped, world/Jack changed before observed death"); return;
+    if (die.revive_bite) {
+      die.queued=0; die.hurt=false; die.observed.reset();
+      REXLOG_INFO("KK dev die: C110 world/Jack changed with a queued bite; biting again in the new world");
+    } else {
+      die.done=true; REXLOG_WARN("KK dev die: stopped, world/Jack changed before observed death"); return;
+    }
   }
   if (die.observed!=h->condition) {
     REXLOG_INFO("KK dev die: at {:.2f} role={} observed condition={}->{} value={:.3f} queued={} dead={:.3f} hurt={:.3f} recovered={:.3f}",
@@ -2181,8 +2200,11 @@ void DevDie(PPCContext& ctx, uint8_t* b) {
     die.observed=h->condition;
   }
   if (h->condition==PlayerCondition::Dead) {
-    die.done=true;
-    REXLOG_INFO("KK dev die: native death observed after {} queued bites; inspect PlayerDowned/private-load/teleport/PlayerRevived",die.queued);
+    ++die.deaths;
+    REXLOG_INFO("KK dev die: native death {} of {} observed after {} queued bites; inspect PlayerDowned/private-load/teleport/PlayerRevived",
+        die.deaths,die.limit,die.queued);
+    if (!die.revive_bite || die.deaths>=die.limit) { die.done=true; return; }
+    die.wait_new_world=true; die.world=world; die.hero=h->hero; die.vars=h->vars; die.due=t;
     return;
   }
   if (die.queued==1 && h->condition==PlayerCondition::Hurt) die.hurt=true;

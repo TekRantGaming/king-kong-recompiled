@@ -43,6 +43,16 @@ void BeforeFrappe(uint8_t* b) {
   s.native_default = Load32(b, hr::kDefaultTrack2);
   const uint32_t state = Load32(b, vars + hr::kVarsState);
   auto& c = Count();
+#if defined(KK_DEV_TOOLS)
+  // Evidence: every entry into the strike state, with the slots its end reads.
+  static uint64_t entries = 0, empty = 0;
+  const bool empty_end = hr::NativeEndChoice(s) == 0;
+  if (state != hr::kStateFrappe && (Report(++entries) || (empty_end && ++empty <= 200))) {
+    REXLOG_INFO("KK dev human strike: entry ai={:08X} actor={:08X} from-state={:X} old={:X} friend={:08X} b04={:08X} afc={:08X} b00={:08X} end-reads={:08X} n={}",
+        ai, Load32(b, hr::kAiObject), state, Load32(b, vars + hr::kVarsOldState), s.friend_object, s.b04, s.afc,
+        Load32(b, vars + hr::kVarsB00), hr::NativeEndChoice(s), entries);
+  }
+#endif
   if (state == hr::kStateHelp && Report(++c.help_entries)) {
     REXLOG_INFO("KK co-op human: strike from help ai={:08X} actor={:08X} friend={:08X} b04={:08X} afc={:08X} n={}",
         ai, Load32(b, hr::kAiObject), s.friend_object, s.b04, s.afc, c.help_entries);
@@ -73,8 +83,13 @@ bool RefuseSetTrack(PPCContext& ctx, uint8_t* b) {
   Store32(b, hr::kAiTargetObject, Load32(b, hr::kAiObject));
   auto& c = Count();
   if (Report(++c.refused)) {
-    REXLOG_WARN("KK co-op human: refused a null state ai={:08X} track={} current={:08X} lr={:08X} (n={})",
-        ai, track, current, uint32_t(ctx.lr), c.refused);
+    const uint32_t vars = Load32(b, ai + hr::kAiVars);
+    const bool v = kk::coop::PoseAddress(vars, hr::kVarsFriend + 4);
+    REXLOG_WARN("KK co-op human: refused a null state ai={:08X} track={} current={:08X} lr={:08X} state={:X} old={:X} "
+        "friend={:08X} b04={:08X} afc={:08X} (n={})",
+        ai, track, current, uint32_t(ctx.lr), v ? Load32(b, vars + hr::kVarsState) : 0,
+        v ? Load32(b, vars + hr::kVarsOldState) : 0, v ? Load32(b, vars + hr::kVarsFriend) : 0,
+        v ? Load32(b, vars + hr::kVarsB04) : 0, v ? Load32(b, vars + hr::kVarsAfc) : 0, c.refused);
   }
   return true;
 }
