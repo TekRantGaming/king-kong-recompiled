@@ -559,6 +559,10 @@ bool SessionBeforeGo(PPCContext& ctx,uint8_t* base,uint32_t g) {
     return true;
   }
   if (!v.host && v.checkpoint!=recorded_checkpoint && v.policy==ChapterPolicy::Together) {
+#if defined(KK_DEV_TOOLS)
+    REXLOG_INFO("KK dev checkpoint trace: guest mirrors host checkpoint generation {} level {} G start point {} -> {} (recorded {})",
+        v.world.generation,v.world.level,Load32(base,g+12),v.checkpoint,recorded_checkpoint);
+#endif
     recorded_checkpoint=v.checkpoint; Store32(base,g+12,v.checkpoint);
     local_checkpoint=v.checkpoint;
     const auto saved=ctx; __imp__sub_82413190(ctx,base); ctx=saved;

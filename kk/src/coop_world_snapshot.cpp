@@ -59,6 +59,7 @@ uint32_t generation=0,level=0;
 unsigned sample=0;
 double playing_at=0,next=0;
 uint32_t checkpoint_level=0,checkpoint_generation=0;
+unsigned checkpoint_loads=0;
 uint64_t checkpoint_epoch=0;
 std::set<uint32_t> load_checkpoints;
 std::set<uint32_t> observed_checkpoints;
@@ -148,6 +149,7 @@ Json Snapshot(uint8_t* b,double now,const FlowView& v,const EnemyLink& link) {
 bool RouteStopped() { return Opt().enabled && playing_at && Now()-playing_at>=Opt().route; }
 void Loaded(const uint8_t* b) {
   load_checkpoints.clear(); observed_checkpoints.clear(); checkpoint_epoch=0; checkpoint_level=checkpoint_generation=0;
+  ++checkpoint_loads;
   if (!Opt().enabled || !b) return;
   const auto v=SessionFlowSnapshot(); const auto link=WorldDevLinkSnapshot();
   const auto game=hfr::Load32(b,0x82CC97C0);
@@ -173,6 +175,66 @@ void CheckpointEntering(const uint8_t* b) {
   if (id<=65535 && observed_checkpoints.insert(id).second)
     REXLOG_INFO("KK dev world: checkpoint observed level={} generation={} id={} before ES_CheckPoint native effects",
         checkpoint_level,checkpoint_generation,id);
+}
+// C123: checkpoint objects (model has ES_CheckPoint) for the first seconds after
+// each load: disabled bit, AI table membership, live tracks, start point.
+void CheckpointTrace(const uint8_t* b,const char* where) {
+  using namespace hfr;
+  static std::map<uint32_t,std::string> last;
+  static uint64_t traced_epoch=0; static uint32_t traced_generation=0; static double since=0; static uint32_t last_point=~0u;
+  static unsigned traced_loads=0;
+  if (!Opt().enabled || !b || !checkpoint_epoch) return;
+  if (traced_epoch!=checkpoint_epoch || traced_generation!=checkpoint_generation || traced_loads!=checkpoint_loads) {
+    last.clear(); since=Now(); last_point=~0u;
+    traced_epoch=checkpoint_epoch; traced_generation=checkpoint_generation; traced_loads=checkpoint_loads;
+  }
+  if (Now()-since>5) return;
+  const auto g=Load32(b,0x82CC97C0);
+  const auto point=PoseAddress(g,28) ? Load32(b,g+12) : ~0u;
+  if (point!=last_point) {
+    REXLOG_INFO("KK dev checkpoint trace: {} G start point {} -> {}",where,int32_t(last_point),int32_t(point));
+    last_point=point;
+  }
+  const auto w=Load32(b,0x828E8388);
+  if (!PoseAddress(w,308)) return;
+  const auto begin=Load32(b,w+40),end=Load32(b,w+28);
+  const auto sbegin=Load32(b,w+304),send=Load32(b,w+292);
+  if (!PoseAddress(begin) || !PoseAddress(end) || end<begin || (end-begin)%8 || end-begin>8*20000) return;
+  std::set<uint32_t> scheduled;
+  if (PoseAddress(sbegin) && PoseAddress(send) && send>sbegin && !((send-sbegin)%8) && send-sbegin<=8*20000)
+    for (auto p=sbegin;p<send;p+=8) scheduled.insert(Load32(b,p));
+  for (auto p=begin;p<end;p+=8) {
+    const auto actor=Load32(b,p);
+    if (!PoseAddress(actor,28)) continue;
+    const auto ext=Load32(b,actor+24); if (!PoseAddress(ext,48)) continue;
+    const auto ai=Load32(b,ext+4); if (!PoseAddress(ai,88)) continue;
+    const auto model=Load32(b,ai);
+    bool cp=false;
+    if (PoseAddress(model,12)) {
+      const auto count=Load32(b,model+8),programs=Load32(b,model+4);
+      if (count && count<=512 && PoseAddress(programs,count*4))
+        for (unsigned m=0;m<count && !cp;++m) {
+          const auto block=Load32(b,programs+m*4);
+          cp=PoseAddress(block,24) && Load32(b,block+20)==0x826437D0;
+        }
+    }
+    if (!cp) continue;
+    std::string sig=fmt::format("flags={:08X} ext28={:08X} scheduled={}",Load32(b,actor+4),Load32(b,ext+0x28),scheduled.contains(actor));
+    const auto vars=Load32(b,ai+64);
+    if (PoseAddress(vars,0x2580))
+      sig+=fmt::format(" id={} zone={} both={} off={} bit={}/{} fired={} test={:08X}",Load32(b,vars+4),Load32(b,vars+0x2544),
+          Load32(b,vars+0x2548),Load32(b,vars+0x254C),Load32(b,vars+0x2550),int32_t(Load32(b,vars+0x2554)),Load32(b,vars+0x2578),
+          Load32(b,vars+0x2494));
+    sig+=" tracks=";
+    const auto first=Load16(b,ai+80),lastt=Load16(b,ai+82);
+    if (first<=lastt && lastt<=4096 && lastt-first<64 && PoseAddress(ai,(lastt+7)*4))
+      for (unsigned t=first;t<=lastt;++t) {
+        const auto block=Load32(b,ai+(t+6)*4);
+        sig+=fmt::format("{:08X},",PoseAddress(block,24) ? Load32(b,block+20) : 0);
+      }
+    auto& old=last[actor];
+    if (old!=sig) { REXLOG_INFO("KK dev checkpoint trace: {} actor={:08X} {}",where,actor,sig); old=sig; }
+  }
 }
 void Frame(uint8_t* b) {
   auto& opt=Opt(); if (!opt.enabled || !b) return;

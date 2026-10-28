@@ -5134,11 +5134,21 @@ REX_HOOK_RAW(sub_8271D498) {
 #if defined(KK_DEV_TOOLS)
   kk::DevSampleTick(&ctx, base, world);
 #endif
-  if (uint32_t(ctx.lr)==0x82881CF0) kk::coop::RestoreRaptorPlayers(base);
+  const bool main_pass=uint32_t(ctx.lr)==0x82881CF0;
+  if (main_pass) kk::coop::RestoreRaptorPlayers(base);
+#if defined(KK_DEV_TOOLS)
+  if (main_pass) kk::coop::world::CheckpointTrace(base,"before-ai");
+#endif
   kk::PartnerBodyBeforeAi(ctx, base, world);
   kk::coop::ObjectsBeforeAi(ctx,base,world);
   kk::coop::BeforeAi(ctx, base, world);
+#if defined(KK_DEV_TOOLS)
+  if (main_pass) kk::coop::world::CheckpointTrace(base,"dispatch");
+#endif
   __imp__sub_8271D498(ctx, base);
+#if defined(KK_DEV_TOOLS)
+  if (main_pass) kk::coop::world::CheckpointTrace(base,"after-ai");
+#endif
   kk::PartnerBodyAfterAi(ctx, base, world);
   kk::coop::AfterAi(ctx, base, world);
   kk::coop::ObjectsAfterAi(ctx,base,world);
