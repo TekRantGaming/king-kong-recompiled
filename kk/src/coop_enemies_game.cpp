@@ -3939,7 +3939,10 @@ bool EnemyDamageEnqueue(PPCContext& ctx, uint8_t* b, uint32_t body) {
       // Bat contact produces its sound immediately after its hit. Defer this
       // one native call until the next normal flush so that an actual successful
       // sound creation can annotate the unsent hit. Other attacks keep their path.
-      const bool defer_sound=source==bat_contact_actor && damage.enemy.family==EnemyFamily::Bat && combat::NativeAttackSound(damage);
+      // Crab and small crawler cues follow their contacts in the same native
+      // state call, with that actor running.
+      const bool defer_sound=combat::NativeAttackSound(damage) && combat::CueAfterContact(damage.enemy.family) &&
+          (damage.enemy.family==EnemyFamily::Bat ? source==bat_contact_actor : source==Load32(b,0x82CCBF6C));
       if (s.outgoing_damage.empty() && !defer_sound && SubmitCombat(m, Now())) { queued = true; ++s.hits_queued; }
       else if (s.outgoing_damage.size() < combat::kQueueLimit) { s.outgoing_damage.push_back({m, Now()}); queued = true; }
       if (queued) ++s.next_damage;
@@ -4251,6 +4254,25 @@ REX_HOOK_RAW(sub_823FCF58) {
       d.attack_sound=true;
 #if defined(KK_DEV_TOOLS)
       REXLOG_INFO("COOP SOUND owner native-contact source={:08X} number={} generation={} code=10 created=true native-hit-unsent=true",actor,d.number,authority->generation);
+#endif
+      break;
+    }
+    return;
+  }
+  if (const auto after=kk::coop::combat::AfterContactSite(caller,resource); after!=kk::coop::EnemyFamily::None) {
+    const auto* owner=kk::coop::CombatOwner(base,after);
+    if (!owner || owner->actor!=actor) return;
+    const auto* authority=kk::coop::AuthorityFor(owner->id);
+    auto& outgoing=kk::coop::Get().outgoing_damage;
+    for (auto it=outgoing.rbegin();it!=outgoing.rend();++it) {
+      auto& d=it->message.damage;
+      if (it->message.type!=kk::coop::MessageType::DamageEvent ||
+          !kk::coop::combat::AfterContactSound(d,kk::coop::Canonical(owner->id),authority->generation,caller,resource,kk::coop::Now())) continue;
+      d.attack_sound=true;
+#if defined(KK_DEV_TOOLS)
+      static unsigned lines=0;
+      if (lines++<64) REXLOG_INFO("COOP SOUND owner native-after-contact source={:08X} family={} number={} generation={} code={} caller={:08X} created=true native-hit-unsent=true",
+          actor,uint16_t(after),d.number,authority->generation,resource,caller);
 #endif
       break;
     }

@@ -491,6 +491,37 @@ void CentipedeContactSound() {
   Check(Encode(m,wire) && Decode(wire,decoded) && decoded.damage.attack_sound &&
       combat::NativeAttackSoundResource(decoded.damage)==8,"leap cue survives the real damage codec with its hit");
 }
+void AfterContactSound() {
+  using F=EnemyFamily;
+  DamageEvent crab{{101,1,5},9,7,{55,2,F::Crab},0x1000,5,{1,0,0}};
+  crab.generation=3; crab.time=10; crab.part=64;
+  Check(combat::CueAfterContact(F::Crab) && combat::CueAfterContact(F::SwampCrawlerSmall) &&
+      !combat::CueAfterContact(F::Scorpion) && !combat::CueAfterContact(F::Centipede),"only cues after contact defer the hit");
+  Check(combat::AfterContactSound(crab,crab.enemy,3,0x8265CA8C,8,10.05),"crab fight cue right after its contact annotates it");
+  Check(!combat::AfterContactSound(crab,crab.enemy,3,0x8265CBB0,8,10.05),"other crab sound sites cannot annotate");
+  Check(!combat::AfterContactSound(crab,crab.enemy,3,0x8265CA8C,9,10.05),"other crab resources excluded");
+  Check(!combat::AfterContactSound(crab,crab.enemy,4,0x8265CA8C,8,10.05),"cue cannot cross an authority generation");
+  Check(!combat::AfterContactSound(crab,crab.enemy,3,0x8265CA8C,8,10.2),"a late cue cannot annotate an older hit");
+  auto other=crab; other.enemy.source++;
+  Check(!combat::AfterContactSound(other,crab.enemy,3,0x8265CA8C,8,10.05),"cue belongs to its exact source");
+  other=crab; other.magnitude=10;
+  Check(!combat::AfterContactSound(other,other.enemy,3,0x8265CA8C,8,10.05),"other crab hit pairs cannot carry a cue");
+  other=crab; other.attack_sound=true;
+  Check(!combat::AfterContactSound(other,other.enemy,3,0x8265CA8C,8,10.05),"an annotated hit is not annotated twice");
+  DamageEvent small{{702,1,5},9,8,{77,1,F::SwampCrawlerSmall},0x1000,6,{0,1,0}};
+  small.generation=1; small.time=20;
+  for (const uint32_t caller:{0x825FBC50u,0x825FBD24u})
+    Check(combat::AfterContactSound(small,small.enemy,1,caller,7,20.01),"small crawler cue right after its contact annotates it");
+  Check(!combat::AfterContactSound(small,small.enemy,1,0x8265CA8C,8,20.01),"a crab site cannot annotate a crawler hit");
+  small.attack_sound=true;
+  Check(ValidDamageEvent(small) && combat::NativeAttackSoundResource(small)==7,"crawler hit carries native resource7");
+  crab.attack_sound=true;
+  Check(ValidDamageEvent(crab) && combat::NativeAttackSoundResource(crab)==8,"crab hit carries native resource8");
+  Message m; m.type=MessageType::DamageEvent; m.epoch=9; m.damage=crab;
+  std::vector<uint8_t> wire; Message decoded;
+  Check(Encode(m,wire) && Decode(wire,decoded) && decoded.damage.attack_sound &&
+      combat::NativeAttackSoundResource(decoded.damage)==8,"crab cue survives the real damage codec");
+}
 void BodyHitClass() {
   using B=combat::BodyHit;
   Check(combat::ClassifyBodyHit(true,true,true)==B::Relayed,"audited owned enemy hit is relayed");
@@ -545,6 +576,7 @@ int main(int argc,char** argv) {
   else if(name=="raptor_bite_sound") RaptorBiteSound();
   else if(name=="centipede_contact_sound") CentipedeContactSound();
   else if(name=="body_hit_class") BodyHitClass();
+  else if(name=="after_contact_sound") AfterContactSound();
   else if(name=="udp_duplicate" || name=="udp_order") Reliable();
   else { std::fprintf(stderr,"unknown test\n"); return 2; }
   std::printf("PASS [%s]\n",test_name); return 0;

@@ -27,6 +27,7 @@
     "raptor_camera": "raptor_camera",
     "raptor_bite_sound": "raptor_bite_sound",
     "centipede_contact_sound": "centipede_contact_sound",
-    "body_hit_class": "body_hit_class"
+    "body_hit_class": "body_hit_class",
+    "after_contact_sound": "after_contact_sound"
   }
 }

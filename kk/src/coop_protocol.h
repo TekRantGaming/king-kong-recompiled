@@ -12,7 +12,7 @@
 
 namespace kk::coop {
 constexpr uint32_t kMagic = 0x4B4B4331;  // KKC1, network byte order throughout
-constexpr uint16_t kProtocolVersion = 31; // Audited native centipede leap sound may accompany its real hit.
+constexpr uint16_t kProtocolVersion = 31; // Audited native centipede, crab and small crawler cues may accompany their real hits.
 constexpr size_t kMaxDisplayNameBytes = 32;
 // Valid UTF-8, no controls or invisible direction/line formatting, bounded at a codepoint.
 // Empty or wholly invalid input becomes "Partner". Never log the input or result.

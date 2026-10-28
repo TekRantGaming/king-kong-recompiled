@@ -57,11 +57,34 @@ inline bool NativeAttackSound(const DamageEvent& d) {
       (d.enemy.family==EnemyFamily::Bat && d.flags==2 && d.magnitude==2) ||
       (d.enemy.family==EnemyFamily::Raptor && d.flags==0x4104 && d.magnitude==1000) ||
       (d.enemy.family==EnemyFamily::Centipede && ((d.flags==3 && d.magnitude==10) ||
-        (d.flags==0x1001 && (d.magnitude==10 || d.magnitude==5)))));
+        (d.flags==0x1001 && (d.magnitude==10 || d.magnitude==5)))) ||
+      // Crab CR_ETAT_FIGHT8265BF60 and small crawler SCS_exec_hit825FB8D8
+      // play their cue right after the contact (sound8 and sound7).
+      (d.enemy.family==EnemyFamily::Crab && d.flags==0x1000 && d.magnitude==5) ||
+      (d.enemy.family==EnemyFamily::SwampCrawlerSmall && d.flags==0x1000 && d.magnitude==6));
 }
 inline uint32_t NativeAttackSoundResource(const DamageEvent& d) {
   return NativeAttackSound(d) ? (d.enemy.family==EnemyFamily::Bat ? 10:
-      d.enemy.family==EnemyFamily::Raptor ? 7:8):0;
+      d.enemy.family==EnemyFamily::Raptor || d.enemy.family==EnemyFamily::SwampCrawlerSmall ? 7:8):0;
+}
+// Families whose native cue follows the contact, so the hit waits for the next
+// normal flush and only an actual successful cue call may annotate it.
+inline bool CueAfterContact(EnemyFamily family) {
+  return family==EnemyFamily::Bat || family==EnemyFamily::Crab || family==EnemyFamily::SwampCrawlerSmall;
+}
+inline EnemyFamily AfterContactSite(uint32_t caller,uint32_t resource) {
+  // Crab: contact builder8265CA40 (V+1104 flags, magnitude5), then sound8 at8265CA8C.
+  // Small crawler: contacts825FBC44 and825FBD18 (4096/6), then sound7 at825FBC50/825FBD24.
+  if (caller==0x8265CA8C && resource==8) return EnemyFamily::Crab;
+  if ((caller==0x825FBC50 || caller==0x825FBD24) && resource==7) return EnemyFamily::SwampCrawlerSmall;
+  return EnemyFamily::None;
+}
+inline bool AfterContactSound(const DamageEvent& d,EnemyId source,uint32_t generation,
+                              uint32_t caller,uint32_t resource,double now) {
+  if (COOP_MUT_IF("after_contact_sound")) return true;
+  const auto family=AfterContactSite(caller,resource);
+  return family!=EnemyFamily::None && d.enemy.family==family && !d.attack_sound && NativeAttackSound(d) &&
+      d.enemy==source && d.generation==generation && Fresh(d.time,now) && now-d.time<=.1;
 }
 inline bool CentipedeContactSound(EnemyFamily family,uint32_t caller,uint32_t resource) {
   if (COOP_MUT_IF("centipede_contact_sound")) return true;
