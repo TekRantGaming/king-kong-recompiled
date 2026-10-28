@@ -19,6 +19,12 @@ struct State {
   std::vector<WorldEnemy> enemies;
   std::vector<WorldProbe> probes;
 };
+inline bool AuditFollows(const WorldAudit& next,const WorldAudit& previous,uint32_t host_sweep) {
+  // A guest process may restart within the same campaign and load generation.
+  // Its counters restart, while the host's sweep remains the ordering clock.
+  return next.sweep && next.sweep<=host_sweep &&
+      (COOP_MUT_IF("digest_audit_order") || next.sweep>=previous.sweep);
+}
 // Reliable pages are self-contained and versioned. Incomplete, stale, duplicate,
 // inconsistent or oversized sweeps never become evidence of a divergent world.
 class Assembly {

@@ -28,8 +28,8 @@ double next_sample=0,grace=0,received_at=0,next_status=0,pending_at=0;
 desync::Tier pending=desync::Tier::None,in_flight=desync::Tier::None;
 EnemyWorld recovery_world;
 std::atomic<uint64_t> summary_epoch{0},quiet_count{0},move_count{0},reload_count{0};
-uint64_t samples=0;
-uint64_t captures=0;
+std::atomic<uint64_t> samples{0},captures{0};
+std::array<std::atomic<uint64_t>,4> peer_summary{};
 WorldAudit audit,peer_audit;
 double peer_audit_at=0,next_audit=0;
 uint64_t pages_received=0,pages_sent=0,rejected_age=0,rejected_pose=0,rejected_scope=0,capture_failed=0;
@@ -42,7 +42,7 @@ void Status(const FlowView& v,double now,const char* gate) {
   next_status=now+60;
   const auto& a=v.host ? peer_audit:audit;
   REXLOG_INFO("KK co-op sync minute: role={} generation={} level={} gate={} captures={} pages-sent={} pages-received={} samples={} diffs-enemies={} diffs-npcs={} diffs-story={} diffs-objects={} diffs-players={} quiet={} moves={} guest-reloads={} peer-report-age={:.1f} rejected-age={} rejected-pose={} rejected-scope={} capture-failed={}; NPCs=observed-human-slots objects=bound-controllers players=world-and-checkpoint",
-      v.host ? "host":"guest",generation,level,gate,captures,pages_sent,pages_received,a.samples,
+      v.host ? "host":"guest",generation,level,gate,captures.load(),pages_sent,pages_received,a.samples,
       a.diffs[0],a.diffs[1],a.diffs[2],a.diffs[3],a.diffs[4],a.quiet,a.moves,a.reloads,
       v.host && peer_audit_at ? now-peer_audit_at:-1.,rejected_age,rejected_pose,rejected_scope,capture_failed);
 }
@@ -88,6 +88,7 @@ void Scope(const FlowView& v,uint64_t current,double now) {
   if (generation==v.world.generation && level==v.world.level) return;
   generation=v.world.generation; level=v.world.level; guard={}; assembly={}; received.reset(); outgoing.clear();
   audit={}; audit.generation=generation; audit.level=level; peer_audit={}; peer_audit_at=next_audit=0;
+  for (auto& count:peer_summary) count=0;
   pages_received=pages_sent=rejected_age=rejected_pose=rejected_scope=capture_failed=0;
   pending=in_flight=desync::Tier::None; recovery_world={}; sweep=0; grace=now+20; next_sample=now+3; next_status=now;
 }
@@ -125,8 +126,10 @@ void WorldGuardReceive(const Message& m) {
     if (!v.host || !v.active || v.policy!=ChapterPolicy::Together || m.epoch!=StorySessionEpoch() ||
         m.audit.generation!=v.world.generation || m.audit.level!=v.world.level) return;
     Scope(v,m.epoch,now);
-    if (m.audit.sweep<peer_audit.sweep || m.audit.sweep>sweep || m.audit.samples<peer_audit.samples) return;
-    peer_audit=m.audit; peer_audit_at=now; return;
+    if (!desync::AuditFollows(m.audit,peer_audit,sweep)) return;
+    peer_audit=m.audit; peer_audit_at=now;
+    peer_summary[0]=m.audit.samples; peer_summary[1]=m.audit.quiet;
+    peer_summary[2]=m.audit.moves; peer_summary[3]=m.audit.reloads; return;
   }
   if (v.host || !v.active || v.policy!=ChapterPolicy::Together || m.epoch!=StorySessionEpoch() ||
       m.digest.generation!=v.world.generation || m.digest.level!=v.world.level || m.digest.start!=v.world.start) { ++rejected_scope; return; }
@@ -139,8 +142,9 @@ void WorldGuardFrame(uint8_t* base) {
   if (now-pending_at>4) pending=desync::Tier::None;
   if (!REXCVAR_GET(kk_coop_enabled) || !base || !v.active || v.phase==FlowPhase::Failed ||
       link.session_state==SessionState::Ended) { WorldGuardSummary(); pending=desync::Tier::None; return; }
-  if (!v.world.generation || !link.epoch) return;
-  Scope(v,link.epoch,now);
+  const auto session_epoch=StorySessionEpoch();
+  if (!v.world.generation || !session_epoch) return;
+  Scope(v,session_epoch,now);
   const char* gate=v.phase!=FlowPhase::Playing ? "flow" : v.policy!=ChapterPolicy::Together ? "independent" :
       !link.connected ? "link" : SessionPrivateReload() || SessionCheckpointCatchup() ? "private-load" :
       play::StartLevelLoading() || play::CoverScreen() ? "loading" :
@@ -236,7 +240,7 @@ void WorldGuardCancelled(desync::Tier tier) {
 void WorldGuardSummary() {
   const auto ended=summary_epoch.exchange(0);
   if (ended) REXLOG_INFO("KK co-op desync session-end: local quiet={} moves={} guest-reloads={} captures={} samples={}; guest-report samples={} quiet={} moves={} guest-reloads={}",
-      quiet_count.load(),move_count.load(),reload_count.load(),captures,samples,
-      peer_audit.samples,peer_audit.quiet,peer_audit.moves,peer_audit.reloads);
+      quiet_count.load(),move_count.load(),reload_count.load(),captures.load(),samples.load(),
+      peer_summary[0].load(),peer_summary[1].load(),peer_summary[2].load(),peer_summary[3].load());
 }
 } // namespace kk::coop

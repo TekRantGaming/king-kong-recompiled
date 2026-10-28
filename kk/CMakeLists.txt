@@ -395,7 +395,7 @@ if(KK_DEV_TOOLS)
         target_link_libraries(kk-chaos-tests PRIVATE ws2_32)
     endif()
     foreach(case model profiles outages ownership_generation story_duplicate story_world
-            digest_compare digest_quiet_progress digest_probes false_quiet shot_validator session_epoch udp_duplicate udp_order
+            digest_compare digest_quiet_progress digest_probes digest_audit_order false_quiet shot_validator session_epoch udp_duplicate udp_order
             projectile_source impact_selector grab_feedback attack_sound grab_start native_script_target
             bat_contact_sound raptor_camera raptor_bite_sound centipede_contact_sound body_hit_class after_contact_sound
             story_native_stop cancelled_activation

@@ -1167,6 +1167,13 @@ void DigestProbes() {
   Check(desync::CompareProbes(host,{})==std::array<uint64_t,2>{1,1},"missing local native identities are visible");
   Check(desync::CompareProbes({},host)==std::array<uint64_t,2>{1,1},"extra local native identities are visible");
 }
+void DigestAuditOrder() {
+  WorldAudit old; old.sweep=10; old.samples=40;
+  auto next=old; next.sweep=11; next.samples=1;
+  Check(desync::AuditFollows(next,old,12),"new guest process can restart counters in the same campaign");
+  next.sweep=9; Check(!desync::AuditFollows(next,old,12),"older host sweep cannot overwrite current evidence");
+  next.sweep=13; Check(!desync::AuditFollows(next,old,12),"unsent host sweep cannot become evidence");
+}
 int main(int argc,char** argv) {
   if(argc!=2) { std::fprintf(stderr,"choose one named chaos test\n"); return 2; }
   test_name=argv[1]; const std::string_view name(test_name);
@@ -1181,6 +1188,7 @@ int main(int argc,char** argv) {
   else if(name=="digest_compare") DigestCompare();
   else if(name=="digest_quiet_progress") DigestQuietProgress();
   else if(name=="digest_probes") DigestProbes();
+  else if(name=="digest_audit_order") DigestAuditOrder();
   else if(name=="false_quiet") FalseQuiet();
   else if(name=="unarmed_gait") UnarmedGait();
   else if(name=="rebirth_adoption") RebirthAdoption();

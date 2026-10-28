@@ -14,6 +14,7 @@
     "digest_compare": "digest_compare",
     "digest_quiet_progress": "digest_quiet_progress",
     "digest_probe_skip": "digest_probes",
+    "digest_audit_order": "digest_audit_order",
     "shot_validator": "shot_validator",
     "session_epoch": "session_epoch",
     "story_world": "story_world",
