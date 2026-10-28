@@ -13,6 +13,7 @@
 #include "coop_partner_body.h"
 #include "coop_world_snapshot.h"
 #include "coop_event_budget.h"
+#include "coop_guest_probe.h"
 #if defined(KK_DEV_TOOLS)
 #include "art.h"
 #include "dev_puppet_mesh.h"
@@ -37,6 +38,8 @@
 #include <fmt/format.h>
 #include <rex/hook.h>
 #include <rex/logging.h>
+#include <rex/system/kernel_state.h>
+#include <rex/system/xmemory.h>
 
 #include "hfr.h"
 #include "play_internal.h"
@@ -109,9 +112,74 @@ namespace {
 using namespace hfr;
 using Clock = std::chrono::steady_clock;
 
-bool Range(uint32_t p, uint32_t bytes) {
-  return p >= 0x40000000 && p < 0xA0000000 && !(p & 3) && bytes <= 0xA0000000 - p;
+// C119 (coop_guest_probe.h): while a probe scope is open, a span must also lie
+// in committed, readable guest pages. Used where other actors' chains are read
+// with the human rig layout (SpawnCopy alias checks). Outside a scope Range is
+// unchanged.
+struct GuestProbe {
+  bool on = false;
+  unsigned spans = 0, unreadable = 0;
+  uint32_t first = 0, first_bytes = 0;
+};
+thread_local GuestProbe guest_probe;
+bool DevC119Replay() {
+#if defined(KK_DEV_TOOLS)
+  // KK_DEV_C119_REPLAY=1: the probe still checks and logs each unreadable span,
+  // but reads it anyway (the c118-beach-fix6 behaviour, so it faults).
+  static const bool on = [] { const char* v = std::getenv("KK_DEV_C119_REPLAY"); return v && v[0] == '1'; }();
+  return on;
+#else
+  return false;
+#endif
 }
+bool GuestReadable(uint32_t p, uint32_t bytes) {
+  auto* memory = rex::system::kernel_memory();
+  if (!memory) return false;
+  return coop::guest_probe::Readable(p, bytes, [&](uint32_t a, coop::guest_probe::Region& r) {
+    auto* heap = memory->LookupHeap(a);
+    if (!heap || !heap->page_size()) return false;
+    // One page per answer: region_size is not trusted to start at this page.
+    const uint32_t page = a & ~(heap->page_size() - 1);
+    rex::memory::HeapAllocationInfo info{};
+    if (!heap->QueryRegionInfo(page, &info)) return false;
+    r.base = page; r.size = heap->page_size();
+    r.readable = (info.state & rex::memory::kMemoryAllocationCommit) &&
+        (info.protect & rex::memory::kMemoryProtectRead) && info.region_size;
+    return true;
+  });
+}
+bool Range(uint32_t p, uint32_t bytes) {
+  if (!(p >= 0x40000000 && p < 0xA0000000 && !(p & 3) && bytes <= 0xA0000000 - p)) return false;
+  if (!guest_probe.on) return true;
+  ++guest_probe.spans;
+  if (GuestReadable(p, bytes)) return true;
+  if (!guest_probe.unreadable++) { guest_probe.first = p; guest_probe.first_bytes = bytes; }
+  if (DevC119Replay()) {
+    REXLOG_WARN("PUPPET C119 replay: unreadable span {:08X}+{} read anyway", p, bytes);
+    return true;
+  }
+  return false;
+}
+// Opens a probe for one alias check and logs what it refused.
+class ProbeScope {
+ public:
+  explicit ProbeScope(const char* stage, bool quiet = false) : stage_(stage), quiet_(quiet), was_(guest_probe) {
+    guest_probe = {}; guest_probe.on = true;
+  }
+  ~ProbeScope() {
+    static unsigned quiet_logged = 0;
+    if ((guest_probe.unreadable && (!quiet_ || quiet_logged++ < 20)) || (DevC119Replay() && !quiet_))
+      REXLOG_INFO("PUPPET alias probe stage={} actors={} spans={} unreadable={} first={:08X}+{} replay={}",
+          stage_, actors, guest_probe.spans, guest_probe.unreadable, guest_probe.first, guest_probe.first_bytes,
+          DevC119Replay());
+    guest_probe = was_;
+  }
+  unsigned actors = 0;
+ private:
+  const char* stage_;
+  bool quiet_;
+  GuestProbe was_;
+};
 uint32_t Ptr(const uint8_t* b, uint32_t p, uint32_t offset, uint32_t bytes) {
   if (!Range(p, offset + 4)) return 0;
   const uint32_t q = Load32(b, p + offset);
@@ -1390,6 +1458,7 @@ bool SpawnCopy(PPCContext& ctx, uint8_t* b, uint32_t w, const Rig& source, const
   if (pooled && (!Range(pooled, 32) || existing.count(pooled) || IsSpawned(pooled) ||
       pooled == t || s.humans.count(pooled))) return refuse("pool-instance-not-spare");
   if (pooled) {
+    ProbeScope probe("pool");
     Rig spare;
     if (!ReadRig(b, pooled, spare) || !coop::puppet::Independent(Mutable(spare), Mutable(source)) ||
         !coop::puppet::Independent(Mutable(spare), Mutable(jack)) ||
@@ -1397,6 +1466,7 @@ bool SpawnCopy(PPCContext& ctx, uint8_t* b, uint32_t w, const Rig& source, const
       return refuse("pool-components-not-independent");
     for (const uint32_t other : existing) {
       Rig r;
+      ++probe.actors;
       if (ReadRig(b, other, r) && (!coop::puppet::Independent(Mutable(spare), Mutable(r)) ||
           !IndependentControllers(b, spare, r)))
         return refuse("pool-aliases-loaded-rig");
@@ -1446,11 +1516,17 @@ bool SpawnCopy(PPCContext& ctx, uint8_t* b, uint32_t w, const Rig& source, const
       !coop::puppet::Independent(Mutable(copy), Mutable(jack)) ||
       !IndependentControllers(b, copy, source) || !IndependentControllers(b, copy, jack))
     return refuse("creation-components-not-independent");
-  for (const uint32_t other : existing) {
-    Rig r;
-    if (ReadRig(b, other, r) && (!coop::puppet::Independent(Mutable(copy), Mutable(r)) ||
-        !IndependentControllers(b, copy, r)))
-      return refuse("creation-aliases-loaded-rig");
+  {
+    // C119: most of these actors are not humans; read their chains under the
+    // probe so a word that only looks like a pointer cannot fault.
+    ProbeScope probe("creation");
+    for (const uint32_t other : existing) {
+      Rig r;
+      ++probe.actors;
+      if (ReadRig(b, other, r) && (!coop::puppet::Independent(Mutable(copy), Mutable(r)) ||
+          !IndependentControllers(b, copy, r)))
+        return refuse("creation-aliases-loaded-rig");
+    }
   }
   if (Model(b, copy.ai) != Model(b, source.ai) || copy.table != source.table ||
       Load32(b, copy.anim + 4) != Load32(b, source.anim + 4)) return refuse("creation-resource-lineage-mismatch");
@@ -1639,6 +1715,19 @@ void CensusAndSelect(PPCContext& ctx, uint8_t* b, uint32_t w) {
   uint32_t begin, end;
   const bool jack_ok = ReadRig(b, s.hero, jack);
   if (!Table(b, w, begin, end)) { s.Abort("active-table-unavailable"); return; }
+#if defined(KK_DEV_TOOLS)
+  // C119 dev hammer: KK_DEV_C119_SCAN=1 runs the SpawnCopy alias read (ReadRig
+  // on every active actor) every frame, so a chain into unmapped memory shows
+  // in seconds instead of once per copy. With KK_DEV_C119_REPLAY=1 it faults.
+  static const bool scan = [] { const char* v = std::getenv("KK_DEV_C119_SCAN"); return v && v[0] == '1'; }();
+  if (scan) {
+    static unsigned frames = 0, hits = 0;
+    ProbeScope probe("scan", true);
+    for (uint32_t p = begin; p < end; p += 8) { Rig r; ++probe.actors; ReadRig(b, Load32(b, p), r); }
+    ++frames; hits += guest_probe.unreadable != 0;
+    if (frames % 600 == 0) REXLOG_INFO("PUPPET C119 scan frames={} frames-with-unreadable={} actors={}", frames, hits, probe.actors);
+  }
+#endif
   const auto now = Clock::now();
   const bool log = s.census_at == Clock::time_point{} || now - s.census_at >= std::chrono::seconds(1);
   if (log) {

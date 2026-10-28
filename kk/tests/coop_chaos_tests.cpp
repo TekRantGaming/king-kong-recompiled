@@ -11,6 +11,7 @@
 #include "coop_event_budget.h"
 #include "coop_human_return.h"
 #include "coop_crab_unstick.h"
+#include "coop_guest_probe.h"
 #include "coop_puppet.h"
 #include "coop_rebirth.h"
 #include "coop_revive.h"
@@ -1083,6 +1084,44 @@ void CrabPlayerUnstick() {
   const auto g=cu::PlayerRelease(kHero,0,0);
   Check(g.excluded==kHero && g.zone==0 && g.gave_up==0,"a player release writes only the release word and keeps the crew give up words");
 }
+void GuestProbe() {
+  namespace gp=guest_probe;
+  // The c118-beach-fix6 host: 64 KB pages committed around the crab blocks,
+  // nothing committed at 9A000000 (the word read from crab block 43B02C00+132).
+  std::map<uint32_t,uint32_t> words;  // committed guest words (big endian in game, plain here)
+  auto committed=[&](uint32_t a) { return (a>=0x434C0000 && a<0x434D0000) || (a>=0x43AF0000 && a<0x43B20000); };
+  auto query=[&](uint32_t a,gp::Region& r) {
+    if (a<0x40000000 || a>=0xA0000000) return false;
+    const uint32_t page=a>=0x90000000 ? 0x1000u : 0x10000u;
+    r.base=a&~(page-1); r.size=page; r.readable=committed(a); return true;
+  };
+  Check(gp::Readable(0x43B02C00,176,query),"a span inside committed pages is readable");
+  Check(!gp::Readable(0x9A0000E0,8,query),"the 9A0000E0 layer is not readable");
+  Check(!gp::Readable(0x43B1FFF0,32,query),"a span running past the last committed page is not readable");
+  Check(!gp::Readable(0x434CFFFC,0x10010,query),"a span crossing into an uncommitted page is not readable");
+  Check(gp::Readable(0x43AFFFF0,0x20,query),"a span crossing two committed pages is readable");
+  Check(!gp::Readable(0x43B02C00,8,[](uint32_t a,gp::Region& r){ r.base=a+4; r.size=0x1000; r.readable=true; return true; }),
+        "a region that does not hold the address is no proof");
+  // The fix6 chain: actor 43AF3604 +20 -> 434C9B10, +0 -> 43B02C00 (crab block), +132 -> 9A0000E0, +4 faults.
+  words[0x43AF3604+20]=0x434C9B10; words[0x434C9B10]=0x43B02C00; words[0x43B02C00+132]=0x9A0000E0;
+  unsigned faults=0;
+  auto load=[&](uint32_t a) { if (!committed(a)) { ++faults; return 0u; } auto it=words.find(a); return it==words.end() ? 0u : it->second; };
+  auto range=[&](uint32_t p,uint32_t bytes,bool probe) {
+    return p>=0x40000000 && p<0xA0000000 && !(p&3) && bytes<=0xA0000000-p && (!probe || gp::Readable(p,bytes,query));
+  };
+  auto ptr=[&](uint32_t p,uint32_t off,uint32_t bytes,bool probe) {
+    if (!range(p,off+4,probe)) return 0u;
+    const auto q=load(p+off); return range(q,bytes,probe) ? q : 0u;
+  };
+  auto header=[&](bool probe) {
+    const auto rig=ptr(0x43AF3604,20,16,probe), anim=ptr(rig,0,176,probe), layer=ptr(anim,132,8,probe);
+    return ptr(ptr(layer,4,4,probe),0,6,probe);
+  };
+  faults=0; header(false);
+  Check(faults==1,"without the probe the fix6 chain reads unmapped memory (the access violation)");
+  faults=0;
+  Check(header(true)==0 && faults==0,"with the probe the fix6 chain stops before the unmapped layer");
+}
 }
 int main(int argc,char** argv) {
   if(argc!=2) { std::fprintf(stderr,"choose one named chaos test\n"); return 2; }
@@ -1134,6 +1173,7 @@ int main(int argc,char** argv) {
   else if(name=="human_set_track") HumanSetTrack();
   else if(name=="crab_unstick") CrabUnstick();
   else if(name=="crab_player_unstick") CrabPlayerUnstick();
+  else if(name=="guest_probe") GuestProbe();
   else { std::fprintf(stderr,"unknown test\n"); return 2; }
   std::printf("PASS [%s]\n",test_name); return 0;
 }
