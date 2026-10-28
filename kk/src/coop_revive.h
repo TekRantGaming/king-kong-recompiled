@@ -87,14 +87,24 @@ inline ShotVector Beside(const PlayerPose& peer) {
 // step of the partner's floor, the head is clear, nothing stands between the
 // spot and the partner, and the native nav cell may be stood on.
 constexpr float kRadii[] = {1.5f, 1.0f, 2.5f};
-// Behind first (the old rule where it is safe), then the sides, then forward.
-constexpr float kTurns[] = {3.14159265f, 1.57079633f, -1.57079633f, 2.35619449f, -2.35619449f,
+// C111: the sides first, then behind. A partner fighting faces the enemies, so
+// a spot 1.5 straight behind put the partner's body between them and the
+// revived player: melee enemies (crabs, 101/4) pushed into that body 1.3 to
+// 2.7 from the player, out of their 2.25 strike range, and nobody was hit for
+// about 90 s (runs c111-beach-b/c). Side spots keep both players reachable.
+constexpr float kTurns[] = {1.57079633f, -1.57079633f, 2.35619449f, -2.35619449f, 3.14159265f,
                             .78539816f, -.78539816f, 0.f};
+// The pre C111 order (behind first), kept for the placement_side twin.
+constexpr float kBehindFirstTurns[] = {3.14159265f, 1.57079633f, -1.57079633f, 2.35619449f, -2.35619449f,
+                                       .78539816f, -.78539816f, 0.f};
 constexpr unsigned kCandidates = 24;
 constexpr float kMaxStep = 1.f, kMinNormalZ = .7f;
 constexpr double kPlaceWait = 2, kGuardSeconds = 3;
+inline float CandidateTurn(unsigned i) {
+  return COOP_MUT_IF("placement_side") ? kBehindFirstTurns[i%8] : kTurns[i%8];
+}
 inline ShotVector Candidate(const PlayerPose& peer, float floor_z, unsigned i) {
-  const float r = kRadii[(i/8)%3], a = peer.facing+kTurns[i%8];
+  const float r = kRadii[(i/8)%3], a = peer.facing+CandidateTurn(i);
   return {peer.x+r*std::cos(a), peer.y+r*std::sin(a), floor_z};
 }
 // Native nav cell byte (nav_cell_at 8284D638, sign extended). nav_grid.c:

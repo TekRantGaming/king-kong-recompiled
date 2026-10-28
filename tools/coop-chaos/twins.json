@@ -30,6 +30,7 @@
     "body_hit_class": "body_hit_class",
     "placement_floor": "placement_floor",
     "placement_sight": "placement_sight",
+    "placement_side": "placement_side",
     "void_guard": "void_guard",
     "after_contact_sound": "after_contact_sound",
     "story_native_stop": "story_native_stop",
