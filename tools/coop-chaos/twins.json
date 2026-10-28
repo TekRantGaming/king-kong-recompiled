@@ -36,6 +36,7 @@
     "event_vision_guard": "event_vision_guard",
     "event_network_defer": "event_network_defer",
     "unarmed_gait": "unarmed_gait",
-    "support_member_personal": "support_member"
+    "support_member_personal": "support_member",
+    "support_delayed_watch": "support_delayed_watch"
   }
 }

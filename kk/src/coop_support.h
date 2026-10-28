@@ -28,6 +28,16 @@ inline SupportMember ClassifySupportMember(bool personal,bool physics,bool rigid
   if (personal && !COOP_MUT_IF("support_member_personal")) return SupportMember::Refuse;
   return physics && rigid_unit ? SupportMember::Drive : SupportMember::Local;
 }
+// C105: ODE Active runs one authored delayed watch (vars 0x8CC, function at
+// 0x8D0) after 0x980 seconds. A guest skips native Active, so it runs that
+// watch itself. Only the three native trigger actions that show, hide or switch
+// authored objects (one, or up to five) are allowed; any other callback keeps
+// the root native.
+constexpr uint32_t kTrigSetActiveAndVisible=0x8250EDE8,kTrigSetActivity=0x8250EE50,kTrigActifVisibleMultiple=0x8250ECF0;
+inline bool SupportDelayedWatchAllowed(uint32_t fn) {
+  if (COOP_MUT_IF("support_delayed_watch")) return fn!=0;
+  return fn==0 || fn==kTrigSetActiveAndVisible || fn==kTrigSetActivity || fn==kTrigActifVisibleMultiple;
+}
 struct PartRoot {
   uint64_t source=0;
   std::vector<uint32_t> parts;

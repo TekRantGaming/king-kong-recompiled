@@ -67,6 +67,9 @@ REX_EXTERN(__imp__sub_82715AC8);
 REX_EXTERN(__imp__sub_828007B0);
 REX_EXTERN(__imp__sub_827061B0);
 REX_EXTERN(__imp__sub_82408648);
+REX_EXTERN(__imp__sub_8250EDE8);
+REX_EXTERN(__imp__sub_8250EE50);
+REX_EXTERN(__imp__sub_8250ECF0);
 #endif
 #if defined(KK_DEV_TOOLS)
 namespace kk {

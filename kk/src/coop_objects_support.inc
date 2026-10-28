@@ -79,7 +79,7 @@ void PrepareSupport(const uint8_t* b,Binding& o) {
   const auto mode=Load32(b,o.vars+(tree ? 0x52C : 0));
   s.eligible=terminated && !s.parts.empty() && mode>=1 && mode<=3 &&
       !(Load32(b,o.actor)&0x400001) &&
-      (tree || (!Load32(b,o.vars+2496) && !Load32(b,o.vars+2256) && !Load32(b,o.vars+3368)));
+      (tree || (!Load32(b,o.vars+2496) && objects::SupportDelayedWatchAllowed(Load32(b,o.vars+2256)) && !Load32(b,o.vars+3368)));
   // C105: a member without a rigid unit ODE body (no physics record, a scaled
   // mesh, a disabled or attached piece) no longer withdraws its whole root. The
   // host still owns the root's trigger and End, the guest replays them through
@@ -277,6 +277,26 @@ void SupportTrigger(PPCContext& ctx,uint8_t* b,bool tree) {
   }
   ctx.r3.u64=0;
 }
+// ode_state_active 826F1E08: once 0x980 seconds have passed since Wait's own
+// start time 0x9BC, it runs the delayed watch at 0x8CC (function 0x8D0, payload
+// 0x914) and clears the function. The guest skips native Active, so it runs the
+// same step with its own clock and its own authored payload. Eligibility only
+// admits the show/hide and activity trigger actions (SupportDelayedWatchAllowed).
+void GuestDelayedWatch(PPCContext& ctx,uint8_t* b,const Binding& o) {
+  const auto fn=Load32(b,o.vars+0x8D0);
+  if (!fn || !objects::SupportDelayedWatchAllowed(fn)) return;
+  const float now=LoadF(b,0x82CCAE1C)-LoadF(b,0x82CCC02C);
+  if (!(now-LoadF(b,o.vars+0x9BC)>LoadF(b,o.vars+0x980))) return;
+  const PPCContext saved=ctx;
+  ctx.r3.u64=o.vars+0x914;
+  if (fn==objects::kTrigSetActiveAndVisible) __imp__sub_8250EDE8(ctx,b);
+  else if (fn==objects::kTrigActifVisibleMultiple) __imp__sub_8250ECF0(ctx,b);
+  else __imp__sub_8250EE50(ctx,b);
+  ctx=saved;
+  Store32(b,o.vars+0x8D0,0);
+  if (Trace()) REXLOG_INFO("KK dev object support delayed watch: role=guest id={:016X} native={:08X} record={:08X} after={:.3f}",
+      o.source,fn,o.vars+0x914,LoadF(b,o.vars+0x980));
+}
 void SupportNative(PPCContext& ctx,uint8_t* b,bool tree,unsigned phase) {
   const auto kind=tree ? ObjectKind::Tree : ObjectKind::Ode;
   auto* o=state.ready && Shared() ? Current(b,kind) : nullptr;
@@ -339,6 +359,7 @@ void SupportNative(PPCContext& ctx,uint8_t* b,bool tree,unsigned phase) {
       if (Trace()) REXLOG_INFO("KK dev object collapse replay: role=guest id={:016X} family={} topology={:016X} trigger={} part={}",
           o->source,uint8_t(kind),s.topology,s.event.trigger,s.event.part);
     } else if (authority->value==2 && s.phase<2) {
+      if (!tree && s.phase==1) GuestDelayedWatch(ctx,b,*o);
       if (!tree && phase==2) {
         // Calling End's body while still scheduled as Active leaves the guest
         // permanently on Active. Native Active uses 826F9F30 with this loaded
@@ -351,7 +372,10 @@ void SupportNative(PPCContext& ctx,uint8_t* b,bool tree,unsigned phase) {
       }
       (tree ? __imp__sub_826D0770 : __imp__sub_826F4948)(ctx,b); s.phase=2;
       if (Trace()) REXLOG_INFO("KK dev object collapse endpoint: role=guest id={:016X} family={} topology={:016X}",o->source,uint8_t(kind),s.topology);
-    } else ctx.r3.u64=0;
+    } else {
+      if (!tree && phase==2 && s.phase==1) GuestDelayedWatch(ctx,b,*o);
+      ctx.r3.u64=0;
+    }
     // Local ODE motion may play the fall, but only the host's active manager
     // may retire pieces, apply environmental hits or start subsequent fires.
     // Otherwise a random guest fall could destroy geometry before its final

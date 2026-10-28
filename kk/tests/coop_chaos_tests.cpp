@@ -325,6 +325,17 @@ void SupportMember() {
   Check(ClassifySupportMember(false,false,false)==SupportMember::Local,"member without physics keeps native motion");
   Check(ClassifySupportMember(false,true,false)==SupportMember::Local,"scaled or disabled body keeps native motion");
 }
+void SupportDelayedWatch() {
+  using namespace kk::coop::objects;
+  // C105: the guest may only run the ODE delayed watch for the native show/hide
+  // and activity trigger actions; any other authored callback keeps the root native.
+  Check(SupportDelayedWatchAllowed(0),"a root without a delayed watch stays eligible");
+  Check(SupportDelayedWatchAllowed(kTrigSetActiveAndVisible) && SupportDelayedWatchAllowed(kTrigSetActivity) &&
+      SupportDelayedWatchAllowed(kTrigActifVisibleMultiple),
+      "show, hide and activity trigger actions are allowed");
+  Check(!SupportDelayedWatchAllowed(0x82538AF0),"object reinit callback keeps the root native");
+  Check(!SupportDelayedWatchAllowed(0x8250B9A0),"NPC order callback keeps the root native");
+}
 void EventNetworkDefer() {
   // Peer shots and relayed damage arriving during a pause wait in their queue.
   PoolModel pool; pool.paused=true; unsigned queued=0,published=0;
@@ -750,6 +761,7 @@ int main(int argc,char** argv) {
   else if(name=="event_vision_guard") EventVisionGuard();
   else if(name=="event_network_defer") EventNetworkDefer();
   else if(name=="support_member") SupportMember();
+  else if(name=="support_delayed_watch") SupportDelayedWatch();
   else { std::fprintf(stderr,"unknown test\n"); return 2; }
   std::printf("PASS [%s]\n",test_name); return 0;
 }
