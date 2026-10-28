@@ -2577,6 +2577,17 @@ void PartnerBodyPoseBlended(PPCContext& ctx,uint8_t* b,uint32_t actor) {
   }
 #endif
 }
+#if defined(KK_DEV_TOOLS)
+// C118 dev probe: where every observed level human stands (crew followers, donors). Read only.
+void DevHumanPositions(const uint8_t* b, const std::function<void(uint32_t, float, float, float)>& f) {
+  for (const auto& [actor, obs] : Get().humans) {
+    const auto m = Ptr(b, actor, 12, 80);
+    if (!m) continue;
+    const auto p = ReadVec(b, m + 48);
+    if (Finite(p)) f(actor, p.x, p.y, p.z);
+  }
+}
+#endif
 }  // namespace kk
 
 REX_HOOK_RAW(sub_8286A660) {

@@ -1084,6 +1084,29 @@ void DevCrabFightProbe(PPCContext& ctx, uint8_t* b) {
         actor,cx,cy,cz,tx,ty,tz,hx,hy,hz,bx,by,bz,std::hypot(hx-cx,hy-cy),hb ? std::hypot(bx-cx,by-cy):-1.f,
         hb && target ? std::hypot(bx-tx,by-ty):-1.f,target ? std::hypot(hx-tx,hy-ty):-1.f,moved,
         Load32(b,vars+1404),Load32(b,vars+3496));
+    // C118 evidence: what stands in the crab's lane to its target (the players, observed level humans,
+    // other enemies). lane = sideways distance from the crab to target line, along = distance from the crab.
+    if (target) {
+      const float len=std::hypot(tx-cx,ty-cy);
+      const float ux=len>0 ? (tx-cx)/len:0, uy=len>0 ? (ty-cy)/len:0;
+      struct Near { uint32_t actor=0; const char* kind=""; float d=1e9f, along=0, lane=0; } close, lane;
+      auto consider=[&](uint32_t o,const char* kind,float x,float y) {
+        if (!o || o==actor || o==target) return;
+        const float rx=x-cx, ry=y-cy, d=std::hypot(rx,ry), along=rx*ux+ry*uy, side=std::abs(rx*uy-ry*ux);
+        if (d<close.d) close={o,kind,d,along,side};
+        if (along>0 && along<len && side<1.5f && along<lane.d) lane={o,kind,along,along,side};
+      };
+      consider(hero,"hero",hx,hy);
+      if (hb) consider(body,"body",bx,by);
+      DevHumanPositions(b,[&](uint32_t o,float x,float y,float) { if (o!=body) consider(o,"human",x,y); });
+      for (const auto& [key,other] : Get().bindings) {
+        if (!other.matrix || !PoseAddress(other.matrix,64)) continue;
+        consider(other.actor,other.id.family==EnemyFamily::Crab ? "crab":"enemy",LoadF(b,other.matrix+48),LoadF(b,other.matrix+52));
+      }
+      REXLOG_INFO("COOP CRAB fight block actor={:08X} target={:08X} to-target={:.2f} near={:08X}({}) near-d={:.2f} near-along={:.2f} near-lane={:.2f} lane={:08X}({}) lane-along={:.2f} lane-side={:.2f}",
+          actor,target,len,close.actor,close.kind,close.d<1e8f ? close.d:-1.f,close.along,close.lane,
+          lane.actor,lane.kind,lane.actor ? lane.along:-1.f,lane.lane);
+    }
   }
   // fn_82463A58 candidate predicate for the local Jack, and its parts.
   uint32_t hero_ok=0, hero_tokens=0, hero_zone=0;

@@ -1,5 +1,6 @@
 #pragma once
 #include <cstdint>
+#include <functional>
 #include <rex/hook.h>
 
 namespace kk {
@@ -24,4 +25,8 @@ uint32_t PartnerBodyCombatCopy(const uint8_t* base);
 bool PartnerBodySuppressShot(const uint8_t* base);
 void PartnerBodyObserveAction(const PPCContext& ctx, const uint8_t* base);
 void PartnerBodyPoseBlended(PPCContext& ctx, uint8_t* base, uint32_t actor);
+#if defined(KK_DEV_TOOLS)
+// Dev probe only: every observed level human and where it stands. Read only.
+void DevHumanPositions(const uint8_t* base, const std::function<void(uint32_t, float, float, float)>& f);
+#endif
 }  // namespace kk
