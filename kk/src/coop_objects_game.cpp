@@ -1627,8 +1627,13 @@ void DevProbe(PPCContext& ctx,uint8_t* b,Probe& probe,ObjectKind kind,bool strik
   const auto hero=Load32(b,0x82CCBF7C),ai=Ptr(b,Ptr(b,hero,24,8),4,88),hm=Ptr(b,hero,12,64);
   if (!hm || !Track(b,ai,0x826718B8)) return;
   if (!probe.source) {
+    static const uint64_t wanted=[] {
+      const auto text=std::getenv("KK_DEV_OBJECT_SOURCE");
+      return text ? std::strtoull(text,nullptr,16):0ull;
+    }();
     Binding* best=nullptr; float distance=1000000; unsigned best_slot=0;
     for (auto& [actor,o] : state.bindings) {
+      if (wanted && o.source!=wanted) continue;
       if (o.kind!=kind || !Valid(b,o) || Match(o.source,kind)!=&o) continue;
       if (kind==ObjectKind::Breakable && (!Load32(b,o.vars+556) || Load32(b,o.vars+552)>=Load32(b,o.vars+556))) continue;
       // A model can retain Go while its native actor is inactive. Fixture
