@@ -337,6 +337,15 @@ void FalseQuiet() {
       g.Observe(1,101,1,quiet,303)==desync::Tier::None &&
       g.Observe(1,101,1,quiet,306)==desync::Tier::Quiet,"repeated actual drift reaches quiet repair");
 }
+void DigestRetired() {
+  // C108 201/3: host retired centipede 62D3D063/0 at 08:13:02; the guest applied the
+  // retirement but its actor stayed bound with life 10, and the old compare called
+  // that structural drift (guest move, then a private reload 20 s later).
+  Check(!desync::GuestOnlyAliveIsDrift(false,true,true),"a locally retired replica is never structural drift");
+  Check(desync::GuestOnlyAliveIsDrift(false,false,true),"a living unretired replica the host lacks is drift");
+  Check(!desync::GuestOnlyAliveIsDrift(true,false,true),"an enemy the host lists is not guest only");
+  Check(!desync::GuestOnlyAliveIsDrift(false,false,false),"a dead replica is not drift");
+}
 void UnarmedGait() {
   // An armed crew donor loads gun walks beside its empty hand walk.
   const puppet::Gait crew[]={{{150,0,2.2f},0,false},{{165,0,2.4f},0,false},{{11,0,1.2f},0,false}};
@@ -751,6 +760,7 @@ int main(int argc,char** argv) {
   else if(name=="false_quiet") FalseQuiet();
   else if(name=="unarmed_gait") UnarmedGait();
   else if(name=="rebirth_adoption") RebirthAdoption();
+  else if(name=="digest_retired") DigestRetired();
   else if(name=="shot_validator") ShotValidation();
   else if(name=="session_epoch") SessionEpoch();
   else if(name=="projectile_source") ProjectileSource();

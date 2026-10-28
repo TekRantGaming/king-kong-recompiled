@@ -38,6 +38,7 @@
     "unarmed_gait": "unarmed_gait",
     "rebirth_dead": "rebirth_adoption",
     "rebirth_any_source": "rebirth_adoption",
-    "rebirth_reuse": "rebirth_adoption"
+    "rebirth_reuse": "rebirth_adoption",
+    "digest_retired": "digest_retired"
   }
 }

@@ -57,6 +57,14 @@ struct Evidence {
   uint64_t structural_anchor=0;
   bool Any() const { return quiet || lag || structural || wrong_level; }
 };
+// C108: a host owned enemy the guest still holds alive is structural drift only
+// while the guest has not applied that owner's retirement. After the guest's
+// native destroy of a retired centipede its actor stayed bound with its last
+// life (201/3); the host digest drops retired records, so the guest drops its own.
+inline bool GuestOnlyAliveIsDrift(bool host_listed,bool locally_retired,bool alive) {
+  if (host_listed || !alive) return false;
+  return !locally_retired || COOP_MUT_IF("digest_retired");
+}
 // Both stamps originate on the host. A whole sweep delayed behind reliable
 // traffic cannot become fresh just because its final page arrived recently.
 inline bool FreshForPose(const WorldDigestPage& p,const std::optional<PlayerPose>& host) {
