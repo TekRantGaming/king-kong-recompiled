@@ -6,6 +6,7 @@
 // partner:index:<n> or partner:nearest[:<max>] follows the copied partner pose.
 // partner:slot:<1..12> selects a stable native H slot for weapon proof runs.
 // partner:spawn:<n> creates an independent engine copy of that loaded human.
+// partner:spawn-slot:<1..12> copies a native H slot for grab visual proof.
 // KK_DEV_PUPPET_SPAWN_MODE=drive (default), hold, or free (UNSAFE story scripts).
 // KK_DEV_PUPPET_SPAWN_OFFSET=x,y,z uses source+offset, permits solo diagnosis,
 // and gives drive mode a stationary target at that creation point.
@@ -183,7 +184,7 @@ struct Options {
       }
       return;
     }
-    spawn = partner && fields[1] == "spawn";
+    spawn = partner && (fields[1] == "spawn" || fields[1] == "spawn-slot");
     if (spawn) {
       if (const char* mode = std::getenv("KK_DEV_PUPPET_SPAWN_MODE")) {
         const std::string value(mode);
@@ -208,7 +209,7 @@ struct Options {
       }
     }
     index = fields[1] == "index" || spawn;
-    slot = fields[1] == "slot"; // Stable native H identity for weapon proof runs.
+    slot = fields[1] == "slot" || fields[1] == "spawn-slot"; // Stable native H identity for visual proof runs.
     if (partner && (!(index || slot) || fields.size() != 3)) { valid = false; return; }
     valid = (fields.size() == 3 || fields.size() == 5) &&
             (index || slot ? number(fields[2], census_index, 10) && (!slot || (census_index>=1 && census_index<=12)) :
