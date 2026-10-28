@@ -991,7 +991,13 @@ bool FreezeActor(const uint8_t* b,uint32_t actor,uint32_t ai) {
   if (!Replication() || !s.prepared || Now()-s.prepared_at>.5) return false;
   const auto it=s.bindings.find(actor);
   const bool player=actor==Load32(b,0x82CCBF7C) || actor==kk::PartnerBodyCombatActor(b);
-  const bool binding=it!=s.bindings.end() && it->second.ai==ai && ValidBinding(b,it->second);
+  bool binding=it!=s.bindings.end() && it->second.ai==ai && ValidBinding(b,it->second);
+  if (!binding && !player && Member(b,s.world,actor,true)) {
+    Binding observed; EnemyState native;
+    // A known initialized actor waiting for its host id must not start its
+    // own AI while the reliable birth or authored binding is still pending.
+    binding=Read(b,actor,observed,native) && observed.ai==ai;
+  }
   const bool session=s.link.session_state==SessionState::Connected || s.link.session_state==SessionState::Lost;
   const bool freeze=actors::Freeze(Replication(),s.link.role==Role::Guest,session,Environment(b,s.world),binding,player,binding);
   if (freeze) ++s.actor_holds;
