@@ -222,13 +222,9 @@ void AskLoad(PPCContext& ctx,uint8_t* base,uint32_t g,const FlowView& v) {
         Load32(base,g+15024),Load32(base,g+15096));
   }
   const bool rejoin=v.start.rejoin && v.start.generation==v.world.generation;
-  const auto start=rejoin ? v.start.start : v.world.start;
+  const auto start=SessionLoadPoint(v);
   if (rejoin) {
-    Store32(base,g+13128,v.start.weapon);
-    for (unsigned i=0;i<4;++i) {
-      Store32(base,g+13432+i*72,v.start.stock[i]);
-      Store32(base,g+14880+i*72,v.start.stock[i+4]);
-    }
+    RestoreRejoinEquipment(v.start,g,[base](uint32_t a,uint32_t value){Store32(base,a,value);});
     REXLOG_INFO("KK co-op rejoin: equipment restored weapon={} magazines={}/{}/{}/{}",v.start.weapon,
         v.start.stock[0],v.start.stock[1],v.start.stock[2],v.start.stock[3]);
   }
@@ -244,8 +240,9 @@ void AskLoad(PPCContext& ctx,uint8_t* base,uint32_t g,const FlowView& v) {
   CancelCatchup(); catchup_notice_until=0;
   catchup.Reset(v.world.generation,start);
   behind=BehindRule{};
-  recorded_checkpoint=v.world.start;
-  REXLOG_INFO("KK co-op flow: load generation {} level {} start {}",v.world.generation,v.world.level,v.world.start);
+  local_checkpoint=recorded_checkpoint=start;
+  REXLOG_INFO("KK co-op flow: load role={} generation {} level {} checkpoint {} world start {} rejoin={}",
+      v.host ? "host":"guest",v.world.generation,v.world.level,start,v.world.start,rejoin);
 #if defined(KK_DEV_TOOLS)
   if (std::getenv("KK_DEV_OBJECTS")) ObjectsDevProgressBits(base,"ask-load");
 #endif
@@ -433,12 +430,17 @@ bool TakeHandover() {
 bool BeginResumedStart(const play::StartRequest& request) {
   auto r=request;
   SessionStart s; std::vector<uint8_t> save;
-  if (!BuildSessionStart(r,s,save)) { REXLOG_WARN("KK co-op hand over: the resumed start could not be built"); return false; }
-  SessionStart recorded;
-  if (RejoinCheckpoint(recorded)) {
-    recorded.save_bytes=s.save_bytes; recorded.save_hash=s.save_hash;
-    s=recorded; r={play::StartKind::kChapter,request.slot,int(s.chapter),{}};
+  if (RejoinCheckpoint(s)) {
+    // A durable checkpoint is authoritative even when the older slot points
+    // at another chapter or has gone away. CarryOut initializes a slot before
+    // AskLoad installs this checkpoint and its equipment on the game thread.
+    if (r.slot<0) r.slot=play::MostRecentSave(play::ListSaves(play::UserDir()));
+    save=play::ExportSessionSave(play::UserDir(),r.slot);
+    s.save_bytes=uint32_t(save.size()); s.save_hash=SessionSaveHash(save);
+    r={play::StartKind::kChapter,r.slot,int(s.chapter),{}};
     REXLOG_INFO("KK co-op rejoin: restarted host restores generation={} level={} checkpoint={}",s.generation,s.level,s.start);
+  } else if (!BuildSessionStart(r,s,save)) {
+    REXLOG_WARN("KK co-op hand over: the resumed start could not be built"); return false;
   }
   if (!BeginSessionFlow(s,std::move(save))) return false;
   selected=r; requested=true; requested_lobby=Social().Snapshot().lobby;
@@ -661,7 +663,24 @@ void SessionAfterGo(uint8_t* base,uint32_t g,bool loaded) {
   if (!launched || !loaded || !loading_generation) return;
   auto v=SessionFlowSnapshot();
   if (v.world.generation!=loading_generation) return;
-  if (hfr::Load32(base,g+0x18)!=v.world.level) { Send(MessageType::FlowAbort,v.world); return; }
+  const auto point=SessionLoadPoint(v);
+  const auto native_level=hfr::Load32(base,g+0x18), native_point=hfr::Load32(base,g+12);
+  // uni_go has returned, but ES_EnterMap has not run yet. Check the point it
+  // will read before acknowledging the shared world identity to the partner.
+  const bool rejoin=v.start.rejoin && v.start.generation==v.world.generation;
+  const bool equipment_ok=!rejoin || RejoinEquipmentMatches(v.start,g,
+      [base](uint32_t a){return hfr::Load32(base,a);});
+  if (native_level!=v.world.level || native_point!=point || !equipment_ok) {
+    REXLOG_ERROR("KK co-op flow: native load mismatch role={} generation {} expected {}/{} actual {}/{} world start {}",
+        v.host ? "host":"guest",v.world.generation,v.world.level,point,native_level,native_point,v.world.start);
+    if (!equipment_ok) REXLOG_ERROR("KK co-op rejoin: native load changed the restored equipment");
+    Send(MessageType::FlowAbort,v.world); return;
+  }
+  REXLOG_INFO("KK co-op flow: native load verified role={} generation {} level {} checkpoint {} world start {} weapon={} magazines={}/{}/{}/{} reserve={}/{}/{}/{}",
+      v.host ? "host":"guest",v.world.generation,native_level,native_point,v.world.start,
+      hfr::Load32(base,g+13128),hfr::Load32(base,g+13432),hfr::Load32(base,g+13504),
+      hfr::Load32(base,g+13576),hfr::Load32(base,g+13648),hfr::Load32(base,g+14880),
+      hfr::Load32(base,g+14952),hfr::Load32(base,g+15024),hfr::Load32(base,g+15096));
 #if defined(KK_DEV_TOOLS)
   benchmark::DevCoopLoaded(v.world.level);
 #endif
