@@ -333,6 +333,13 @@ bool HeroPivot(const uint8_t* b,uint32_t payload) {
       Tracks(b,ai,0x826718B8) && Ptr(b,hero,12,64) && Load32(b,payload+8)==hero &&
       !Load32(b,payload+96) && !Load32(b,payload+100);
 }
+bool SharedPivot(const uint8_t* b,uint32_t payload) {
+  if (!PoseAddress(payload,108) || !PoseAddress(Load32(b,payload+4),32) ||
+      Load32(b,payload+96) || Load32(b,payload+100)) return false;
+  const auto selected=Load32(b,payload+8);
+  const auto target=selected ? selected:Load32(b,0x82CCBF7C);
+  return PoseAddress(target,32) && Ptr(b,target,12,64);
+}
 bool SharedDetector(const uint8_t* b,const Script& s) {
   return Load32(b,s.binding.vars+20)==kPivot && HeroPivot(b,s.binding.vars+88);
 }
@@ -936,16 +943,16 @@ bool StoryDetect(PPCContext& ctx,uint8_t* b) {
     }
     // The predicate itself is read-only apart from its local result word.
     // Mixed action chains still execute entirely through their own native loop;
-    // only their noninverted Jack-volume activation is shared. Always run
+    // noninverted player and NPC volume activations follow the host. Always run
     // SSDetect itself so its native checkpoint claim, removal and completion
     // bit bookkeeping remain intact, including persistent programs.
-    if (!host && !s->exact && Load32(b,vars+20)==kPivot && HeroPivot(b,vars+88) &&
+    if (!host && !s->exact && Load32(b,vars+20)==kPivot && SharedPivot(b,vars+88) &&
         story::DetectIdle(before)) {
       if (s->activation.CanArm(s->run)) {
         forced_pivot=vars+88;
         Note("host volume activation",Event(*s,StoryPhase::Armed,kDetectRecord),"native mixed chain and persistence retained");
       } else {
-        Request(ctx,b,*s);
+        if (HeroPivot(b,vars+88)) Request(ctx,b,*s);
         blocked_pivot=vars+88;
       }
     }
@@ -1171,6 +1178,19 @@ bool HostAnimationWait(PPCContext& ctx,uint8_t* b) {
   if (passed) Note("host animation wait",Event(*s,StoryPhase::Advance,index),"read-only native action/frame predicate follows the same host activation");
   return true;
 }
+void HostPivotWait(PPCContext& ctx,uint8_t* b,uint32_t payload) {
+  auto* s=CinematicRecord(ctx,b,payload,kPivot,true);
+  if (!s || !SharedPivot(b,payload)) return;
+  // This native predicate only writes its result target. A guest NPC can enter
+  // the volume earlier than its host counterpart. Keep the authored local
+  // callback, but gate its result on this same host activation and record.
+  const auto index=Load32(b,s->binding.vars+19812);
+  const bool passed=s->hints.Passed(s->run,index);
+  const auto selected=Load32(b,payload+8);
+  Store32(b,payload+20,passed ? (selected ? selected:Load32(b,0x82CCBF7C)):0);
+  ctx.r3.u32=passed ? 1:0;
+  if (passed) Note("host volume wait",Event(*s,StoryPhase::Advance,index),"same host activation completed; native result target retained");
+}
 bool HostCinematicSpeech(PPCContext& ctx,uint8_t* b) {
   const auto payload=ctx.r3.u32;
   auto* s=CinematicRecord(ctx,b,payload,0x8250BED8);
@@ -1239,10 +1259,11 @@ REX_HOOK_RAW(sub_8244F0E8) {
   const auto rec=ctx.r3.u32,lr=uint32_t(ctx.lr);
   __imp__sub_8244F0E8(ctx,base);
   if (kk::coop::forced_pivot==rec) {
-    kk::hfr::Store32(base,rec+20,kk::hfr::Load32(base,0x82CCBF7C)); ctx.r3.u32=1;
+    const auto selected=kk::hfr::Load32(base,rec+8);
+    kk::hfr::Store32(base,rec+20,selected ? selected:kk::hfr::Load32(base,0x82CCBF7C)); ctx.r3.u32=1;
   } else if (kk::coop::blocked_pivot==rec) {
     kk::hfr::Store32(base,rec+20,0); ctx.r3.u32=0;
-  }
+  } else kk::coop::HostPivotWait(ctx,base,rec);
 #if defined(KK_DEV_TOOLS)
   kk::DevTrigPivotResult(base,rec,lr,ctx.r3.u32);
 #endif
