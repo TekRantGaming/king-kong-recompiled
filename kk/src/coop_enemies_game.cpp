@@ -2935,7 +2935,7 @@ void DevScorpionActivity(PPCContext& ctx,uint8_t* b) {
   // One known authored actor only. No generic spawn, state write, invented
   // grab handle or hit. Native initialization and the shipping bridge still
   // have to produce the actual encounter after this controlled activation.
-  if (s.identity.level!=203 || s.identity.start!=5 || !kk::PartnerBodyCombatCopy(b)) return;
+  if (s.identity.level!=203 || (s.identity.start!=1 && s.identity.start!=5) || !kk::PartnerBodyCombatCopy(b)) return;
   const auto hero=Load32(b,0x82CCBF7C),matrix=Ptr(b,hero,12,64);
   if (!matrix) return;
   const auto all=DevEnemies(b,s.world,Vector(b,matrix+48));
