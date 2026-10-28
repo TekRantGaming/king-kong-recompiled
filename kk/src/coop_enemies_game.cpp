@@ -54,6 +54,10 @@ REX_EXTERN(__imp__sub_82404490);
 REX_EXTERN(__imp__sub_82425038);
 #if defined(KK_DEV_TOOLS)
 REX_EXTERN(__imp__sub_826C4E98);
+REX_EXTERN(__imp__sub_82451DB8);
+REX_EXTERN(__imp__sub_8286A660);
+REX_EXTERN(__imp__sub_82459498);
+REX_EXTERN(__imp__sub_8270FA58);
 #endif
 REX_EXTERN(__imp__sub_82548BC0);
 REX_EXTERN(__imp__sub_82538B70);
@@ -1023,7 +1027,117 @@ uint32_t CrabSelectedPlayer(const uint8_t* b, const Binding& binding, uint32_t h
   const auto claim=stimulus_debug::ReadHandle([&](uint32_t p) { return Load32(b,p); },binding.vars+1048);
   return body && claim.valid && (claim.id>>24)==16 && claim.source==binding.actor && claim.target==body ? body : hero;
 }
+#if defined(KK_DEV_TOOLS)
+// C111 evidence: why CR_ETAT_FIGHT waits (8265C5xx wait branch). Reads the
+// same inputs the native strike gate reads, plus the native attacker count and
+// the native strike ray, once a second per crab. Changes no crab state.
+void DevCrabFightProbe(PPCContext& ctx, uint8_t* b) {
+  static const bool trace=std::getenv("KK_DEV_CRAB_FIGHT_TRACE")!=nullptr;
+  if (!trace || !Scratch::CanUse(ctx)) return;
+  static std::map<uint32_t,double> next; static unsigned lines=0;
+  const auto actor=Load32(b,0x82CCBF6C), ai=Load32(b,0x82CCBF64);
+  const auto vars=Ptr(b,ai,64,4600);
+  if (!vars || !PoseAddress(actor,32) || lines>=1500) return;
+  if (next.size()>=64 && !next.contains(actor)) return;
+  auto& due=next[actor]; if (Now()<due) return;
+  due=Now()+1; ++lines;
+  const auto hero=Load32(b,0x82CCBF7C), body=kk::PartnerBodyCombatActor(b);
+  const auto target=Load32(b,vars+1056), cached=Load32(b,vars+2040), mouth=Load32(b,vars+2484);
+  const auto own=Ptr(b,actor,12,64), tm=target ? Ptr(b,target,12,64) : 0;
+  float dx=0,dy=0,dz=0;
+  if (own && tm) { dx=LoadF(b,tm+48)-LoadF(b,own+48); dy=LoadF(b,tm+52)-LoadF(b,own+52); dz=LoadF(b,tm+56)-LoadF(b,own+56); }
+  const auto anim=Ptr(b,Ptr(b,actor,20,4),0,164);
+  uint32_t attackers=0, ray=0, child=0;
+  if (target && PoseAddress(target,32)) {
+    Scratch scratch(ctx,b);
+    ctx.r3.u64=target; ctx.r4.u64=0; ctx.r5.u64=5; ctx.r6.u64=1; ctx.r7.u64=0;
+    __imp__sub_82451DB8(ctx,b); attackers=ctx.r3.u32;
+    ctx.r3.u64=target; ctx.r4.u64=0; __imp__sub_8286A660(ctx,b); child=ctx.r3.u32;
+    const auto from=mouth ? Ptr(b,mouth,12,64) : 0, to=Ptr(b,child ? child:target,12,64);
+    if (from && to) {
+      const auto p=scratch.Vec(LoadF(b,from+48),LoadF(b,from+52),LoadF(b,from+56),0x100);
+      const auto d=scratch.Vec(LoadF(b,to+48)-LoadF(b,from+48),LoadF(b,to+52)-LoadF(b,from+52),LoadF(b,to+56)-LoadF(b,from+56),0x110);
+      ctx.r3.u64=actor; ctx.r4.u64=p; ctx.r5.u64=d; ctx.r6.u64=UINT32_MAX; ctx.r7.u64=2; ctx.r8.u64=0; ctx.r9.u64=1;
+      __imp__sub_82403E38(ctx,b); ray=ctx.r3.u32;
+    }
+  }
+  REXLOG_INFO("COOP CRAB fight actor={:08X} sub={} kind={} anim={} target={:08X} cached={:08X} hero={:08X} body={:08X} dist={:.2f} dz={:.2f} r1408={:.2f} r1412={:.2f} r1416={:.2f} f1460={:.2f} f1432={:.2f} i1092={} f1024={:.2f} f1124={:.2f} f3528={:.2f} i1068={} i276={} f280={:.2f} i1404={} i1044={} i1464={} attackers={} ray={:08X}{} child={:08X} mouth={:08X}",
+      actor,Load32(b,vars+3496),Load32(b,vars+4),anim ? Load16(b,anim+156):0xFFFF,target,cached,hero,body,
+      std::hypot(dx,dy),dz,LoadF(b,vars+1408),LoadF(b,vars+1412),LoadF(b,vars+1416),LoadF(b,vars+1460),LoadF(b,vars+1432),
+      Load32(b,vars+1092),LoadF(b,vars+1024),LoadF(b,vars+1124),LoadF(b,vars+3528),int32_t(Load32(b,vars+1068)),
+      Load32(b,vars+276),LoadF(b,vars+280),Load32(b,vars+1404),Load32(b,vars+1044),Load32(b,vars+1464),attackers,ray,
+      ray==0 ? "" : ray==hero ? "(hero)" : body && ray==body ? "(body)" : ray==target ? "(target)" : ray==actor ? "(self)" : "",
+      child,mouth);
+  // fn_82463A58 candidate predicate for the local Jack, and its parts.
+  uint32_t hero_ok=0, hero_tokens=0, hero_zone=0;
+  if (hero && PoseAddress(hero,32)) {
+    Scratch scratch(ctx,b);
+    ctx.r3.u64=hero; __imp__sub_82463A58(ctx,b); hero_ok=ctx.r3.u32;
+    ctx.r3.u64=hero; ctx.r4.u64=0; ctx.r5.u64=5; ctx.r6.u64=0; ctx.r7.u64=0;
+    __imp__sub_82451DB8(ctx,b); hero_tokens=ctx.r3.u32;
+    ctx.r3.u64=hero; ctx.r4.u64=Load32(b,vars+(Load32(b,vars+3532) ? 16:12)); __imp__sub_82459498(ctx,b); hero_zone=ctx.r3.u32;
+  }
+  REXLOG_INFO("COOP CRAB fight hero actor={:08X} hero={:08X} accepted={} kind5-tokens={} zone={} excluded={:08X} f216={:.2f} v224={:08X} v232={:08X} i3532={} v3512={:08X}",
+      actor,hero,hero_ok,hero_tokens,hero_zone,Load32(b,vars+4424),LoadF(b,vars+216),Load32(b,vars+224),Load32(b,vars+232),
+      Load32(b,vars+3532),Load32(b,vars+3512));
+  if (hero_tokens) {
+    const auto u32=[&](uint32_t p) { return Load32(b,p); };
+    const auto pool=stimulus_debug::ReadPool(u32,16);
+    for (uint32_t i=0;i<pool.count && i<512;++i) {
+      const auto r=stimulus_debug::ReadSlot(u32,pool,i);
+      bool names=false; for (uint32_t o=8;o<=40;o+=4) names|=Load32(b,r.address+o)==hero;
+      if (!r.valid || !names) continue;
+      REXLOG_INFO("COOP CRAB fight hero-record actor={:08X} slot={} gen={} flags={:08X} w8={:08X} w12={:08X} w16={:08X} w20={:08X} w24={:08X} w28={:08X} w32={:08X} w36={:08X} w40={:08X}",
+          actor,i,r.generation,r.flags,Load32(b,r.address+8),Load32(b,r.address+12),Load32(b,r.address+16),Load32(b,r.address+20),
+          Load32(b,r.address+24),Load32(b,r.address+28),Load32(b,r.address+32),Load32(b,r.address+36),Load32(b,r.address+40));
+    }
+  }
+  // Facing gate (front_dot against F1432) and the turn rate the finish block uses.
+  if (own && tm) {
+    const float len=std::hypot(dx,dy);
+    const float ux=len>0 ? dx/len:0, uy=len>0 ? dy/len:0;
+    auto row=[&](uint32_t r) { const float x=LoadF(b,own+r), y=LoadF(b,own+r+4), l=std::hypot(x,y); return l>0 ? (x*ux+y*uy)/l : 0.f; };
+    // Native forward (8270FA58) of the crab and of its target, as CR_ETAT_FIGHT reads them.
+    float sf[3]{}, tf[3]{};
+    {
+      Scratch scratch(ctx,b);
+      const auto out=scratch.Vec(0,0,0,0x160);
+      ctx.r3.u64=actor; ctx.r4.u64=out; __imp__sub_8270FA58(ctx,b);
+      for (int i=0;i<3;++i) sf[i]=LoadF(b,out+4*i);
+      ctx.r3.u64=target; ctx.r4.u64=out; __imp__sub_8270FA58(ctx,b);
+      for (int i=0;i<3;++i) tf[i]=LoadF(b,out+4*i);
+    }
+    auto hn=[](const float* v,float& x,float& y) { const float l=std::hypot(v[0],v[1]); x=l>0 ? v[0]/l:0; y=l>0 ? v[1]/l:0; };
+    float sx,sy,tx,ty; hn(sf,sx,sy); hn(tf,tx,ty);
+    REXLOG_INFO("COOP CRAB fight facing actor={:08X} front={:.3f} special-dot={:.3f} target-forward=({:.3f},{:.3f}) dot-row1={:.3f} f1260={:.3f} f1264={:.3f} f1316={:.3f} f1320={:.3f} f2564={:.3f} i1100={} i3488={}",
+        actor,sx*ux+sy*uy,tx*ux+ty*uy,tx,ty,row(16),LoadF(b,vars+1260),LoadF(b,vars+1264),LoadF(b,vars+1316),LoadF(b,vars+1320),
+        LoadF(b,vars+2564),Load32(b,vars+1100),Load32(b,vars+3488));
+  }
+  // fn_8244CC10 strike gate: the shared next strike time and its overrides.
+  const auto w9998=Load32(b,0x82CC9998), w8a90=Load32(b,0x82CC8A90);
+  REXLOG_INFO("COOP CRAB fight gate actor={:08X} now={:.3f} next9998={:.3f} next8a90={:.3f} same={} i3536={} i1152={} f1500={:.2f} f1492={:.2f} f1528={:.2f} f1248={:.2f} f1504={:.2f} i3524={} i1112={}",
+      actor,LoadF(b,0x82CCAE1C)-LoadF(b,0x82CCC02C),PoseAddress(w9998,92308) ? LoadF(b,w9998+92304):-1.f,
+      PoseAddress(w8a90,92308) ? LoadF(b,w8a90+92304):-1.f,w9998==w8a90,Load32(b,vars+3536),Load32(b,vars+1152),
+      LoadF(b,vars+1500),LoadF(b,vars+1492),LoadF(b,vars+1528),LoadF(b,vars+1248),LoadF(b,vars+1504),
+      Load32(b,vars+3524),Load32(b,vars+1112));
+  if (attackers) {
+    // List the type 16 records that name this target, to see which crab holds the strike.
+    const auto u32=[&](uint32_t p) { return Load32(b,p); };
+    const auto pool=stimulus_debug::ReadPool(u32,16);
+    for (uint32_t i=0;i<pool.count && i<512;++i) {
+      const auto r=stimulus_debug::ReadSlot(u32,pool,i);
+      if (!r.valid || (r.source!=target && r.target!=target && Load32(b,r.address+16)!=target)) continue;
+      REXLOG_INFO("COOP CRAB fight record actor={:08X} slot={} flags={:08X} w8={:08X} w12={:08X} w16={:08X} w20={:08X} w24={:08X} w28={:08X} w32={:08X} w36={:08X}",
+          actor,i,r.flags,Load32(b,r.address+8),Load32(b,r.address+12),Load32(b,r.address+16),Load32(b,r.address+20),
+          Load32(b,r.address+24),Load32(b,r.address+28),Load32(b,r.address+32),Load32(b,r.address+36));
+    }
+  }
+}
+#endif
 void CrabFight(PPCContext& ctx, uint8_t* b) {
+#if defined(KK_DEV_TOOLS)
+  DevCrabFightProbe(ctx,b);
+#endif
   const auto* owner=CombatOwner(b,EnemyFamily::Crab);
   const auto hero=Load32(b,0x82CCBF7C);
   if (!owner || Load32(b,owner->vars+2040)!=hero) { __imp__sub_8265BF60(ctx,b); return; }
@@ -3865,7 +3979,7 @@ revive::Place ReviveTeleport(PPCContext& ctx,uint8_t* b,const PlayerPose& partne
   ResetGround(b,h->vars,*chosen,false);
   void_guard.Arm(before,grounded,Now());
   REXLOG_INFO("KK co-op placement: spot {} radius {:.1f} turn {:.2f} at ({:.3f},{:.3f},{:.3f}) partner ({:.3f},{:.3f},{:.3f}) floor={} nav={} from ({:.3f},{:.3f},{:.3f}) guard={} refused={}",
-      index,revive::kRadii[index/8],revive::kTurns[index%8],chosen->x,chosen->y,chosen->z,partner.x,partner.y,partner.z,
+      index,revive::kRadii[index/8],revive::CandidateTurn(index),chosen->x,chosen->y,chosen->z,partner.x,partner.y,partner.z,
       partner_grounded,int(partner_nav),before.x,before.y,before.z,void_guard.Armed(),refused.empty() ? "none" : refused);
   return result;
 }

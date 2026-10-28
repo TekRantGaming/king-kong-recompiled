@@ -758,10 +758,26 @@ void PlacementFloor() {
   p=GoodSpot(5); p.nav=1; Check(revive::Judge(p,5,2)==Verdict::Nav && revive::Judge(p,5,1)==Verdict::Ok,"native blocked cell 1 is refused unless the partner stands on it");
   PlayerPose peer; peer.x=10; peer.y=20; peer.z=7; peer.facing=0;
   const auto c=revive::Candidate(peer,6,0);
-  Check(std::abs(c.x-8.5f)<.001f && std::abs(c.y-20)<.001f && c.z==6,"first candidate keeps the old spot behind, on the partner floor");
-  const auto side=revive::Candidate(peer,6,1);
-  Check(std::abs(side.x-10)<.001f && std::abs(side.y-21.5f)<.001f,"second candidate is the partner's left side");
-  Check(std::abs(revive::Candidate(peer,6,8).x-9)<.001f,"second ring is closer");
+  Check(std::abs(c.x-10)<.001f && std::abs(c.y-21.5f)<.001f && c.z==6,"first candidate is the partner's left side, on the partner floor");
+  const auto behind=revive::Candidate(peer,6,4);
+  Check(std::abs(behind.x-8.5f)<.001f && std::abs(behind.y-20)<.001f,"the old spot behind is still a candidate");
+  Check(std::abs(revive::Candidate(peer,6,8).y-21)<.001f,"second ring is closer");
+}
+// C111 (runs c111-beach-b/c, 101/4): the partner faces the crabs it fights; a
+// revived player 1.5 straight behind was shielded by the partner body and the
+// crabs stalled out of strike range. The first spots must leave the line from
+// the partner's front to the revived player clear of the partner.
+void PlacementSide() {
+  PlayerPose peer; peer.x=0; peer.y=0; peer.z=0; peer.facing=0;
+  for (unsigned i=0;i<2;++i) {
+    const auto s=revive::Candidate(peer,0,i);
+    // An enemy 6 ahead of the partner, heading for the revived player.
+    const float ex=6-s.x, ey=0-s.y, len=std::hypot(ex,ey);
+    // Closest approach of that line (spot to enemy) to the partner at the origin.
+    const float t=std::clamp(-(s.x*ex+s.y*ey)/(len*len),0.f,1.f);
+    const float gap=std::hypot(s.x+t*ex,s.y+t*ey);
+    Check(gap>1.f,"an early spot is not shielded by the partner from enemies in front");
+  }
 }
 void PlacementSight() {
   auto p=GoodSpot(5); p.sight=false;
@@ -850,6 +866,7 @@ int main(int argc,char** argv) {
   else if(name=="after_contact_sound") AfterContactSound();
   else if(name=="placement_floor") PlacementFloor();
   else if(name=="placement_sight") PlacementSight();
+  else if(name=="placement_side") PlacementSide();
   else if(name=="placement_wait") PlacementWait();
   else if(name=="void_guard") VoidGuard();
   else if(name=="udp_duplicate" || name=="udp_order") Reliable();
