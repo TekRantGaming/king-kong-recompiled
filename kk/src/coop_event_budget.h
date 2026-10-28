@@ -83,6 +83,10 @@ inline bool DevReplay26a() {
 #endif
 }
 
+// Scan statistics of the vision guard, read by developer evidence lines.
+struct VisionStats { uint64_t scans = 0, skipped = 0; uint32_t max_visible = 0; };
+inline VisionStats& Vision() { static VisionStats v; return v; }
+
 struct BucketCount {
   uint32_t enumerable = 0;   // what 8271E450 visits: neither flag 1 nor 4
   uint32_t owner_live = 0;   // not freed, made by the given owner

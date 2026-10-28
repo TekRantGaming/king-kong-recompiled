@@ -2585,13 +2585,18 @@ void OwnerShots(PPCContext& ctx, uint8_t* b) {
   {
     // C101 evidence: the pool pause word and the type 1 bucket, once a second.
     static double next=0;
+    static uint32_t peak_visible=0, peak_partner=0;
+    const auto body=kk::PartnerBodyCombatActor(b);
+    const auto c=event_budget::Count([&](uint32_t p) { return Load32(b,p); },1,body);
+    peak_visible=std::max(peak_visible,c.enumerable); peak_partner=std::max(peak_partner,c.owner_live);
     if (Now()>=next) {
       next=Now()+1;
-      const auto body=kk::PartnerBodyCombatActor(b);
-      const auto c=event_budget::Count([&](uint32_t p) { return Load32(b,p); },1,body);
       const auto pool=stimulus_debug::ReadPool([&](uint32_t p) { return Load32(b,p); },1);
-      REXLOG_INFO("KK dev event pool: pause-word={} type1 used={}/{} visible={} partner={:08X} partner-live={}",
-          Load32(b,event_budget::kPoolPauseWord),pool.count,pool.capacity,c.enumerable,body,c.owner_live);
+      auto& v=event_budget::Vision();
+      REXLOG_INFO("KK dev event pool: pause-word={} type1 used={}/{} visible={} peak-visible={} partner={:08X} partner-live={} peak-partner={} bat-scans={} scan-max-visible={} skipped={}",
+          Load32(b,event_budget::kPoolPauseWord),pool.count,pool.capacity,c.enumerable,peak_visible,body,c.owner_live,peak_partner,
+          v.scans,v.max_visible,v.skipped);
+      peak_visible=peak_partner=0; v.max_visible=0;
     }
   }
 #endif
@@ -3810,7 +3815,9 @@ REX_HOOK_RAW(sub_8262FE20) {
   if (REXCVAR_GET(kk_coop_enabled)) {
     namespace eb=kk::coop::event_budget;
     const auto count=eb::Count([&](uint32_t p) { return kk::hfr::Load32(base,p); },1,0);
+    auto& stats=eb::Vision(); ++stats.scans; stats.max_visible=std::max(stats.max_visible,count.enumerable);
     if (count.valid && !eb::DevReplay26a() && !eb::VisionScanSafe(count.enumerable)) {
+      ++stats.skipped;
       static unsigned logged=0;
       if (logged++<16) REXLOG_WARN("KK co-op bat vision: scan skipped, {} visible type 1 events exceed its list of {} (actor={:08X})",
           count.enumerable,eb::kVisionListRoom,kk::hfr::Load32(base,0x82CCBF6C));
