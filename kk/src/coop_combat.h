@@ -2,6 +2,7 @@
 #include "coop_protocol.h"
 #include "coop_mut.h"
 #include <cmath>
+#include <optional>
 
 namespace kk::coop::combat {
 constexpr size_t kQueueLimit = 32;
@@ -16,6 +17,21 @@ inline bool DamageClock(double hit_time, double host_pose_time) {
       hit_time >= host_pose_time-kMaxAge && hit_time <= host_pose_time+.5;
 }
 enum class GrabFeedback { Pending, Accepted, Release };
+inline bool RaptorViewRead(uint32_t caller) {
+  if (COOP_MUT_IF("raptor_camera")) return true;
+  // Only the selected camera-reference reads in824641B0. Its target,
+  // attacker and jaw-anchor reads keep their physical positions.
+  return caller==0x82464320 || caller==0x82464374 || caller==0x824643E0 || caller==0x8246446C;
+}
+inline std::optional<float> RaptorViewHeight(EnemyFamily family,uint32_t kind,uint32_t caller,
+                                           ShotVector foot,ShotVector view,bool local_crouched,bool peer_crouched) {
+  if (family!=EnemyFamily::Raptor || kind!=16 || !RaptorViewRead(caller) || local_crouched!=peer_crouched) return {};
+  const float x=view.x-foot.x,y=view.y-foot.y,z=view.z-foot.z;
+  // Use the actual native first person camera offset, never a guessed eye
+  // height or a remote address. Detached/cinematic cameras are not an anchor.
+  if (!std::isfinite(x) || !std::isfinite(y) || !std::isfinite(z) || std::hypot(x,y)>1 || z<.05f || z>3) return {};
+  return z;
+}
 inline bool NativePlayerScriptTarget(uint32_t authored,uint32_t selected,uint32_t hero,uint32_t body) {
   if (COOP_MUT_IF("native_script_target")) return true;
   // An authored nonplayer target belongs to the story. Only alias an existing

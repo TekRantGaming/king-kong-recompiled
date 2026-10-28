@@ -335,6 +335,24 @@ void ProfileScenario(const char* name,uint32_t seed) {
   std::printf("actual-core profile=%s seed=%u story=%u poses=%llu/%llu converged=yes native-hooks=absent\n",name,seed,applied,
       (unsigned long long)p.host.Poses().received,(unsigned long long)p.guest.Poses().received);
 }
+void RaptorCamera() {
+  const ShotVector foot{1,2,3},view{1.1f,2.1f,4.6f};
+  const auto height=[&](EnemyFamily family=EnemyFamily::Raptor,uint32_t kind=16,uint32_t caller=0x82464320,
+                        ShotVector camera=ShotVector{1.1f,2.1f,4.6f},bool local=false,bool peer=false) {
+    return combat::RaptorViewHeight(family,kind,caller,foot,camera,local,peer);
+  };
+  Check(height() && std::abs(*height()-1.6f)<.001f,"native view height retained for peer camera sight ray");
+  for (const auto caller : {0x82464320u,0x82464374u,0x824643E0u,0x8246446Cu})
+    Check(height(EnemyFamily::Raptor,16,caller).has_value(),"each native camera-derived read admitted");
+  Check(!height(EnemyFamily::Raptor,16,0x824642B4),"physical target position read is not a camera");
+  Check(!height(EnemyFamily::Raptor,16,0x8246430C),"jaw anchor position is not a camera");
+  Check(!height(EnemyFamily::Scorpion),"other enemy models do not use raptor camera offsets");
+  Check(!height(EnemyFamily::Raptor,14),"small raptor behavior unchanged");
+  Check(!height(EnemyFamily::Raptor,16,0x82464320,view,false,true),"different crouch states cannot borrow local camera height");
+  Check(!height(EnemyFamily::Raptor,16,0x82464320,{10,2,4.6f}),"detached camera excluded");
+  Check(!height(EnemyFamily::Raptor,16,0x82464320,{1,2,20}),"cinematic height excluded");
+  Check(!height(EnemyFamily::Raptor,16,0x82464320,{1,2,std::numeric_limits<float>::quiet_NaN()}),"nonfinite camera excluded");
+}
 void BatContactSound() {
   DamageEvent d{{302,9,5},9,7,{123,4,EnemyFamily::Bat},2,2,{1,0,0}};
   d.generation=2; d.time=10;
@@ -471,6 +489,7 @@ int main(int argc,char** argv) {
   else if(name=="grab_start") GrabStart();
   else if(name=="native_script_target") NativeScriptTarget();
   else if(name=="bat_contact_sound") BatContactSound();
+  else if(name=="raptor_camera") RaptorCamera();
   else if(name=="udp_duplicate" || name=="udp_order") Reliable();
   else { std::fprintf(stderr,"unknown test\n"); return 2; }
   std::printf("PASS [%s]\n",test_name); return 0;

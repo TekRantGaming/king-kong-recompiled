@@ -30,6 +30,7 @@ REX_EXTERN(__imp__sub_8271CCB8);
 REX_EXTERN(__imp__sub_82715AC8);
 REX_EXTERN(__imp__sub_827117E0);
 REX_EXTERN(__imp__sub_82711278);
+REX_EXTERN(__imp__sub_8270FCE0);
 REX_EXTERN(__imp__sub_82401AA8);
 REX_EXTERN(__imp__sub_82850100);
 REX_EXTERN(__imp__sub_826FA3B0);
@@ -1258,6 +1259,41 @@ void RaptorPlayer(uint8_t* b, bool capture) {
   Store32(b,owner->vars+14192,partner ? body : it->second.reference);
   const auto distance=PlayerDistance(b,owner->actor,player);
   if (std::isfinite(distance)) StoreF(b,owner->vars+5104,distance);
+}
+void RaptorViewPosition(PPCContext& ctx,uint8_t* b,uint32_t actor,uint32_t out,uint32_t caller) {
+  const auto* owner=CombatOwner(b,EnemyFamily::Raptor);
+  const auto body=kk::PartnerBodyCombatActor(b);
+  auto& s=Get();
+  if (!owner || !body || actor!=body || !PoseAddress(out,12) || !s.link.partner ||
+      Load32(b,owner->vars+32)!=16 || Load32(b,owner->vars+14192)!=body || !Scratch::CanUse(ctx)) return;
+  const auto cached=s.raptor_players.find(owner->actor);
+  const auto hero=Load32(b,0x82CCBF7C);
+  if (cached==s.raptor_players.end() || cached->second.hero!=hero || cached->second.binding.id!=owner->id ||
+      cached->second.binding.ai!=owner->ai || cached->second.binding.vars!=owner->vars ||
+      cached->second.binding.matrix!=owner->matrix || !PoseAddress(cached->second.reference,32) ||
+      !Ptr(b,cached->second.reference,12,64)) return;
+  const auto claim=stimulus_debug::ReadHandle([&](uint32_t p){return Load32(b,p);},owner->vars+5216);
+  const auto slot=Load32(b,owner->vars+5228),count=Load32(b,owner->vars+5236);
+  if (!claim.valid || (claim.id>>24)!=16 || claim.source!=owner->actor || claim.target!=body || count>20 ||
+      slot>=count || Load32(b,owner->vars+6244+4*slot)!=body || Load32(b,owner->vars+5664+4*slot)!=1) return;
+  const auto local=ReadJackPose([&](uint32_t p){return Load32(b,p);},[&](uint32_t p){return Load16(b,p);},
+      [&](uint32_t p){return LoadF(b,p);},Now());
+  if (!local.pose) return;
+  ShotVector view;
+  {
+    Scratch scratch(ctx,b); const auto point=scratch.Vec(0,0,0,0x100);
+    ctx.r3.u64=cached->second.reference; ctx.r4.u64=point; __imp__sub_8270FCE0(ctx,b);
+    view={LoadF(b,point),LoadF(b,point+4),LoadF(b,point+8)};
+  }
+  const auto height=combat::RaptorViewHeight(owner->id.family,Load32(b,owner->vars+32),caller,
+      {local.pose->x,local.pose->y,local.pose->z},view,local.pose->crouched,s.link.partner->crouched);
+  if (!height || !std::isfinite(LoadF(b,out+8))) return;
+  StoreF(b,out+8,LoadF(b,out+8)+*height);
+#if defined(KK_DEV_TOOLS)
+  static unsigned lines=0;
+  if (lines++<64) REXLOG_INFO("COOP TARGET native-view actor={:08X} body={:08X} reference={:08X} caller={:08X} height={:.3f} native-camera-offset=true physical-target-unchanged=true",
+      owner->actor,body,cached->second.reference,caller,*height);
+#endif
 }
 void ContactVictim(PPCContext& ctx, const uint8_t* b) {
   // 82638B30 has already tested contact with *r29, but its kind-1 branch
@@ -4095,6 +4131,11 @@ REX_HOOK_RAW(sub_8250EDE8) {
 #endif
 
 // One owner for each shared hook in both dev and production builds.
+REX_HOOK_RAW(sub_8270FCE0) {
+  const auto actor=ctx.r3.u32,out=ctx.r4.u32,caller=uint32_t(ctx.lr);
+  __imp__sub_8270FCE0(ctx,base);
+  if (kk::coop::combat::RaptorViewRead(caller)) kk::coop::RaptorViewPosition(ctx,base,actor,out,caller);
+}
 REX_HOOK_RAW(sub_826A0920) {
   kk::coop::ObserveHumanConsumption(ctx, base);
 }
