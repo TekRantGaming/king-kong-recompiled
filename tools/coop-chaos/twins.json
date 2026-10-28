@@ -64,6 +64,8 @@
     "crab_player_unstick_off": "crab_player_unstick",
     "crab_player_any_other": "crab_player_unstick",
     "crab_player_release_zone": "crab_player_unstick",
-    "crab_player_no_exclude": "crab_player_unstick"
+    "crab_player_no_exclude": "crab_player_unstick",
+    "probe_off": "guest_probe",
+    "probe_first_region": "guest_probe"
   }
 }
