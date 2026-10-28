@@ -10,6 +10,7 @@
 #include "coop_stimulus_debug.h"
 #include "coop_event_budget.h"
 #include "coop_puppet.h"
+#include "coop_rebirth.h"
 #include <algorithm>
 #include <map>
 #include <vector>
@@ -343,6 +344,36 @@ void UnarmedGait() {
     const auto g=puppet::ChooseGait(v,0,0,false,crew,UINT32_MAX,true);
     Check(g && !puppet::HeldItemAction(g->clip.action),"empty hands never walk with a gun grip or raised arms");
   }
+}
+void RebirthAdoption() {
+  // C107: host private reload at level 101/4. Six living crabs of one spawner
+  // template (sequences 1 to 6; 3 is a corpse) and one of another template.
+  using F=EnemyFamily;
+  const uint64_t spawner=0x9B70C2F92FA57564ull, crab_template=0x1111ull, other_template=0x2222ull;
+  enemies::RebirthAdoption adoption;
+  for(uint32_t n=1;n<=6;++n) {
+    EnemyState e; e.id=enemies::SpawnId(spawner,crab_template,n,F::Crab); e.life=n==3 ? 0.f:12.f;
+    e.spawn_x=float(n); adoption.Remember(e);
+  }
+  EnemyState other; other.id=enemies::SpawnId(spawner,other_template,7,F::Crab); other.life=5; adoption.Remember(other);
+  Check(adoption.Pending()==6,"only living spawned identities are remembered");
+  // The reloaded spawner's native births would be sequences 8, 9, ...
+  std::vector<uint32_t> taken;
+  for(uint32_t next=8;next<14;++next) {
+    const auto a=adoption.Take(enemies::SpawnId(spawner,crab_template,next,F::Crab));
+    if(!a) break;
+    Check(a->id.source==enemies::SpawnId(spawner,crab_template,1,F::Crab).source && a->id.family==F::Crab,
+        "a rebirth adopts only its own spawner template");
+    taken.push_back(a->id.sequence);
+  }
+  Check((taken==std::vector<uint32_t>{1,2,4,5,6}),"each living identity is adopted once, in sequence order, corpses skipped");
+  Check(!adoption.Take(enemies::SpawnId(spawner,crab_template,9,F::Crab)),"extra rebirths keep fresh sequences");
+  Check(!adoption.Take(enemies::SpawnId(spawner,crab_template,1,F::Raptor)),"another family never adopts");
+  Check(!adoption.Take(enemies::SpawnId(spawner+1,crab_template,1,F::Crab)),"another spawner never adopts");
+  const auto o=adoption.Take(enemies::SpawnId(spawner,other_template,8,F::Crab));
+  Check(o && o->id==other.id && !adoption.Pending(),"the other template adopts its own identity");
+  adoption.Remember(other); adoption.Clear();
+  Check(!adoption.Pending(),"a new world forgets every identity");
 }
 void ShotValidation() {
   const EnemyWorld w{101,1,1}; InventoryState inventory{w,100,1}; inventory.ammo[0]=50;
@@ -719,6 +750,7 @@ int main(int argc,char** argv) {
   else if(name=="digest_compare") DigestCompare();
   else if(name=="false_quiet") FalseQuiet();
   else if(name=="unarmed_gait") UnarmedGait();
+  else if(name=="rebirth_adoption") RebirthAdoption();
   else if(name=="shot_validator") ShotValidation();
   else if(name=="session_epoch") SessionEpoch();
   else if(name=="projectile_source") ProjectileSource();
