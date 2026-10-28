@@ -23,7 +23,8 @@ param(
     [string]$ResumeManifest = '',
     [ValidateRange(0,60)][int]$RetryBlockedSeconds = 0,
     [string]$ExtraEnv = '',
-    [string]$ExtraJoinEnv = ''
+    [string]$ExtraJoinEnv = '',
+    [switch]$NoStoryFixture
 )
 $ErrorActionPreference = 'Stop'
 $coopRoot = 'F:\kk-native-coop'
@@ -145,6 +146,14 @@ try {
         $envText = "KK_DEV_LAUNCHER_INPUT=wait-home,direct:code:C86ABC,direct:host,session:$($record.entry)|KK_DEV_AUTOSKIP=1|KK_DEV_SCRIPT=0:SKIP/10|KK_DEV_WANDER=1|KK_DEV_CHEATS_ANYWHERE=1|KK_DEV_EMPTY_LOADOUT=1|KK_DEV_TRIG_TRACE=1|KK_DEV_ENEMY_NEAR=1"
         $joinText = 'KK_DEV_LAUNCHER_INPUT=wait-home,direct:code:C86ABC,direct:join,direct:ready|KK_DEV_FACE_ENEMY=16:0.001'
         if ($StoryLayout) { $envText += "|KK_DEV_STORY_LAYOUT=$StoryLayout" }
+        # C116 story fixture: level 1101 checkpoint 5 fails in single player too unless Jack follows Ann onto the
+        # rock pillar (ActivatorTrigger_wait 8244F860: Ann in zone 4268A79C and Jack in zone 42688BC0); otherwise
+        # the V-Rex takes her and her death script reloads about every 33 s. Both players are placed on that spot
+        # with the game's own teleport trigger while she waits there. -NoStoryFixture keeps the old behaviour.
+        if (-not $NoStoryFixture -and $record.entry -eq 22 -and $record.start -eq 5) {
+            $envText += '|KK_DEV_TELEPORT=19,127.9,191.8,17.2,-1,0'
+            $joinText += '|KK_DEV_TELEPORT=19.5,127.9,191.8,17.2,-1,0'
+        }
         if ($ExtraEnv) { $envText += "|$ExtraEnv" }
         if ($ExtraJoinEnv) { $joinText += "|$ExtraJoinEnv" }
         if ($ObjectTrace) { $envText += '|KK_DEV_OBJECTS=1' }
