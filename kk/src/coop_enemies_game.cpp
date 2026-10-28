@@ -2339,10 +2339,11 @@ void DevDie(PPCContext& ctx, uint8_t* b) {
   if (die.queued==1 && h->condition==PlayerCondition::Hurt) die.hurt=true;
   if (die.queued==2) return; // Queue acceptance is not proof of native death.
   // Repeat mode: the first bite waits for 4 s of life, so the revive placement
-  // and its void guard are judged before the next death starts.
+  // and its void guard are judged before the next death starts. The C110
+  // revive bite mode bites in the revive frame on purpose, so it skips this.
   if (h->condition!=PlayerCondition::Alive || die.queued) die.alive_since=-1;
   else if (die.alive_since<0) die.alive_since=t;
-  if (die.repeat>0 && !die.queued && (die.alive_since<0 || t-die.alive_since<4)) return;
+  if (die.repeat>0 && !die.revive_bite && !die.queued && (die.alive_since<0 || t-die.alive_since<4)) return;
   const float immunity=LoadF(b,h->vars+3232), allowed=LoadF(b,0x8203BFF0);
   const float clock=LoadF(b,0x82CCAE1C)-LoadF(b,0x82CCC02C);
   const float elapsed=clock-LoadF(b,h->vars+11852);
