@@ -237,6 +237,7 @@ uint32_t LifeCell(const uint8_t* b, const Binding& binding) {
 }
 bool Read(const uint8_t* b, uint32_t actor, Binding& bind, EnemyState& e) {
   if (!PoseAddress(actor, 32) || actor == Load32(b, 0x82CCBF7C) || (Load32(b, actor)&0x00400001)) return false;
+  if (Replication() && kk::PartnerBodyManagedActor(b,actor)) return false;
   bind.actor = actor;
   bind.ai = Ptr(b, Ptr(b, actor, 24, 8), 4, 88);
   bool spawner = false, initializing = false;
@@ -244,8 +245,8 @@ bool Read(const uint8_t* b, uint32_t actor, Binding& bind, EnemyState& e) {
   if (family == EnemyFamily::None || initializing) return false;
   bind.vars = Ptr(b, bind.ai, 64, LifeBytes(family)); bind.matrix = Ptr(b, actor, 12, 64);
   if (!bind.vars || !bind.matrix) return false;
-  if (family==EnemyFamily::Human && (actor==kk::PartnerBodyCombatActor(b) ||
-      Load32(b,bind.vars)!=0 || !LifeCell(b,Binding{{0,0,family},actor,bind.ai,bind.vars,bind.matrix}))) return false;
+  if (family==EnemyFamily::Human && (Load32(b,bind.vars)!=0 ||
+      !LifeCell(b,Binding{{0,0,family},actor,bind.ai,bind.vars,bind.matrix}))) return false;
   const auto hero = Load32(b, 0x82CCBF7C);
   const auto hero_ai = Ptr(b, Ptr(b, hero, 24, 8), 4, 88);
   if (bind.ai == hero_ai || bind.vars == Ptr(b, hero_ai, 64, 4) || bind.matrix == Ptr(b, hero, 12, 64)) return false;
@@ -4401,6 +4402,7 @@ world::Json world::EnemySnapshot(const uint8_t* b,world::Capture& capture) {
   for (auto p=begin;p<end;p+=8) {
     const auto actor=Load32(b,p);
     if (!PoseAddress(actor,32) || (Load32(b,actor)&0x00400001)) continue;
+    if (Replication() && (actor==Load32(b,0x82CCBF7C) || kk::PartnerBodyManagedActor(b,actor))) continue;
     const auto ai=Ptr(b,Ptr(b,actor,24,8),4,88),matrix=Ptr(b,actor,12,64);
     bool spawner=false,initializing=false; uint32_t state=0;
     const auto family=Tracks(b,ai,state,spawner,&initializing);

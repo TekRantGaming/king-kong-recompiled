@@ -2562,6 +2562,15 @@ uint32_t PartnerBodyCombatActor(const uint8_t* b) {
 uint32_t PartnerBodyCombatCopy(const uint8_t* b) {
   return Get().selected_copy ? PartnerBodyCombatActor(b):0;
 }
+bool PartnerBodyManagedActor(const uint8_t* b,uint32_t actor) {
+  const auto& s=Get();
+  for (const auto& copy:s.spawned) if (copy.rig.actor==actor && SpawnIdentity(b,copy)) return true;
+  if (!s.driving || !s.prepared || actor!=s.selected.actor || !s.Environment(b,s.world)) return false;
+  const auto observation=s.humans.find(actor);
+  if (observation==s.humans.end() || observation->second.generation!=s.selected_generation) return false;
+  Rig rig;
+  return Registered(b,s.world,actor) && ReadRig(b,actor,rig) && Same(rig,s.selected);
+}
 bool PartnerBodyStimulus(PPCContext& ctx, uint8_t* b) {
   auto& s = Get();
   const auto body = PartnerBodyCombatActor(b);
