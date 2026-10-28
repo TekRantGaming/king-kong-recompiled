@@ -34,10 +34,10 @@ inline bool Relevant(const EnemyState& e, const PlayerPose& player) {
   return std::hypot(e.x-player.x,e.y-player.y,e.z-player.z)<=kRadius;
 }
 inline bool Freeze(bool enabled, bool guest, bool connected, bool world,
-                   bool binding, bool player, bool initialized) {
+                   bool binding, bool player, bool initialized,bool retiring=false) {
   if (COOP_MUT_IF("actor_freeze_off")) return false;
   return enabled && (guest || COOP_MUT_IF("actor_freeze_host")) && connected && world &&
-      binding && !player && initialized;
+      binding && !player && initialized && (!retiring || COOP_MUT_IF("actor_freeze_retire"));
 }
 inline EnemyState Interpolate(const EnemyState& a, const EnemyState& b, float t) {
   if (COOP_MUT_IF("actor_interpolation_latest")) return b;

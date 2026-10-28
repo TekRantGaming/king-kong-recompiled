@@ -582,6 +582,7 @@ struct DevRaptorLog {
 #endif
 void ShotSummary(const char* boundary, bool end = true);
 struct State {
+  uint32_t retiring_actor=0;
   uint64_t actor_holds=0,actor_last_bytes=0,actor_drifts=0;
   double actor_log_at=0,actor_publish_at=0;
   uint32_t world = 0, game = 0;
@@ -686,6 +687,7 @@ struct State {
   Counters counts;
   double next_log = 0, prepared_at = 0;
   void ResetWorld() {
+    retiring_actor=0;
     actor_holds=actor_last_bytes=actor_drifts=0; actor_log_at=actor_publish_at=0;
     ShotSummary("world-end");
     world = game = 0; capture = prepared = false; identity = {};
@@ -1004,7 +1006,8 @@ bool FreezeActor(const uint8_t* b,uint32_t actor,uint32_t ai) {
     binding=Read(b,actor,observed,native) && observed.ai==ai;
   }
   const bool session=s.link.session_state==SessionState::Connected || s.link.session_state==SessionState::Lost;
-  const bool freeze=actors::Freeze(Replication(),s.link.role==Role::Guest,session,Environment(b,s.world),binding,player,binding);
+  const bool freeze=actors::Freeze(Replication(),s.link.role==Role::Guest,session,Environment(b,s.world),
+      binding,player,binding,s.retiring_actor==actor);
   if (freeze) ++s.actor_holds;
   return freeze;
 }
@@ -2015,6 +2018,11 @@ void Replicas(PPCContext& ctx, uint8_t* b, bool drive) {
       constexpr uint32_t globals[]{0x82CCBF58,0x82CCBF5C,0x82CCBF60,0x82CCBF64,0x82CCBF68,0x82CCBF6C,0x82CCBF70};
       uint32_t saved[7];
       for (unsigned i=0;i<7;++i) saved[i]=Load32(b,globals[i]);
+      struct Retiring {
+        uint32_t& value; uint32_t previous;
+        ~Retiring() { value=previous; }
+      } retiring{s.retiring_actor,s.retiring_actor};
+      s.retiring_actor=actor;
       ctx.r3.u64=actor; __imp__sub_82714E40(ctx,b);
       for (unsigned i=0;i<7;++i) Store32(b,globals[i],saved[i]);
       if (auto local=s.records.find(binding->id);local!=s.records.end()) local->second.kind=EnemyEventKind::Removed;

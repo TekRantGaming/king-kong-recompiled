@@ -70,6 +70,7 @@
     "probe_first_region": "guest_probe",
     "actor_freeze_off": "actor_freeze",
     "actor_freeze_host": "actor_freeze",
+    "actor_freeze_retire": "actor_freeze",
     "actor_interpolation_latest": "actor_interpolation",
     "actor_interpolation_no_snap": "actor_interpolation"
   }

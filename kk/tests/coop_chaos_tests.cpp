@@ -79,6 +79,7 @@ void ActorFreeze() {
   Check(!actors::Freeze(true,true,true,true,false,false,true),"recycled bindings are untouched");
   Check(!actors::Freeze(true,true,true,true,true,true,true),"local Jack and partner are untouched");
   Check(!actors::Freeze(true,true,true,true,true,false,false),"native initialization must finish");
+  Check(!actors::Freeze(true,true,true,true,true,false,true,true),"host retirement must run native destruction cleanup");
 }
 void ActorInterpolation() {
   enemies::Channel c;
@@ -177,6 +178,37 @@ void ActorLoss() {
     const auto frame=p.guest.Enemies(p.now+Pair::offset);
     Check(frame.records.size()==16,"all actor rows recover after losses");
     Check(frame.records[0].kind==EnemyEventKind::Removed && frame.records[0].enemy.life==0,"retirement wins over delayed live poses");
+  }
+  for (bool replication:{false,true}) {
+    Pair p({},replication); p.Connect();
+    auto e=Enemy(); e.owner=EnemyOwner::Guest;
+    enemies::Frame f{{101,4,1},p.now+Pair::offset,{{e}}};
+    ShotIntent shot; shot.world=f.world; shot.number=1; shot.weapon=1; shot.time=f.time;
+    shot.origin={4,2,3}; shot.direction={1,0,0}; shot.ray_length=1; shot.hits={{e.id,{5,2,3},0}};
+    InventoryState inventory{f.world,f.time,1}; inventory.ammo[0]=30;
+    Check(p.guest.QueueShot({shot,inventory}),"guest shot queues with either actor setting");
+    for (unsigned n=0;n<50;++n) {
+      f.time=p.now+Pair::offset;
+      p.host.Tick(p.now,PlayerPose{p.now,101});
+      p.guest.Tick(p.now+Pair::offset,PlayerPose{p.now+Pair::offset,101,4,2,3},&f); p.now+=.01;
+    }
+    Check(p.host.Enemies(p.now).records.empty()==replication,
+        "new mode refuses guest actor authority while off preserves the old owner stream");
+    const auto shots=p.host.TakeShots();
+    Check(shots.size()==1 && shots[0].inventory && shots[0].intent.number==1,
+        "guest shot and inventory still reach the host exactly once with replication on");
+    if (replication) {
+      e.owner=EnemyOwner::Host; e.life=0;
+      enemies::Frame result{f.world,p.now,{{e,EnemyEventKind::Died}}};
+      for (unsigned n=0;n<50;++n) {
+        result.time=p.now;
+        p.host.Tick(p.now,PlayerPose{p.now,101},&result);
+        p.guest.Tick(p.now+Pair::offset,PlayerPose{p.now+Pair::offset,101,4,2,3}); p.now+=.01;
+      }
+      const auto received=p.guest.Enemies(p.now+Pair::offset);
+      Check(received.records.size()==1 && received.records[0].enemy.life==0,
+          "host result returns to the guest through actor snapshots");
+    }
   }
 }
 void ProjectileSource() {
