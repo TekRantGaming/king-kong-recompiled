@@ -128,7 +128,14 @@ void DevFacePartnerCamera(PPCContext& ctx, uint8_t* base) {
     const auto* v=std::getenv("KK_DEV_FACE_PARTNER_UNTIL"); return v ? std::atof(v) : 0.;
   }();
   if (!f.enemy && !f.point_set && until>0 && elapsed>until) { f.done=true; return; }
-  if (f.point_set && f.point_index+1<f.points.size() && elapsed>=f.points[f.point_index+1].at) {
+  // C116: KK_DEV_FACE_POINT_REACH=<metres> moves on to the next point only when
+  // Jack is that close (horizontally) to the current one, so a walking route
+  // follows waypoints; the later points' times are then ignored.
+  static const float reach=[] {
+    const char* v=std::getenv("KK_DEV_FACE_POINT_REACH"); const float r=v ? float(std::atof(v)) : 0.f;
+    return std::isfinite(r) && r>0 && r<50 ? r : 0.f;
+  }();
+  if (f.point_set && reach==0 && f.point_index+1<f.points.size() && elapsed>=f.points[f.point_index+1].at) {
     while (f.point_index+1<f.points.size() && elapsed>=f.points[f.point_index+1].at) ++f.point_index;
     const auto& p=f.points[f.point_index]; f.first=p.at; f.point=p.position; f.repeat=p.repeat; f.next=p.at; f.done=false; f.logged=false;
   }
@@ -143,6 +150,12 @@ void DevFacePartnerCamera(PPCContext& ctx, uint8_t* base) {
       [&](uint32_t a) { return LoadF(base, a); }, elapsed);
   if (!local.pose || (!f.enemy && !f.point_set && local.pose->level != snapshot.partner->level) ||
       local.pose->level != snapshot.local->level) return;
+  if (f.point_set && reach>0 && f.point_index+1<f.points.size() &&
+      std::hypot(f.point.x-local.pose->x,f.point.y-local.pose->y)<reach) {
+    ++f.point_index;
+    const auto& p=f.points[f.point_index]; f.point=p.position; f.repeat=p.repeat; f.first=elapsed; f.next=elapsed; f.logged=false;
+    REXLOG_INFO("KK dev: face point reached, next point {} ({:.2f},{:.2f},{:.2f})",f.point_index,p.position.x,p.position.y,p.position.z);
+  }
   const uint32_t hero = Load32(base, 0x82CCBF7C);
   const uint32_t script = Load32(base, 0x82CCBF64);
   if (!coop::PoseAddress(script, 68)) return;
