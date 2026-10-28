@@ -2915,6 +2915,45 @@ void BeforeAi(PPCContext& ctx, uint8_t* b, uint32_t w) {
   PeerGrabTick(ctx,b);
 }
 #if defined(KK_DEV_TOOLS)
+void DevScorpionActivity(PPCContext& ctx,uint8_t* b) {
+  static const double due=[] {
+    const auto* value=std::getenv("KK_DEV_SCORPION_ACTIVITY");
+    if (!value || !*value) return -1.;
+    char* end=nullptr; const auto t=std::strtod(value,&end);
+    return end!=value && !*end && std::isfinite(t) && t>=0 && t<=3600 ? t:-1.;
+  }();
+  static bool done=false;
+  const auto t=kk::DevSecondsSinceMenu();
+  auto& s=Get();
+  if (done || due<0 || t<due || !s.prepared || !Connected() || s.link.role!=Role::Host ||
+      !Environment(b,s.world) || !EnemyPartnerCombatReady() || !Scratch::CanUse(ctx)) return;
+  if (t>due+15) {
+    done=true;
+    REXLOG_INFO("COOP GRAB activation-fixture expired without a qualified native source and peer copy");
+    return;
+  }
+  // One known authored actor only. No generic spawn, state write, invented
+  // grab handle or hit. Native initialization and the shipping bridge still
+  // have to produce the actual encounter after this controlled activation.
+  if (s.identity.level!=203 || s.identity.start!=5 || !kk::PartnerBodyCombatCopy(b)) return;
+  const auto hero=Load32(b,0x82CCBF7C),matrix=Ptr(b,hero,12,64);
+  if (!matrix) return;
+  const auto all=DevEnemies(b,s.world,Vector(b,matrix+48));
+  const auto it=std::find_if(all.begin(),all.end(),[](const auto& e) {
+    return !e.scheduled && e.family==EnemyFamily::Scorpion && (e.initializing || e.life>0) &&
+        ShotDistance(e.position,{51.110620f,132.907700f,19.930140f})<=.5f;
+  });
+  if (it==all.end()) return;
+  Scratch scratch(ctx,b);
+  const auto record=scratch.Vec(0,0,0,0x200);
+  std::memset(b+record,0,108); Store32(b,record+4,it->actor); Store32(b,record+84,1);
+  constexpr uint32_t globals[]{0x82CCBF64,0x82CCBF68,0x82CCBF6C,0x82CCBF70};
+  uint32_t saved[4]; for (unsigned i=0;i<4;++i) saved[i]=Load32(b,globals[i]);
+  ctx.r3.u64=record; __imp__sub_8250EDE8(ctx,b);
+  for (unsigned i=0;i<4;++i) Store32(b,globals[i],saved[i]);
+  done=true;
+  REXLOG_INFO("COOP GRAB activation-fixture actor={:08X} native=8250EDE8 controlled-activation=true native-init-and-attacks-required=true direct-hit=false normal-traversal-unverified=true",it->actor);
+}
 void EnemyThrowProbe(PPCContext& ctx,uint8_t* b) {
   static const double due=[] {
     const auto* text=std::getenv("KK_DEV_ENEMY_THROW"); return text ? std::atof(text):-1.;
@@ -3194,7 +3233,7 @@ void AfterAi(PPCContext& ctx, uint8_t* b, uint32_t w) {
   auto& s = Get();
   if (Environment(b,w)) { PeerGrabTick(ctx,b); LocalNativeGrabTick(ctx,b); }
 #if defined(KK_DEV_TOOLS)
-  if (Environment(b,w)) EnemyThrowProbe(ctx,b);
+  if (Environment(b,w)) { DevScorpionActivity(ctx,b); EnemyThrowProbe(ctx,b); }
 #endif
   if (!s.prepared || !Connected() || !Environment(b, w)) { s.driving.clear(); return; }
   Scan(b);

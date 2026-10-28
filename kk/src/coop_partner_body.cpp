@@ -1617,7 +1617,8 @@ void CensusAndSelect(PPCContext& ctx, uint8_t* b, uint32_t w) {
   std::map<uint32_t, unsigned> membership;
   for (uint32_t p = begin; p < end; p += 8) ++membership[Load32(b, p)];
   std::vector<std::pair<uint32_t, uint32_t>> entries;
-  if (Opt().automatic && registry_evidence.valid) {
+  const bool registry_source=Opt().automatic || (Opt().spawn && Opt().slot);
+  if (registry_source && registry_evidence.valid) {
     uint32_t rb, re;
     if (RegistryTable(b, w, rb, re)) for (uint32_t p = rb; p < re; p += 8)
       entries.emplace_back(Load32(b, p), (p - rb) / 8);
@@ -1638,7 +1639,7 @@ void CensusAndSelect(PPCContext& ctx, uint8_t* b, uint32_t w) {
     auto& obs = it->second;
     seen.insert(actor);
     const bool scheduled = membership.count(actor) && membership.at(actor) == 1;
-    const bool duplicate = Opt().automatic && registry_evidence.members.count(actor) ?
+    const bool duplicate = registry_source && registry_evidence.members.count(actor) ?
         registry_evidence.members.at(actor) != 1 || (membership.count(actor) && !scheduled) : !scheduled;
     const auto key_it = s.keys.find(actor);
     const uint32_t key = key_it == s.keys.end() ? 0 : key_it->second;
@@ -1804,7 +1805,7 @@ void CensusAndSelect(PPCContext& ctx, uint8_t* b, uint32_t w) {
     return;
   }
   if (!pick || tied) { s.Abort(tied ? "ambiguous-selector" : "no-qualified-selector-within-limit"); return; }
-  if (!(Opt().automatic && s.selected_tier == 6 ? Registered(b, w, pick->rig.actor) :
+  if (!((Opt().automatic && s.selected_tier == 6) || (Opt().spawn && Opt().slot) ? Registered(b, w, pick->rig.actor) :
         Opt().automatic ? AutoMembership(b, w, pick->rig) : Member(b, w, pick->rig.actor))) {
     s.Abort("duplicate-or-unconfirmed-membership"); return;
   }
