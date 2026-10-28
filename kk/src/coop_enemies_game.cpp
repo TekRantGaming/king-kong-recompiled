@@ -89,11 +89,11 @@ REX_EXTERN(__imp__sub_8271E760);
 REX_EXTERN(__imp__sub_8271E968);
 REX_EXTERN(__imp__sub_8271EBE8);
 REX_EXTERN(__imp__sub_8271E4E8);
+REX_EXTERN(__imp__sub_8262FE20);
 #if defined(KK_DEV_TOOLS)
 REX_EXTERN(__imp__sub_825491B0);
 REX_EXTERN(__imp__sub_8271ECF8);
 REX_EXTERN(__imp__sub_82663550);
-REX_EXTERN(__imp__sub_8262FE20);
 REX_EXTERN(__imp__sub_8241F0A8);
 #endif
 #if defined(KK_DEV_TOOLS)
@@ -1814,7 +1814,7 @@ void CombatBeforeAi(PPCContext& ctx, uint8_t* b) {
   {
     while (!s.pending_damage.empty()) {
       // C101: relayed damage makes a native type 4 event; wait while paused.
-      if (event_budget::DeferWhilePaused(Load32(b,event_budget::kPoolPauseWord)!=0)) break;
+      if (!event_budget::DevReplay26a() && event_budget::DeferWhilePaused(Load32(b,event_budget::kPoolPauseWord)!=0)) break;
       const auto& entry = s.pending_damage.front();
       // Wait briefly for the normal enemy matcher, without advancing replay.
       if ((!s.aliases.contains(entry.message.damage.enemy) || !s.link.partner) && combat::Fresh(entry.received, Now())) break;
@@ -2581,7 +2581,21 @@ void OwnerShots(PPCContext& ctx, uint8_t* b) {
   }
   // C101: peer shots make native type 2/21/4 events. While the world is
   // paused those never age, so leave the intents in their bounded queue.
-  const bool paused=event_budget::DeferWhilePaused(Load32(b,event_budget::kPoolPauseWord)!=0);
+#if defined(KK_DEV_TOOLS)
+  {
+    // C101 evidence: the pool pause word and the type 1 bucket, once a second.
+    static double next=0;
+    if (Now()>=next) {
+      next=Now()+1;
+      const auto body=kk::PartnerBodyCombatActor(b);
+      const auto c=event_budget::Count([&](uint32_t p) { return Load32(b,p); },1,body);
+      const auto pool=stimulus_debug::ReadPool([&](uint32_t p) { return Load32(b,p); },1);
+      REXLOG_INFO("KK dev event pool: pause-word={} type1 used={}/{} visible={} partner={:08X} partner-live={}",
+          Load32(b,event_budget::kPoolPauseWord),pool.count,pool.capacity,c.enumerable,body,c.owner_live);
+    }
+  }
+#endif
+  const bool paused=!event_budget::DevReplay26a() && event_budget::DeferWhilePaused(Load32(b,event_budget::kPoolPauseWord)!=0);
   if (paused!=s.events_paused) {
     s.events_paused=paused;
     REXLOG_INFO("KK co-op events: world {}, peer shots and relayed damage {} (deferred frames so far {})",
@@ -3796,7 +3810,7 @@ REX_HOOK_RAW(sub_8262FE20) {
   if (REXCVAR_GET(kk_coop_enabled)) {
     namespace eb=kk::coop::event_budget;
     const auto count=eb::Count([&](uint32_t p) { return kk::hfr::Load32(base,p); },1,0);
-    if (count.valid && !eb::VisionScanSafe(count.enumerable)) {
+    if (count.valid && !eb::DevReplay26a() && !eb::VisionScanSafe(count.enumerable)) {
       static unsigned logged=0;
       if (logged++<16) REXLOG_WARN("KK co-op bat vision: scan skipped, {} visible type 1 events exceed its list of {} (actor={:08X})",
           count.enumerable,eb::kVisionListRoom,kk::hfr::Load32(base,0x82CCBF6C));

@@ -2,6 +2,7 @@
 #include <cstdint>
 #include "coop_mut.h"
 #include "coop_stimulus_debug.h"
+#include <cstdlib>
 
 // C101: events that co-op code adds to the native event pool must follow the
 // native pool's own cadence. Root cause of the 26 Oct 21:03 host crash:
@@ -57,6 +58,29 @@ inline bool DeferWhilePaused(bool pool_paused) { return pool_paused && !COOP_MUT
 // must never run when that number exceeds the list's room.
 inline bool VisionScanSafe(uint32_t enumerable) {
   return COOP_MUT_IF("event_vision_guard") || enumerable <= kVisionListRoom;
+}
+
+// Developer builds only: KK_DEV_C101_REPLAY=1 restores the 26a behaviour (no
+// publish gate, no network deferral, no vision guard) to reproduce the crash
+// conditions in a two window run. The C90 group lookup guard stays on and
+// then logs the corrupt player pointer instead of crashing.
+inline bool DevReplay26a() {
+#if defined(KK_DEV_TOOLS)
+  static const bool on = [] {
+#if defined(_MSC_VER)
+    char* v = nullptr; size_t n = 0;
+    const bool set = _dupenv_s(&v, &n, "KK_DEV_C101_REPLAY") == 0 && v && v[0] == '1';
+    std::free(v);
+    return set;
+#else
+    const char* v = std::getenv("KK_DEV_C101_REPLAY");
+    return v && v[0] == '1';
+#endif
+  }();
+  return on;
+#else
+  return false;
+#endif
 }
 
 struct BucketCount {

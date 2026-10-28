@@ -11,11 +11,11 @@
 // and gives drive mode a stationary target at that creation point.
 #include "coop_partner_body.h"
 #include "coop_world_snapshot.h"
+#include "coop_event_budget.h"
 #if defined(KK_DEV_TOOLS)
 #include "art.h"
 #include "dev_puppet_mesh.h"
 #include "coop_stimulus_debug.h"
-#include "coop_event_budget.h"
 #include "dev_puppet_variant.h"
 #endif
 
@@ -1996,7 +1996,7 @@ static coop::event_budget::Decision PartnerPublishDecision(const uint8_t* b, con
   const auto count = eb::Count([&](uint32_t p) { return Load32(b, p); }, bucket >= 1 && bucket <= 12 ? bucket : 1, rig.actor);
   const eb::PublishInput in{Load32(b, eb::kPoolPauseWord) != 0, s.held != s.published_held,
       count.valid ? count.owner_live : eb::kOwnerLiveLimit};
-  const auto d = eb::DecidePublish(in);
+  const auto d = eb::DevReplay26a() ? eb::Decision::Publish : eb::DecidePublish(in);
   ++s.publish_counts[unsigned(d)];
   const auto now = Clock::now();
   if (d != eb::Decision::Publish && d != eb::Decision::NotDispatched && now >= s.publish_log_at) {
