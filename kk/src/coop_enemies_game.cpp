@@ -445,6 +445,24 @@ void DevEnemyNear(const uint8_t* b, uint32_t w) {
   const auto now = Now();
   if (now < next) return;
   next = now+1;
+  // C116: KK_DEV_ACTOR_POS=41DD45D0[,...] also logs these actors' positions
+  // (matrix at actor+12, translation at +48), e.g. a story companion.
+  static const std::vector<uint32_t> watched=[] {
+    std::vector<uint32_t> out;
+    if (const char* value=std::getenv("KK_DEV_ACTOR_POS"))
+      for (const char* p=value; *p;) {
+        char* end=nullptr; const auto v=std::strtoul(p,&end,16);
+        if (end==p) break;
+        out.push_back(uint32_t(v)); p=*end ? end+1 : end;
+      }
+    return out;
+  }();
+  for (const auto actor : watched) {
+    const auto matrix = actor>=0x40000000u && actor<0xA0000000u ? Load32(b, actor+12) : 0u;
+    if (matrix>=0x40000000u && matrix<0xA0000000u)
+      REXLOG_INFO("KK dev actor pos: actor={:08X} pos=({:.3f},{:.3f},{:.3f})", actor,
+          LoadF(b, matrix+48), LoadF(b, matrix+52), LoadF(b, matrix+56));
+  }
   const auto jack = ReadJackPose([&](uint32_t p) { return Load32(b, p); },
       [&](uint32_t p) { return Load16(b, p); }, [&](uint32_t p) { return LoadF(b, p); }, now);
   if (!jack.pose || !DevWorld(b, w)) {
