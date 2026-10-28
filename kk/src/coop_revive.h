@@ -1,6 +1,9 @@
 #pragma once
 #include "coop_protocol.h"
+#include "coop_mut.h"
 #include <cmath>
+#include <cstdint>
+#include <optional>
 
 namespace kk::coop::revive {
 // Native audit, generated/default/king_kong_recomp.N.cpp (G.N):
@@ -74,4 +77,101 @@ class Recovery {
 inline ShotVector Beside(const PlayerPose& peer) {
   return {peer.x-1.5f*std::cos(peer.facing), peer.y-1.5f*std::sin(peer.facing), peer.z};
 }
+// C104 placement. The old spot (1.5 behind at partner height) was never
+// checked: a checkpoint start usually faces into the level with its back to
+// the edge, so "behind" was often over nothing. Native rule, decomp
+// H_exec_read_world 826A1178: a player more than 0.2 off the ground whose ray
+// from 0.5 up and 8.5 down meets nothing sets V+0x3C50 (void) and dies once
+// the fall passes 3 (runs c89b-bat-strike302 05:20:49, c89b-centipede 08:45:07).
+// A spot is used only when the native ground ray finds a flat floor within a
+// step of the partner's floor, the head is clear, nothing stands between the
+// spot and the partner, and the native nav cell may be stood on.
+constexpr float kRadii[] = {1.5f, 1.0f, 2.5f};
+// Behind first (the old rule where it is safe), then the sides, then forward.
+constexpr float kTurns[] = {3.14159265f, 1.57079633f, -1.57079633f, 2.35619449f, -2.35619449f,
+                            .78539816f, -.78539816f, 0.f};
+constexpr unsigned kCandidates = 24;
+constexpr float kMaxStep = 1.f, kMinNormalZ = .7f;
+constexpr double kPlaceWait = 2, kGuardSeconds = 3;
+inline ShotVector Candidate(const PlayerPose& peer, float floor_z, unsigned i) {
+  const float r = kRadii[(i/8)%3], a = peer.facing+kTurns[i%8];
+  return {peer.x+r*std::cos(a), peer.y+r*std::sin(a), floor_z};
+}
+// Native nav cell byte (nav_cell_at 8284D638, sign extended). nav_grid.c:
+// bits 6 and 7 block AI routes, kind 15 costs 0 (not walkable). fn_826D5348:
+// cell 1 or 12 is blocked. fn_826D8020: kinds 3, 10 and 12 around the player
+// refuse a stand. A player can stand where AI may not route (run
+// c104-fix302: the host stood on cell 0x40), so every rule is relative to the
+// partner's own cell: only marks and kinds the partner does not stand on are
+// refused. Cell 0 is also "off the cells": taken only when the partner's is 0.
+inline bool NavStandable(int8_t cell, int8_t partner) {
+  const auto c = uint8_t(cell), p = uint8_t(partner), kind = uint8_t(c&15);
+  if (((c&0xC0) & ~(p&0xC0)) || kind == 15) return false;
+  if ((c == 1 || c == 12) && c != p) return false;
+  if (kind == 3 || kind == 10 || kind == 12) return kind == (p&15);
+  if (c == 0) return p == 0;
+  return true;
+}
+struct Probe {
+  bool floor = false;     // native ground ray met a face (not Jack, not the partner body)
+  float floor_z = 0, normal_z = 0;
+  bool headroom = false;  // nothing above the floor up to head height
+  bool sight = false;     // nothing between the spot and the partner
+  int8_t nav = 0;
+};
+enum class Verdict : uint8_t { Ok, NoFloor, Steep, Step, Head, Sight, Nav };
+inline Verdict Judge(const Probe& p, float partner_floor, int8_t partner_nav) {
+  if (!COOP_MUT_IF("placement_floor") && (!p.floor || !std::isfinite(p.floor_z))) return Verdict::NoFloor;
+  if (!(p.normal_z >= kMinNormalZ) && p.floor) return Verdict::Steep;
+  if (!(std::abs(p.floor_z-partner_floor) <= kMaxStep) && p.floor) return Verdict::Step;
+  if (!p.headroom) return Verdict::Head;
+  if (!COOP_MUT_IF("placement_sight") && !p.sight) return Verdict::Sight;
+  if (!NavStandable(p.nav, partner_nav)) return Verdict::Nav;
+  return Verdict::Ok;
+}
+inline const char* VerdictName(Verdict v) {
+  switch (v) {
+    case Verdict::Ok: return "ok"; case Verdict::NoFloor: return "no-floor"; case Verdict::Steep: return "steep";
+    case Verdict::Step: return "step"; case Verdict::Head: return "head"; case Verdict::Sight: return "sight";
+    case Verdict::Nav: return "nav";
+  }
+  return "?";
+}
+// Repeated placement attempts (one per frame). No valid spot for kPlaceWait
+// seconds: keep Jack on the native respawn spot the private load gave him.
+enum class Place : uint8_t { Wait, Spot, Stay };
+class Placement {
+ public:
+  Place Step(bool found, double now) {
+    if (!std::isfinite(now)) return Place::Wait;
+    if (first_ < 0 || now < last_ || now-last_ > 1) first_ = now;
+    last_ = now;
+    if (found) { *this = {}; return Place::Spot; }
+    if (now-first_ >= kPlaceWait) { *this = {}; return Place::Stay; }
+    return Place::Wait;
+  }
+ private:
+  double first_ = -1, last_ = -1;
+};
+// Safety net after any co-op placement: the native void flag means the fall
+// will kill. Within kGuardSeconds, put Jack back once on the grounded spot he
+// stood on before the move.
+class VoidGuard {
+ public:
+  void Arm(const ShotVector& rescue, bool grounded, double now) {
+    armed_ = grounded && std::isfinite(now) && std::isfinite(rescue.x) && std::isfinite(rescue.y) &&
+        std::isfinite(rescue.z);
+    rescue_ = rescue; since_ = now;
+  }
+  std::optional<ShotVector> Check(bool void_flag, double now) {
+    if (!armed_ || !std::isfinite(now) || now < since_ || now-since_ > kGuardSeconds) { armed_ = false; return {}; }
+    if (COOP_MUT_IF("void_guard") || !void_flag) return {};
+    armed_ = false; return rescue_;
+  }
+  bool Armed() const { return armed_; }
+ private:
+  bool armed_ = false;
+  ShotVector rescue_{};
+  double since_ = 0;
+};
 } // namespace kk::coop::revive

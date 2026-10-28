@@ -3,6 +3,7 @@
 #include <rex/hook.h>
 #include "coop_protocol.h"
 #include "coop_desync.h"
+#include "coop_revive.h"
 #include <optional>
 
 namespace kk::coop {
@@ -10,7 +11,10 @@ bool EnemySpawnerStep(PPCContext& ctx,uint8_t* base);
 bool EnemyHoldDestroy(PPCContext& ctx,uint8_t* base);
 void EnemyDestroying(const PPCContext& ctx,uint8_t* base);
 std::optional<PlayerCondition> LocalPlayerCondition(const uint8_t* base);
-bool ReviveTeleport(PPCContext& ctx, uint8_t* base, const PlayerPose& partner);
+// C104: validated native placement by a living partner (see coop_revive.h).
+revive::Place ReviveTeleport(PPCContext& ctx, uint8_t* base, const PlayerPose& partner);
+// Each frame before AI: puts Jack back if the native void flag follows a placement.
+void ReviveGuardFrame(PPCContext& ctx, uint8_t* base);
 void EnemyBeforeLoad();
 void EnemyAfterLoad(const uint8_t* base, uint32_t game);
 void EnemyGameFrame();

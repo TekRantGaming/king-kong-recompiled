@@ -22,7 +22,7 @@ class RunnerTests(unittest.TestCase):
 
     def test_all_guard_sites_are_registered(self):
         table = RUNNER["load_table"](ROOT / "tools" / "coop-chaos" / "twins.json")
-        self.assertEqual(31, len(table["twins"]))
+        self.assertEqual(34, len(table["twins"]))
         self.assertEqual([], RUNNER["scan_problems"](table))
         table["twins"] = table["twins"][:-1]
         self.assertTrue(any("UNLISTED" in item for item in RUNNER["scan_problems"](table)))
