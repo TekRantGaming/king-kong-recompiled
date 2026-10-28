@@ -59,7 +59,7 @@ void WriteEnemy(Writer& w, const EnemyState& e) {
   w.U(uint8_t(e.owner), 1); w.U(e.generation, 4);
   w.U(std::bit_cast<uint32_t>(e.secondary_life), 4);
   w.U(e.birth_spawner,8); w.U(e.birth_template,1); w.U(e.birth_point,1);
-  w.U(std::bit_cast<uint32_t>(e.animation_time),4); w.U(e.actor_flags,4);
+  w.U(std::bit_cast<uint32_t>(e.animation_time),4); w.U(std::bit_cast<uint32_t>(e.animation_duration),4); w.U(e.actor_flags,4);
   w.U(e.target,1); w.U(e.target_crew,1);
 }
 EnemyState ReadEnemy(Reader& r) {
@@ -75,7 +75,8 @@ EnemyState ReadEnemy(Reader& r) {
   e.owner = EnemyOwner(r.U(1)); e.generation = uint32_t(r.U(4));
   e.secondary_life = std::bit_cast<float>(uint32_t(r.U(4)));
   e.birth_spawner=r.U(8); e.birth_template=uint8_t(r.U(1)); e.birth_point=uint8_t(r.U(1));
-  e.animation_time=std::bit_cast<float>(uint32_t(r.U(4))); e.actor_flags=uint32_t(r.U(4));
+  e.animation_time=std::bit_cast<float>(uint32_t(r.U(4)));
+  e.animation_duration=std::bit_cast<float>(uint32_t(r.U(4))); e.actor_flags=uint32_t(r.U(4));
   e.target=uint8_t(r.U(1)); e.target_crew=uint8_t(r.U(1));
   return e;
 }
@@ -241,8 +242,9 @@ bool ValidShotReceipt(const ShotReceipt& r) {
 bool ValidEnemy(const EnemyState& e) {
   return e.id.source && ValidEnemyFamily(e.id.family) &&
       std::isfinite(e.animation_time) && e.animation_time>=-1 && e.animation_time<3600 &&
+      std::isfinite(e.animation_duration) && e.animation_duration>=-1 && e.animation_duration<3600 &&
       !(e.actor_flags & ~0x00200001u) && e.target<=3 && e.target_crew<=12 &&
-      (e.target==3 || !e.target_crew) &&
+      (e.target==3 ? e.target_crew>=1 : e.target_crew==0) &&
       std::isfinite(e.x) && std::isfinite(e.y) && std::isfinite(e.z) && std::isfinite(e.facing) &&
       std::isfinite(e.life) && std::abs(e.x) < 1000000 && std::abs(e.y) < 1000000 &&
       std::abs(e.z) < 1000000 && std::abs(e.facing) <= 3.1416f && std::abs(e.life) < 1000000 &&

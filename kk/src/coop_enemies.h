@@ -427,8 +427,10 @@ class Channel {
         record.enemy.item = r.record.enemy.item; record.enemy.state = r.record.enemy.state;
         record.enemy.actor_flags=r.record.enemy.actor_flags; record.enemy.target=r.record.enemy.target;
         record.enemy.target_crew=r.record.enemy.target_crew;
-        if (!same_clip)
+        if (!same_clip) {
           record.enemy.animation_time=r.record.enemy.animation_time;
+          record.enemy.animation_duration=r.record.enemy.animation_duration;
+        }
       }
       out.records.push_back(record);
     }

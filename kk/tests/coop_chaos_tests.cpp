@@ -95,6 +95,9 @@ void ActorInterpolation() {
   Check(actors::Interpolate(a,b,.5f).animation_time==a.animation_time,"animation time never blends across clips");
   a.facing=3.1f; b.facing=-3.1f;
   Check(std::abs(actors::Interpolate(a,b,.5f).facing)>3.14f,"facing follows the short arc");
+  a.animation_time=1.95f; b.animation_time=.05f; a.animation_duration=b.animation_duration=2;
+  b.action=a.action;
+  Check(std::abs(actors::Interpolate(a,b,.5f).animation_time)<.001f,"looping animation crosses its wrap without seeking backward");
   Check(c.Sample(11,true).records.empty(),"expired samples cannot extrapolate forever");
   m.type=MessageType::EnemyEvent; m.enemy_event={{101,4,1},EnemyEventKind::Died,a};
   m.enemy_event.enemy.life=0; c.Receive(m,11,true);
@@ -124,6 +127,8 @@ void ActorWire() {
   Check(!Encode(invalid,again),"network cannot set scheduler or component flags");
   invalid=m; invalid.enemies.enemies[0].target=2;
   Check(!Encode(invalid,again),"crew slot without crew target refuses");
+  invalid=m; invalid.enemies.enemies[0].target_crew=0;
+  Check(!Encode(invalid,again),"crew target requires a valid crew slot");
   auto compat=Compatible(),other=compat; other.actor_replication=true;
   Check(CheckCompatibility(compat,other)==RejectReason::ActorReplication,"mode mismatch refuses before playing");
   Message hello; hello.type=MessageType::Hello; hello.hello=other;

@@ -45,8 +45,12 @@ inline EnemyState Interpolate(const EnemyState& a, const EnemyState& b, float t)
   auto out=a;
   out.x+=(b.x-a.x)*t; out.y+=(b.y-a.y)*t; out.z+=(b.z-a.z)*t;
   out.facing=std::remainder(a.facing+std::remainder(b.facing-a.facing,6.2831853f)*t,6.2831853f);
-  if (a.action==b.action && a.item==b.item && b.animation_time>=a.animation_time)
-    out.animation_time+=(b.animation_time-a.animation_time)*t;
+  if (a.action==b.action && a.item==b.item) {
+    if (b.animation_time>=a.animation_time) out.animation_time+=(b.animation_time-a.animation_time)*t;
+    else if (a.animation_duration>0 && a.animation_duration==b.animation_duration &&
+             a.animation_time<=a.animation_duration && b.animation_time>=0)
+      out.animation_time=std::fmod(a.animation_time+(a.animation_duration-a.animation_time+b.animation_time)*t,a.animation_duration);
+  }
   return out;
 }
 // A record delta is absolute and repeated after a short interval. It never
@@ -55,7 +59,7 @@ inline bool Same(const EnemyState& a,const EnemyState& b) {
   return a.id==b.id && a.generation==b.generation && a.owner==b.owner &&
       a.x==b.x && a.y==b.y && a.z==b.z && a.facing==b.facing && a.life==b.life &&
       a.secondary_life==b.secondary_life && a.state==b.state && a.action==b.action &&
-      a.item==b.item && a.animation_time==b.animation_time && a.actor_flags==b.actor_flags &&
+      a.item==b.item && a.animation_time==b.animation_time && a.animation_duration==b.animation_duration && a.actor_flags==b.actor_flags &&
       a.target==b.target && a.target_crew==b.target_crew;
 }
 }

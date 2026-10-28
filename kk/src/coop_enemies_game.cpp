@@ -557,7 +557,12 @@ bool SharedSpawner(const uint8_t* b,uint32_t vars) {
     const auto source=Load32(b,vars+(slot<2 ? 1592+184*slot : 1972+4*(slot-2)));
     if (!source) { if (slot>=2) break; else continue; }
     bool nested=false; uint32_t fn=0;
-    const auto family=Tracks(b,Ptr(b,Ptr(b,source,24,8),4,88),fn,nested);
+    const auto template_ai=Ptr(b,Ptr(b,source,24,8),4,88);
+    const auto family=Tracks(b,template_ai,fn,nested);
+    if (family==EnemyFamily::Human) {
+      const auto variables=Ptr(b,template_ai,64,8);
+      if (!ActorReadable(variables,8) || Load32(b,variables)!=0) return false;
+    }
     if (nested || family==EnemyFamily::None) {
 #if defined(KK_DEV_TOOLS)
       REXLOG_INFO("ENEMIES birth admission refused vars={:08X} slot={} template={:08X} state={:08X} nested={}",vars,slot,source,fn,nested);
@@ -1752,7 +1757,7 @@ bool ControllerSafe(const uint8_t* b, uint32_t actor) {
   if (!PoseAddress(p, 60)) return false;
   p = Load32(b, p+56); return PoseAddress(p, 60);
 }
-uint32_t ActorAnimation(const uint8_t* b,uint32_t actor,float* seconds=nullptr) {
+uint32_t ActorAnimation(const uint8_t* b,uint32_t actor,float* seconds=nullptr,float* duration=nullptr) {
   auto pointer=[&](uint32_t p,uint32_t off,uint32_t bytes) {
     if (!ActorReadable(p,off+4)) return 0u;
     const auto q=Load32(b,p+off); return ActorReadable(q,bytes) ? q:0u;
@@ -1764,6 +1769,7 @@ uint32_t ActorAnimation(const uint8_t* b,uint32_t actor,float* seconds=nullptr) 
   if (!count || count>512) return 0;
   const auto descriptors=pointer(header,0,24*count),states=pointer(timing,4,12*count);
   if (!descriptors || !states) return 0;
+  float elapsed=-1,length=-1;
   for (uint32_t i=0;i<count;++i) {
     const auto d=descriptors+24*i,number=uint32_t(Load16(b,d+16)),index=uint32_t(Load16(b,states+12*i+8));
     if (number>8192 || (number && index>number)) return 0;
@@ -1771,17 +1777,25 @@ uint32_t ActorAnimation(const uint8_t* b,uint32_t actor,float* seconds=nullptr) 
     if (number && !records) return 0;
     if (!i && seconds) {
       if (!number) return 0;
-      double time=LoadF(b,states);
-      for (uint32_t n=0;n<index;++n) time+=(Load16(b,records+8*n)&0x7FFF)*double(LoadF(b,0x820B0C68));
+      double time=LoadF(b,states),total=0;
+      const double scale=LoadF(b,0x820B0C68);
+      for (uint32_t n=0;n<(duration ? number:index);++n) {
+        const double length=(Load16(b,records+8*n)&0x7FFF)*scale;
+        if (n<index) time+=length;
+        total+=length;
+      }
       if (!std::isfinite(time) || time<0 || time>=3600) return 0;
-      *seconds=float(time);
+      elapsed=float(time);
+      if (duration && std::isfinite(total) && total>0 && total<3600) length=float(total);
     }
   }
+  if (seconds) *seconds=elapsed;
+  if (duration) *duration=length;
   return anim;
 }
 void ActorMetadata(const uint8_t* b,const Binding& binding,EnemyState& e) {
   if (!Replication()) return;
-  ActorAnimation(b,binding.actor,&e.animation_time);
+  ActorAnimation(b,binding.actor,&e.animation_time,&e.animation_duration);
   e.actor_flags=Load32(b,binding.actor+4)&actors::kFlagsMask;
   const uint32_t offset=actors::TargetOffset(binding.id.family);
   uint32_t target=0,handle=0;
@@ -1889,7 +1903,12 @@ bool Drive(PPCContext& ctx, uint8_t* b, const Binding& binding, const EnemyState
     if (ValidBinding(b,binding)) {
       ctx.r3.u64=binding.actor; ctx.r4.u64=(e.actor_flags&0x00200000)!=0;
       __imp__sub_8270BED8(ctx,b);
-      Store32(b,binding.actor+4,(Load32(b,binding.actor+4)&~1u)|(e.actor_flags&1));
+      const auto flags=Load32(b,binding.actor+4);
+      Store32(b,binding.actor+4,(flags&~1u)|(e.actor_flags&1));
+      if ((flags^e.actor_flags)&1) {
+        // Same list invalidation words used by native object activity changes.
+        for (uint32_t off:{8u,12u,16u}) Store32(b,Get().world+off,1);
+      }
     }
   }
   return true;

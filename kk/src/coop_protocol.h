@@ -235,6 +235,7 @@ struct EnemyState {
   uint64_t birth_spawner = 0; // Authored identity, never an address. Zero for authored roots.
   uint8_t birth_template = 0, birth_point = 0; // Two fallback / 17 wave slots and 16 local points.
   float animation_time = -1; // Native channel ticks divided by 60. Negative means absent.
+  float animation_duration = -1;
   uint32_t actor_flags = 0; // Audited runtime visibility and collision bits only.
   uint8_t target = 0, target_crew = 0; // 0 none, 1 host, 2 guest, 3 crew slot.
 };
@@ -249,7 +250,7 @@ struct OwnershipChange {
   EnemyState enemy; // last state, tagged with the OLD owner/generation until Commit
 };
 bool ValidOwnershipChange(const OwnershipChange& change);
-constexpr size_t kEnemyStateBytes = 82, kMaxEnemyBatch = 11, kMaxEnemies = 512;
+constexpr size_t kEnemyStateBytes = 86, kMaxEnemyBatch = 11, kMaxEnemies = 512;
 
 struct ShotVector { float x = 0, y = 0, z = 0; };
 enum class PlayerCondition : uint8_t { Alive = 1, Hurt, Dead };
