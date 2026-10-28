@@ -15,6 +15,7 @@ import sys
 
 SCHEMA = 1
 IGNORED_ENEMY = {"position", "native_state", "scheduled"}
+OUT_OF_WORLD_Z = -10000.0  # far below every level's floor (levels span a few hundred units)
 IDENTITY = ("session", "generation", "level", "start", "enemy_visit", "checkpoint",
             "shared_checkpoint", "completed", "policy")
 
@@ -157,6 +158,15 @@ def shared(d):
         for row in out.get("objects", {}).get(category, {}).values():
             if "flags" in row:
                 row["flags"] &= 0x00600000
+    # C121: a support body knocked off the map falls forever in native ODE (no kill
+    # plane; 1804/3 pieces reach z -170000). Host body replication stops at the
+    # protocol bound (|z| <= 100000), so the guest keeps its last valid pose far
+    # below too. Far below any level both are only "out of world": compare that
+    # fact, not a free fall that never settles. Flags and retirement stay compared.
+    for row in out.get("objects", {}).get("bodies", {}).values():
+        pose = row.get("pose")
+        if isinstance(pose, list) and len(pose) >= 3 and isinstance(pose[2], (int, float)) and pose[2] < OUT_OF_WORLD_Z:
+            row["pose"] = "out-of-world"
     return out
 
 
