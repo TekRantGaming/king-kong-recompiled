@@ -50,11 +50,20 @@ inline bool NativeAttackSound(const DamageEvent& d) {
   if (COOP_MUT_IF("attack_sound")) return true;
   // Scorpion82616490 plays sound8 immediately before producing5/10.
   // Bat82652FF8 plays sound10 immediately after its player contact2/2.
+  // Raptor8256D2F0 creates attached sound7 after its native bite geometry.
   return !d.projectile && ((d.enemy.family==EnemyFamily::Scorpion && d.flags==5 && d.magnitude==10) ||
-      (d.enemy.family==EnemyFamily::Bat && d.flags==2 && d.magnitude==2));
+      (d.enemy.family==EnemyFamily::Bat && d.flags==2 && d.magnitude==2) ||
+      (d.enemy.family==EnemyFamily::Raptor && d.flags==0x4104 && d.magnitude==1000));
 }
 inline uint32_t NativeAttackSoundResource(const DamageEvent& d) {
-  return NativeAttackSound(d) ? (d.enemy.family==EnemyFamily::Bat ? 10:8):0;
+  return NativeAttackSound(d) ? (d.enemy.family==EnemyFamily::Bat ? 10:
+      d.enemy.family==EnemyFamily::Raptor ? 7:8):0;
+}
+inline bool RaptorBiteSound(EnemyFamily family,uint32_t caller,uint32_t resource,uint32_t selector) {
+  if (COOP_MUT_IF("raptor_bite_sound")) return true;
+  // The earlier8256D388 scripted animation branch returns without a bite
+  // contact. Only the call after successful native geometry is evidence.
+  return family==EnemyFamily::Raptor && caller==0x8256D578 && resource==7 && selector==0;
 }
 inline bool BatContactSound(const DamageEvent& d,EnemyId source,uint32_t generation,
                             uint32_t caller,uint32_t resource,double now) {

@@ -335,6 +335,27 @@ void ProfileScenario(const char* name,uint32_t seed) {
   std::printf("actual-core profile=%s seed=%u story=%u poses=%llu/%llu converged=yes native-hooks=absent\n",name,seed,applied,
       (unsigned long long)p.host.Poses().received,(unsigned long long)p.guest.Poses().received);
 }
+void RaptorBiteSound() {
+  Check(combat::RaptorBiteSound(EnemyFamily::Raptor,0x8256D578,7,0),"native bite geometry cue admitted");
+  Check(!combat::RaptorBiteSound(EnemyFamily::Raptor,0x8256D388,7,0),"scripted animation without contact excluded");
+  Check(!combat::RaptorBiteSound(EnemyFamily::Bat,0x8256D578,7,0),"other family cannot use a raptor cue");
+  Check(!combat::RaptorBiteSound(EnemyFamily::Raptor,0x8256D578,9,0),"other resources excluded");
+  Check(!combat::RaptorBiteSound(EnemyFamily::Raptor,0x8256D578,7,19),"other attachment excluded");
+  DamageEvent d{{305,3,5},9,7,{123,4,EnemyFamily::Raptor},0x4104,1000,{1,0,0}};
+  d.attack_sound=true; d.generation=2; d.time=10;
+  Check(ValidDamageEvent(d) && combat::NativeAttackSoundResource(d)==7,"actual large dinosaur bite can carry native resource7");
+  Check(combat::AttackSoundObserved(d,d.enemy,2,9.95,10,false),"recent successful cue matches exact attack source");
+  Check(!combat::AttackSoundObserved(d,d.enemy,2,9.95,10,true),"consumed bite cue cannot replay");
+  Check(!combat::AttackSoundObserved(d,d.enemy,3,9.95,10,false),"cue cannot cross an authority generation");
+  Check(!combat::AttackSoundObserved(d,d.enemy,2,9.8,10,false),"later bite cannot borrow old cue");
+  Message m; m.type=MessageType::DamageEvent; m.epoch=9; m.damage=d;
+  std::vector<uint8_t> wire; Message decoded;
+  Check(Encode(m,wire) && Decode(wire,decoded) && decoded.damage.attack_sound &&
+      combat::NativeAttackSoundResource(decoded.damage)==7,"native bite cue survives the real damage codec");
+  d.flags=4096; d.magnitude=1; Check(!ValidDamageEvent(d),"other raptor attack forms require their own cue audit");
+  d.flags=0x4104; d.magnitude=1000; d.projectile=true;
+  Check(!ValidDamageEvent(d),"projectile cannot request a bite sound");
+}
 void RaptorCamera() {
   const ShotVector foot{1,2,3},view{1.1f,2.1f,4.6f};
   const auto height=[&](EnemyFamily family=EnemyFamily::Raptor,uint32_t kind=16,uint32_t caller=0x82464320,
@@ -490,6 +511,7 @@ int main(int argc,char** argv) {
   else if(name=="native_script_target") NativeScriptTarget();
   else if(name=="bat_contact_sound") BatContactSound();
   else if(name=="raptor_camera") RaptorCamera();
+  else if(name=="raptor_bite_sound") RaptorBiteSound();
   else if(name=="udp_duplicate" || name=="udp_order") Reliable();
   else { std::fprintf(stderr,"unknown test\n"); return 2; }
   std::printf("PASS [%s]\n",test_name); return 0;

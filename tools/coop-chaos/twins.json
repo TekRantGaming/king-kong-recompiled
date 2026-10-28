@@ -24,6 +24,7 @@
     "grab_start": "grab_start",
     "native_script_target": "native_script_target",
     "bat_contact_sound": "bat_contact_sound",
-    "raptor_camera": "raptor_camera"
+    "raptor_camera": "raptor_camera",
+    "raptor_bite_sound": "raptor_bite_sound"
   }
 }

@@ -100,6 +100,7 @@ REX_EXTERN(__imp__sub_826F9C60);
 REX_EXTERN(__imp__sub_8271E450);
 REX_EXTERN(__imp__sub_8271E290);
 REX_EXTERN(__imp__sub_823FCF58);
+REX_EXTERN(__imp__sub_823FCEB0);
 #if defined(KK_DEV_TOOLS)
 REX_EXTERN(__imp__sub_8284D638);
 REX_EXTERN(__imp__sub_82663550);
@@ -2004,7 +2005,10 @@ bool NativeDamage(PPCContext& ctx, uint8_t* b, const DamageEvent& d) {
   const bool queued=Load32(b,result)!=UINT32_MAX && Load32(b,result+4)!=0;
   if (queued && d.attack_sound && combat::NativeAttackSound(d)) {
     const auto resource=combat::NativeAttackSoundResource(d);
-    ctx.r3.u64=source->actor; ctx.r4.u64=resource; __imp__sub_823FCF58(ctx,b);
+    ctx.r3.u64=source->actor; ctx.r4.u64=resource;
+    if (d.enemy.family==EnemyFamily::Raptor) {
+      ctx.r5.u64=0; __imp__sub_823FCEB0(ctx,b);
+    } else __imp__sub_823FCF58(ctx,b);
     REXLOG_INFO("COOP SOUND guest native-attack source={:08X} family={} number={} code={} created={} native-hit-queued=true",
         source->actor,uint16_t(d.enemy.family),d.number,resource,ctx.r3.s32!=-1);
   }
@@ -4195,6 +4199,20 @@ REX_HOOK_RAW(sub_82548BC0) {
 }
 REX_HOOK_RAW(sub_8271E450) { kk::coop::FilterPeerGrabQuery(ctx,base,false); }
 REX_HOOK_RAW(sub_8271E290) { kk::coop::FilterPeerGrabQuery(ctx,base,true); }
+REX_HOOK_RAW(sub_823FCEB0) {
+  const auto actor=ctx.r3.u32,resource=ctx.r4.u32,selector=ctx.r5.u32,caller=uint32_t(ctx.lr);
+  __imp__sub_823FCEB0(ctx,base);
+  if (ctx.r3.s32==-1 || !kk::coop::combat::RaptorBiteSound(kk::coop::EnemyFamily::Raptor,caller,resource,selector)) return;
+  const auto* owner=kk::coop::CombatOwner(base,kk::coop::EnemyFamily::Raptor);
+  if (!owner || owner->actor!=actor) return;
+  const auto* authority=kk::coop::AuthorityFor(owner->id);
+  kk::coop::Get().sting_sounds[kk::coop::Canonical(owner->id)]={authority->generation,kk::coop::Now(),false};
+#if defined(KK_DEV_TOOLS)
+  static unsigned lines=0;
+  if (lines++<64) REXLOG_INFO("COOP SOUND owner native-bite source={:08X} generation={} code=7 selector=0 created=true caller={:08X} native-geometry-passed=true",
+      actor,authority->generation,caller);
+#endif
+}
 REX_HOOK_RAW(sub_823FCF58) {
   const auto actor=ctx.r3.u32,resource=ctx.r4.u32,caller=uint32_t(ctx.lr);
   __imp__sub_823FCF58(ctx,base);

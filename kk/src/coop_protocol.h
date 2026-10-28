@@ -12,7 +12,7 @@
 
 namespace kk::coop {
 constexpr uint32_t kMagic = 0x4B4B4331;  // KKC1, network byte order throughout
-constexpr uint16_t kProtocolVersion = 29; // Audited native Bat contact sound may accompany its real hit.
+constexpr uint16_t kProtocolVersion = 30; // Audited native Raptor bite sound may accompany its real hit.
 constexpr size_t kMaxDisplayNameBytes = 32;
 // Valid UTF-8, no controls or invisible direction/line formatting, bounded at a codepoint.
 // Empty or wholly invalid input becomes "Partner". Never log the input or result.
@@ -260,7 +260,7 @@ struct DamageEvent {
   ShotVector point; // native projectile/contact impact point, never a native reference
   uint32_t surface = UINT32_MAX;
   bool projectile = false; // use the builder that retains the native impact fields
-  bool attack_sound = false; // Audited Scorpion sound8 observed immediately before its real sting.
+  bool attack_sound = false; // Audited native attack cue observed with this exact source and hit.
 };
 struct PlayerStatus {
   EnemyWorld world;
