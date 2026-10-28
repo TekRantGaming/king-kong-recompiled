@@ -150,7 +150,10 @@ try {
         # rock pillar (ActivatorTrigger_wait 8244F860: Ann in zone 4268A79C and Jack in zone 42688BC0); otherwise
         # the V-Rex takes her and her death script reloads about every 33 s. Both players are placed on that spot
         # with the game's own teleport trigger while she waits there. -NoStoryFixture keeps the old behaviour.
+        # C120/C121: the host also stands still there (KK_DEV_WANDER=0); the sweep wander walks Jack off the
+        # pillar zone and the story reload comes back about every 35 s.
         if (-not $NoStoryFixture -and $record.entry -eq 22 -and $record.start -eq 5) {
+            $envText = $envText.Replace('|KK_DEV_WANDER=1','|KK_DEV_WANDER=0')
             $envText += '|KK_DEV_TELEPORT=19,127.9,191.8,17.2,-1,0'
             $joinText += '|KK_DEV_TELEPORT=19.5,127.9,191.8,17.2,-1,0'
         }
