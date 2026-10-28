@@ -569,7 +569,7 @@ void Receive(const uint8_t* b) {
     ++state.accepted;
   }
 }
-bool NativeHit(PPCContext& ctx,uint8_t* b,const Binding& o,uint32_t hero,uint32_t ai,uint32_t flags,uint32_t magnitude,float seconds=.5f,uint32_t target=0) {
+bool NativeHit(PPCContext& ctx,uint8_t* b,const Binding& o,uint32_t hero,uint32_t ai,uint32_t flags,uint32_t magnitude,float seconds=.5f,uint32_t target=0,const ShotVector* direction=nullptr) {
   const auto sp=ctx.r1.u32;
   if ((sp&15) || sp<0x40014000 || sp>=0xA0000000) return false;
   constexpr uint32_t pool=0x82C8EF30;
@@ -584,6 +584,9 @@ bool NativeHit(PPCContext& ctx,uint8_t* b,const Binding& o,uint32_t hero,uint32_
   const auto result=ctx.r1.u32+0x100;
   Store32(b,result,UINT32_MAX); Store32(b,result+4,0);
   StoreF(b,ctx.r1.u32+80,0); StoreF(b,ctx.r1.u32+84,0); StoreF(b,ctx.r1.u32+88,1);
+  if (direction) {
+    StoreF(b,ctx.r1.u32+80,direction->x); StoreF(b,ctx.r1.u32+84,direction->y); StoreF(b,ctx.r1.u32+88,direction->z);
+  }
   StoreF(b,ctx.r1.u32+96,LoadF(b,o.matrix+48)); StoreF(b,ctx.r1.u32+100,LoadF(b,o.matrix+52)); StoreF(b,ctx.r1.u32+104,LoadF(b,o.matrix+56));
   ctx.r3.u64=result; ctx.r4.s64=-1; ctx.r5.u64=flags; ctx.r6.u64=hero; ctx.r7.u64=0;
   ctx.r8.u64=target ? target : o.actor; ctx.r9.s64=-1; ctx.r10.u64=magnitude; ctx.f1.f64=seconds;
@@ -1681,7 +1684,10 @@ void DevProbe(PPCContext& ctx,uint8_t* b,Probe& probe,ObjectKind kind,bool strik
       char* end=nullptr; const auto n=std::strtoul(value,&end,10);
       return end!=value && !*end && n<=100000 ? uint32_t(n) : 1000u;
     }();
-    supplied=NativeHit(ctx,b,*o,hero,ai,64,magnitude);
+    // Supply the real native player's aim direction, as H firearm calls do.
+    // The old vertical fixture itself made invalid planar piece velocities.
+    const auto direction=NativePoint(ctx,b,hero,__imp__sub_8270FA58);
+    if (direction) supplied=NativeHit(ctx,b,*o,hero,ai,64,magnitude,.5f,0,&*direction);
   }
   else if (const auto ext=Lever(b,*o,probe.slot)) { Store16(b,ext+40,Load16(b,ext+40)|0x8000); supplied=true; }
   if (!supplied) return;
