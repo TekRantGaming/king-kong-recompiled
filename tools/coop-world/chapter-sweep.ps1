@@ -21,7 +21,9 @@ param(
     [ValidateRange(1,256)][int]$MaxRuns = 64,
     [string]$DeadlineUtc = '',
     [string]$ResumeManifest = '',
-    [ValidateRange(0,60)][int]$RetryBlockedSeconds = 0
+    [ValidateRange(0,60)][int]$RetryBlockedSeconds = 0,
+    [string]$ExtraEnv = '',
+    [string]$ExtraJoinEnv = ''
 )
 $ErrorActionPreference = 'Stop'
 $coopRoot = 'F:\kk-native-coop'
@@ -143,6 +145,8 @@ try {
         $envText = "KK_DEV_LAUNCHER_INPUT=wait-home,direct:code:C86ABC,direct:host,session:$($record.entry)|KK_DEV_AUTOSKIP=1|KK_DEV_SCRIPT=0:SKIP/10|KK_DEV_WANDER=1|KK_DEV_CHEATS_ANYWHERE=1|KK_DEV_EMPTY_LOADOUT=1|KK_DEV_TRIG_TRACE=1|KK_DEV_ENEMY_NEAR=1"
         $joinText = 'KK_DEV_LAUNCHER_INPUT=wait-home,direct:code:C86ABC,direct:join,direct:ready|KK_DEV_FACE_ENEMY=16:0.001'
         if ($StoryLayout) { $envText += "|KK_DEV_STORY_LAYOUT=$StoryLayout" }
+        if ($ExtraEnv) { $envText += "|$ExtraEnv" }
+        if ($ExtraJoinEnv) { $joinText += "|$ExtraJoinEnv" }
         if ($ObjectTrace) { $envText += '|KK_DEV_OBJECTS=1' }
         if ($VegetationCensus) { $envText += '|KK_DEV_OBJECTS_SCAN=1|KK_DEV_OBJECTS_SCAN_LATE=25' }
         if ($Stationary) {
