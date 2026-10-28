@@ -191,7 +191,7 @@ try {
             do {
             $attempt++; $runOutput.Clear()
             "runner attempt $attempt" | Add-Content -LiteralPath $record.runner_output -Encoding UTF8
-            & $shellExe -NoProfile -ExecutionPolicy Bypass -File $runner -Name $record.name `
+            & $shellExe -NoProfile -File $runner -Name $record.name `
                 -Seconds $record.seconds -Worktree $Worktree -Two -Launcher -DirectIp -Snap '60' -Env $envText -JoinEnv $joinText `
                 -HostExtra $hostArgs -Extra '--kk_launcher=true|--kk_toggle_aim=false|--kk_coop_udp_profile=bad_wifi|--kk_coop_udp_seed=86' 2>&1 |
                 ForEach-Object {
