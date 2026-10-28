@@ -514,6 +514,22 @@ void ReplaySupports(PPCContext& ctx,uint8_t* b) {
       REXLOG_INFO("KK dev object support fixture: role=host id={:016X} mode={} native-trigger-fixture=true",choice->source,fixture_mode);
     }
   }
+  // C105 guest break fixture: the guest sends its OWN part hit request, the same
+  // message ObjectsEnqueued sends for a real guest strike. The host applies it
+  // as a native hit and owns the collapse; the guest never collapses locally.
+  static bool guest_sent=false;
+  if (!state.host && !guest_sent && fixture_at>=0 && DevSupportSource() && kk::DevSecondsSinceMenu()>=fixture_at) {
+    auto* o=Match(DevSupportSource(),ObjectKind::Ode); if (!o) o=Match(DevSupportSource(),ObjectKind::Tree);
+    const auto part=DevSupportPart();
+    if (o && Valid(b,*o) && o->support.eligible && o->support.topology && part<o->support.parts.size()) {
+      unsigned flags=0x00400400,magnitude=11; char tail=0;
+      if (const auto value=std::getenv("KK_DEV_OBJECT_COLLAPSE_HIT"); value && *value &&
+          (std::sscanf(value,"%x,%u%c",&flags,&magnitude,&tail)!=2 || (flags&~kObjectHitFlags) || magnitude>100000)) { guest_sent=true; return; }
+      guest_sent=Request(*o,flags,float(magnitude),.5f,uint8_t(part));
+      REXLOG_INFO("KK dev object support guest hit fixture: role=guest id={:016X} part={} flags={:08X} magnitude={} sent={}",
+          o->source,part,flags,magnitude,guest_sent);
+    }
+  }
 #endif
   for (auto& [actor,o]:state.bindings) {
     if (!objects::SupportRoot(o.kind) || !o.support.topology || !Valid(b,o) || Match(o.source,o.kind)!=&o) continue;
@@ -523,6 +539,8 @@ void ReplaySupports(PPCContext& ctx,uint8_t* b) {
         if (Now()>hit.until) { o.pending_hits.pop_front(); ++state.rejected; continue; }
         if (hit.raw.collapse.part>=o.support.parts.size() || !NativeHit(ctx,b,o,o.actor,o.ai,hit.raw.value,uint32_t(hit.raw.position),hit.raw.seconds,o.support.parts[hit.raw.collapse.part])) break;
         o.pending_hits.pop_front(); ++state.applied; o.support.intent_until=Now()+2;
+        if (Trace()) REXLOG_INFO("KK dev object support partner hit applied: role=host id={:016X} part={} flags={:08X} magnitude={}",
+            o.source,unsigned(hit.raw.collapse.part),hit.raw.value,uint32_t(hit.raw.position));
       }
       if (!o.support.fixture && !o.support.phase && Now()>o.support.intent_until) continue;
     }
