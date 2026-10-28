@@ -1337,6 +1337,18 @@ void DoorInit(PPCContext& ctx,uint8_t* b) {
 #endif
 }
 #if defined(KK_DEV_TOOLS)
+void DevProgressBits(const uint8_t* b,const char* where);
+void DevWatchBits(const uint8_t* b,const char* where) {
+  static uint64_t last=0;
+  const auto bank=Load32(b,kDoorGamePtr);
+  if (!Trace() || !PoseAddress(bank,(770+48)*4)) return;
+  uint64_t hash=1469598103934665603ull;
+  for (unsigned w=0;w<48;++w) hash=(hash^Load32(b,bank+(770+w)*4))*1099511628211ull;
+  if (hash==last) return;
+  last=hash;
+  REXLOG_INFO("KK dev progress bits changed: where={} ai={:08X} actor={:08X}",where,Load32(b,0x82CCBF64),Load32(b,0x82CCBF6C));
+  DevProgressBits(b,where);
+}
 void DevProgressBits(const uint8_t* b,const char* where) {
   const auto bank=Load32(b,kDoorGamePtr);
   if (!PoseAddress(bank,(770+48)*4)) { REXLOG_INFO("KK dev progress bits: where={} bank={:08X} unreadable",where,bank); return; }
@@ -2226,6 +2238,9 @@ void ObjectsLoaded(uint8_t* b) {
 #endif
 }
 void ObjectsBeforeAi(PPCContext& ctx,uint8_t* b,uint32_t w) {
+#if defined(KK_DEV_TOOLS)
+  DevWatchBits(b,"before-ai");
+#endif
   state.ready=false;
   if (uint32_t(ctx.lr)!=0x82881CF0) return;
 #if defined(KK_DEV_TOOLS)
@@ -2254,6 +2269,9 @@ void ObjectsBeforeAi(PPCContext& ctx,uint8_t* b,uint32_t w) {
 #endif
 }
 void ObjectsAfterAi(PPCContext& ctx,uint8_t* b,uint32_t w) {
+#if defined(KK_DEV_TOOLS)
+  DevWatchBits(b,"after-ai");
+#endif
   if (!state.ready || w!=state.world || !Shared()) return;
   ReplayBreakables(ctx,b);
   RetireDoors(ctx,b);
@@ -2440,5 +2458,13 @@ REX_HOOK_RAW(sub_82413080) {
   if (std::getenv("KK_DEV_OBJECTS")) { REXLOG_INFO("KK dev universe restore: lr={:08X}",lr); kk::coop::ObjectsDevProgressBits(base,"restore-before"); }
   __imp__sub_82413080(ctx,base);
   if (std::getenv("KK_DEV_OBJECTS")) kk::coop::ObjectsDevProgressBits(base,"restore-after");
+}
+REX_EXTERN(__imp__sub_8271D698);
+REX_HOOK_RAW(sub_8271D698) {
+  const auto lr=uint32_t(ctx.lr),ai=ctx.r3.u32;
+  const bool trace=std::getenv("KK_DEV_OBJECTS")!=nullptr && ai==kk::hfr::Load32(base,0x828E838C);
+  if (trace) { REXLOG_INFO("KK dev universe reinit: lr={:08X}",lr); kk::coop::ObjectsDevProgressBits(base,"reinit-before"); }
+  __imp__sub_8271D698(ctx,base);
+  if (trace) kk::coop::ObjectsDevProgressBits(base,"reinit-after");
 }
 #endif
