@@ -98,13 +98,16 @@ inline ShotVector Candidate(const PlayerPose& peer, float floor_z, unsigned i) {
   return {peer.x+r*std::cos(a), peer.y+r*std::sin(a), floor_z};
 }
 // Native nav cell byte (nav_cell_at 8284D638, sign extended). nav_grid.c:
-// bits 6 and 7 block, kind 15 costs 0 (not walkable). fn_826D5348: cell 1 or 12
-// is blocked. fn_826D8020: kinds 3, 10 and 12 around the player refuse a stand,
-// so they are taken only where the partner stands on the same kind. Cell 0 is
-// also "off the cells", so it is taken only when the partner's cell is 0 too.
+// bits 6 and 7 block AI routes, kind 15 costs 0 (not walkable). fn_826D5348:
+// cell 1 or 12 is blocked. fn_826D8020: kinds 3, 10 and 12 around the player
+// refuse a stand. A player can stand where AI may not route (run
+// c104-fix302: the host stood on cell 0x40), so every rule is relative to the
+// partner's own cell: only marks and kinds the partner does not stand on are
+// refused. Cell 0 is also "off the cells": taken only when the partner's is 0.
 inline bool NavStandable(int8_t cell, int8_t partner) {
   const auto c = uint8_t(cell), p = uint8_t(partner), kind = uint8_t(c&15);
-  if ((c&0xC0) || kind == 15 || c == 1 || c == 12) return false;
+  if (((c&0xC0) & ~(p&0xC0)) || kind == 15) return false;
+  if ((c == 1 || c == 12) && c != p) return false;
   if (kind == 3 || kind == 10 || kind == 12) return kind == (p&15);
   if (c == 0) return p == 0;
   return true;

@@ -685,9 +685,11 @@ void PlacementFloor() {
   p=GoodSpot(5); p.normal_z=.5f; Check(revive::Judge(p,5,2)==Verdict::Steep,"a steep face is refused");
   p=GoodSpot(5); p.headroom=false; Check(revive::Judge(p,5,2)==Verdict::Head,"a spot inside rock is refused");
   p=GoodSpot(5); p.nav=int8_t(0x42); Check(revive::Judge(p,5,2)==Verdict::Nav,"blocked nav bits refuse");
+  Check(revive::Judge(p,5,int8_t(0x40))==Verdict::Ok,"a mark the partner stands on too is taken (302 start cell 0x40)");
+  p.nav=int8_t(0x82); Check(revive::Judge(p,5,int8_t(0x40))==Verdict::Nav,"a mark the partner does not stand on refuses");
   p=GoodSpot(5); p.nav=0; Check(revive::Judge(p,5,2)==Verdict::Nav && revive::Judge(p,5,0)==Verdict::Ok,"off grid cell only where the partner is off grid too");
   p=GoodSpot(5); p.nav=3; Check(revive::Judge(p,5,2)==Verdict::Nav && revive::Judge(p,5,3)==Verdict::Ok,"water kind only where the partner stands on it");
-  p=GoodSpot(5); p.nav=1; Check(revive::Judge(p,5,1)==Verdict::Nav,"native blocked cell 1 is refused");
+  p=GoodSpot(5); p.nav=1; Check(revive::Judge(p,5,2)==Verdict::Nav && revive::Judge(p,5,1)==Verdict::Ok,"native blocked cell 1 is refused unless the partner stands on it");
   PlayerPose peer; peer.x=10; peer.y=20; peer.z=7; peer.facing=0;
   const auto c=revive::Candidate(peer,6,0);
   Check(std::abs(c.x-8.5f)<.001f && std::abs(c.y-20)<.001f && c.z==6,"first candidate keeps the old spot behind, on the partner floor");

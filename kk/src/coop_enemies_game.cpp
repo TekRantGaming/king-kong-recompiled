@@ -2144,7 +2144,7 @@ void CombatBeforeAi(PPCContext& ctx, uint8_t* b) {
 #if defined(KK_DEV_TOOLS)
 void DevDie(PPCContext& ctx, uint8_t* b) {
   struct Die {
-    double due=-1, next_log=0, repeat=0; bool done=false, host=false, hurt=false;
+    double due=-1, next_log=0, repeat=0, alive_since=-1; bool done=false, host=false, hurt=false;
     unsigned queued=0, deaths=0, limit=1;
     uint32_t world=0, hero=0, vars=0;
     std::optional<PlayerCondition> observed;
@@ -2201,6 +2201,11 @@ void DevDie(PPCContext& ctx, uint8_t* b) {
   }
   if (die.queued==1 && h->condition==PlayerCondition::Hurt) die.hurt=true;
   if (die.queued==2) return; // Queue acceptance is not proof of native death.
+  // Repeat mode: the first bite waits for 4 s of life, so the revive placement
+  // and its void guard are judged before the next death starts.
+  if (h->condition!=PlayerCondition::Alive || die.queued) die.alive_since=-1;
+  else if (die.alive_since<0) die.alive_since=t;
+  if (die.repeat>0 && !die.queued && (die.alive_since<0 || t-die.alive_since<4)) return;
   const float immunity=LoadF(b,h->vars+3232), allowed=LoadF(b,0x8203BFF0);
   const float clock=LoadF(b,0x82CCAE1C)-LoadF(b,0x82CCC02C);
   const float elapsed=clock-LoadF(b,h->vars+11852);
@@ -3798,6 +3803,7 @@ revive::Place ReviveTeleport(PPCContext& ctx,uint8_t* b,const PlayerPose& partne
   const auto body=kk::PartnerBodyCombatActor(b);
   std::optional<ShotVector> chosen; unsigned index=0;
   revive::Verdict verdicts[revive::kCandidates]{};
+  int8_t navs[revive::kCandidates]{};
   ShotVector partner_floor{partner.x,partner.y,partner.z};
   int8_t partner_nav=0; bool partner_grounded=false;
   {
@@ -3811,7 +3817,7 @@ revive::Place ReviveTeleport(PPCContext& ctx,uint8_t* b,const PlayerPose& partne
     for (unsigned i=0;i<revive::kCandidates && !chosen;++i) {
       const auto spot=revive::Candidate(partner,partner_floor.z,i);
       const auto probe=ProbeSpot(ctx,b,scratch,world,h->hero,body,spot,partner_floor);
-      verdicts[i]=revive::Judge(probe,partner_floor.z,partner_nav);
+      verdicts[i]=revive::Judge(probe,partner_floor.z,partner_nav); navs[i]=probe.nav;
       if (verdicts[i]==revive::Verdict::Ok) { chosen=ShotVector{spot.x,spot.y,probe.floor_z+.1f}; index=i; }
     }
   }
@@ -3821,6 +3827,7 @@ revive::Place ReviveTeleport(PPCContext& ctx,uint8_t* b,const PlayerPose& partne
   for (unsigned i=0;i<(chosen ? index : revive::kCandidates);++i) {
     if (!refused.empty()) refused+=',';
     refused+=revive::VerdictName(verdicts[i]);
+    if (verdicts[i]==revive::Verdict::Nav) refused+=':'+std::to_string(int(uint8_t(navs[i])));
   }
   if (result==revive::Place::Stay) {
     REXLOG_INFO("KK co-op placement: no safe spot by partner ({:.3f},{:.3f},{:.3f}) floor={} nav={} for {:.0f} s; staying on native spot ({:.3f},{:.3f},{:.3f}) refused={}",
