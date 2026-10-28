@@ -345,11 +345,40 @@ uint32_t BodyWeapon(const uint8_t* b,const Rig& r) {
 #endif
   return weapon;
 }
+uint32_t OwnedAimBone(const uint8_t* b,const Rig& rig,uint8_t tag);
+// Bit w (1..4) set when this body's own tag 125 part draws gun w (C106).
+uint8_t WeaponModels(const uint8_t* b,const Rig& r) {
+  const auto part=OwnedAimBone(b,r,125);
+  uint8_t models=0;
+  for (uint8_t weapon=1;weapon<=4;++weapon) {
+    const auto variant=coop::puppet::WeaponVariant(weapon,true);
+    if (part && coop::puppet::WeaponVariantTemplate(part,variant,true,
+        [&](uint32_t p) { return Load32(b,p); },
+        [&](uint32_t p,uint32_t off,uint32_t bytes) { return Ptr(b,p,off,bytes); },Range))
+      models|=uint8_t(1u<<weapon);
+  }
+#if defined(KK_DEV_TOOLS)
+  static std::set<uint32_t> logged;
+  if (logged.size()<64 && logged.insert(r.actor).second)
+    REXLOG_INFO("PUPPET weapon models actor={:08X} slot={} part={:08X} pistol={} mg={} shotgun={} sniper={}",
+        r.actor,Load32(b,r.vars+4),part,(models>>1)&1,(models>>2)&1,(models>>3)&1,(models>>4)&1);
+#endif
+  return models;
+}
+// The gun this body really shows for the partner's weapon, or 0 (empty hands).
+uint8_t BodyGun(const uint8_t* b,const Rig& r,uint8_t weapon) {
+  return coop::puppet::BodyGun(BodyWeapon(b,r),WeaponModels(b,r),weapon);
+}
 uint8_t AnimationSupport(const uint8_t* b, const Rig& r, uint8_t weapon) {
   if (Load32(b,r.vars) != 0) return 0;
   const auto held=BodyWeapon(b,r);
-  const bool gun=held>=1 && held<=4;
-  if (gun) weapon=uint8_t(held);
+  const auto models=WeaponModels(b,r);
+  // A body whose own model draws a gun counts as armed even while its H bank
+  // is empty, so selection prefers it before the partner picks a gun up.
+  const bool gun=(held>=1 && held<=4) || models;
+  if (held>=1 && held<=4) weapon=uint8_t(held);
+  else if (!coop::puppet::BodyGun(0,models,weapon))
+    for (uint8_t w=1;w<=4;++w) if ((models>>w)&1) { weapon=w; break; }
   const bool gait = LoadedItem(b,r,0).has_value() && LoadedItem(b,r,10).has_value();
   const bool fire = coop::puppet::FireAction(weapon,false,
       [&](uint16_t action) { return LoadedItem(b,r,action); }).has_value();
@@ -892,7 +921,7 @@ void PartnerWeapon(PPCContext& ctx,uint8_t* b,const Rig& rig,const coop::PlayerP
   const bool gun=weapon>=1 && weapon<=4;
   // An unarmed H bank can contain these numbers as unrelated story gestures.
   // Only a naturally armed donor proves that its gun channels have this ABI.
-  const bool gun_clips=gun && BodyWeapon(b,rig)!=0;
+  const bool gun_clips=gun && BodyGun(b,rig,weapon)!=0;
   s.flash_left=gun_clips ? std::max(0.f,s.flash_left-s.dt) : 0;
   if (s.animation.new_shot && gun_clips) s.flash_left=.075f;
   if (!s.flash_left && s.weapon_flash>=0) {
@@ -1111,7 +1140,7 @@ void PartnerBodyAim(PPCContext& ctx,uint8_t* b,uint32_t actor,uint32_t ai) {
   const auto weapon=s.animation.weapon;
   const auto gun=OwnedAimBone(b,rig,125), hand=OwnedAimBone(b,rig,20);
   if (weapon>=1 && weapon<=4 && s.animation.last_action!=weapon+0x72 &&
-      s.animation.aim_weight>.001f && gun && hand && BodyWeapon(b,rig)) {
+      s.animation.aim_weight>.001f && gun && hand && BodyGun(b,rig,weapon)) {
     Scratch scratch(ctx,b);
     ctx.r3.u64=rig.actor; ctx.r4.u64=125; __imp__sub_823F8FB0(ctx,b);
     const bool tracked=ctx.r3.u32!=0;
@@ -1773,6 +1802,20 @@ void CensusAndSelect(PPCContext& ctx, uint8_t* b, uint32_t w) {
       }
       s.selected_tier = 6;
     } else {
+      if (coop::puppet::PreferStoryCopy(facts[pick-candidates.data()],
+              s.humans.at(pick->rig.actor).story_copy_failed) && Registered(b, w, pick->rig.actor)) {
+        std::vector<uint8_t> copyable(candidates.size());
+        for (std::size_t i = 0; i < candidates.size(); ++i)
+          copyable[i] = !s.humans.at(candidates[i].rig.actor).story_copy_failed &&
+              Registered(b, w, candidates[i].rig.actor);
+        const std::size_t before = pick-candidates.data();
+        const auto armed = coop::puppet::PreferArmedCopySource(facts, before, copyable);
+        if (armed != before) {
+          REXLOG_INFO("PUPPET story-copy armed source={:08X} instead-of={:08X} animations={}/{} reason=source-model-shows-guns",
+              candidates[armed].rig.actor, pick->rig.actor, facts[armed].animation_support, facts[before].animation_support);
+          pick = &candidates[armed];
+        }
+      }
       s.selected_tier = coop::puppet::BodyTier(facts[pick-candidates.data()]);
       copy_before_lease = coop::puppet::PreferStoryCopy(facts[pick-candidates.data()],
           s.humans.at(pick->rig.actor).story_copy_failed) && Registered(b, w, pick->rig.actor);
@@ -2043,7 +2086,7 @@ void PartnerBodyAfterAi(PPCContext& ctx, uint8_t* b, uint32_t w) {
 #endif
     const bool log_shot = s.animation_shots <= 8 || s.animation_shots%60 == 0;
     const bool human = !s.humans.at(rig.actor).other_human && Load32(b,rig.vars) == 0;
-    const auto held=human ? BodyWeapon(b,rig) : 0;
+    const auto held=human ? BodyGun(b,rig,p.weapon) : 0;
     const auto weapon=coop::puppet::AnimationWeapon(p.weapon,uint8_t(held));
     // Empty hands never borrow the donor's own armed idle or walk clips.
     auto choice = coop::puppet::ChooseAction(s.animation.moving ? s.animation.speed : 0, s.observed_motion,!weapon);

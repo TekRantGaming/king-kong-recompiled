@@ -21,6 +21,33 @@ uint32_t HumanWeapon(uint32_t slot,Word word,Address address) {
   const auto weapon=word(bank+4*(slot+3281));
   return weapon<=4 ? weapon : 0;
 }
+// group_child_swap (8286ADA0) picks entry <variant> of the part's own
+// template list (part flag 0x800000, list at part+24 -> +12 -> +0). Only a
+// template with geometry and material draws anything; an unarmed body such
+// as Carl (H slot 5) has empty entries where an armed crew has its guns.
+template<class Word,class Pointer,class Address>
+uint32_t WeaponVariantTemplate(uint32_t part,uint32_t variant,bool drawable,
+                               Word word,Pointer pointer,Address address) {
+  if (!address(part,32) || !(word(part)&0x800000)) return 0;
+  const auto list=pointer(pointer(pointer(part,24,48),12,4),0,20);
+  if (!list) return 0;
+  const auto begin=word(list+16),end=word(list+4),count=word(list+12);
+  if (count>32 || end<begin || end-begin!=8*count ||
+      !address(begin,end-begin) || variant>=count) return 0;
+  const auto source=word(begin+8*variant);
+  if (!address(source,32)) return 0;
+  const auto mesh=pointer(pointer(source,20,16),0,12);
+  if (drawable && (!pointer(mesh,0,4) || !pointer(mesh,4,4))) return 0;
+  return source;
+}
+// The gun a body can really show for the partner's weapon: the gun its H bank
+// holds (C95 armed path), else the partner's gun when the body's own model
+// draws it (bit w of models, from WeaponVariantTemplate on tag 125). Zero
+// means empty hands: no gun clips, no aim, no flash on that body.
+inline uint8_t BodyGun(uint32_t held,uint8_t models,uint8_t weapon) {
+  if (held>=1 && held<=4) return uint8_t(held);
+  return weapon>=1 && weapon<=4 && ((models>>weapon)&1) ? weapon : 0;
+}
 // Native animation-event lookup (823F8FB0) reads layer+4 -> descriptor+0
 // -> header+4. A live layer can temporarily have no header during a switch.
 template<class Pointer>

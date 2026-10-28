@@ -10,6 +10,7 @@
 #include "coop_stimulus_debug.h"
 #include "coop_event_budget.h"
 #include "coop_puppet.h"
+#include "coop_partner_selection.h"
 #include <algorithm>
 #include <map>
 #include <vector>
@@ -343,6 +344,15 @@ void UnarmedGait() {
     const auto g=puppet::ChooseGait(v,0,0,false,crew,UINT32_MAX,true);
     Check(g && !puppet::HeldItemAction(g->clip.action),"empty hands never walk with a gun grip or raised arms");
   }
+}
+void ArmedCopySource() {
+  // Twin armed_copy_source keeps unarmed Carl as the copy source.
+  puppet::AutoCandidate carl; carl.actor=110; carl.natural_h=true; carl.rig_valid=true; carl.stable=true;
+  carl.script_evidence_complete=true; carl.script_reference=true; carl.animation_support=4;
+  auto crew=carl; crew.actor=111; crew.animation_support=5;
+  const puppet::AutoCandidate sources[]{carl,crew};
+  const uint8_t copyable[]{1,1};
+  Check(puppet::PreferArmedCopySource(sources,0,copyable)==1,"partner copy uses a body that can show the gun");
 }
 void ShotValidation() {
   const EnemyWorld w{101,1,1}; InventoryState inventory{w,100,1}; inventory.ammo[0]=50;
@@ -719,6 +729,7 @@ int main(int argc,char** argv) {
   else if(name=="digest_compare") DigestCompare();
   else if(name=="false_quiet") FalseQuiet();
   else if(name=="unarmed_gait") UnarmedGait();
+  else if(name=="armed_copy_source") ArmedCopySource();
   else if(name=="shot_validator") ShotValidation();
   else if(name=="session_epoch") SessionEpoch();
   else if(name=="projectile_source") ProjectileSource();
