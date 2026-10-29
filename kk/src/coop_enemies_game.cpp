@@ -4678,17 +4678,17 @@ desync::Evidence EnemyCompareDigest(uint8_t* b,const desync::State& state,bool r
   }
   return result;
 }
-void InitializeHostHumans(PPCContext& ctx,uint8_t* b) {
+void InitializeHostActors(PPCContext& ctx,uint8_t* b) {
   auto& s=Get();
   const bool fresh=Connected() && s.link.remote.world==s.identity && Now()-s.link.remote.time<=.5;
   if (!Replication() || s.link.role!=Role::Guest || !fresh || !Scratch::CanUse(ctx)) return;
   bool attempted=false;
   for (const auto& r:s.link.remote.records) {
-    if (r.enemy.id.family!=EnemyFamily::Human ||
-        r.kind!=EnemyEventKind::Spawned || r.enemy.life<=0) continue;
+    const auto family=r.enemy.id.family;
+    if (r.kind!=EnemyEventKind::Spawned || r.enemy.life<=0) continue;
     uint32_t actor=0; Authored authored{}; unsigned count=0;
     if (!r.enemy.id.sequence) {
-      for (const auto& [candidate,a]:s.authored) if (a.key==r.enemy.id.source && a.family==EnemyFamily::Human) {
+      for (const auto& [candidate,a]:s.authored) if (a.key==r.enemy.id.source && a.family==family && !a.ambiguous) {
         ++count; if (!actor) { actor=candidate; authored=a; }
       }
     } else {
@@ -4706,10 +4706,13 @@ void InitializeHostHumans(PPCContext& ctx,uint8_t* b) {
     }
     if (!actor || s.bindings.contains(actor) || !Member(b,s.world,actor,true)) continue;
     const auto ai=Ptr(b,Ptr(b,actor,24,8),4,88);
-    const auto vars=Ptr(b,ai,64,16892),block=Ptr(b,ai,24,24),model=Ptr(b,ai,0,16);
-    const bool init=ai==authored.ai && Ptr(b,actor,12,64)==authored.matrix && vars && block && Load32(b,block+20)==0x8268D8E8 &&
-        Load16(b,ai+80)==0 && Load16(b,ai+82)==0 && !Load32(b,vars) &&
-        Load32(b,vars+4)>=1 && Load32(b,vars+4)<=12;
+    const auto vars=Ptr(b,ai,64,LifeBytes(family)),model=Ptr(b,ai,0,16);
+    bool initializing=false,spawner=false; uint32_t state=0;
+    const auto local_family=Tracks(b,ai,state,spawner,&initializing);
+    const bool human=family!=EnemyFamily::Human || (ActorReadable(vars,8) && !Load32(b,vars) &&
+        Load32(b,vars+4)>=1 && Load32(b,vars+4)<=12);
+    const bool init=ai==authored.ai && Ptr(b,actor,12,64)==authored.matrix && vars &&
+        local_family==family && initializing && !spawner && human;
     const bool player=actor==Load32(b,0x82CCBF7C) || kk::PartnerBodyManagedActor(b,actor);
     if (!actors::Initialize(Replication(),s.link.role==Role::Guest,fresh,count==1,player,init)) continue;
     auto& tries=s.actor_init_attempts[r.enemy.id];
@@ -4718,9 +4721,10 @@ void InitializeHostHumans(PPCContext& ctx,uint8_t* b) {
         REXLOG_WARN("ACTORS init deferred id={:016X} model-off={} attempts={}",r.enemy.id.source,model ? b[model+15]:255,tries);
       continue;
     }
-    // A host live actor may still be outside the guest's native AI range.
-    // Run only its verified local two phase H initializer. The ordinary track
-    // hook holds every later NPC track as soon as initialization completes.
+    // The host can activate an authored actor outside the guest scheduler.
+    // Enter its loaded local initializer through ai_run_object, retaining the
+    // native timer, model and grid readiness checks. The ordinary track hook
+    // holds later tracks as soon as the initializer has installed them.
     const auto node=Load32(b,ai+4);
     {
       Scratch scratch(ctx,b);
@@ -4808,7 +4812,7 @@ void ActorLateWorld(PPCContext& ctx,uint8_t* b,uint32_t w) {
   if (s.link.role==Role::Guest) {
     // Native root motion and physics run after the immediate AI pass. The
     // final displayed transform must still be the buffered host pose.
-    if (Connected()) { InitializeHostHumans(ctx,b); Replicas(ctx,b,true); }
+    if (Connected()) { InitializeHostActors(ctx,b); Replicas(ctx,b,true); }
     if (s.link.session_state==SessionState::Connected || s.link.session_state==SessionState::Lost)
       HoldReplicas(ctx,b,true);
     ActorNativeAudit(b);
