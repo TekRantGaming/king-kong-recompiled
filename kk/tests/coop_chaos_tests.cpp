@@ -142,6 +142,20 @@ void ActorWire() {
   Check(Encode(hello,again) && Decode(again,out) && out.hello.actor_replication,"Hello carries the mode");
   auto old=compat; old.protocol=32;
   Check(CheckCompatibility(compat,old)==RejectReason::Protocol,"old builds refuse with version reason");
+  for (bool enabled:{false,true}) {
+    hello.hello=compat; hello.hello.actor_replication=enabled;
+    Check(Encode(hello,again) && Decode(again,out) && out.hello.protocol==33 &&
+        out.hello.actor_replication==enabled,"Hello mode flag keeps the logical version");
+    auto legacy=hello; legacy.hello=old;
+    std::vector<uint8_t> expected;
+    Check(Encode(legacy,expected),"legacy Hello fixture encodes");
+    expected[kHeaderBytes]=enabled ? 0x80:0;
+    expected[kHeaderBytes+1]=33;
+    Check(again==expected,"old readers can parse the complete Hello and show a version refusal");
+    auto legacy_read=out.hello;
+    legacy_read.protocol=uint16_t((again[kHeaderBytes]<<8)|again[kHeaderBytes+1]);
+    Check(CheckCompatibility(old,legacy_read)==RejectReason::Protocol,"legacy readers refuse both new modes by version");
+  }
   enemies::Channel tx; enemies::Frame f{m.enemies.world,10,{}};
   for (const auto& e:m.enemies.enemies) f.records.push_back({e});
   tx.Publish(f); const auto first=tx.Snapshots(true);

@@ -13,7 +13,7 @@
 namespace kk::coop {
 constexpr uint32_t kMagic = 0x4B4B4331;  // KKC1, network byte order throughout
 // 33: optional host actor replication, human families, animation time and
-// packet local byte deltas. Hello retains decoding for an older version refusal.
+// packet local byte deltas. Hello keeps its legacy shape for a version refusal.
 constexpr uint16_t kProtocolVersion = 33;
 constexpr size_t kMaxDisplayNameBytes = 32;
 // Valid UTF-8, no controls or invisible direction/line formatting, bounded at a codepoint.

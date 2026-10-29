@@ -9,6 +9,7 @@
 namespace kk::coop {
 namespace {
 constexpr uint8_t kResumeTag = 0xA5;  // C80 Hello extension marker (a join code starts with its length, 6)
+constexpr uint16_t kActorHelloFlag = 0x8000;
 struct Writer {
   std::vector<uint8_t> bytes;
   void U(uint64_t v, size_t n) { for (size_t i = n; i; --i) bytes.push_back(uint8_t(v >> ((i - 1) * 8))); }
@@ -459,8 +460,9 @@ bool Encode(const Message& m, std::vector<uint8_t>& out) {
       payload.U(m.flow.generation, 4); payload.U(m.flow.level, 4); payload.U(m.flow.start, 4); payload.U(m.flow.completed, 8);
       break;
     case MessageType::Hello:
-      payload.U(m.hello.protocol, 2);
-      if (m.hello.protocol>=33) payload.U(m.hello.actor_replication,1);
+      // Keep the legacy Hello shape so old peers can reach their version refusal.
+      if ((m.hello.protocol&kActorHelloFlag) || (m.hello.actor_replication && m.hello.protocol<33)) return false;
+      payload.U(m.hello.protocol | (m.hello.actor_replication ? kActorHelloFlag:0), 2);
       if (!payload.Text(m.hello.version) || !payload.Text(m.hello.build) || !payload.Text(m.hello.gameplay_digest))
         return false;
       if (m.display_name.size() > kMaxDisplayNameBytes || SanitizeDisplayName(m.display_name) != m.display_name)
@@ -706,10 +708,10 @@ bool Decode(std::span<const uint8_t> bytes, Message& out) {
       if (!ValidFlowEvent(m.flow)) return false;
       break;
     case MessageType::Hello: {
-      m.hello.protocol = uint16_t(r.U(2));
-      if (m.hello.protocol>=33) {
-        const auto mode=r.U(1); if (mode>1) return false; m.hello.actor_replication=mode!=0;
-      }
+      const auto protocol=uint16_t(r.U(2));
+      m.hello.protocol=protocol&~kActorHelloFlag;
+      m.hello.actor_replication=(protocol&kActorHelloFlag)!=0;
+      if (m.hello.actor_replication && m.hello.protocol<33) return false;
       if (!r.Text(m.hello.version) || !r.Text(m.hello.build) || !r.Text(m.hello.gameplay_digest)) return false;
       const size_t n = size_t(r.U(1));
       if (!r.ok || !n || n > kMaxDisplayNameBytes || n > bytes.size()-r.at) return false;
