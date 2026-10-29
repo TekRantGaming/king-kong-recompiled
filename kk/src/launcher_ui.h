@@ -20,7 +20,6 @@
 
 #include <imgui.h>
 #include "slider_input.h"
-#include "social_panel_logic.h"
 
 namespace rex::ui {
 class ImmediateDrawer;
@@ -81,7 +80,6 @@ enum class Action {
   kPageUp, kPageDown,
   kAccept, kBack, kDefault, kResetPage,
   kPrevTab, kNextTab, kPlay,
-  kSocial,
   kCount,
 };
 constexpr size_t kActionCount = size_t(Action::kCount);
@@ -130,10 +128,6 @@ class Input {
   // The program's own controllers press nothing while its window is not the active one; what is held as it
   // comes back counts only once let go and pressed again.
   void set_pads_active(bool on) { pads_active_ = on; }
-  // Launcher only. Pause-menu inputs retain their original trigger paging.
-  void set_social_triggers(bool on) { social_triggers_ = on; }
-  void set_social_blocking(bool on) { social_blocking_ = on; }
-  bool social_blocking() const { return social_blocking_; }
   // Task 357: what a controller newly pressed this frame (not repeats, not the keyboard): PadBit values.
   // Injected controller presses (testing aid) count too.
   enum PadBit : uint32_t {
@@ -168,9 +162,6 @@ class Input {
   Sticks sticks_;
   bool keyboard_enabled_ = true;
   bool pads_active_ = true;
-  bool social_triggers_ = false;
-  bool social_blocking_ = false;
-  coop::SocialTrigger social_trigger_;
   std::array<bool, 6> dir_stale_{};  // a direction held while the window was not active (until let go)
   bool injected_ = false;
   ImVec2 last_mouse_{-1, -1};
@@ -313,6 +304,11 @@ int DescriptionFit(const Item* item, ImVec2 p0, ImVec2 p1, const Metrics& m);
 // How wide DrawPrompts draws `prompts` (task 365: the setup's top right row is laid out around it).
 float PromptsWidth(ImDrawList* dl, Glyphs& glyphs, const std::string& set, const std::vector<Prompt>& prompts,
                    const Metrics& m);
+
+// One button's picture (a key's name in a box when the set has none), its left at x, centred on center_y,
+// h tall. Returns its width (draw = false only measures).
+float DrawGlyph(ImDrawList* dl, Glyphs& glyphs, Action a, const std::string& set, float x, float center_y, float h,
+                const Metrics& m, bool draw, ImU32 fallback_color = color::kText);
 
 // The prompt bar, right-aligned to `right` and centred on `center_y`. A
 // clicked prompt returns its action (Action::kCount if none).

@@ -4,34 +4,6 @@
 #include <optional>
 
 namespace kk::coop {
-// Value-only input policy, shared by the launcher and SDK/UI-free tests.
-enum class SocialPage { Page, Display, Graphics, Audio, Controls, Gameplay, Cheats, Advanced, About,
-                        Achievements, Workshop, PlayMenu, Load, NewGame, Chapters, Extras,
-                        Artbook, Setup, Shaders, Modal, Capture };
-bool SocialAllowed(bool enabled, SocialPage page);
-class SocialTrigger {
- public:
-  bool Update(bool down, bool active = true) {
-    const bool pressed = down && !down_ && !stale_ && active;
-    if (!down) stale_ = false;
-    else if (!active) stale_ = true;
-    down_ = down;
-    return pressed;
-  }
- private:
-  bool down_ = false, stale_ = false;
-};
-class SocialPanelState {
- public:
-  // Returns true when opening. Ineligible contexts close the drawer.
-  bool Update(bool enabled, SocialPage page, bool toggle, bool back, float dt);
-  bool open() const { return open_; }
-  bool blocking() const { return open_ || progress_ > 0; }
-  float slide() const { return progress_ * progress_ * (3 - 2 * progress_); }
- private:
-  bool open_ = false;
-  float progress_ = 0;
-};
 enum class SocialRowKind { Section, Member, Accept, Decline, Create, Ready, Start, OverlayInvite, Leave, Friend, Text,
                            AddSteam, DirectAddress, DirectPort, DirectCode, DirectHost, DirectJoin, ChapterSelect,
                            DirectChooseHost, DirectChooseJoin, ConnectSteam, PlaySteam, PlayIP,
@@ -76,4 +48,28 @@ struct CoopStatus { const char* key = ""; std::string name; };
 CoopStatus CoopLobbyStatus(const SocialModel& model, SocialId invited = 0);
 // The Steam startup lobby (+connect_lobby): Steam lists it as an invite without an inviter.
 SocialId StartupInvite(const SocialModel& model);
+
+// UI1 (29 Oct, Design 1 "Clear steps"): what the new co-op pages show, as English text keys.
+// A chapter's co-op mode in plain words (Play together; Apart, then regroup; Watch) and what it means.
+const char* CoopModeName(int chapter);
+const char* CoopModeText(int chapter);
+// The lobby's step bar: 1 choose what to play, 2 invite a friend, 3 both ready then start.
+int CoopLobbyStep(const SocialModel& model);
+// Why the host's Start game is locked (key and the name for its {0}); an empty key when Start can be pressed.
+CoopStatus CoopStartLock(const SocialModel& model);
+// The early access warning before the co-op pages (Craig, 29 Oct): nothing closes it for its first 5 seconds.
+class EarlyAccessGate {
+ public:
+  static constexpr double kSeconds = 5.0;
+  void Open(double now) { open_ = true; at_ = now; }
+  void Close() { open_ = false; }
+  bool open() const { return open_; }
+  double opened_at() const { return at_; }
+  bool Ready(double now) const { return open_ && now - at_ >= kSeconds; }
+  // The countdown shown on Continue: 5, 4, 3, 2, 1, then 0 once it can be closed.
+  int SecondsLeft(double now) const;
+ private:
+  bool open_ = false;
+  double at_ = 0;
+};
 }  // namespace kk::coop

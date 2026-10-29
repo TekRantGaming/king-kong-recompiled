@@ -1,6 +1,7 @@
 // SDK/UI-free source tests. Claude builds and runs them, never starts Steam or a game.
 #include "social_panel_logic.h"
 #include "social_fake.h"
+#include "coop_flow.h"
 #include <algorithm>
 #include <cstdio>
 #include <cstdlib>
@@ -16,47 +17,6 @@ void Check(bool yes, const char* message) {
 const SocialRow& Find(const std::vector<SocialRow>& rows, SocialRowKind kind, SocialId id = 0) {
   auto i = std::find_if(rows.begin(), rows.end(), [&](const auto& row) { return row.key == SocialRowKey{kind, id}; });
   Check(i != rows.end(), "expected panel row exists"); return *i;
-}
-void InputPolicy() {
-  for (auto page : {SocialPage::Page, SocialPage::Display, SocialPage::Graphics, SocialPage::Audio,
-                    SocialPage::Controls, SocialPage::Gameplay, SocialPage::Cheats, SocialPage::Advanced,
-                    SocialPage::About, SocialPage::Achievements, SocialPage::Workshop, SocialPage::PlayMenu,
-                    SocialPage::Load, SocialPage::NewGame, SocialPage::Chapters, SocialPage::Extras,
-                    SocialPage::Artbook, SocialPage::Setup, SocialPage::Shaders, SocialPage::Modal, SocialPage::Capture}) {
-    SocialPanelState state;
-    Check(!state.Update(false, page, true, false, 0.1f) && !state.blocking(), "disabled never opens on any page");
-    const bool allowed = page <= SocialPage::Extras;
-    Check(state.Update(true, page, true, false, 0.1f) == allowed && state.open() == allowed,
-          "only normal launcher pages open Social; Artbook and input-priority contexts do not");
-  }
-  SocialPanelState state;
-  Check(state.Update(true, SocialPage::Page, true, false, 0.1f), "RT/F4/click toggle opens");
-  Check(state.slide() > 0 && state.slide() < 1 && state.blocking(), "partial slide blocks background");
-  state.Update(true, SocialPage::Page, false, false, 0.1f);
-  Check(state.slide() == 1, "slide completes in 0.2 seconds");
-  state.Update(true, SocialPage::Page, false, true, 0.1f);
-  Check(!state.open() && state.blocking(), "B/Esc closes and traps input through closing animation");
-  state.Update(true, SocialPage::Page, false, false, 0.1f);
-  Check(!state.blocking(), "background focus is available after close");
-  state.Update(true, SocialPage::Page, true, false, 0.2f);
-  state.Update(true, SocialPage::Page, true, false, 0.2f);
-  Check(!state.open(), "RT again closes");
-  state.Update(true, SocialPage::Page, true, false, 0.2f);
-  state.Update(true, SocialPage::Modal, true, false, 0.2f);
-  Check(!state.blocking(), "modal takes priority and prevents reopening");
-  state.Update(true, SocialPage::Page, true, false, 0.2f);
-  state.Update(false, SocialPage::Page, true, false, 0.01f);
-  Check(!state.blocking(), "disabling co-op clears the drawer immediately");
-  SocialTrigger trigger;
-  Check(trigger.Update(true), "first RT press is an edge");
-  for (int i = 0; i < 120; ++i) Check(!trigger.Update(true), "held RT never repeats");
-  Check(!trigger.Update(false) && trigger.Update(true), "release rearms RT");
-  trigger.Update(false);
-  Check(!trigger.Update(true, false) && !trigger.Update(true, true), "inactive-window press stays stale");
-  trigger.Update(false); Check(trigger.Update(true), "release after focus return rearms");
-  // Context/off-state still tracks physical edges, before routing or suppressing page actions.
-  trigger.Update(false); trigger.Update(true);
-  Check(!trigger.Update(true), "holding RT while leaving Artbook cannot open Social");
 }
 void FocusAndActions() {
   SocialModel dormant;
@@ -357,5 +317,56 @@ void CoopPages() {
   Check(CoopRowCommand(Find(rejoin_rows,SocialRowKind::Friend,2),reconnect,CoopPage::Lobby).has_value(),
       "controller rejoin invite uses the existing command path");
 }
+// UI1 (29 Oct, Design 1): the co-op pages' step bar, Start's lock reason, the modes in plain words, and the early
+// access warning that nothing closes for 5 seconds.
+bool NoDash(const char* text) {
+  const std::string_view t(text);
+  return t.find('-') == std::string_view::npos && t.find("\xE2\x80\x93") == std::string_view::npos &&
+         t.find("\xE2\x80\x94") == std::string_view::npos;
 }
-int main() { InputPolicy(); FocusAndActions(); PreviewScenes(); DirectRows(); ChapterChoice(); CoopPages(); std::printf("Social panel: %u checks passed\n", checks); }
+void DesignOne() {
+  EarlyAccessGate gate;
+  Check(!gate.open() && !gate.Ready(100), "the warning starts closed");
+  gate.Open(10.0);
+  Check(gate.open() && !gate.Ready(10.0) && gate.SecondsLeft(10.0) == 5, "the warning opens with 5 seconds to go");
+  Check(!gate.Ready(14.99) && gate.SecondsLeft(14.2) == 1 && gate.SecondsLeft(11.5) == 4, "the countdown counts down");
+  Check(gate.Ready(15.0) && gate.SecondsLeft(15.0) == 0 && gate.Ready(60.0), "after 5 seconds it can be closed");
+  gate.Open(70.0);
+  Check(!gate.Ready(72.0), "every opening waits its own 5 seconds");
+  gate.Close();
+  Check(!gate.open() && !gate.Ready(100), "closed");
+
+  SocialModel m;
+  Check(CoopLobbyStep(m) == 1, "no lobby: choose what to play");
+  m.status = SocialStatus::Lobby; m.lobby = 5; m.self = m.owner = 1; m.members = {{1, "Host", false}};
+  Check(CoopLobbyStep(m) == 1, "a lobby without a choice is still step 1");
+  m.choice = {1, 3, false};
+  Check(CoopLobbyStep(m) == 2, "a choice and no partner: invite a friend");
+  Check(std::string_view(CoopStartLock(m).key) == "Waiting for a friend to join", "Start waits for a friend");
+  m.members.push_back({2, "Dazza", false});
+  Check(CoopLobbyStep(m) == 3, "two players: both ready, then start");
+  Check(std::string_view(CoopStartLock(m).key) == "Press Ready first", "Start asks the host to press Ready first");
+  m.members[0].ready = true;
+  const auto lock = CoopStartLock(m);
+  Check(std::string_view(lock.key) == "Waiting for {0} to press Ready" && lock.name == "Dazza",
+        "Start names the partner who is not ready");
+  m.members[1].ready = true;
+  Check(std::string_view(CoopStartLock(m).key) == "Waiting for both games to be ready", "can_start comes from the lobby");
+  m.can_start = true;
+  Check(!*CoopStartLock(m).key && CanStartLobby(m), "both ready: Start is not locked");
+  m.start_requested = true;
+  Check(std::string_view(CoopStartLock(m).key) == "Starting co-op...", "starting");
+  for (int chapter = 0; chapter < 42; ++chapter) {
+    const auto policy = kChapterRules[size_t(chapter)].policy;
+    const std::string_view name = CoopModeName(chapter);
+    Check(policy == ChapterPolicy::Together ? name == "Play together"
+          : policy == ChapterPolicy::SoloRegroup ? name == "Apart, then regroup" : name == "Watch",
+          "every chapter shows its co-op mode in plain words");
+    Check(NoDash(CoopModeName(chapter)) && NoDash(CoopModeText(chapter)) && *CoopModeText(chapter),
+          "mode words and their meaning have no dashes");
+  }
+  Check(std::string_view(CoopModeName(-1)) == "Play together" && std::string_view(CoopModeName(99)) == "Play together",
+        "out of range chapters fall back safely");
+}
+}
+int main() { FocusAndActions(); PreviewScenes(); DirectRows(); ChapterChoice(); CoopPages(); DesignOne(); std::printf("Social panel: %u checks passed\n", checks); }

@@ -580,9 +580,10 @@ class KingKongApp : public rex::ReXApp {
   }
 
   void OnCreateDialogs(rex::ui::ImGuiDrawer* drawer) override {
-    // F4 belongs to Social in this build. Otherwise the SDK also opens its
-    // settings overlay behind the launcher and its active callback can zero
-    // both native pad and MnK reads after Play.
+    // F4 opened the old Social drawer (removed in UI1, 29 Oct) and stays reserved
+    // with co-op on: otherwise the SDK also opens its settings overlay behind the
+    // launcher and its active callback can zero both native pad and MnK reads
+    // after Play.
     kk::ui::ReserveSocialHotkey(REXCVAR_GET(kk_coop_enabled));
     kk::input_diag::Install(drawer, window());
     kk::SetUiPaintRequest([this] {

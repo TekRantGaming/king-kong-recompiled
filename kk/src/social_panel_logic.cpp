@@ -1,18 +1,9 @@
 #include "social_panel_logic.h"
 #include "coop_flow.h"
 #include <algorithm>
+#include <cmath>
 
 namespace kk::coop {
-bool SocialAllowed(bool enabled, SocialPage page) { return enabled && page >= SocialPage::Page && page <= SocialPage::Extras; }
-bool SocialPanelState::Update(bool enabled, SocialPage page, bool toggle, bool back, float dt) {
-  const bool was = open_;
-  if (!SocialAllowed(enabled, page)) open_ = false;
-  else if (back && open_) open_ = false;
-  else if (toggle) open_ = !open_;
-  if (!enabled) progress_ = 0;
-  else progress_ = std::clamp(progress_ + (open_ ? 1 : -1) * std::max(0.0f, dt) / 0.2f, 0.0f, 1.0f);
-  return !was && open_;
-}
 const char* SocialFriendState(FriendState state) {
   switch (state) {
     case FriendState::Offline: return "Offline";
@@ -368,6 +359,53 @@ CoopStatus CoopLobbyStatus(const SocialModel& m, SocialId invited) {
 SocialId StartupInvite(const SocialModel& m) {
   for (const auto& i : m.pending_invites) if (!i.inviter && i.lobby) return i.lobby;
   return 0;
+}
+namespace {
+ChapterPolicy PolicyOf(int chapter) {
+  return chapter >= 0 && size_t(chapter) < kChapterRules.size() ? kChapterRules[size_t(chapter)].policy
+                                                                : ChapterPolicy::Together;
+}
+}  // namespace
+const char* CoopModeName(int chapter) {
+  switch (PolicyOf(chapter)) {
+    case ChapterPolicy::Together: return "Play together";
+    case ChapterPolicy::SoloRegroup: return "Apart, then regroup";
+    case ChapterPolicy::Observer: return "Watch";
+  }
+  return "Play together";
+}
+const char* CoopModeText(int chapter) {
+  switch (PolicyOf(chapter)) {
+    case ChapterPolicy::Together:
+      return "You both play the whole chapter in the same world. If one of you goes down, the other can keep going "
+             "and you come back next to them.";
+    case ChapterPolicy::SoloRegroup:
+      return "Each of you plays this part on your own, then you meet up again.";
+    case ChapterPolicy::Observer:
+      return "The host plays this chapter and the partner watches it.";
+  }
+  return "";
+}
+int CoopLobbyStep(const SocialModel& m) {
+  if (!m.lobby || !m.choice.valid()) return 1;
+  return m.members.size() < 2 ? 2 : 3;
+}
+CoopStatus CoopStartLock(const SocialModel& m) {
+  if (m.start_requested || m.status == SocialStatus::Starting) return {"Starting co-op..."};
+  const SocialMember* self = nullptr;
+  const SocialMember* partner = nullptr;
+  for (const auto& p : m.members) (p.id == m.self ? self : partner) = &p;
+  if (!m.lobby || !partner) return {"Waiting for a friend to join"};
+  if (!m.choice.valid()) return {"Choose a chapter or save first"};
+  if (!self || !self->ready) return {"Press Ready first"};
+  if (!partner->ready) return {"Waiting for {0} to press Ready", partner->name};
+  if (!m.can_start || !CanStartLobby(m)) return {"Waiting for both games to be ready"};
+  return {};
+}
+int EarlyAccessGate::SecondsLeft(double now) const {
+  if (!open_) return 0;
+  const double left = kSeconds - (now - at_);
+  return left <= 0 ? 0 : int(std::ceil(left));
 }
 }  // namespace kk::coop
 
