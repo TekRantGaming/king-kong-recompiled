@@ -4748,7 +4748,7 @@ void ActorNativeAudit(const uint8_t* b,double sample_time=0) {
   if (!sample_time && now<next) return;
   next=now+.05;
   const auto* path=std::getenv("KK_COOP_ACTOR_AUDIT_DIR"); if (!path || !*path) return;
-  const auto dir=std::filesystem::absolute(path).lexically_normal();
+  const auto dir=std::filesystem::absolute(path).lexically_normal()/(Get().link.role==Role::Host ? "host":"join");
   if (!dir.generic_string().starts_with("F:/kk-native-coop/") && !dir.generic_string().starts_with("f:/kk-native-coop/")) return;
   auto& s=Get(); std::vector<world::Json> rows;
   PlayerPose local;
