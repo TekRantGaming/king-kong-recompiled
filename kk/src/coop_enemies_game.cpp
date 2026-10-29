@@ -2904,6 +2904,11 @@ bool SkipPeerContact(const uint8_t* b,uint32_t query) {
   // contacts_pass / obj_collide set source at +8 and target at +0x70 in
   // this exact native SceneBoundsState. Do not reinterpret other queries.
   if (query!=0x828E89D0) return false;
+#if defined(KK_DEV_TOOLS)
+  // Counterfactual walking fixture only. Shipping always keeps the filter.
+  static const bool native_contact=std::getenv("KK_DEV_PLAYER_CONTACT_NATIVE")!=nullptr;
+  if (native_contact) return false;
+#endif
   const auto local=Load32(b,0x82CCBF7C);
   const auto a=Load32(b,query+8),c=Load32(b,query+0x70);
   if (!local || (a!=local && c!=local)) return false;

@@ -29,6 +29,9 @@ foreach($role in 'host','guest') {
 $extra='--kk_shaders_prepared=2.0.0-beta.17;spirv,dxil|--kk_setup_again=false|--native_backend=d3d12|--kk_frame_rate=120'
 $fixture=[ordered]@{name=$Name;mode='native_beta_smoke';entry=$Entry;breaker='host';preset='kk-beta';seconds=$Seconds;
     source_commit=(& git -C $worktree rev-parse HEAD);dirty_paths=@(& git -C $worktree status --short);
+    source_files=@('kk/src/coop_objects_game.cpp','kk/src/coop_protocol.cpp','kk/src/coop_protocol.h','kk/src/coop_enemies_game.cpp','kk/src/coop_barrier.h','kk/src/coop_player_contact.h','kk/src/coop_partner_body.cpp','kk/src/coop_partner_body.h' | ForEach-Object {
+        [ordered]@{path=$_;sha256=(Get-FileHash -LiteralPath "$worktree\$_").Hash}
+    });
     binary_sha256=(Get-FileHash -LiteralPath "$worktree\kk\out\build\kk-beta\king_kong.exe").Hash;
     developer_aids=$false;fault_injection=$false;input_files=$inputFiles;extra=$extra}
 $fixture | ConvertTo-Json -Depth 4 | Set-Content -LiteralPath "$state\$Name-fixture.json"
