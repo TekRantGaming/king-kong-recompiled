@@ -18,6 +18,13 @@ REX_EXTERN(__imp__sub_824759C0);
 REX_EXTERN(__imp__sub_82465920);
 REX_EXTERN(__imp__sub_826E9220);
 REX_EXTERN(__imp__sub_826D5CD8);
+REX_EXTERN(__imp__sub_82593B98);
+REX_EXTERN(__imp__sub_825E2178);
+REX_EXTERN(__imp__sub_825B7BA8);
+REX_EXTERN(__imp__sub_827117E0);
+REX_EXTERN(__imp__sub_82711718);
+REX_EXTERN(__imp__sub_82710E20);
+REX_EXTERN(__imp__sub_82409B80);
 
 namespace kk::coop::raptor_route {
 using namespace kk::hfr;
@@ -69,7 +76,76 @@ void Inputs(const uint8_t* b,const char* source,uint32_t caller) {
   const auto count=Load32(b,v+2644);
   if (count<=100) for (uint32_t i=0;i<count;++i) Point(b,v+2652+12*i,"cached path",caller);
 }
+bool Raptor(const uint8_t* b) {
+  const auto ai=Load32(b,0x82CCBF64);
+  if (!PoseAddress(ai,88)) return false;
+  const auto first=Load16(b,ai+80), last=Load16(b,ai+82);
+  if (first>last || last>4096 || !PoseAddress(ai,4*(last+7))) return false;
+  for (uint32_t t=first;t<=last;++t) {
+    const auto block=Load32(b,ai+4*(t+6));
+    if (!PoseAddress(block,24)) continue;
+    const auto fn=Load32(b,block+20);
+    if (fn==0x82572E40 || fn==0x8254BCB0 || fn==0x825B9020) return true;
+  }
+  return false;
+}
+void WriteInput(PPCContext& ctx,uint8_t* b,const char* source,bool pair=false) {
+  if (!REXCVAR_GET(kk_coop_enabled) || !PoseAddress(ctx.r4.u32,12) ||
+      (Finite(b,ctx.r4.u32) && (!pair || !PoseAddress(ctx.r5.u32,12) || Finite(b,ctx.r5.u32))) ||
+      ctx.r3.u32!=Load32(b,0x82CCBF6C) || !Raptor(b)) return;
+  Scope scope(b);
+  Point(b,ctx.r4.u32,source,uint32_t(ctx.lr));
+  if(pair) Point(b,ctx.r5.u32,source,uint32_t(ctx.lr));
+}
+void WriteOutput(uint8_t* b,uint32_t actor,uint32_t caller,const char* source) {
+  if (!REXCVAR_GET(kk_coop_enabled) || actor!=Load32(b,0x82CCBF6C) || !PoseAddress(actor,16)) return;
+  const auto m=Load32(b,actor+12);
+  if (!PoseAddress(m,64) || (Finite(b,m) && Finite(b,m+16) && Finite(b,m+32) && Finite(b,m+48)) || !Raptor(b)) return;
+  Scope scope(b);
+  for (uint32_t off : {0u,16u,32u,48u}) Point(b,m+off,source,caller);
+}
 } // namespace kk::coop::raptor_route
+
+REX_HOOK_RAW(sub_82593B98) {
+  kk::coop::raptor_route::Scope scope(base);
+  kk::coop::raptor_route::Inputs(base,"blend input",uint32_t(ctx.lr));
+  __imp__sub_82593B98(ctx,base);
+  kk::coop::raptor_route::Inputs(base,"blend output",0x82593B98);
+}
+REX_HOOK_RAW(sub_825E2178) {
+  kk::coop::raptor_route::Scope scope(base);
+  kk::coop::raptor_route::Inputs(base,"fight input",uint32_t(ctx.lr));
+  __imp__sub_825E2178(ctx,base);
+  kk::coop::raptor_route::Inputs(base,"fight output",0x825E2178);
+}
+REX_HOOK_RAW(sub_825B7BA8) {
+  kk::coop::raptor_route::Scope scope(base);
+  kk::coop::raptor_route::Inputs(base,"action input",uint32_t(ctx.lr));
+  __imp__sub_825B7BA8(ctx,base);
+  kk::coop::raptor_route::Inputs(base,"action output",0x825B7BA8);
+}
+REX_HOOK_RAW(sub_827117E0) {
+  const auto actor=ctx.r3.u32, caller=uint32_t(ctx.lr);
+  kk::coop::raptor_route::WriteInput(ctx,base,"position setter input");
+  __imp__sub_827117E0(ctx,base);
+  kk::coop::raptor_route::WriteOutput(base,actor,caller,"position setter output");
+}
+REX_HOOK_RAW(sub_82711718) {
+  const auto actor=ctx.r3.u32, caller=uint32_t(ctx.lr);
+  kk::coop::raptor_route::WriteInput(ctx,base,"position setter input");
+  __imp__sub_82711718(ctx,base);
+  kk::coop::raptor_route::WriteOutput(base,actor,caller,"position setter output");
+}
+REX_HOOK_RAW(sub_82710E20) {
+  const auto actor=ctx.r3.u32, caller=uint32_t(ctx.lr);
+  kk::coop::raptor_route::WriteInput(ctx,base,"orientation setter input",true);
+  __imp__sub_82710E20(ctx,base);
+  kk::coop::raptor_route::WriteOutput(base,actor,caller,"orientation setter output");
+}
+REX_HOOK_RAW(sub_82409B80) {
+  kk::coop::raptor_route::WriteInput(ctx,base,"velocity setter input");
+  __imp__sub_82409B80(ctx,base);
+}
 
 REX_HOOK_RAW(sub_825924A8) {
   kk::coop::raptor_route::Scope scope(base);
