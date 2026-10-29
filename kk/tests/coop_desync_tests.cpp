@@ -160,6 +160,11 @@ void AutoRepairOff() {
   g={}; desync::Evidence quiet; quiet.quiet=true;
   g.Observe(1,101,1,quiet,1); g.Observe(1,101,1,quiet,4);
   Check(desync::Applied(g.Observe(1,101,1,quiet,7),false)==Tier::Quiet,"quiet value repair is unchanged when off");
+  using B=desync::PartnerButton;
+  Check(desync::OfferedButton(true,true,desync::AutoRepairDefault())==B::None,"default overlay hides the catch up with partner button");
+  Check(desync::OfferedButton(true,false,desync::AutoRepairDefault())==B::Move,"default overlay keeps move to partner");
+  Check(desync::OfferedButton(true,true,kRepairOn)==B::Catchup,"testing setting restores the catch up button");
+  Check(!desync::CatchupButtonAllowed(false) && desync::CatchupButtonAllowed(kRepairOn),"catch up request needs the testing setting");
 }
 void Mailbox() {
   StoryMailbox box; Message m; m.type=MessageType::WorldDigest; m.epoch=17; m.digest=Page();

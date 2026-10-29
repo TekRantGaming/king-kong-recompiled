@@ -1716,6 +1716,14 @@ void AutoRepair() {
   Check(w.Note(desync::Withheld::kReload,13),"each decision kind has its own minute");
   Check(w.Note(desync::Withheld::kMove,70),"a later minute logs again");
   Check(w.Count(desync::Withheld::kMove)==4 && w.Count(desync::Withheld::kReload)==1,"every withheld decision is counted");
+  // Early access: the "Catch up with partner" private reload button is hidden by default.
+  using B=desync::PartnerButton;
+  const bool off=desync::AutoRepairDefault();
+  Check(desync::OfferedButton(true,true,off)==B::None,"catch up button is hidden by default and not swapped for a move");
+  Check(desync::OfferedButton(true,false,off)==B::Move,"move to partner stays by default");
+  Check(desync::OfferedButton(false,true,off)==B::None && desync::OfferedButton(false,false,true)==B::None,"no offer shows no button");
+  Check(desync::OfferedButton(true,true,true)==B::Catchup && desync::OfferedButton(true,false,true)==B::Move,"auto repair on keeps both buttons");
+  Check(!desync::CatchupButtonAllowed(off) && desync::CatchupButtonAllowed(true),"the overlay cannot start the private catch up reload by default");
 }
 void DigestAuditOrder() {
   WorldAudit old; old.sweep=10; old.samples=40;

@@ -26,6 +26,18 @@ inline Tier Applied(Tier decision,bool auto_repair) {
   if (decision!=Tier::Move && decision!=Tier::Reload) return decision;
   return auto_repair || COOP_MUT_IF("auto_repair_gate") ? decision : Tier::None;
 }
+// Early access (Craig, 29 Oct): the overlay's "Catch up with partner" button
+// starts a private guest reload, so it is hidden unless auto repair is on. That
+// state shows no button at all; "Move to partner" stays as it is.
+enum class PartnerButton { None, Move, Catchup };
+inline PartnerButton OfferedButton(bool offered,bool checkpoint_recovery,bool auto_repair) {
+  if (!offered) return PartnerButton::None;
+  if (!checkpoint_recovery) return PartnerButton::Move;
+  if (auto_repair || COOP_MUT_IF("catchup_button_default")) return PartnerButton::Catchup;
+  return COOP_MUT_IF("catchup_button_swap") ? PartnerButton::Move : PartnerButton::None;
+}
+// The overlay may start the private catch up reload only when its button exists.
+inline bool CatchupButtonAllowed(bool auto_repair) { return auto_repair || COOP_MUT_IF("catchup_request_open"); }
 // Every withheld decision is counted; each kind is logged at most once a minute.
 class Withheld {
  public:

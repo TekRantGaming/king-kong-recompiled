@@ -494,11 +494,14 @@ class PartnerOverlay final : public rex::ui::ImGuiDialog {
         if (waiting || observer::Active() || flow.policy!=ChapterPolicy::Together) return;
       }
       if (observer::CutsceneActive()) return;
-      if (MoveToPartnerOffered()) {
+      // Early access: no "Catch up with partner" (private reload) unless kk_coop_auto_repair.
+      const auto partner_button=desync::OfferedButton(MoveToPartnerOffered(),PrivateCatchupOffered(),
+          REXCVAR_GET(kk_coop_auto_repair));
+      if (partner_button!=desync::PartnerButton::None) {
         ImGui::SetNextWindowPos(ImVec2(24,190),ImGuiCond_Always);
         ImGui::SetNextWindowBgAlpha(.9f);
         if (ImGui::Begin("##coop-catchup",nullptr,ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoDecoration)) {
-          const bool checkpoint_recovery=PrivateCatchupOffered();
+          const bool checkpoint_recovery=partner_button==desync::PartnerButton::Catchup;
           ImGui::TextUnformatted(checkpoint_recovery || StoryNeedsMove() ? "Your world needs to catch up with the host." : "Your partner is far ahead.");
           ImGui::TextUnformatted(checkpoint_recovery ? "Catch up at the host's checkpoint and rejoin your partner." :
               "Move beside the host and let your story catch up.");

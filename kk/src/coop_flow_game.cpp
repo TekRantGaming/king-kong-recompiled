@@ -244,7 +244,9 @@ bool CatchupNotice() { return Now()<catchup_notice_until.load(); }
 void MoveToPartner(bool checkpoint_recovery) {
   const auto v=SessionFlowSnapshot();
   if (checkpoint_recovery) {
-    if (catchup_offer.exchange(false) && !v.host && v.phase==FlowPhase::Playing && v.policy==ChapterPolicy::Together)
+    // Early access: the overlay never starts this private reload unless auto repair is on.
+    if (!desync::CatchupButtonAllowed(REXCVAR_GET(kk_coop_auto_repair))) return;
+    if (catchup_offer.exchange(false) &&!v.host && v.phase==FlowPhase::Playing && v.policy==ChapterPolicy::Together)
       catchup_request=v.world.generation;
     return;
   }
