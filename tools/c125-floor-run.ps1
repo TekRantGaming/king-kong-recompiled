@@ -3,7 +3,8 @@ param([Parameter(Mandatory)][string]$Name,[int]$Entry=1,[int]$Start=3,
       [string]$Preset='kk-dev-vulkan',[int]$Seconds=130,[int]$Seed=125,
       [ValidateSet('vulkan','d3d12')][string]$Backend='d3d12',[int]$FrameRate=120,
       [int]$FloorAt=15,[switch]$AuditOnly,
-      [string]$Source='',[string]$Walk='21.5:LSUP/2,25:LSLEFT/1,28:LSUP/1',[string]$ExtraEnv='',[string]$JoinPoint='')
+      [string]$Source='',[string]$Walk='21.5:LSUP/2,25:LSLEFT/1,28:LSUP/1',[string]$ExtraEnv='',[string]$JoinPoint='',
+      [switch]$NativeResume)
 $ErrorActionPreference='Stop'
 $worktree=Split-Path $PSScriptRoot -Parent
 $state='F:\kk-native-coop\codex\state'
@@ -17,21 +18,40 @@ $joinText="KK_DEV_LAUNCHER_INPUT=wait-home,direct:code:C125AB,direct:join,direct
 if ($JoinPoint) {$joinText=$joinText.Replace("KK_DEV_OBJECT_FLOOR_POINT=$Point","KK_DEV_OBJECT_FLOOR_POINT=$JoinPoint")}
 if ($Breaker -eq 'host') { $hostText+=$operator; $joinText+=$walker }
 else { $hostText+=$walker; $joinText+=$operator }
+$hostExtra='--kk_cheats=true|--kk_cheat_healing=true|--kk_cheat_one_hit=false';$joinExtra=''
+if ($NativeResume -and -not $AuditOnly) {
+    # Exercise the game's existing resume entry without any scripted lobby actions.
+    $versionMatch=Select-String -LiteralPath "$worktree\kk\CMakeLists.txt" -Pattern '^\s*set\(KK_VERSION\s+"([^"]+)"\)'
+    $version=$versionMatch.Matches[0].Groups[1].Value
+    $protocolMatch=Select-String -LiteralPath "$worktree\kk\src\coop_protocol.h" -Pattern 'constexpr uint16_t kProtocolVersion = (\d+);'
+    $protocol=$protocolMatch.Matches[0].Groups[1].Value
+    $written=[DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds();$token='00000000c1250033'
+    foreach($role in 'host','guest') {
+        $file="coop-resume-$role-$token.txt"
+        $content=@('kk_coop_resume=1',"role=$role","token=$token",'transport=direct',"chapter=$Entry",'continue=0','slot=-1',
+            'host_id=0','guest_id=0','port=33225','address=127.0.0.1','code=C125AB','partner=Peer',"protocol=$protocol", "version=$version","written=$written")
+        Set-Content -LiteralPath "F:\kk-native-coop\userdata\$file" -Value $content -Encoding ASCII
+        if($role -eq 'host') {$hostExtra+="|--kk_coop_resume=$file"} else {$joinExtra="--kk_coop_resume=$file"}
+    }
+    $hostText=$hostText -replace 'KK_DEV_LAUNCHER_INPUT=[^|]*\|','KK_DEV_LAUNCHER_INPUT=|'
+    $joinText=$joinText -replace 'KK_DEV_LAUNCHER_INPUT=[^|]*\|','KK_DEV_LAUNCHER_INPUT=|'
+}
 $extra="--kk_shaders_prepared=2.0.0-beta.17;spirv,dxil|--kk_setup_again=false|--kk_toggle_aim=false|--kk_coop_udp_profile=bad_wifi|--kk_coop_udp_seed=$Seed|--native_backend=$Backend|--kk_frame_rate=$FrameRate"
 if ($AuditOnly) {
     $fixture=Get-Content -LiteralPath "$state\$Name-fixture.json" -Raw | ConvertFrom-Json
     $Breaker=$fixture.breaker; $result=0
 } else {
   $fixture=[ordered]@{name=$Name;entry=$Entry;start=$Start;breaker=$Breaker;preset=$Preset;seed=$Seed;
-    point=$Point;join_point=$JoinPoint;object_source=$Source;walk=$Walk;backend=$Backend;frame_rate=$FrameRate;floor_at=$FloorAt;extra_env=$ExtraEnv;
+    point=$Point;join_point=$JoinPoint;object_source=$Source;walk=$Walk;backend=$Backend;frame_rate=$FrameRate;floor_at=$FloorAt;extra_env=$ExtraEnv;native_resume=[bool]$NativeResume;
     source_commit=(& git -C $worktree rev-parse HEAD);dirty_paths=@(& git -C $worktree status --short);
+    developer_tools=@(Select-String -LiteralPath "$worktree\kk\out\build\$Preset\CMakeCache.txt" -Pattern '^KK_DEV_TOOLS:BOOL=' | ForEach-Object {$_.Line});
     binary_sha256=(Get-FileHash -LiteralPath "$worktree\kk\out\build\$Preset\king_kong.exe").Hash;
     environment=$hostText;join_environment=$joinText;extra=$extra;seconds=$Seconds}
 $fixture | ConvertTo-Json -Depth 4 | Set-Content -LiteralPath "$state\$Name-fixture.json"
   $ErrorActionPreference='Continue'
 & powershell -NoProfile -File F:\kk-native-coop\tools\coop-run.ps1 -Name $Name -Seconds $Seconds -Two -Launcher -DirectIp `
     -Worktree $worktree -Preset $Preset -Snap '85,110' -Env $hostText -JoinEnv $joinText `
-    -HostExtra '--kk_cheats=true|--kk_cheat_healing=true|--kk_cheat_one_hit=false' -Extra $extra *> "$state\$Name-run.log"
+    -HostExtra $hostExtra -JoinExtra $joinExtra -Extra $extra *> "$state\$Name-run.log"
   $result=$LASTEXITCODE
   $ErrorActionPreference='Stop'
 }
@@ -74,6 +94,7 @@ foreach ($role in 'host','join') {
         load_released=@(LogLines $lines 'load barrier released').Count;
         consequences=@(LogLines $lines 'barrier consequences:');
         game_crashes=@(LogLines $lines 'Access violation|unhandled exception|\[critical\]').Count;
+        session_ends=@(LogLines $lines 'KK co-op: ended');
         failures=@(LogLines $lines 'probe: expired|Access violation|\[error\]')}
 }
 $operatorRole=if ($Breaker -eq 'host') {0} else {1}
@@ -97,9 +118,14 @@ $firstInput=if($nativeInput) {$nativeInput[0].Substring(0,24)} else {''}
 $crossed=$firstCross[$walkerRole] -and $firstCross[$walkerRole].Substring(0,24) -gt $firstInput
 $partnerFirst=$crossed -and (-not $firstCross[$operatorRole] -or $firstCross[$walkerRole] -lt $firstCross[$operatorRole])
 $earlyDeath=@($audit.roles | ForEach-Object {$_.deaths} | Where-Object {$firstInput -and $_.Substring(0,24) -lt $firstInput}).Count
+$earlyEnd=@($audit.roles | ForEach-Object {$_.session_ends} | Where-Object {
+    $firstInput -and $_.Substring(0,24) -gt $firstInput -and
+    ([datetime]::ParseExact($_.Substring(1,23),'yyyy-MM-dd HH:mm:ss.fff',[Globalization.CultureInfo]::InvariantCulture)-
+     [datetime]::ParseExact($firstInput.Substring(1,23),'yyyy-MM-dd HH:mm:ss.fff',[Globalization.CultureInfo]::InvariantCulture)).TotalSeconds -lt 30
+}).Count
 $audit['target']=$target
 $audit['first_cross']=$firstCross
-$audit['valid_crossing']=[bool]($nativeInput -and $partnerFirst -and -not $earlyDeath -and $audit.roles[0].load_released -and $audit.roles[1].load_released -and $audit.roles[0].impulses.Count -and $audit.roles[1].impulses.Count -and -not $audit.roles[0].game_crashes -and -not $audit.roles[1].game_crashes)
+$audit['valid_crossing']=[bool]($nativeInput -and $partnerFirst -and -not $earlyDeath -and -not $earlyEnd -and $audit.roles[0].load_released -and $audit.roles[1].load_released -and $audit.roles[0].impulses.Count -and $audit.roles[1].impulses.Count -and -not $audit.roles[0].game_crashes -and -not $audit.roles[1].game_crashes)
 $copies=@(Get-ChildItem -LiteralPath $run.FullName -Directory -Recurse | Where-Object Name -in @('bin','cache'))
 if ($copies) { throw "Run copies remain: $($copies.FullName -join ', ')" }
 $audit | ConvertTo-Json -Depth 5 -Compress | Set-Content -LiteralPath "$state\$Name-audit.json"

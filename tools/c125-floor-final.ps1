@@ -1,4 +1,6 @@
-param([int]$First=1,[int]$Last=10)
+param([int]$First=1,[int]$Last=10,[string]$Suffix='',
+      [ValidateSet('kk-dev-vulkan','kk-beta')][string]$Preset='kk-dev-vulkan',[switch]$NativeResume,
+      [ValidateRange(0,360)][int]$FrameRateOverride=0)
 $ErrorActionPreference='Stop'
 foreach($index in $First..$Last) {
     $breaker=if($index%2) {'host'} else {'guest'}
@@ -9,20 +11,22 @@ foreach($index in $First..$Last) {
     if($index -in @(7,8)) {
         $entry=24;$start=1;$point='30,93,12';$joinPoint='33,93,12';$source='44554B4D8561A02F'
         $walk='23:LSUP/3'
-        $extraEnv='KK_DEV_OBJECT_FLOOR_SCAN=1|KK_DEV_OBJECT_FLOOR_STEP=1|KK_DEV_FACE_POINT=22:0.05,28.768,90.871,5.5'
+        $extraEnv='KK_DEV_OBJECT_FLOOR_SCAN=1|KK_DEV_OBJECT_FLOOR_STEP=1|KK_DEV_FACE_POINT=22:0.05,25.0,89.5,5.5'
     }
     if($index -ge 9) {
-        $entry=4;$start=1;$point='89,99,40';$joinPoint='89,103,40';$source='E288DB6E01C48E47'
+        $entry=4;$start=1;$point='80,103,40';$joinPoint='80,100,40';$source='E288DB6E01C48E47'
         $walk='23:LSUP/2'
-        $extraEnv='KK_DEV_FACE_POINT=22:0.05,85.319,99.133,33.0'
+        $extraEnv='KK_DEV_FACE_POINT=22:0.05,92.0,99.133,33.0'
     }
-    $name="c125-final-$index"
+    if($FrameRateOverride) {$frameRate=$FrameRateOverride}
+    $name="c125-final-$index$Suffix"
     $driver="F:\kk-native-coop\codex\state\$name-driver.log"
     do {
-        $driverArgs=@('-NoProfile','-File',"$PSScriptRoot\c125-floor-run.ps1",'-Name',$name,'-Entry',"$entry",'-Start',"$start",
+        $driverArgs=@('-NoProfile','-File',"$PSScriptRoot\c125-floor-run.ps1",'-Name',$name,'-Preset',$Preset,'-Entry',"$entry",'-Start',"$start",
             '-Point',$point,'-JoinPoint',$joinPoint,'-Source',$source,'-Breaker',$breaker,'-Seed',"$(150+$index)",'-Seconds',"$seconds",
             '-Backend',$backend,'-FrameRate',"$frameRate",'-Walk',$walk,'-FloorAt','15')
         if($extraEnv) {$driverArgs+=@('-ExtraEnv',$extraEnv)}
+        if($NativeResume) {$driverArgs+='-NativeResume'}
         & powershell @driverArgs *> $driver
         $code=$LASTEXITCODE
         if($code -in @(3,4)) {Write-Output "$name refused $code";Start-Sleep -Seconds 30}
