@@ -2865,18 +2865,27 @@ void DevBait(PPCContext& ctx, uint8_t* b) {
   if (!jack.pose) return;
   const ShotVector origin{jack.pose->x, jack.pose->y, jack.pose->z};
   const Record* nearest = nullptr; float distance = 300;
-  for (const auto& [actor, record] : s.driving) {
-    if (record.kind != EnemyEventKind::Spawned || record.enemy.life <= 0 || record.enemy.id.family != bait.family) continue;
-    if (bait.source && record.enemy.id.source!=bait.source) continue;
+  // C135 fixture: a host raptor can exist before its guest replica binds.
+  // Its fresh authority pose still supplies a real combat location. This
+  // option moves only the test player and never creates or repairs an actor.
+  static const bool host_pose=[] {const auto p=std::getenv("KK_DEV_BAIT_HOST_POSE");return p && std::strcmp(p,"1")==0;}();
+  if(host_pose && (!Replication() || s.link.remote.world!=s.identity || Now()-s.link.remote.time>.5)) return;
+  const auto consider=[&](uint32_t actor,const Record& record) {
+    if (record.kind != EnemyEventKind::Spawned || record.enemy.life <= 0 || record.enemy.id.family != bait.family) return;
+    if (bait.source && record.enemy.id.source!=bait.source) return;
     // Optional fixture limit: a flying or perched enemy on another floor is
     // not evidence that Jack can stand underneath it. This does not prove
     // collision or ground even for an accepted placement.
-    if (std::abs(record.enemy.z-origin.z)>bait.max_height) continue;
-    const auto it = s.bindings.find(actor); const auto alias = s.aliases.find(record.enemy.id);
-    if (it == s.bindings.end() || alias == s.aliases.end() || alias->second != it->second.id || !ValidBinding(b, it->second)) continue;
+    if (std::abs(record.enemy.z-origin.z)>bait.max_height) return;
+    if(!host_pose) {
+      const auto it = s.bindings.find(actor); const auto alias = s.aliases.find(record.enemy.id);
+      if (it == s.bindings.end() || alias == s.aliases.end() || alias->second != it->second.id || !ValidBinding(b, it->second)) return;
+    } else if(record.enemy.owner!=EnemyOwner::Host || !ValidEnemy(record.enemy)) return;
     const float d = ShotDistance(origin, {record.enemy.x, record.enemy.y, record.enemy.z});
     if (d < distance) { distance = d; nearest = &record; }
-  }
+  };
+  if(host_pose) {for(const auto& record:s.link.remote.records) consider(0,record);}
+  else {for(const auto& [actor,record]:s.driving) consider(actor,record);}
   if (!nearest) return;
   const auto& e = nearest->enemy;
   const float dx = e.x-origin.x, dy = e.y-origin.y, length = std::hypot(dx, dy);
@@ -2916,8 +2925,8 @@ void DevBait(PPCContext& ctx, uint8_t* b) {
   if (!kk::DevTeleportJack(ctx, b, Load32(b, 0x82CCBF7C), target, fx, fy)) return;
   bait.done = !bait.repeat || ++bait.placements>=12;
   if (!bait.done) bait.due=t+bait.repeat;
-  REXLOG_INFO("KK dev bait: at {:.2f} guest teleported by native 82538B70 family={} enemy={:016X}/{} from=({:.3f},{:.3f},{:.3f}) to=({:.3f},{:.3f},{:.3f}) stand-off={:.2f} height={:.2f} floor-rays={} grab-floor={} collision-unverified=true",
-      t, uint16_t(e.id.family), e.id.source, e.id.sequence, origin.x, origin.y, origin.z, target.x, target.y, target.z,bait.distance,bait.height,bait.ground,bait.grab_floor);
+  REXLOG_INFO("KK dev bait: at {:.2f} guest teleported by native 82538B70 family={} enemy={:016X}/{} from=({:.3f},{:.3f},{:.3f}) to=({:.3f},{:.3f},{:.3f}) stand-off={:.2f} height={:.2f} floor-rays={} grab-floor={} host-pose-fixture={} collision-unverified=true",
+      t, uint16_t(e.id.family), e.id.source, e.id.sequence, origin.x, origin.y, origin.z, target.x, target.y, target.z,bait.distance,bait.height,bait.ground,bait.grab_floor,host_pose);
 }
 // Diagnostics are per validated host raptor, bounded and reset on load. The old
 // process-wide timer hid other raptors; a handle alone did not identify a victim.
