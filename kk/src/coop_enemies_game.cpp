@@ -1916,6 +1916,12 @@ bool Drive(PPCContext& ctx, uint8_t* b, const Binding& binding, const EnemyState
         for (uint32_t off:{8u,12u,16u}) Store32(b,Get().world+off,1);
       }
     }
+    // Native animation changes evaluate a pose immediately and can move the
+    // root. Commit the buffered transform after that work and its callbacks.
+    if (!ValidBinding(b,binding)) return false;
+    call(__imp__sub_827117E0,xyz);
+    if (!PerchedBat(binding.id.family,e.state)) call(__imp__sub_82711278,forward);
+    call(__imp__sub_82401AA8,xyz);
   }
   return true;
 }
@@ -4670,6 +4676,9 @@ void ActorNativeAudit(const uint8_t* b,double sample_time=0) {
         {"native_health",cell ? world::Json(LoadF(b,cell)):world::Json()},
         {"action",e.action},{"item",e.item},{"animation_time",animation},
         {"flags",Load32(b,actor+4)&actors::kFlagsMask},
+        {"buffered_x",driven==s.driving.end() ? world::Json():world::Json(driven->second.enemy.x)},
+        {"buffered_y",driven==s.driving.end() ? world::Json():world::Json(driven->second.enemy.y)},
+        {"buffered_z",driven==s.driving.end() ? world::Json():world::Json(driven->second.enemy.z)},
         {"source_time",driven==s.driving.end() ? 0.:driven->second.source_time}}));
   }
   const double utc=std::chrono::duration<double>(std::chrono::system_clock::now().time_since_epoch()).count();
