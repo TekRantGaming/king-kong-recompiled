@@ -119,6 +119,8 @@ void ActorFreeze() {
   Check(!actors::Initialize(true,true,false,true,false,true),"stale or other world records cannot initialize actors");
   Check(!actors::Initialize(true,true,true,true,true,true),"player initialization is never driven by replication");
   Check(!actors::Initialize(true,true,true,true,false,false),"ordinary NPC tracks cannot run through initialization");
+  Check(!actors::Initialize(true,true,true,true,false,true,0,1),"a packet cannot run ordinary tracks beside an initializer");
+  Check(!actors::Initialize(true,true,true,true,false,true,1,1),"only the audited initial native track can be pumped");
   auto far=Enemy(); far.x=1000;
   PlayerPose local,peer; peer.x=1000;
   Check(!actors::InScope(true,false,far,&local,nullptr),"far live actors are omitted from snapshots and digests together");

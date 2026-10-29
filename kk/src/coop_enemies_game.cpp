@@ -4746,7 +4746,8 @@ void InitializeHostActors(PPCContext& ctx,uint8_t* b) {
     }
     if (!actor || s.bindings.contains(actor) || !Member(b,s.world,actor,true)) continue;
     const auto ai=Ptr(b,Ptr(b,actor,24,8),4,88);
-    const auto vars=Ptr(b,ai,64,LifeBytes(family)),model=Ptr(b,ai,0,16);
+    // Preserve the original audited H variable span and single init track.
+    const auto vars=Ptr(b,ai,64,family==EnemyFamily::Human ? 16892:LifeBytes(family)),model=Ptr(b,ai,0,16);
     bool initializing=false,spawner=false; uint32_t state=0;
     const auto local_family=Tracks(b,ai,state,spawner,&initializing);
     const bool human=family!=EnemyFamily::Human || (ActorReadable(vars,8) && !Load32(b,vars) &&
@@ -4754,7 +4755,8 @@ void InitializeHostActors(PPCContext& ctx,uint8_t* b) {
     const bool init=ai==authored.ai && Ptr(b,actor,12,64)==authored.matrix && vars &&
         local_family==family && initializing && !spawner && human;
     const bool player=actor==Load32(b,0x82CCBF7C) || kk::PartnerBodyManagedActor(b,actor);
-    if (!actors::Initialize(Replication(),s.link.role==Role::Guest,fresh,count==1,player,init)) continue;
+    if (!actors::Initialize(Replication(),s.link.role==Role::Guest,fresh,count==1,player,init,
+        ai ? Load16(b,ai+80):UINT16_MAX,ai ? Load16(b,ai+82):UINT16_MAX)) continue;
     auto& tries=s.actor_init_attempts[r.enemy.id];
     if (!model || b[model+15] || tries>=120) {
       if (s.actor_init_blocked.insert(r.enemy.id).second)

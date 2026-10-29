@@ -60,8 +60,10 @@ inline bool HoldDispatch(ReplicaHold replica,PartnerHold partner,Recheck recheck
   // That donor is a replica again before any native script may execute.
   return !COOP_MUT_IF("actor_freeze_release") && recheck();
 }
-inline bool Initialize(bool enabled,bool guest,bool fresh,bool exact,bool player,bool initializer) {
-  return enabled && guest && fresh && (exact || COOP_MUT_IF("actor_init_exact")) && !player && initializer;
+inline bool Initialize(bool enabled,bool guest,bool fresh,bool exact,bool player,bool initializer,
+                       uint16_t first=0,uint16_t last=0) {
+  return enabled && guest && fresh && (exact || COOP_MUT_IF("actor_init_exact")) && !player && initializer &&
+      (COOP_MUT_IF("actor_init_tracks") || (first==0 && last==0));
 }
 // Digest pages describe an older instant than the buffered actor stream.
 // Keep their diagnostics, but let snapshots alone repair replicated actors.
