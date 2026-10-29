@@ -38,9 +38,7 @@
 #include "settings.h"
 #include "cheats.h"
 #include "ui_paint.h"
-#if defined(KK_DEV_TOOLS)
 #include "coop_runtime.h"
-#endif
 
 #if defined(_WIN32)
 #ifndef WIN32_LEAN_AND_MEAN
