@@ -49,6 +49,7 @@ REX_EXTERN(__imp__sub_82715AC8);
 REX_EXTERN(__imp__sub_82714E40);
 REX_EXTERN(__imp__sub_826E1EE8);
 REX_EXTERN(__imp__sub_826F8BC8);
+REX_EXTERN(__imp__sub_826EB8C0);
 REX_EXTERN(__imp__sub_827117E0);
 REX_EXTERN(__imp__sub_82711278);
 REX_EXTERN(__imp__sub_8270FCE0);
@@ -4115,7 +4116,7 @@ void Spawned(const uint8_t* b, uint32_t spawner, uint32_t source, uint32_t actor
     }
   }
 }
-bool SpawnerStep(PPCContext& ctx,uint8_t* b) {
+bool SpawnerStep(PPCContext& ctx,uint8_t* b,bool host_birth=false) {
   const auto view=SessionFlowSnapshot();
   if (!REXCVAR_GET(kk_coop_enabled) || !view.active || view.host || view.policy!=ChapterPolicy::Together) return false;
   auto& s=Get();
@@ -4125,19 +4126,13 @@ bool SpawnerStep(PPCContext& ctx,uint8_t* b) {
   auto& sp=it->second;
   const auto ext=Ptr(b,actor,24,42);
   if (sp.ai!=ai || Ptr(b,ext,4,88)!=ai || Ptr(b,ai,64,0x2094)!=sp.vars ||
-      !Member(b,s.world,actor,true) || (Load32(b,actor+4)&0x00600000)) return false;
+      !Member(b,s.world,actor,true) || (!host_birth && (Load32(b,actor+4)&0x00600000))) return false;
   ctx.r3.u32=0;
   if (!Connected() || s.link.remote.world!=s.identity) return true;
   // Preserve native post-birth visibility, wave limits and callbacks. Only the
   // choice to create a new root comes from the host's reliable lifecycle.
   if (Load16(b,ext+40)&4) { __imp__sub_826F8BC8(ctx,b); return true; }
-  const Record* next=nullptr;
-  for (const auto& record:s.link.remote.records) {
-    const auto& e=record.enemy;
-    if (e.birth_spawner!=sp.key || sp.sequence==UINT32_MAX || e.id.sequence!=sp.sequence+1) continue;
-    if (next) return true; // A sequence cannot select competing templates.
-    next=&record;
-  }
+  const auto* next=NextSpawnerBirth(s.link.remote.records,sp.key,sp.sequence);
   if (!next) return true;
   const auto e=next->enemy;
   if (!ValidEnemy(e) || e.birth_template>=19 || e.birth_point>=16) return true;
@@ -4186,6 +4181,42 @@ bool SpawnerStep(PPCContext& ctx,uint8_t* b) {
   for (unsigned i=0;i<7;++i) Store32(b,globals[i],values[i]);
   ctx=saved; ctx.r3.u32=result;
   return true;
+}
+void ReplayHostBirths(PPCContext& ctx,uint8_t* b) {
+  auto& s=Get();
+  if (!Replication() || s.link.role!=Role::Guest || !Connected() ||
+      s.link.remote.world!=s.identity || Now()-s.link.remote.time>.5 || !Scratch::CanUse(ctx)) return;
+  for (auto& [actor,sp]:s.spawners) {
+    const auto* next=NextSpawnerBirth(s.link.remote.records,sp.key,sp.sequence);
+    if (!sp.shared_births || !next ||
+        !Member(b,s.world,actor,true) || Ptr(b,Ptr(b,actor,24,8),4,88)!=sp.ai ||
+        Ptr(b,sp.ai,64,0x2094)!=sp.vars) continue;
+    const auto& e=next->enemy;
+    if (!ValidEnemy(e) || e.birth_template>=19 || e.birth_point>=16) continue;
+    const auto offset=e.birth_template<2 ? 1592+184*e.birth_template : 1972+4*(e.birth_template-2);
+    const auto source=Ptr(b,sp.vars,offset,32);
+    bool nested=false; uint32_t template_state=0;
+    const auto family=Tracks(b,Ptr(b,Ptr(b,source,24,8),4,88),template_state,nested);
+    if (!source || nested || SpawnId(sp.key,Mix(sp.key,offset),e.id.sequence,family)!=e.id) continue;
+    const auto model=Ptr(b,sp.ai,0,16),block=Ptr(b,sp.ai,24,24);
+    if (!model || b[model+15] || !block) continue;
+    const auto fn=Load32(b,block+20);
+    // Initialize only a loaded local spawner. A host birth can precede the
+    // guest's activation range. Never copy scheduler flags or enable a model.
+    bool native_spawner=false; uint32_t state=0;
+    Tracks(b,sp.ai,state,native_spawner);
+    if (!native_spawner && fn!=0x826D6750 && fn!=0x826D6890) continue;
+    Scratch scratch(ctx,b);
+    constexpr uint32_t globals[]{0x82CCBF58,0x82CCBF5C,0x82CCBF60,0x82CCBF64,0x82CCBF68,0x82CCBF6C,0x82CCBF70};
+    uint32_t saved[7]; for (unsigned i=0;i<7;++i) saved[i]=Load32(b,globals[i]);
+    Store32(b,globals[0],0); Store32(b,globals[1],block); Store32(b,globals[2],sp.ai+4);
+    Store32(b,globals[3],sp.ai); Store32(b,globals[4],sp.ai);
+    Store32(b,globals[5],actor); Store32(b,globals[6],actor);
+    if (fn==0x826EB8C0) __imp__sub_826EB8C0(ctx,b);
+    if (Member(b,s.world,actor,true) && Ptr(b,Ptr(b,actor,24,8),4,88)==sp.ai &&
+        Ptr(b,sp.ai,64,0x2094)==sp.vars) SpawnerStep(ctx,b,true);
+    for (unsigned i=0;i<7;++i) Store32(b,globals[i],saved[i]);
+  }
 }
 void SpiderCopied(const uint8_t* b,uint32_t parent,uint32_t ordinal,uint32_t actor) {
   auto& s=Get();
@@ -4812,7 +4843,7 @@ void ActorLateWorld(PPCContext& ctx,uint8_t* b,uint32_t w) {
   if (s.link.role==Role::Guest) {
     // Native root motion and physics run after the immediate AI pass. The
     // final displayed transform must still be the buffered host pose.
-    if (Connected()) { InitializeHostActors(ctx,b); Replicas(ctx,b,true); }
+    if (Connected()) { ReplayHostBirths(ctx,b); InitializeHostActors(ctx,b); Replicas(ctx,b,true); }
     if (s.link.session_state==SessionState::Connected || s.link.session_state==SessionState::Lost)
       HoldReplicas(ctx,b,true);
     ActorNativeAudit(b);

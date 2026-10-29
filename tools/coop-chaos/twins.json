@@ -8,6 +8,8 @@
   "jobs": 1,
   "scan": ["../../kk/src/coop_*.h", "../../kk/src/coop_*.cpp"],
   "twins": {
+    "actor_birth_ordinal": "actor_freeze",
+    "actor_birth_unique": "actor_freeze",
     "ownership_generation": "ownership_generation",
     "udp_duplicate": "udp_duplicate",
     "udp_order": "udp_order",

@@ -75,6 +75,16 @@ EnemyState Enemy() {
   EnemyState e; e.id={0x123456789abcdef0ull,1,EnemyFamily::Raptor}; e.life=100; return e;
 }
 void ActorFreeze() {
+  std::vector<enemies::Record> births(1);
+  births[0].enemy=Enemy(); births[0].enemy.birth_spawner=123;
+  Check(enemies::NextSpawnerBirth(births,123,0)==&births[0],"host birth selects the next local ordinal");
+  Check(!enemies::NextSpawnerBirth(births,123,1),"a duplicate birth cannot create another native actor");
+  Check(!enemies::NextSpawnerBirth(births,124,0),"another spawner cannot choose a local template");
+  Check(!enemies::NextSpawnerBirth(births,123,UINT32_MAX),"a full sequence cannot wrap");
+  births.push_back(births[0]);
+  Check(!enemies::NextSpawnerBirth(births,123,0),"competing templates at one ordinal are refused");
+  births.pop_back(); births[0].kind=EnemyEventKind::Removed;
+  Check(enemies::NextSpawnerBirth(births,123,0)==&births[0],"a retired birth consumes its ordinal without resurrection");
   bool borrowed=true; unsigned rechecked=0;
   Check(actors::HoldDispatch([&]{return !borrowed;},[&]{borrowed=false; return false;},
       [&]{++rechecked; return actors::Freeze(true,true,true,true,true,borrowed,true);}) && rechecked==1,

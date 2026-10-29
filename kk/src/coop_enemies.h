@@ -271,6 +271,17 @@ struct Frame {
   double time = 0;
   std::vector<Record> records;  // Includes terminal tombstones until load; bounded by kMaxEnemies.
 };
+inline const Record* NextSpawnerBirth(std::span<const Record> records,uint64_t spawner,uint32_t sequence) {
+  if (!spawner || sequence==UINT32_MAX) return nullptr;
+  const Record* next=nullptr;
+  for (const auto& record:records) {
+    if (record.enemy.birth_spawner!=spawner ||
+        (!COOP_MUT_IF("actor_birth_ordinal") && record.enemy.id.sequence!=sequence+1)) continue;
+    if (next && !COOP_MUT_IF("actor_birth_unique")) return nullptr;
+    next=&record;
+  }
+  return next;
+}
 struct Counters { uint64_t sent = 0; uint32_t matched = 0, unmatched = 0, driven = 0, owned_me = 0, owned_partner = 0; };
 
 // Worker-owned, SDK/game-free replication policy. Reliable events retry on backpressure.
