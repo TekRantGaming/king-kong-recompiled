@@ -1159,12 +1159,25 @@ void BarrierRelay() {
   }
 }
 void PlayerContact() {
-  constexpr uint32_t local=0x414E8A24,peer=0x41FA0260,terrain=0x42CE2004,enemy=0x42B2C284,retired=0x41FA0200;
-  Check(contact::PeerPair(local,peer,local,peer) && contact::PeerPair(peer,local,local,peer),
-      "both orders of the two player contact are excluded from native pushing");
-  for (const auto a:{local,peer,terrain,enemy,retired}) for (const auto b:{local,peer,terrain,enemy,retired}) {
-    const bool player_pair=(a==local && b==peer) || (a==peer && b==local);
-    Check(contact::PeerPair(a,b,local,peer)==player_pair,"terrain, enemies and a retired body keep native contacts");
+  constexpr uint32_t local=0x414E8A24,peer=0x41FA0260,terrain=0x42CE2004,enemy=0x42B2C284,old_copy=0x41FA0200,npc=0x41FA0400;
+  struct Case { uint32_t a,b; bool copy,driver,exclude; const char* why; };
+  const Case cases[]{
+    {local,peer,true,true,true,"a driven copy cannot push local Jack"},
+    {peer,local,true,true,true,"the reverse pair cannot push local Jack"},
+    {local,old_copy,true,false,true,"an allocated copy remains harmless after release"},
+    {old_copy,local,true,false,true,"the reverse released copy pair remains harmless"},
+    {local,npc,false,true,true,"a currently borrowed player body is excluded"},
+    {local,npc,false,false,false,"a released authored NPC resumes native contact"},
+    {local,terrain,false,false,false,"Jack retains native floor collision"},
+    {terrain,local,false,false,false,"reverse floor contact remains native"},
+    {local,enemy,false,false,false,"an enemy retains native contact with Jack"},
+    {enemy,peer,true,true,false,"an enemy retains native contact with the peer"},
+    {peer,terrain,true,true,false,"the peer retains native terrain contact"}
+  };
+  for (const auto& c:cases) {
+    const auto other=c.a==local ? c.b:c.a;
+    const bool exclude=contact::OwnedBody(c.copy,c.driver) && contact::PeerPair(c.a,c.b,local,other);
+    Check(exclude==c.exclude,c.why);
   }
   Check(!contact::PeerPair(local,peer,0,peer) && !contact::PeerPair(local,peer,local,0) &&
         !contact::PeerPair(local,peer,local,local) && !contact::PeerPair(0,peer,local,peer),

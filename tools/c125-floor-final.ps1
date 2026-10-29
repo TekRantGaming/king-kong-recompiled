@@ -1,8 +1,9 @@
 param([int]$First=1,[int]$Last=10,[string]$Suffix='',
       [ValidateSet('kk-dev-vulkan','kk-beta')][string]$Preset='kk-dev-vulkan',[switch]$NativeResume,
       [ValidateRange(0,360)][int]$FrameRateOverride=0,[ValidateSet('','vulkan','d3d12')][string]$BackendOverride='',
-      [switch]$Overlap,[switch]$RequireContactFilter)
+      [switch]$Overlap,[switch]$RequireContactFilter,[string]$DeadlineUtc='')
 $ErrorActionPreference='Stop'
+$deadline=if($DeadlineUtc){[datetime]::Parse($DeadlineUtc).ToUniversalTime()}else{[datetime]::MaxValue}
 foreach($index in $First..$Last) {
     $breaker=if($index%2) {'host'} else {'guest'}
     $entry=1;$start=3;$point='319.631,273.888,25';$joinPoint='321.5,273.888,25';$source='A098251F7A73B76D'
@@ -25,6 +26,7 @@ foreach($index in $First..$Last) {
     $name="c125-final-$index$Suffix"
     $driver="F:\kk-native-coop\codex\state\$name-driver.log"
     do {
+        if([datetime]::UtcNow -ge $deadline) {throw 'Proof deadline reached; no new game starts'}
         $driverArgs=@('-NoProfile','-File',"$PSScriptRoot\c125-floor-run.ps1",'-Name',$name,'-Preset',$Preset,'-Entry',"$entry",'-Start',"$start",
             '-Point',$point,'-JoinPoint',$joinPoint,'-Source',$source,'-Breaker',$breaker,'-Seed',"$(150+$index)",'-Seconds',"$seconds",
             '-Backend',$backend,'-FrameRate',"$frameRate",'-Walk',$walk,'-FloorAt','15')
@@ -41,4 +43,5 @@ foreach($index in $First..$Last) {
     $invalid=@($audit.roles.impulses | Where-Object {$_ -like '*finite=false*'}).Count
     Write-Output "$name valid=$($audit.valid_crossing) void=$voids invalid-velocity=$invalid"
     if($voids -or $invalid) {throw "$name captured a failure; keep it for investigation"}
+    if($RequireContactFilter -and -not $audit.valid_crossing) {throw "$name did not prove a crossing with both contact filters"}
 }

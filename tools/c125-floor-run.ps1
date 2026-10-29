@@ -45,7 +45,7 @@ if ($AuditOnly) {
   $fixture=[ordered]@{name=$Name;entry=$Entry;start=$Start;breaker=$Breaker;preset=$Preset;seed=$Seed;
     point=$Point;join_point=$JoinPoint;object_source=$Source;walk=$Walk;backend=$Backend;frame_rate=$FrameRate;floor_at=$FloorAt;extra_env=$ExtraEnv;native_resume=[bool]$NativeResume;require_contact_filter=[bool]$RequireContactFilter;
     source_commit=(& git -C $worktree rev-parse HEAD);dirty_paths=@(& git -C $worktree status --short);proof_variant=$ProofVariant;
-    source_files=@('kk/src/coop_objects_game.cpp','kk/src/coop_protocol.cpp','kk/src/coop_protocol.h','kk/src/coop_enemies_game.cpp','kk/src/coop_barrier.h','kk/src/coop_player_contact.h' | ForEach-Object {
+    source_files=@('kk/src/coop_objects_game.cpp','kk/src/coop_protocol.cpp','kk/src/coop_protocol.h','kk/src/coop_enemies_game.cpp','kk/src/coop_barrier.h','kk/src/coop_player_contact.h','kk/src/coop_partner_body.cpp','kk/src/coop_partner_body.h' | ForEach-Object {
         [ordered]@{path=$_;sha256=(Get-FileHash -LiteralPath "$worktree\$_").Hash}
     });
     developer_tools=@(Select-String -LiteralPath "$worktree\kk\out\build\$Preset\CMakeCache.txt" -Pattern '^KK_DEV_TOOLS:BOOL=' | ForEach-Object {$_.Line});
@@ -102,6 +102,7 @@ foreach ($role in 'host','join') {
         session_ends=@(LogLines $lines 'KK co-op: ended');
         native_reloads=@(LogLines $lines 'KK co-op flow: death/reload fallback');
         contact_filter_logs=@(LogLines $lines 'COOP PLAYER contact ignored');
+        body_retire_logs=@(LogLines $lines 'COOP PLAYER dev retire');
         failures=@(LogLines $lines 'probe: expired|Access violation|\[error\]')}
 }
 $operatorRole=if ($Breaker -eq 'host') {0} else {1}

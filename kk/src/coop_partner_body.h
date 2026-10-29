@@ -19,6 +19,9 @@ void PartnerBodyTriggerReference(const uint8_t* base, uint32_t record);
 // Current validated borrowed or native-copy partner. Zero after release/load/loss. Used by
 // the one stimulus hook to protect its authored state and route native bites.
 uint32_t PartnerBodyCombatActor(const uint8_t* base);
+// Copies stay allocated and quarantined after their driving lease ends.
+// Physical player contact must ignore those copies as well as a live driver.
+bool PartnerBodyPlayerContact(const uint8_t* base, uint32_t actor);
 // Only an independently allocated native copy, never an authored donor.
 uint32_t PartnerBodyCombatCopy(const uint8_t* base);
 // Proxy animation callbacks must not fire another damaging native shot.

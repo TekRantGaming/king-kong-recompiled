@@ -2903,15 +2903,21 @@ thread_local uint32_t equipment_query_partner=0;
 bool SkipPeerContact(const uint8_t* b,uint32_t query) {
   // contacts_pass / obj_collide set source at +8 and target at +0x70 in
   // this exact native SceneBoundsState. Do not reinterpret other queries.
-  if (query!=0x828E89D0 || !REXCVAR_GET(kk_coop_enabled) || !Connected()) return false;
+  if (query!=0x828E89D0) return false;
   const auto local=Load32(b,0x82CCBF7C);
   const auto a=Load32(b,query+8),c=Load32(b,query+0x70);
   if (!local || (a!=local && c!=local)) return false;
-  const auto peer=kk::PartnerBodyCombatActor(b);
+  const auto peer=a==local ? c:a;
+  if (!kk::PartnerBodyPlayerContact(b,peer)) return false;
   if (!contact::PeerPair(a,c,local,peer)) return false;
 #if defined(KK_DEV_TOOLS)
   static unsigned logged=0;
-  if (logged++<16) REXLOG_INFO("COOP PLAYER contact ignored local={:08X} peer={:08X} pair={:08X}/{:08X} native-world-and-enemy-contacts=unchanged",local,peer,a,c);
+  static bool logged_released=false;
+  const bool active=peer==kk::PartnerBodyCombatActor(b);
+  if (logged++<16 || (!active && !logged_released)) {
+    logged_released |= !active;
+    REXLOG_INFO("COOP PLAYER contact ignored local={:08X} peer={:08X} pair={:08X}/{:08X} active-lease={} native-world-and-enemy-contacts=unchanged",local,peer,a,c,active);
+  }
 #endif
   return true;
 }
