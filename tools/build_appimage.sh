@@ -34,7 +34,7 @@ if ! command -v clang++-20 >/dev/null && ! sudo apt-get install -y clang-20 lld-
   sudo apt-get install -y clang-20 lld-20
 fi
 sudo apt-get install -y g++ cmake ninja-build pkg-config file unzip rsync desktop-file-utils \
-  libx11-dev libxext-dev libxrandr-dev libxcursor-dev libxi-dev libxinerama-dev libxss-dev \
+  libx11-dev libx11-xcb-dev libxext-dev libxrandr-dev libxcursor-dev libxi-dev libxinerama-dev libxss-dev \
   libxkbcommon-dev libwayland-dev libdecor-0-dev libegl-dev libgl-dev libvulkan-dev \
   libasound2-dev libpulse-dev libpipewire-0.3-dev libdbus-1-dev libudev-dev libgtk-3-dev nasm
 fi
@@ -45,6 +45,11 @@ rsync -aL --delete --exclude out --exclude assets --exclude image.bin "$ROOT/kk/
 rsync -a --delete --exclude out --exclude build "$ROOT/native-renderer/" "$WORK/native-renderer/"
 mkdir -p "$WORK/tools/rexglue" "$WORK/kk/assets"
 cp "$ROOT/CHANGELOG.md" "$WORK/"  # the launcher's What's new and version history are built in
+cp "$ROOT/MODDING.md" "$WORK/"  # the modding guide ships beside the program (task 200)
+# The user manual's PDFium (task 333): tools/pdfium/linux-x64, or KK_PDFIUM_DIR as kk/CMakeLists.txt reads it.
+if [ -f "$ROOT/tools/pdfium/linux-x64/lib/libpdfium.so" ]; then
+  mkdir -p "$WORK/tools/pdfium" && rsync -aL --delete "$ROOT/tools/pdfium/linux-x64/" "$WORK/tools/pdfium/linux-x64/"
+fi
 # The build checks the translated code against your default.xex (from your own disc).
 cp "$ROOT/kk/assets/default.xex" "$WORK/kk/assets/"
 
@@ -80,7 +85,7 @@ echo "== Build"
 cd "$WORK/kk"
 # KK_DEV_TOOLS=ON builds the developer test aids in (for testing only, never a release).
 cmake --preset kk-linux-release -DKK_DEV_TOOLS="${KK_DEV_TOOLS:-OFF}" -DNR_DXC_DIR="${KK_DXC_DIR:-}" \
-  -DKK_FFMPEG_DIR="$FFMPEG_DIR"
+  -DKK_FFMPEG_DIR="$FFMPEG_DIR" -DKK_PDFIUM_DIR="${KK_PDFIUM_DIR:-$([ ! -d "$WORK/tools/pdfium/linux-x64" ] || echo "$WORK/tools/pdfium/linux-x64")}"
 cmake --build --preset kk-linux-release -- -k 0
 BIN="$WORK/kk/out/build/kk-linux-release"
 
@@ -98,6 +103,21 @@ cp -a "$BIN/glyphs" "$APPDIR/usr/bin/"
 [ -f "$BIN/MODDING.md" ] && cp -a "$BIN/MODDING.md" "$APPDIR/usr/bin/"
 # Task 331: the launcher's loading loops (launcher/video, read from beside the program).
 [ -d "$BIN/launcher" ] && cp -a "$BIN/launcher" "$APPDIR/usr/bin/"
+# The owner's Easter egg game (task 357; Linux: owner, 25 Oct): the official Electron runtime for Linux
+# (KK_EGG_ELECTRON_ZIP, the version the Windows build has) with the game's own app.asar (KK_EGG_ASAR, the
+# Windows package's) as resources/egg.asar, the same game, started by kk/egg-linux (resources/app), which lets
+# the launcher pause it (easter_egg.cpp). launcher/easter-egg/LegallyDistinctGorilla.
+if [ -n "${KK_EGG_ELECTRON_ZIP:-}" ] && [ -n "${KK_EGG_ASAR:-}" ]; then
+  EGG="$APPDIR/usr/bin/launcher/easter-egg"
+  rm -rf "$EGG" && mkdir -p "$EGG"
+  unzip -q "$KK_EGG_ELECTRON_ZIP" -d "$EGG"
+  mv "$EGG/electron" "$EGG/LegallyDistinctGorilla"
+  rm -f "$EGG/chrome-sandbox" "$EGG/resources/default_app.asar"  # no setuid helper in an AppImage (--no-sandbox)
+  cp "$KK_EGG_ASAR" "$EGG/resources/egg.asar"
+  cp -r "$ROOT/kk/egg-linux" "$EGG/resources/app"
+else
+  echo "warning: KK_EGG_ELECTRON_ZIP / KK_EGG_ASAR not set: no Easter egg game in this AppImage" >&2
+fi
 # The SDK's own copies win: the build only refreshes the ones beside the binary when it relinks.
 for lib in librexruntime.so libTracyClient.so; do
   [ ! -e "$SDK/lib/$lib" ] || cp -a "$SDK/lib/$lib" "$APPDIR/usr/bin/"
@@ -159,6 +179,30 @@ EOF
 cat > "$APPDIR/AppRun" <<'EOF'
 #!/bin/sh
 HERE="$(dirname "$(readlink -f "$0")")"
+# Run from a copy outside the AppImage's mount. The mount is served by a helper process that ends as soon as it
+# gets a signal; Steam signals every process of a game at once when it stops it, so the game, still quitting,
+# lost its own code and crashed (SIGBUS) at each exit. The copy is made once per AppImage file (its size and
+# time: an update gets a new one) under ~/.cache/king_kong/appimage; older copies are removed.
+# KK_APPIMAGE_COPY=0 runs from the mount as before.
+if [ -n "$APPIMAGE" ] && [ "${KK_APPIMAGE_COPY:-1}" != 0 ]; then
+  ID="$(stat -c '%s-%Y' "$APPIMAGE" 2>/dev/null)"
+  BASE="${XDG_CACHE_HOME:-$HOME/.cache}/king_kong/appimage"
+  if [ -n "$ID" ] && [ ! -f "$BASE/$ID/.complete" ]; then
+    # Other versions' copies go (a running one keeps its files open: Linux frees them when it ends).
+    for old in "$BASE"/*; do [ "$old" = "$BASE/$ID" ] || rm -rf "$old"; done
+    PART="$BASE/.part-$$"
+    rm -rf "$BASE/$ID"
+    if mkdir -p "$PART" && cp -a "$HERE/." "$PART/" && touch "$PART/.complete"; then
+      mv -T "$PART" "$BASE/$ID" 2>/dev/null || rm -rf "$PART"
+    else
+      rm -rf "$PART"
+    fi
+  fi
+  if [ -n "$ID" ] && [ -f "$BASE/$ID/.complete" ]; then
+    HERE="$BASE/$ID"
+    export KK_APPIMAGE_COPY_DIR="$HERE"
+  fi
+fi
 LIBS="$HERE/usr/bin"
 # Use the bundled C++ runtime only when the system's is older than the one
 # the game needs; a newer system copy is kept for the graphics drivers.

@@ -1,0 +1,28 @@
+Subject: [PATCH] POSIX threads: join a finished thread once, however often it is waited on
+
+A second pthread_join of the same thread is undefined; King Kong's benchmark start waited on a thread twice
+and its main thread blocked forever on Linux.
+---
+--- a/src/core/threading_posix.cpp	2026-10-26 03:13:07.726092405 +0000
++++ b/src/core/threading_posix.cpp	2026-10-26 03:13:07.759335374 +0000
+@@ -1018,6 +1018,12 @@
+   static void* ThreadStartRoutine(void* parameter);
+   inline bool signaled() const override { return signaled_; }
+   inline void post_execution() override {
++    // Every successful wait on a finished thread ends here. A guest may wait on the same thread more than once
++    // (allowed on Windows and the console), but a thread can be joined only once: a second pthread_join on it
++    // is undefined and was seen to block forever (King Kong's benchmark start, Linux). Join and clean up once.
++    if (joined_.exchange(true)) {
++      return;
++    }
+     if (thread_) {
+       pthread_join(thread_, nullptr);
+     }
+@@ -1030,6 +1036,7 @@
+     sem_destroy(&suspend_sem_);
+ #endif
+   }
++  std::atomic<bool> joined_{false};
+   pthread_t thread_;
+   bool signaled_;
+   int exit_code_;

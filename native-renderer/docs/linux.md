@@ -31,7 +31,7 @@ The script, in order:
 2. **ReXGlue SDK source**: `REXGLUE_SDK_SRC` (default `F:\KK-native-renderer\sdk-src-upscalers-038`: SDK v0.10.0
    + `tools/rexglue-patches` + `native-renderer/sdk-patches` 0001-0003, 0035, 0037, 0038) + sdk-patches 0039,
    0040, 0041, 0043, then compared file by file with the Windows SDK's source (`REXGLUE_SDK_CHECK`, default
-   `sdk-src-upscalers-043`): the build stops if any file differs.
+   `sdk-src-real-hdr-317`, 0044 and 0045 added for Beta 17): the build stops if any file differs.
 3. **SDK build** (clang 20, Release, `REXGLUE_USE_VULKAN=ON`, preset `linux-amd64`) installed to `sdk/`.
 4. **DXC**: the official Microsoft Linux release, the same version as Windows' `dxcompiler.dll`
    (`KK_DXC_FROM`, default `downloads\dxc-linux-v1.9.2609\x`: v1.9.2609, `libdxcompiler.so` 1.9.2609.5).
@@ -63,13 +63,16 @@ are already on disk: `KK_APPIMAGETOOL` (the copy in `/root/kk-beta4-081/work/`) 
 
 ```
 sudo apt install clang-20 lld-20 g++ cmake ninja-build nasm make rsync patch file pkg-config \
-  libx11-dev libxext-dev libxrandr-dev libxcursor-dev libxi-dev libxinerama-dev libxss-dev libxkbcommon-dev \
+  libx11-dev libx11-xcb-dev libxext-dev libxrandr-dev libxcursor-dev libxi-dev libxinerama-dev libxss-dev libxkbcommon-dev \
   libwayland-dev libdecor-0-dev libegl-dev libgl-dev libvulkan-dev libasound2-dev libpulse-dev \
   libpipewire-0.3-dev libdbus-1-dev libudev-dev libgtk-3-dev
 ```
 
 For the headless test also `xvfb mesa-vulkan-drivers pulseaudio` (all already in the build PC's Ubuntu-24.04;
-task 191 installed nothing). The AppImage needs at run time: glibc 2.38 or newer (it is built on Ubuntu 24.04:
+task 191 installed nothing). The unit tests (`KK_DEV_TOOLS=ON`, `-DNR_BUILD_TESTS=ON -DNR_LIGHTING_DXC=<dxc>`) also
+need `python3-numpy python3-pil` and must run one at a time (`ctest` without `-j`: nr_game_tests and its small and
+minimum table variants share their pipeline files in /tmp). The Ubuntu-24.04 install was made new on 25 Oct 2026
+(its disk had gone); everything above was installed again then. The AppImage needs at run time: glibc 2.38 or newer (it is built on Ubuntu 24.04:
 Ubuntu 24.04, Fedora 39+, Bazzite run it; Ubuntu 22.04 with 2.35 cannot; the C++ runtime, GLIBCXX_3.4.32, is
 bundled and AppRun uses it only when the system's is older), a Vulkan 1.3 driver
 (Mesa RADV/ANV, NVIDIA), `curl` for the content downloads and the Workshop page, `libdbus-1.so.3` for
@@ -89,6 +92,7 @@ notifications (optional; falls back to `notify-send`, then a pop-up), FUSE 2 to 
 | 0040 timer queue sleeps instead of spinning | in the source, no effect | yes | Linux only (`#if` guarded) |
 | 0041 pacing / benchmark present observer | yes | yes (unused) | the game calls it on Windows only (benchmark host presents, handoff) |
 | 0043 scRGB HDR output | yes | yes (inactive) | HDR is offered only where Windows reports an HDR monitor |
+| 0044, 0045 HDR highlight expansion and curve | yes (-317) | yes (inactive) | added to the Linux recipe for Beta 17 |
 
 Before task 191 the Linux SDK (`/root/kk-beta4-081/sdk`, built 15 Oct) had everything up to 0040 but not
 0041/0043. No game feature depended on them on Linux, but the HDR settings then had no SDK option behind

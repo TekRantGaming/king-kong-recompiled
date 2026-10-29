@@ -1,6 +1,7 @@
 #include "launcher_ui.h"
 
 #include <algorithm>
+#include <chrono>
 #include <cmath>
 #include <cstdlib>
 #include <cstring>
@@ -27,6 +28,10 @@ namespace {
 // A controller press and a key press of the same action this close together
 // are one press (Steam's desktop layout types keys for the controller).
 constexpr double kSameInput = 0.25;
+
+double SteadySeconds() {
+  return std::chrono::duration<double>(std::chrono::steady_clock::now().time_since_epoch()).count();
+}
 
 int Utf8Length(unsigned char c) {
   return c < 0x80 ? 1 : (c >> 5) == 0x6 ? 2 : (c >> 4) == 0xE ? 3 : (c >> 3) == 0x1E ? 4 : 1;
@@ -460,6 +465,18 @@ void Input::Update() {
       held_[size_t(kHeld[i].second)] = std::max(held_[size_t(kHeld[i].second)], key_held_[i]);
     }
   }
+  // Settle: everything above was followed (what is held stays held, so it does not press later either), but
+  // nothing presses yet. The steady clock: ImGui's stood still while the launcher waited.
+  if (SteadySeconds() < settle_until_) {
+    pressed_ = {};
+    pad_presses_ = key_presses_ = 0;
+  }
+}
+
+void Input::Settle(double seconds) {
+  settle_until_ = SteadySeconds() + seconds;
+  pressed_ = {};
+  pad_presses_ = key_presses_ = 0;
 }
 
 // --------------------------------------------------------------- prompts ---

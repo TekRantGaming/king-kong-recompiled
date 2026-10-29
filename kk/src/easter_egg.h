@@ -8,11 +8,11 @@
 
 namespace kk::egg {
 
-// launcher\easter-egg\LegallyDistinctGorilla.exe beside the program (Windows only; empty elsewhere).
+// launcher\easter-egg\LegallyDistinctGorilla.exe beside the program (Linux: launcher/easter-egg/LegallyDistinctGorilla).
 std::filesystem::path AppPath();
 
-// The game's process (and the processes it starts, in one job: none outlive the launcher). Windows only;
-// elsewhere Start fails.
+// The game's process (and the processes it starts, in one job, on Linux one process group: none outlive the
+// launcher).
 class Process {
  public:
   Process();
@@ -35,8 +35,9 @@ class Process {
   // Ends it and everything it started.
   void Terminate();
 
+  struct State;  // per platform (easter_egg.cpp; Linux's is also reached by ForceToFront and the key reads)
+
  private:
-  struct State;
   std::unique_ptr<State> s_;
 };
 
@@ -46,7 +47,7 @@ bool ForceToFront(void* hwnd);
 
 // Task 358: Enter is held down now, read from the system: while the game is in front the launcher's window gets no
 // keys, so Enter as Start (the pause panel) is read this way, and only while the game is in front (Process::InFront).
-// Windows only (false elsewhere).
+// Windows only (false on Linux: Enter and Esc count only while the launcher's own window has the keyboard).
 bool EnterKeyDown();
 // Task 364: Esc held down now, read the same way (Esc pauses the game too).
 bool EscapeKeyDown();

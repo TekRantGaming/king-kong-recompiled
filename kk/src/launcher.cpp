@@ -290,13 +290,14 @@ std::filesystem::path BrowseForDiscImage() {
 }
 #else
 // Linux: the desktop's own file picker through zenity (GNOME, SteamOS and
-// most others) or kdialog (KDE).
+// most others) or kdialog (KDE). Without the AppImage's library path, as the PS2 movie folder picker
+// (system programs load their own libraries). What it gave is logged: players' reports need it.
 std::filesystem::path BrowseForDiscImage() {
   const char* commands[] = {
-      "zenity --file-selection --title='Select your King Kong Xbox 360 disc image' "
+      "env -u LD_LIBRARY_PATH zenity --file-selection --title='Select your King Kong Xbox 360 disc image' "
       "--file-filter='Xbox 360 disc image (*.iso) | *.iso *.ISO' --file-filter='All files | *' 2>/dev/null",
-      "kdialog --title 'Select your King Kong Xbox 360 disc image' --getopenfilename \"$HOME\" "
-      "'*.iso *.ISO|Xbox 360 disc image' 2>/dev/null",
+      "env -u LD_LIBRARY_PATH kdialog --title 'Select your King Kong Xbox 360 disc image' --getopenfilename "
+      "\"$HOME\" '*.iso *.ISO|Xbox 360 disc image' 2>/dev/null",
   };
   for (const char* cmd : commands) {
     FILE* pipe = popen(cmd, "r");
@@ -306,10 +307,13 @@ std::filesystem::path BrowseForDiscImage() {
     while (fgets(buf, sizeof(buf), pipe)) out += buf;
     const int status = pclose(pipe);
     while (!out.empty() && (out.back() == '\n' || out.back() == '\r')) out.pop_back();
+    const int code = WIFEXITED(status) ? WEXITSTATUS(status) : -1;
+    REXLOG_INFO("KK: disc picker {}: exit {}, gave '{}'", std::strstr(cmd, "zenity") ? "zenity" : "kdialog", code,
+                out);
     if (!out.empty()) return std::filesystem::path(out);
     // 127: the tool isn't installed, so try the next one; anything else means
     // the player cancelled.
-    if (!WIFEXITED(status) || WEXITSTATUS(status) != 127) return {};
+    if (code != 127) return {};
   }
   return {};
 }
@@ -1599,7 +1603,9 @@ class SettingsPages {
     it.description = "How the game fills your screen: in a window, borderless or fullscreen.";
     it.options = {"Windowed", "Borderless", "Fullscreen"};
     it.index = !GetBool("fullscreen") ? 0 : ExclusiveFullscreen() ? 2 : 1;
-    it.default_text = "Windowed";
+    // Windowed, except in Game Mode (gamescope, ApplyPortDefaults): the screen's own size, as Borderless.
+    const auto* mode_flag = FindFlag("fullscreen");
+    it.default_text = mode_flag && mode_flag->default_value == "true" ? "Borderless" : "Windowed";
     it.on_choice = [this](int i) {
       if (i == 1) Set("kk_fullscreen_mode", "desktop");
       if (i == 2 && !ParseDisplayMode(Get("kk_fullscreen_mode"))) Set("kk_fullscreen_mode", DesktopModeValue());
@@ -2201,6 +2207,7 @@ class SettingsPages {
         const auto folder = movies::Folder().u8string();
         Item it = ActionItem("PS2 movie folder", "Choose the folder containing BK_xxxx.mp4.", "", [this] {
           const auto path = movies::BrowseFolder();
+          input_.Settle(0.35);  // nothing the picker's confirming press left over presses here (StartInstall)
           if (!path.empty()) {
             Set("kk_ps2_movie_folder", path);
           }
@@ -6676,17 +6683,29 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
     } else if (update_->done && !relaunched_) {  // start the new version, then close this one
       relaunched_ = true;
       std::wstring extra;
-#if defined(KK_DEV_TOOLS) && defined(_WIN32)
+#if defined(KK_DEV_TOOLS)
       // Task 370: a KK_DEV_UPDATE_ZIP test. The new process must not offer it again (nor its steps install it again),
       // and it must not log over this run's log (with the second --log_file it writes logs\king_kong_NNN.log in the
       // program folder, as a run without one does).
       if (const char* zip = std::getenv("KK_DEV_UPDATE_ZIP"); zip && *zip) {
+#if defined(_WIN32)
         _putenv_s("KK_DEV_UPDATE_RELAUNCHED", "1");
         _putenv_s("KK_DEV_LAUNCHER_INPUT", "");
+#else
+        setenv("KK_DEV_UPDATE_RELAUNCHED", "1", 1);
+        setenv("KK_DEV_LAUNCHER_INPUT", "", 1);
+#endif
         const std::filesystem::path log = rex::cvar::GetFlagByName("log_file");
+        // (Windows parses a command line, so the path is quoted; on Linux the argument arrives whole as it is.)
+#if defined(_WIN32)
+        constexpr const wchar_t* kQuote = L"\"";
+#else
+        constexpr const wchar_t* kQuote = L"";
+#endif
         if (!log.empty())
-          extra = L"--log_file=\"" +
-                  (log.parent_path() / (log.stem().wstring() + L"-relaunch" + log.extension().wstring())).wstring() + L"\"";
+          extra = L"--log_file=" + std::wstring(kQuote) +
+                  (log.parent_path() / (log.stem().wstring() + L"-relaunch" + log.extension().wstring())).wstring() +
+                  kQuote;
       }
 #endif
       RelaunchSelf(extra);
@@ -6826,8 +6845,13 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
   // ------------------------------------------------------------ install ---
   void StartInstall() {
     const auto pkg = BrowseForDiscImage();
+    // The launcher waited while the picker was open: what the controller or keyboard did in the picker (its
+    // confirming press, still held or queued) must not press anything here (Linux, 26 Oct: it opened the picker
+    // again behind the install).
+    input_.Settle(0.35);
     if (pkg.empty()) return;
     const uint32_t title = iso::ReadTitleId(pkg);
+    REXLOG_INFO("KK: install: {} has title {:08X}", pkg.filename().string(), title);
     if (title == 0) {
       OpenModal("Can't install", "That file is not an Xbox 360 disc image.", {"OK"}, 0, nullptr);
       return;

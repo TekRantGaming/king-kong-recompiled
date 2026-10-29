@@ -37,6 +37,8 @@ if git -C "$SRC" rev-parse HEAD >/dev/null 2>&1; then
   git -C "$SRC" -c core.autocrlf=false -c core.eol=lf archive HEAD | tar -x -C "$WORK/src"
 else
   cp -a "$SRC/." "$WORK/src/"
+  # A copy of a Windows checkout (tools/make_linux_sdk_base.sh from C:\rexsrc): its text files to Unix line endings.
+  grep -rlI $'\r' "$WORK/src" | xargs -r sed -i 's/\r$//'
 fi
 # The SDK's copy carries files generated for its own premake build; configure makes its own, and an
 # out-of-tree build refuses to run (or would include the wrong lists) while they are in the source tree.
@@ -55,6 +57,9 @@ OPTIONS=(--prefix="$PREFIX" --build-suffix=-kk --cc="$CC"
   --disable-avdevice --disable-avfilter --disable-postproc --disable-network --disable-debug
   --enable-shared --disable-static --enable-pic
   --enable-protocol=file --enable-demuxer=mov --enable-decoder=h264,aac --enable-parser=h264,aac
+  # The game's own logo movies at the launcher's start (Video/Ubisoft, Universal, Wingnut.wmv: ASF, WMV3 with
+  # WMA 2 or WMA Pro): on Windows Media Foundation plays them; here these LGPL decoders.
+  --enable-demuxer=asf --enable-decoder=wmv3,wmav2,wmapro
   --enable-swscale --enable-swresample)
 # FFmpeg 4.4 still has libavresample (off by default in later versions).
 grep -q -- '--disable-avresample' "$WORK/src/configure" && OPTIONS+=(--disable-avresample)

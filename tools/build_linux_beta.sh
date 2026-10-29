@@ -6,9 +6,9 @@
 #
 # Steps (each is skipped when its result is already there and up to date):
 #   1. toolchain check (lists missing Ubuntu packages; installs nothing)
-#   2. ReXGlue SDK source = REXGLUE_SDK_SRC (the Windows -038 source: v0.10.0 + tools/rexglue-patches +
+#   2. ReXGlue SDK source = REXGLUE_SDK_SRC (tools/make_linux_sdk_base.sh, the same as the Windows -038 source: v0.10.0 + tools/rexglue-patches +
 #      sdk-patches 0001-0003, 0035, 0037, 0038) + sdk-patches 0039, 0040 (Linux waits) + 0041 (present
-#      observer) + 0043 (scRGB HDR), checked file by file against the Windows SDK's source (REXGLUE_SDK_CHECK)
+#      observer) + 0043 (scRGB HDR) + 0044, 0045 (HDR curve, Beta 11), checked file by file against the Windows SDK's source (REXGLUE_SDK_CHECK)
 #   3. SDK build + install (clang 20, Release, Vulkan)
 #   4. DXC: the official Microsoft Linux release (same version as Windows' dxcompiler.dll)
 #   5. FFmpeg: tools/build_ffmpeg_linux.sh from the SDK's own thirdparty/FFmpeg (LGPL, PS2 cutscenes)
@@ -28,13 +28,16 @@ VERSION="${1:?usage: build_linux_beta.sh <version, e.g. v2.0.0-beta.6>}"
 REPO="$(cd "$(dirname "$0")/.." && pwd)"
 BASE="${KK_LINUX_ROOT:-$HOME/kk-linux-beta}"
 F=/mnt/f/KK-native-renderer
-SDK_FROM="${REXGLUE_SDK_SRC:-$F/sdk-src-upscalers-038}"
-SDK_CHECK="${REXGLUE_SDK_CHECK:-$F/sdk-src-upscalers-043}"
+SDK_FROM="${REXGLUE_SDK_SRC:-$BASE/sdk-base-038}"  # made by tools/make_linux_sdk_base.sh
+SDK_CHECK="${REXGLUE_SDK_CHECK:-$F/sdk-src-real-hdr-317}"
 DXC_FROM="${KK_DXC_FROM:-$F/downloads/dxc-linux-v1.9.2609/x}"
 JOBS="${KK_JOBS:-$(( $(nproc) > 2 ? $(nproc) - 2 : 1 ))}"
 # The game build (a developer build, KK_DEV_TOOLS=ON, gets its own, so the two never rebuild each other).
 WORKDIR="${KK_BUILD_DIR:-$BASE/work$([ "${KK_DEV_TOOLS:-OFF}" != ON ] || echo -dev)}"
-PATCHES="0039 0040 0041 0043"
+PATCHES="0039 0040 0041 0043 0044 0045 0046 0047"
+# Linux only fixes the Windows SDK source does not have (its files are left out of the step 2 comparison):
+# 0046 joins a finished thread once (threading_posix.cpp; the benchmark start hung).
+LINUX_ONLY="0046 0047"
 mkdir -p "$BASE"
 T0=$(date +%s)
 step() { echo "== [$(( $(date +%s) - T0 )) s] $*"; }
@@ -45,14 +48,14 @@ for c in clang-20:clang-20 clang++-20:clang-20 lld-20:lld-20 cmake:cmake ninja:n
          rsync:rsync patch:patch file:file pkg-config:pkg-config g++:g++; do
   command -v "${c%%:*}" >/dev/null || missing="$missing ${c#*:}"
 done
-for h in X11/Xlib.h wayland-client.h xkbcommon/xkbcommon.h vulkan/vulkan.h alsa/asoundlib.h pulse/pulseaudio.h \
+for h in X11/Xlib.h X11/Xlib-xcb.h wayland-client.h xkbcommon/xkbcommon.h vulkan/vulkan.h alsa/asoundlib.h pulse/pulseaudio.h \
          dbus/dbus.h libudev.h gtk/gtk.h; do
   [ -e "/usr/include/$h" ] || [ -n "$(find /usr/include -path "*/$h" -print -quit 2>/dev/null)" ] || missing="$missing (header $h)"
 done
 if [ -n "$missing" ]; then
   echo "missing:$missing" >&2
   echo "Ubuntu 24.04: sudo apt install clang-20 lld-20 g++ cmake ninja-build nasm make rsync patch file pkg-config \\" >&2
-  echo "  libx11-dev libxext-dev libxrandr-dev libxcursor-dev libxi-dev libxinerama-dev libxss-dev libxkbcommon-dev \\" >&2
+  echo "  libx11-dev libx11-xcb-dev libxext-dev libxrandr-dev libxcursor-dev libxi-dev libxinerama-dev libxss-dev libxkbcommon-dev \\" >&2
   echo "  libwayland-dev libdecor-0-dev libegl-dev libgl-dev libvulkan-dev libasound2-dev libpulse-dev \\" >&2
   echo "  libpipewire-0.3-dev libdbus-1-dev libudev-dev libgtk-3-dev" >&2
   exit 1
@@ -61,7 +64,7 @@ fi
 step "2. SDK source ($SDK_FROM + sdk-patches $PATCHES)"
 SRC="$BASE/sdk-src"
 STAMP="$(cd "$REPO/native-renderer/sdk-patches" && for n in $PATCHES; do sha256sum $n-*.patch; done | sha256sum | cut -c1-16)"
-STAMP="$STAMP $(git -C "$SDK_FROM" rev-parse --short HEAD 2>/dev/null || echo nogit)"
+STAMP="$STAMP $(git -C "$SDK_FROM" rev-parse --short HEAD 2>/dev/null || cat "$SDK_FROM/.kk-base-id" 2>/dev/null || echo nogit)"
 if [ "$(cat "$SRC/.kk-sdk-stamp" 2>/dev/null)" != "$STAMP" ]; then
   [ -d "$SDK_FROM/src" ] || { echo "error: no SDK source at $SDK_FROM (REXGLUE_SDK_SRC)" >&2; exit 1; }
   # out/ (the build) is kept. By content, not times: a changed file gets a new time, so the build compiles
@@ -81,9 +84,14 @@ if [ "$(cat "$SRC/.kk-sdk-stamp" 2>/dev/null)" != "$STAMP" ]; then
   echo "$STAMP" > "$SRC/.kk-sdk-stamp"
 fi
 if [ -d "$SDK_CHECK/src" ]; then
+  : > "$BASE/linux-only-files.txt"
+  for n in $LINUX_ONLY; do
+    tr -d '\r' < "$(ls "$REPO/native-renderer/sdk-patches/$n"-*.patch)" | sed -n 's|^+++ b/||p' >> "$BASE/linux-only-files.txt"
+  done
   # Every file of the Windows SDK's source (its include/ and src/) must be the same here (line ends aside).
   diffs=0
   while IFS= read -r f; do
+    grep -qx "$f" "$BASE/linux-only-files.txt" 2>/dev/null && continue
     if ! diff -q --strip-trailing-cr "$SDK_CHECK/$f" "$SRC/$f" >/dev/null 2>&1; then echo "  differs from Windows: $f"; diffs=$((diffs+1)); fi
   done < <(cd "$SDK_CHECK" && find include src -type f)
   [ $diffs -eq 0 ] || { echo "error: the Linux SDK source differs from $SDK_CHECK in $diffs files" >&2; exit 1; }
@@ -129,6 +137,8 @@ if [ -z "${KK_EXTRA_FILES:-}" ]; then
   KK_EXTRA_FILES="$(pick benchmark-route.kkbr) $(pick FREECAM.txt)"
 fi
 export KK_EXTRA_FILES
+export KK_EGG_ASAR="${KK_EGG_ASAR:-$(pick launcher/easter-egg/resources/app.asar)}"
+export KK_EGG_ELECTRON_ZIP="${KK_EGG_ELECTRON_ZIP:-$F/downloads/electron-v45.0.0-linux-x64/electron-v45.0.0-linux-x64.zip}"
 export KK_SKIP_PACKAGES=ON KK_WORK="$WORKDIR" REXGLUE_SDK_DIR="$BASE/sdk" KK_DXC_DIR="$BASE/dxc" \
        KK_FFMPEG_DIR="$BASE/ffmpeg" CMAKE_BUILD_PARALLEL_LEVEL="$JOBS" KK_DEV_TOOLS="${KK_DEV_TOOLS:-OFF}"
 [ -z "${KK_APPIMAGETOOL:-}" ] || export KK_APPIMAGETOOL
@@ -147,8 +157,10 @@ step "7. package checks"
 OUT="$REPO/dist/KingKong-$VERSION-linux-x86_64.AppImage"
 A="$WORKDIR/AppDir"
 fail=0
-for f in usr/bin/king_kong usr/bin/librexgpu-native.so usr/bin/librexruntime.so usr/bin/libdxcompiler.so \
+for f in usr/bin/king_kong usr/bin/librexgpu-native.so usr/bin/librexruntime.so usr/bin/libdxcompiler.so usr/bin/libpdfium.so \
          usr/bin/THIRD-PARTY-NOTICES.txt usr/share/licenses/ffmpeg usr/share/licenses/dxc usr/bin/glyphs \
+         usr/bin/launcher/easter-egg/LegallyDistinctGorilla usr/bin/launcher/easter-egg/resources/egg.asar \
+         usr/bin/launcher/easter-egg/resources/app/main.js \
          usr/bin/launcher/video/save-notice-loop.mp4 usr/bin/launcher/video/returning-loop.mp4 usr/bin/launcher/video/trg-startup.mp4 AppRun; do
   [ -e "$A/$f" ] || { echo "  MISSING $f"; fail=1; }
 done

@@ -36,6 +36,15 @@ REXCVAR_DEFINE_BOOL(kk_coop_actor_replication, false, "KK", "Host controls enemy
 // RO1: off in every build (default from coop_desync.h). Testing only.
 REXCVAR_DEFINE_BOOL(kk_coop_auto_repair, kk::coop::desync::AutoRepairDefault(), "KK/Debug",
                     "Testing only: when the partner world drifts, move the guest beside the host or reload the guest");
+
+#if !defined(_WIN32)
+// The VSync setting (launcher, setup, pause menu, F8 panel) is the SDK's D3D12 presenter cvar, which only
+// the Windows SDK builds. Without it the VSync row had no value on Linux and the Vulkan present modes
+// (ApplyVSyncSettings) were all off: VSync always on. Same name and default as the SDK's.
+REXCVAR_DEFINE_BOOL(d3d12_allow_variable_refresh_rate_and_tearing, true, "UI/D3D12",
+                    "VSync off: allow tearing (Linux: the Vulkan presenter's immediate and mailbox modes)");
+#endif
+
 REXCVAR_DEFINE_BOOL(kk_launcher, true, "KK",
                     "Show the launcher before starting the game (hold Shift at start to force it)");
 REXCVAR_DEFINE_BOOL(kk_skip_launcher, false, "KK",
@@ -1019,6 +1028,15 @@ void SetCvarDefault(std::string_view name, std::string_view value) {
 void ApplyPortDefaults() {
   // Windowed by default so the launcher isn't a giant fullscreen dialog.
   SetCvarDefault("fullscreen", "false");
+#if !defined(_WIN32)
+  // Owner, 26 Oct: in Game Mode (gamescope) the game fills the screen: a window there was 1280x720 stretched to the
+  // screen. At the screen's own resolution (kk_fullscreen_mode "desktop"); gamescope shows only the game, so this
+  // looks the same as Fullscreen without switching the display's mode. A player's own choice still wins.
+  if (InGamescope()) {
+    SetCvarDefault("fullscreen", "true");
+    SetCvarDefault("kk_fullscreen_mode", "desktop");
+  }
+#endif
 #if defined(_WIN32)
   // Task 350a (owner, 21 Oct): DirectX 12 is the graphics API on Windows; startup recovery switches to Vulkan when
   // DirectX 12 cannot start (startup_recovery.cpp). Linux keeps the renderer's own "auto" (Vulkan). A settings file

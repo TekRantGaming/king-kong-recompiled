@@ -104,6 +104,9 @@ class Input {
   bool Pressed(Action a) const { return pressed_[size_t(a)]; }
   void Consume(Action a) { pressed_[size_t(a)] = false; }
   void ConsumeAll() { pressed_ = {}; }
+  // After the launcher waited on something modal of the system's (a file picker): for `seconds` the
+  // controllers and keys are followed but press nothing, so what confirmed the picker does not act here too.
+  void Settle(double seconds);
   // How long a direction has been held.
   float HeldFor(Action a) const;
   void Inject(Action a, Device d);  // testing aid
@@ -164,6 +167,7 @@ class Input {
   bool pads_active_ = true;
   std::array<bool, 6> dir_stale_{};  // a direction held while the window was not active (until let go)
   bool injected_ = false;
+  double settle_until_ = 0;  // Settle: no presses before this steady clock time
   ImVec2 last_mouse_{-1, -1};
   bool sdl_ready_ = false;
   std::vector<void*> pads_;  // SDL_Gamepad*

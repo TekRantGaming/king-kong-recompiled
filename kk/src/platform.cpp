@@ -23,7 +23,11 @@
 #include <timeapi.h>
 #else
 #include <SDL3/SDL.h>
+#include <vulkan/vulkan.h>
+#include <algorithm>
 #include <cerrno>
+#include <dlfcn.h>
+#include <vector>
 #include <cstdlib>
 #include <cstring>
 #include <fcntl.h>
@@ -103,6 +107,64 @@ GpuInfo DetectGpu() {
     }
   }
   adapter->Release();
+#else
+  // Linux: the Vulkan device the game draws with (the system's loader, as the renderer uses): a discrete
+  // card first, then an integrated one; never a software one (llvmpipe). Its largest device local heap
+  // stands for Windows' dedicated video memory (an APU's: the memory set aside for it in the firmware).
+  void* vk = dlopen("libvulkan.so.1", RTLD_NOW | RTLD_LOCAL);
+  if (!vk) return info;
+  auto get = reinterpret_cast<PFN_vkGetInstanceProcAddr>(dlsym(vk, "vkGetInstanceProcAddr"));
+  auto create = get ? reinterpret_cast<PFN_vkCreateInstance>(get(nullptr, "vkCreateInstance")) : nullptr;
+  VkInstance instance = VK_NULL_HANDLE;
+  VkApplicationInfo app{VK_STRUCTURE_TYPE_APPLICATION_INFO};
+  app.apiVersion = VK_API_VERSION_1_1;
+  VkInstanceCreateInfo ci{VK_STRUCTURE_TYPE_INSTANCE_CREATE_INFO};
+  ci.pApplicationInfo = &app;
+  if (create && create(&ci, nullptr, &instance) == VK_SUCCESS) {
+    auto enumerate = reinterpret_cast<PFN_vkEnumeratePhysicalDevices>(get(instance, "vkEnumeratePhysicalDevices"));
+    auto properties = reinterpret_cast<PFN_vkGetPhysicalDeviceProperties>(get(instance, "vkGetPhysicalDeviceProperties"));
+    auto memory = reinterpret_cast<PFN_vkGetPhysicalDeviceMemoryProperties>(
+        get(instance, "vkGetPhysicalDeviceMemoryProperties"));
+    auto destroy = reinterpret_cast<PFN_vkDestroyInstance>(get(instance, "vkDestroyInstance"));
+    uint32_t count = 0;
+    if (enumerate && properties && memory && enumerate(instance, &count, nullptr) == VK_SUCCESS && count) {
+      std::vector<VkPhysicalDevice> devices(count);
+      enumerate(instance, &count, devices.data());
+      VkPhysicalDevice best = VK_NULL_HANDLE;
+      int best_rank = 0;
+      for (VkPhysicalDevice d : devices) {
+        VkPhysicalDeviceProperties p{};
+        properties(d, &p);
+        const int rank = p.deviceType == VK_PHYSICAL_DEVICE_TYPE_DISCRETE_GPU     ? 3
+                         : p.deviceType == VK_PHYSICAL_DEVICE_TYPE_INTEGRATED_GPU ? 2
+                         : p.deviceType == VK_PHYSICAL_DEVICE_TYPE_CPU            ? 0
+                                                                                  : 1;
+        if (rank > best_rank) best = d, best_rank = rank;
+      }
+      if (best) {
+        VkPhysicalDeviceProperties p{};
+        properties(best, &p);
+        info.vendor = p.vendorID == 0x10DE   ? GpuVendor::kNvidia
+                      : p.vendorID == 0x1002 ? GpuVendor::kAmd
+                      : p.vendorID == 0x8086 ? GpuVendor::kIntel
+                                             : GpuVendor::kUnknown;
+        info.name = p.deviceName;
+        info.vendor_id = p.vendorID;
+        info.device_id = p.deviceID;
+        char version[64];
+        std::snprintf(version, sizeof(version), "%u.%u.%u", VK_API_VERSION_MAJOR(p.driverVersion),
+                      VK_API_VERSION_MINOR(p.driverVersion), VK_API_VERSION_PATCH(p.driverVersion));
+        info.driver = version;
+        VkPhysicalDeviceMemoryProperties m{};
+        memory(best, &m);
+        for (uint32_t i = 0; i < m.memoryHeapCount; ++i)
+          if (m.memoryHeaps[i].flags & VK_MEMORY_HEAP_DEVICE_LOCAL_BIT)
+            info.dedicated_memory = std::max<uint64_t>(info.dedicated_memory, m.memoryHeaps[i].size);
+      }
+    }
+    if (destroy) destroy(instance, nullptr);
+  }
+  dlclose(vk);
 #endif
   return info;
 }
@@ -133,6 +195,27 @@ HardwareProfile DetectHardware() {
     h.height = int(mode.dmPelsHeight);
     h.refresh_hz = int(mode.dmDisplayFrequency);
   }
+#else
+  // Linux: memory from the system, physical cores as distinct core ids per package, the primary display
+  // from SDL (the launcher has its video started; before that the size stays 0, as when Windows fails).
+  if (const long pages = sysconf(_SC_PHYS_PAGES), size = sysconf(_SC_PAGE_SIZE); pages > 0 && size > 0)
+    h.system_memory = uint64_t(pages) * uint64_t(size);
+  std::vector<std::string> cores;
+  for (int cpu = 0;; ++cpu) {
+    const std::string dir = "/sys/devices/system/cpu/cpu" + std::to_string(cpu) + "/topology/";
+    std::ifstream package(dir + "physical_package_id"), core(dir + "core_id");
+    std::string p, c;
+    if (!std::getline(package, p) || !std::getline(core, c)) break;
+    if (std::find(cores.begin(), cores.end(), p + ":" + c) == cores.end()) cores.push_back(p + ":" + c);
+  }
+  h.physical_cores = unsigned(cores.size());
+  if (SDL_WasInit(SDL_INIT_VIDEO)) {
+    if (const SDL_DisplayMode* mode = SDL_GetDesktopDisplayMode(SDL_GetPrimaryDisplay())) {
+      h.width = mode->w;
+      h.height = mode->h;
+      h.refresh_hz = int(mode->refresh_rate + 0.5f);
+    }
+  }
 #endif
   return h;
 }
@@ -146,6 +229,17 @@ bool IsSteamDeck() {
   if (name == "Jupiter" || name == "Galileo") return true;  // the LCD and OLED models
 #endif
   return false;
+}
+
+bool InGamescope() {
+#if defined(_WIN32)
+  return false;
+#else
+  // gamescope gives its clients its own Wayland display; SteamOS style sessions also name it the desktop.
+  if (const char* v = std::getenv("GAMESCOPE_WAYLAND_DISPLAY"); v && *v) return true;
+  const char* desktop = std::getenv("XDG_CURRENT_DESKTOP");
+  return desktop && std::strstr(desktop, "gamescope") != nullptr;
+#endif
 }
 
 bool ScreenHdrOn() {

@@ -45,6 +45,7 @@ namespace kk {
 HardwareProfile fake;
 GpuInfo DetectGpu() { return fake.gpu; }
 HardwareProfile DetectHardware() { return fake; }
+bool InGamescope() { return false; }  // settings.cpp's Game Mode default (desktop here)
 }
 namespace {
 int checks = 0;
@@ -71,9 +72,19 @@ int main() {
   rex::cvar::SetFlagByName("native_backend", "classic");
   Check(NormalizeRendererSettings(), "legacy API migrated");
   Equals("native_backend", "auto");
+#if defined(__linux__)
+  // Linux has no DirectX 12: a settings file from Windows goes back to Auto (Vulkan).
+  rex::cvar::SetFlagByName("native_backend", "d3d12");
+  Check(NormalizeRendererSettings(), "d3d12 migrated on Linux");
+  Equals("native_backend", "auto");
+  rex::cvar::SetFlagByName("native_backend", "vulkan");
+  Check(!NormalizeRendererSettings(), "native API preserved");
+  Equals("native_backend", "vulkan");
+#else
   rex::cvar::SetFlagByName("native_backend", "d3d12");
   Check(!NormalizeRendererSettings(), "native API preserved");
   Equals("native_backend", "d3d12");
+#endif
   rex::cvar::SetFlagByName("native_backend", "auto");
   constexpr uint64_t GiB = uint64_t(1) << 30;
   struct Case { GpuVendor vendor; const char* model; unsigned vram, cores, ram; bool deck; size_t tier; };
@@ -224,6 +235,12 @@ int main() {
   const auto dir = std::filesystem::current_path() / ("hardware-test-" + std::to_string(
       std::chrono::steady_clock::now().time_since_epoch().count()));
   std::filesystem::create_directories(dir);
+#if !defined(_WIN32)
+  // The full recommendation below (tier, upscaler, AO, first setup policy) is Windows only: on Linux
+  // ApplyHardwareRecommendation sets only the GI from the tier, except on a Steam Deck's first setup.
+  std::cout << "PASS: " << checks << " hardware/settings checks (Linux: the Windows recommendation is not built)\n";
+  return 0;
+#endif
   const auto config = dir / "king_kong.toml";
   // Only a missing config receives the new policy. The setup's second pass
   // reuses the selected tier, and later launches retain it even on another GPU.
