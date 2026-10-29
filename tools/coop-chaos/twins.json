@@ -29,6 +29,7 @@
     "bat_contact_sound": "bat_contact_sound",
     "raptor_camera": "raptor_camera",
     "raptor_orientation_zero": "raptor_route",
+    "raptor_curve_input": "raptor_route",
     "raptor_route_recovery": "raptor_route",
     "raptor_route_reselect": "raptor_route",
     "raptor_bite_sound": "raptor_bite_sound",

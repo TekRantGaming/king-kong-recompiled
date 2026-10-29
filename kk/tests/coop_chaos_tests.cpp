@@ -859,6 +859,29 @@ void RaptorRoute() {
   Check(!route::RefuseOrientation(false,true,zero,up) && !route::RefuseOrientation(true,false,zero,up),
       "only enabled co op raptors change");
   Check(!route::RefuseOrientation(true,true,forward,up),"ordinary native orientation passes unchanged");
+  const auto packed=route::PackedPoint(0x42A4DA9542BF394Aull,0x416746747FC00000ull);
+  Check(packed[0]>82 && packed[0]<83 && packed[1]>95 && packed[1]<96 && packed[2]>14 && packed[2]<15,
+      "curve vector registers decode x y z and ignore NaN padding");
+  route::Curve curve{.5,{{{1,2,3},{2,3,4},{3,4,5},{4,5,6}}}};
+  for(uint32_t caller:{0x8245BB60u,0x82492B8Cu}) {
+    Check(!route::RefuseCurve(true,true,caller,curve),"both native movement curve consumers keep valid curves");
+    for(unsigned point=0;point<4;++point) for(unsigned axis=0;axis<3;++axis) {
+      auto bad=curve;bad.points[point][axis]=nan;
+      Check(route::RefuseCurve(true,true,caller,bad),"invalid cell curve cannot produce a NaN actor velocity");
+      Check(!route::RefuseCurve(false,true,caller,bad) && !route::RefuseCurve(true,false,caller,bad),
+          "source fix leaves disabled co op and other actors unchanged");
+    }
+    auto bad=curve;bad.parameter=nan;
+    Check(route::RefuseCurve(true,true,caller,bad),"zero segment NaN parameter is rejected before curve evaluation");
+    bad.parameter=std::numeric_limits<float>::infinity();
+    Check(route::RefuseCurve(true,true,caller,bad),"zero segment infinite parameter is rejected");
+    bad=curve;bad.parameter=0;bad.points[2][0]=nan;bad.points[3][1]=nan;
+    Check(!route::RefuseCurve(true,true,caller,bad),"native start branch ignores unused end controls");
+    bad=curve;bad.parameter=1;bad.points[0][0]=nan;bad.points[1][1]=nan;
+    Check(!route::RefuseCurve(true,true,caller,bad),"native end branch ignores unused start controls");
+  }
+  curve.points[2][0]=nan;
+  Check(!route::RefuseCurve(true,true,0x8255EE50,curve),"neck and query curves keep their native consumers");
   for (unsigned axis=0;axis<3;++axis) {
     auto p=forward;p[axis]=nan;
     Check(route::RefuseOrientation(true,true,p,up),"each invalid direction coordinate refused");

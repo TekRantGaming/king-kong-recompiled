@@ -1,6 +1,7 @@
 #pragma once
 #include "coop_mut.h"
 #include <array>
+#include <bit>
 #include <cmath>
 #include <cstdint>
 
@@ -18,6 +19,21 @@ inline bool Normalizable(Point3 p) {
 inline bool RefuseOrientation(bool enabled,bool raptor,Point3 first,Point3 second) {
   if (COOP_MUT_IF("raptor_orientation_zero")) return false;
   return enabled && raptor && (!Normalizable(first) || !Normalizable(second));
+}
+inline Point3 PackedPoint(uint64_t xy,uint64_t z) {
+  return {std::bit_cast<float>(uint32_t(xy>>32)),std::bit_cast<float>(uint32_t(xy)),
+      std::bit_cast<float>(uint32_t(z>>32))};
+}
+struct Curve { double parameter=0;std::array<Point3,4> points; };
+inline bool MotionCurveCaller(uint32_t caller) {return caller==0x8245BB60 || caller==0x82492B8C;}
+inline bool RefuseCurve(bool enabled,bool raptor,uint32_t caller,const Curve& curve) {
+  if(COOP_MUT_IF("raptor_curve_input")) return false;
+  if(!enabled || !raptor || !MotionCurveCaller(caller)) return false;
+  if(!std::isfinite(curve.parameter)) return true;
+  // Native endpoint branches read only the adjacent control point and end.
+  const unsigned first=curve.parameter>=1 ? 2:0, last=curve.parameter<=0 ? 1:3;
+  for(unsigned i=first;i<=last;++i) if(!Finite(curve.points[i])) return true;
+  return false;
 }
 // Reset movement only. Keep the state, threat handle, health, target choice,
 // transform and all story fields. The native destination selector runs again.

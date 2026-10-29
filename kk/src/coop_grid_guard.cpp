@@ -59,10 +59,11 @@ bool Readable(uint32_t p,uint32_t bytes) {
 struct Owner { uint32_t actor=0, ai=0, vars=0, matrix=0; };
 thread_local Owner current;
 thread_local uint64_t grid_refusals=0, recovered_grid=0;
-thread_local Owner refused_grid, refused_orientation;
+thread_local Owner refused_grid, refused_orientation, refused_curve;
 bool Same(Owner a,Owner b) { return a.vars && a.actor==b.actor && a.ai==b.ai && a.vars==b.vars && a.matrix==b.matrix; }
 bool PendingGrid() { return grid_refusals!=recovered_grid && Same(current,refused_grid); }
 bool PendingOrientation() { return Same(current,refused_orientation); }
+bool PendingCurve() { return Same(current,refused_curve); }
 struct ResumeWatch { Owner owner; Point3 from; bool pending=false; };
 ResumeWatch watch;
 Point3 ReadPoint(const uint8_t* b,uint32_t p) { return {LoadF(b,p),LoadF(b,p+4),LoadF(b,p+8)}; }
@@ -71,7 +72,7 @@ struct Scope {
   explicit Scope(uint8_t* b) {
     current={};
     if (!REXCVAR_GET(kk_coop_enabled)) return;
-    if (!saved.vars) {refused_grid={};refused_orientation={};recovered_grid=grid_refusals;}
+    if (!saved.vars) {refused_grid={};refused_orientation={};refused_curve={};recovered_grid=grid_refusals;}
     const auto actor=Load32(b,0x82CCBF6C), ai=Load32(b,0x82CCBF64);
     if (!Readable(actor,28) || !Readable(ai,68)) return;
     const auto vars=Load32(b,ai+64), matrix=Load32(b,actor+12);
@@ -180,6 +181,7 @@ bool Recover(PPCContext& ctx,uint8_t* b,const char* reason) {
   if (!reset) return false;
   recovered_grid=grid_refusals;
   if (PendingOrientation()) refused_orientation={};
+  if (PendingCurve()) refused_curve={};
   watch={current,own,true};
   static grid_guard::Reports reports;
   const double now=std::chrono::duration<double>(std::chrono::steady_clock::now().time_since_epoch()).count();
@@ -274,6 +276,48 @@ void Matrix(PPCContext& ctx,uint8_t* b,bool look_y,void (*native)(PPCContext&,ui
   if(injected) for(unsigned i=0;i<3;++i) Store32(b,injected+4*i,words[i]);
 #endif
 }
+bool CurveStop(PPCContext& ctx,uint8_t* b,uint32_t out,uint32_t tangent,const Curve& curve,uint32_t caller,const char* reason) {
+  if(!current.vars || !Readable(out,12) || !Readable(tangent,12)) return false;
+  if(uint64_t(out)<uint64_t(tangent)+12 && uint64_t(tangent)<uint64_t(out)+12) return false;
+  const auto own=ReadPoint(b,current.matrix+48);
+  if(!Finite(own)) return false;
+  for(unsigned i=0;i<3;++i) {StoreF(b,out+4*i,own[i]);StoreF(b,tangent+4*i,0);}
+  ctx.r3.u64=out;
+  refused_curve=current;
+  static grid_guard::Reports reports;
+  const double now=std::chrono::duration<double>(std::chrono::steady_clock::now().time_since_epoch()).count();
+  if(reports.Note(now)) REXLOG_WARN("KK co op raptor curve refused: actor={:08X} ai={:08X} caller={:08X} source={} parameter={} cells={} "
+      "p0=({},{},{}) p1=({},{},{}) p2=({},{},{}) p3=({},{},{}) own=({},{},{}) count={}",
+      current.actor,current.ai,caller,reason,curve.parameter,Load32(b,current.vars+2644),
+      curve.points[0][0],curve.points[0][1],curve.points[0][2],curve.points[1][0],curve.points[1][1],curve.points[1][2],
+      curve.points[2][0],curve.points[2][1],curve.points[2][2],curve.points[3][0],curve.points[3][1],curve.points[3][2],
+      own[0],own[1],own[2],reports.refused);
+  return true;
+}
+void Bezier(PPCContext& ctx,uint8_t* b) {
+  const auto out=ctx.r3.u32,caller=uint32_t(ctx.lr);
+  if(!current.vars || !MotionCurveCaller(caller) || !Readable(ctx.r1.u32+80,24)) {
+    __imp__sub_8261D338(ctx,b);Point(b,out,"Bezier output",caller);return;
+  }
+  // f1 reserves GPR slot r4. Four packed vectors start at r5, r7, r9
+  // and caller SP+80. The tangent pointer is the word at caller SP+100.
+  const Curve curve{ctx.f1.f64,{PackedPoint(ctx.r5.u64,ctx.r6.u64),PackedPoint(ctx.r7.u64,ctx.r8.u64),
+      PackedPoint(ctx.r9.u64,ctx.r10.u64),ReadPoint(b,ctx.r1.u32+80)}};
+  const auto tangent=Load32(b,ctx.r1.u32+100);
+#if defined(KK_DEV_TOOLS)
+  const auto off=std::getenv("KK_DEV_RAPTOR_SOURCE_OFF");
+  const bool enabled=!(off && std::strcmp(off,"1")==0);
+#else
+  constexpr bool enabled=true;
+#endif
+  if(RefuseCurve(enabled,true,caller,curve) && CurveStop(ctx,b,out,tangent,curve,caller,"native movement controls")) return;
+  __imp__sub_8261D338(ctx,b);
+  Point(b,out,"Bezier output",caller);
+  // Finite controls can still overflow native arithmetic. Check its two
+  // scratch outputs before the caller turns them into an actor velocity.
+  if(enabled && Readable(out,12) && Readable(tangent,12) && (!Finite(b,out) || !Finite(b,tangent)))
+    CurveStop(ctx,b,out,tangent,curve,caller,"native movement result");
+}
 } // namespace kk::coop::raptor_route
 
 REX_HOOK_RAW(sub_82593B98) {
@@ -282,6 +326,7 @@ REX_HOOK_RAW(sub_82593B98) {
   __imp__sub_82593B98(ctx,base);
   kk::coop::raptor_route::Inputs(base,"blend output",0x82593B98);
   if (kk::coop::raptor_route::PendingOrientation()) kk::coop::raptor_route::Recover(ctx,base,"orientation input");
+  if (kk::coop::raptor_route::PendingCurve()) kk::coop::raptor_route::Recover(ctx,base,"invalid movement curve");
 }
 REX_HOOK_RAW(sub_825E2178) {
   kk::coop::raptor_route::Scope scope(base);
@@ -339,17 +384,14 @@ REX_HOOK_RAW(sub_82491B50) {
   __imp__sub_82491B50(ctx,base);
   kk::coop::raptor_route::Inputs(base,"motion output",0x82491B50);
   if (kk::coop::raptor_route::PendingOrientation()) kk::coop::raptor_route::Recover(ctx,base,"orientation input");
+  if (kk::coop::raptor_route::PendingCurve() && kk::coop::raptor_route::Recover(ctx,base,"invalid movement curve")) ctx.r3.u64=0;
 }
 REX_HOOK_RAW(sub_8245B0D0) {
   const auto out=ctx.r3.u32, caller=uint32_t(ctx.lr);
   __imp__sub_8245B0D0(ctx,base);
   kk::coop::raptor_route::Point(base,out,"cell curve output",caller);
 }
-REX_HOOK_RAW(sub_8261D338) {
-  const auto out=ctx.r3.u32, caller=uint32_t(ctx.lr);
-  __imp__sub_8261D338(ctx,base);
-  kk::coop::raptor_route::Point(base,out,"Bezier output",caller);
-}
+REX_HOOK_RAW(sub_8261D338) { kk::coop::raptor_route::Bezier(ctx,base); }
 REX_HOOK_RAW(sub_82409B80) {
   kk::coop::raptor_route::WriteInput(ctx,base,"velocity setter input");
   __imp__sub_82409B80(ctx,base);
