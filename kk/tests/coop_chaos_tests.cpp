@@ -110,25 +110,35 @@ void ActorInterpolation() {
     auto before=Enemy(),after=before; after.life=98; after.x=.7f;
     Message damage; damage.type=MessageType::EnemySnapshot; damage.sequence=1;
     damage.enemies={{101,4,1},1000,{before}}; hit.Receive(damage,10,true);
-    damage.sequence=2; damage.enemies.time=1000.1; damage.enemies.enemies={after}; hit.Receive(damage,10.1,true);
-    const auto pose=hit.Sample(10.15,true).records.at(0);
-    Check(pose.enemy.x==.7f && pose.enemy.life==98 && std::abs(pose.source_time-1000.1)<1e-7,
+    damage.sequence=2; damage.enemies.time=1000.05; damage.enemies.enemies={after}; hit.Receive(damage,10.05,true);
+    const auto pose=hit.Sample(10.125,true).records.at(0);
+    Check(pose.enemy.x==.7f && pose.enemy.life==98 && std::abs(pose.source_time-1000.05)<1e-7,
         "native hit knockback keeps the new pose and its actual source time together");
     before.secondary_life=50; after=before; after.secondary_life=49; after.x=.7f;
     Check(actors::Interpolate(before,after,.5f).x==.7f,"secondary health changes also retain native knockback");
   }
+  {
+    enemies::Channel loss;
+    auto before=Enemy(),after=before; after.x=2;
+    Message gap; gap.type=MessageType::EnemySnapshot; gap.sequence=1;
+    gap.enemies={{101,4,1},1000,{before}}; loss.Receive(gap,10,true);
+    gap.sequence=2; gap.enemies.time=1000.13; gap.enemies.enemies={after}; loss.Receive(gap,10.13,true);
+    const auto pose=loss.Sample(10.165,true).records.at(0);
+    Check(pose.enemy.x==2 && std::abs(pose.source_time-1000.13)<1e-7,
+        "missing publications use an actual host pose and timestamp instead of an unknown path");
+  }
   enemies::Channel c;
   auto a=Enemy(),b=a; a.x=0; b.x=2; a.animation_time=1; b.animation_time=1.2f;
   Message m; m.type=MessageType::EnemySnapshot; m.sequence=1; m.enemies={{101,4,1},1000,{a}};
-  c.Receive(m,10); m.sequence=2; m.enemies.time=1000.2; m.enemies.enemies={b}; c.Receive(m,10.2);
-  const auto sample=c.Sample(10.2,true);
+  c.Receive(m,10); m.sequence=2; m.enemies.time=1000.05; m.enemies.enemies={b}; c.Receive(m,10.05);
+  const auto sample=c.Sample(10.125,true);
   Check(sample.records.size()==1 && std::abs(sample.records[0].enemy.x-1)<.001f,"100 ms buffer interpolates between host samples");
   Check(std::abs(sample.records[0].enemy.animation_time-1.1f)<.001f,"animation time follows buffered position");
-  Check(std::abs(sample.records[0].source_time-1000.1)<.001,"native audit identifies the buffered source time");
-  const auto before=c.Sample(10.29,true).records[0].source_time;
-  m.sequence=3; m.enemies.time=1000.25; m.enemies.enemies[0].x=2.5f;
-  m.enemies.enemies[0].animation_time=1.25f; c.Receive(m,10.30);
-  Check(c.Sample(10.30,true).records[0].source_time>=before,
+  Check(std::abs(sample.records[0].source_time-1000.025)<.001,"native audit identifies the buffered source time");
+  const auto before=c.Sample(10.14,true).records[0].source_time;
+  m.sequence=3; m.enemies.time=1000.1; m.enemies.enemies[0].x=2.5f;
+  m.enemies.enemies[0].animation_time=1.25f; c.Receive(m,10.15);
+  Check(c.Sample(10.15,true).records[0].source_time>=before,
       "a delayed packet cannot move the actor clock backward");
   b.x=20;
   Check(actors::Interpolate(a,b,.5f).x==20,"teleports beyond 5 m snap instead of crossing geometry");

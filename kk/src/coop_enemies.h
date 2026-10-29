@@ -414,14 +414,15 @@ class Channel {
           const auto& a = r.history[i-1]; const auto& b = r.history[i];
           if (target > b.time) { record.enemy = b.enemy; record.source_time=b.time; continue; }
           const float t = float(std::clamp((target-a.time)/(b.time-a.time), 0., 1.));
-          if (replication) record.enemy=actors::Interpolate(a.enemy,b.enemy,t);
+          const bool snap=replication && (actors::SnapPose(a.enemy,b.enemy) || actors::MissingPoseSamples(b.time-a.time));
+          if (replication) record.enemy=snap ? b.enemy:actors::Interpolate(a.enemy,b.enemy,t);
           else {
             record.enemy = a.enemy;
             record.enemy.x += (b.enemy.x-a.enemy.x)*t; record.enemy.y += (b.enemy.y-a.enemy.y)*t;
             record.enemy.z += (b.enemy.z-a.enemy.z)*t;
             record.enemy.facing = std::remainder(a.enemy.facing + std::remainder(b.enemy.facing-a.enemy.facing, 6.2831853f)*t, 6.2831853f);
           }
-          record.source_time=replication && actors::SnapPose(a.enemy,b.enemy) ?
+          record.source_time=snap ?
               b.time:a.time+(b.time-a.time)*t;
           break;
         }

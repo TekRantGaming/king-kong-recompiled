@@ -65,6 +65,11 @@ inline bool SnapPose(const EnemyState& a,const EnemyState& b) {
       !COOP_MUT_IF("actor_hit_interpolation")) return true;
   return std::hypot(b.x-a.x,b.y-a.y,b.z-a.z)>kSnapDistance;
 }
+inline bool MissingPoseSamples(double span) {
+  // Normal 20 Hz publications can alternate native frame intervals. Beyond
+  // one and a half intervals, missing motion must not become a guessed curve.
+  return span>kInterval*1.5 && !COOP_MUT_IF("actor_gap_interpolation");
+}
 inline EnemyState Interpolate(const EnemyState& a, const EnemyState& b, float t) {
   if (COOP_MUT_IF("actor_interpolation_latest")) return b;
   if (SnapPose(a,b)) return b;
