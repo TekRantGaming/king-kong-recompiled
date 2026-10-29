@@ -73,9 +73,9 @@ void VoidDevFall(PPCContext& ctx,uint8_t* b,const HumanStatus& h,const ShotVecto
   static const unsigned total=[] { const auto s=std::getenv("KK_DEV_VOID_COUNT"); return s ? unsigned(std::clamp(std::atoi(s),1,5)) : 1u; }();
   static unsigned count=0; static double next=0;
   if (due<0 || count>=total || kk::DevSecondsSinceMenu()<due || now<next) return;
-  // Move only the local Jack beyond the authored world. Do not set the void
-  // flag or health: the native floor query and gravity must confirm the fall.
-  const ShotVector outside{at.x+2000,at.y+2000,at.z-.5f};
+  // Move only Jack below the floor. Keep authored map bounds in play. Do not
+  // set the void flag or health: the native query and gravity confirm the fall.
+  const ShotVector outside{at.x,at.y,at.z-2.f};
   NativeTeleport(ctx,b,h.hero,outside,0);
   ResetGround(b,h.vars,at,false);
   if (std::getenv("KK_DEV_VOID_NO_SPOTS")) void_history.ClearSpots();
