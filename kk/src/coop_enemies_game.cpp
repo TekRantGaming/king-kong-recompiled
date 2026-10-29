@@ -4609,8 +4609,12 @@ void ActorNativeAudit(const uint8_t* b,double sample_time=0) {
     const auto driven=s.driving.find(actor);
     float animation=-1; ActorAnimation(b,actor,&animation);
     const auto cell=LifeCell(b,binding);
+    const auto record=s.records.find(binding.id);
+    const bool retired=s.retirement_applied.contains(binding.id) ||
+        (record!=s.records.end() && record->second.kind==EnemyEventKind::Removed);
     rows.push_back(world::Json::Object({{"id",world::Hex(id.source)},{"sequence",id.sequence},
         {"family",uint16_t(binding.id.family)},{"bound",id.source!=0},
+        {"retired",retired},
         {"relevant",!hero || actors::Relevant(e,local) || (s.link.partner && actors::Relevant(e,*s.link.partner))},
         {"x",e.x},{"y",e.y},{"z",e.z},{"facing",e.facing},{"life",e.life},
         {"native_health",cell ? world::Json(LoadF(b,cell)):world::Json()},
