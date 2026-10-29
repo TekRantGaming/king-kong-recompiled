@@ -75,6 +75,10 @@ EnemyState Enemy() {
   EnemyState e; e.id={0x123456789abcdef0ull,1,EnemyFamily::Raptor}; e.life=100; return e;
 }
 void ActorFreeze() {
+  Check(actors::Freeze(true,true,true,true,true,false,true,false,true,.684),
+      "a long shipping frame cannot release guest AI authority");
+  Check(actors::Freeze(true,true,true,true,true,false,true,false,false,10),
+      "deferred scheduling cannot release a validated guest actor");
   Check(!actors::DigestRepairs(true),"actor snapshots own repairs while old digests only observe");
   Check(actors::DigestRepairs(false),"setting off retains digest repair and recovery");
   Check(actors::Freeze(true,true,true,true,true,false,true),"initialized guest actor is frozen");

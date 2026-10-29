@@ -85,6 +85,7 @@
     "partner_contact_world": "player_contact",
     "actor_digest_repair": "actor_freeze",
     "actor_freeze_off": "actor_freeze",
+    "actor_freeze_prepared": "actor_freeze",
     "actor_freeze_host": "actor_freeze",
     "actor_freeze_retire": "actor_freeze",
     "actor_init_exact": "actor_freeze",

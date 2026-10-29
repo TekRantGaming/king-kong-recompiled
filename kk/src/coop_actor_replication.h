@@ -44,8 +44,12 @@ inline bool InScope(bool enabled,bool terminal,const EnemyState& e,const PlayerP
   return !enabled || terminal || !local || Relevant(e,*local) || (peer && Relevant(e,*peer));
 }
 inline bool Freeze(bool enabled, bool guest, bool connected, bool world,
-                   bool binding, bool player, bool initialized,bool retiring=false) {
+                   bool binding, bool player, bool initialized,bool retiring=false,
+                   bool prepared=true,double prepared_age=0) {
   if (COOP_MUT_IF("actor_freeze_off")) return false;
+  // Authority survives a long render or loading stall. Preparation freshness
+  // guards writes elsewhere, but cannot give native AI back to a replica.
+  if (COOP_MUT_IF("actor_freeze_prepared") && (!prepared || prepared_age>.5)) return false;
   return enabled && (guest || COOP_MUT_IF("actor_freeze_host")) && connected && world &&
       binding && !player && initialized && (!retiring || COOP_MUT_IF("actor_freeze_retire"));
 }

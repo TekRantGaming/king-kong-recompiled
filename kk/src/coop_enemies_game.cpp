@@ -1000,7 +1000,9 @@ bool ValidBinding(const uint8_t* b, const Binding& binding) {
 }
 bool FreezeActor(const uint8_t* b,uint32_t actor,uint32_t ai) {
   auto& s=Get();
-  if (!Replication() || !s.prepared || Now()-s.prepared_at>.5) return false;
+  if (!Replication()) return false;
+  const bool session=s.link.session_state==SessionState::Connected || s.link.session_state==SessionState::Lost;
+  if (s.link.role!=Role::Guest || !session || !Environment(b,Load32(b,0x828E8388))) return false;
   const auto it=s.bindings.find(actor);
   const bool player=actor==Load32(b,0x82CCBF7C) || actor==kk::PartnerBodyCombatActor(b);
   bool binding=it!=s.bindings.end() && it->second.ai==ai && ValidBinding(b,it->second);
@@ -1010,9 +1012,8 @@ bool FreezeActor(const uint8_t* b,uint32_t actor,uint32_t ai) {
     // own AI while the reliable birth or authored binding is still pending.
     binding=Read(b,actor,observed,native) && observed.ai==ai;
   }
-  const bool session=s.link.session_state==SessionState::Connected || s.link.session_state==SessionState::Lost;
   const bool freeze=actors::Freeze(Replication(),s.link.role==Role::Guest,session,Environment(b,s.world),
-      binding,player,binding,s.retiring_actor==actor);
+      binding,player,binding,s.retiring_actor==actor,s.prepared,Now()-s.prepared_at);
   if (freeze) ++s.actor_holds;
   return freeze;
 }
@@ -1022,7 +1023,7 @@ void ActorNativeRun(const uint8_t* b,uint32_t actor,uint32_t ai) {
   auto& s=Get();
   if (!Replication() || s.link.role!=Role::Guest ||
       (s.link.session_state!=SessionState::Connected && s.link.session_state!=SessionState::Lost) ||
-      !Environment(b,s.world) || actor==s.retiring_actor) return;
+      !Environment(b,Load32(b,0x828E8388)) || actor==s.retiring_actor) return;
   Binding binding; EnemyState native;
   if (!Member(b,s.world,actor,true) || !Read(b,actor,binding,native) || binding.ai!=ai) return;
   ++s.actor_native_runs;
