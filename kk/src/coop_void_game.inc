@@ -41,7 +41,8 @@ bool VoidStaticFloor(const uint8_t* b,uint32_t floor) {
 }
 uint32_t VoidVelocity(const uint8_t* b,uint32_t hero) {
   const auto motion=Ptr(b,Ptr(b,hero,20,8),4,0x28);
-  return Ptr(b,Ptr(b,motion,0x24,4),0,12);
+  // The motion word at 0x24 points directly to the vector, not another pointer.
+  return Ptr(b,motion,0x24,12);
 }
 std::array<uint32_t,16> VoidTransform(const uint8_t* b,uint32_t floor) {
   std::array<uint32_t,16> out{};
@@ -59,7 +60,7 @@ bool VoidCheckSpot(PPCContext& ctx,uint8_t* b,Scratch& scratch,uint32_t world,
   if (recheck && (surface!=spot.floor || VoidTransform(b,surface)!=spot.transform)) return false;
   // A short sight ray also keeps the landing capsule away from walls. The
   // nav reference is the cell Jack actually stood on, retained with the spot.
-  const ShotVector anchor{p.x+.5f*std::cos(spot.facing),p.y+.5f*std::sin(spot.facing),floor->z};
+  const ShotVector anchor{p.x+std::cos(spot.facing),p.y+std::sin(spot.facing),floor->z};
   const auto probe=ProbeSpot(ctx,b,scratch,world,h.hero,body,{p.x,p.y,floor->z},anchor);
   if (revive::Judge(probe,floor->z,spot.nav)!=revive::Verdict::Ok) return false;
   spot.floor=surface; spot.transform=VoidTransform(b,surface);
