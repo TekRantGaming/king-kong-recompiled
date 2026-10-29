@@ -27,6 +27,7 @@
     double read_at = -1;
   };
   static constexpr float kCoopPi = 3.14159265f;
+  float coop_gate_h_ = 0;  // the warning panel's height last frame (it is centred on it)
 
   void OpenCoop(CoopPage page) {
     if (!CoopEnabled()) return;
@@ -432,13 +433,18 @@
   }
   // A plain button (the mockups' btn2): bone when focused, faint when it cannot be pressed.
   void CoopButton(ImDrawList* dl, const std::string& key, ImVec2 a, ImVec2 b, const std::string& label, bool enabled,
-                  std::function<void()> press, Action glyph = Action::kCount, bool primary = false, int group = 0) {
+                  std::function<void()> press, Action glyph = Action::kCount, bool primary = false, int group = 0,
+                  bool on_light = false) {
     const ui::Fonts f = ui::GetFonts();
     const float s = S();
     const bool on = CoopAdd(key, a, b, enabled, std::move(press), group);
-    const ImU32 fill = on ? color::kFocus : primary && enabled ? IM_COL32(255, 255, 255, 22) : IM_COL32(255, 255, 255, 10);
+    // On a bone card (the focused invite): the focused button dark with bone text, the other outlined in dark.
+    const ImU32 fill = on_light ? (on ? color::kOnFocus : IM_COL32(0, 0, 0, 0))
+                       : on     ? color::kFocus
+                       : primary && enabled ? IM_COL32(255, 255, 255, 22) : IM_COL32(255, 255, 255, 10);
     dl->AddRectFilled(a, b, fill);
-    if (!on) dl->AddRect(a, b, primary && enabled ? ui::WithAlpha(color::kAccent, 0.6f) : kCoopHair, 0, 0, 1.0f);
+    if (on_light && !on) dl->AddRect(a, b, IM_COL32(0, 0, 0, 64), 0, 0, 1.0f);
+    else if (!on) dl->AddRect(a, b, primary && enabled ? ui::WithAlpha(color::kAccent, 0.6f) : kCoopHair, 0, 0, 1.0f);
     const float fs = 14 * s, cy = (a.y + b.y) * 0.5f;
     float gw = 0;
     if (glyph != Action::kCount) gw = ui::DrawGlyph(dl, glyphs_, glyph, PromptSet(), 0, 0, 20 * s, m_, false) + 8 * s;
@@ -449,8 +455,10 @@
       ui::DrawGlyph(dl, glyphs_, glyph, PromptSet(), x, cy, 20 * s, m_, true);
       x += gw;
     }
-    dl->AddText(f.semibold, fs, ImVec2(x, cy - fs * 0.55f), on ? color::kOnFocus : enabled ? color::kText : color::kTextFaint,
-                text.c_str());
+    const ImU32 col = on_light ? (on ? color::kFocus : IM_COL32(58, 61, 68, 255))
+                      : on     ? color::kOnFocus
+                      : enabled ? color::kText : color::kTextFaint;
+    dl->AddText(f.semibold, fs, ImVec2(x, cy - fs * 0.55f), col, text.c_str());
   }
   // A text field (Direct IP address, port): its caption, the value, bone outline when focused.
   void CoopField(ImDrawList* dl, const std::string& key, float x, float& y, float w, const std::string& caption,
@@ -947,7 +955,7 @@
       dl->AddText(f.semibold, 13.5f * s, ImVec2(L, y - 18 * s), warn ? color::kWarn : color::kText,
                   Ellipsize(f.semibold, 13.5f * s, line, cw).c_str());
     }
-    const float card_w = (cw - U(36)) * 0.5f, card_h = U(520), pic_h = U(300);
+    const float card_w = (cw - U(36)) * 0.5f, card_h = U(440), pic_h = U(260);
     struct Card { const char* key; coop::SocialRowKind kind; const char* title; const char* text; int picture; };
     const Card cards[2] = {{"new", coop::SocialRowKind::HostNewGame, "New game", "Choose any chapter to play together.", 1},
                            {"load", coop::SocialRowKind::HostLoadGame, "Load game",
@@ -1111,7 +1119,10 @@
               py += U(56);
             }
           });
-    CoopNavigate(coop_focus_[int(CoopPage::HostHow)], interactive, "steam-host");
+    CoopNavigate(coop_focus_[int(CoopPage::HostHow)], interactive,
+                 CoopFind(rows, coop::SocialRowKind::ConnectSteam) ? "connect"
+                 : model.status != coop::SocialStatus::Unavailable && model.status != coop::SocialStatus::Disabled
+                     ? "steam-host" : "host-ip");
   }
 
   // Join: invites, friends playing now, and join with a code.
@@ -1186,10 +1197,10 @@
         dl->AddText(f.text, 11.5f * s, ImVec2(tx, cy + 2 * s), on ? color::kOnFocusDim : color::kTextDim, T("Steam invite"));
         const float by = cy + r + U(16), bw = (pw - U(36) - U(10)) * 0.5f;
         CoopButton(dl, akey, ImVec2(a.x + U(18), by), ImVec2(a.x + U(18) + bw, by + U(48)), T("Accept"), acc->enabled,
-                   CoopPressRow(*acc), Action::kAccept, true, 0);
+                   CoopPressRow(*acc), Action::kAccept, true, 0, on);
         if (decline)
           CoopButton(dl, dkey, ImVec2(a.x + U(28) + bw, by), ImVec2(a.x + U(28) + bw * 2, by + U(48)), T("Decline"),
-                     decline->enabled, CoopPressRow(*decline), Action::kCount, false, 0);
+                     decline->enabled, CoopPressRow(*decline), Action::kCount, false, 0, on);
         y = b.y + U(14);
         ++shown;
       }
@@ -1348,7 +1359,7 @@
         bx += w + U(14);
       };
       if (change && host) button("change", model.choice.valid() ? "Change chapter" : "Choose a chapter", change, Action::kDefault);
-      if (overlay) button("invite", "Invite with Steam", overlay, Action::kResetPage);
+      if (overlay && host) button("invite", "Invite with Steam", overlay, Action::kResetPage);
       if (leave) button("leave", "Leave lobby", leave, Action::kCount);
       end += bh + U(26);
       split.SetCurrentChannel(dl, 0);
@@ -1516,7 +1527,7 @@
     }
     if (interactive && input_.Pressed(Action::kResetPage)) {
       input_.Consume(Action::kResetPage);
-      if (overlay) CoopPress({"invite", {}, {}, overlay->enabled, 0, CoopPressRow(*overlay)});
+      if (overlay && host) CoopPress({"invite", {}, {}, overlay->enabled, 0, CoopPressRow(*overlay)});
     }
     CoopNavigate(coop_focus_[int(CoopPage::Lobby)], interactive, "ready");
   }
@@ -1560,8 +1571,8 @@
     ImDrawListSplitter split;
     split.Split(dl, 2);
     split.SetCurrentChannel(dl, 1);
-    const float est_h = U(900);
-    const float top = o_.y + std::max(U(40), (h_ - 60 * s - est_h) * 0.5f);
+    const float est_h = coop_gate_h_ > 0 ? coop_gate_h_ : U(1000);
+    const float top = o_.y + std::max(U(30), (h_ - 70 * s - est_h) * 0.5f);
     float y = top + U(44);
     CoopWarnIcon(dl, ImVec2(tx + 13 * s, y + 12 * s), 26 * s, color::kWarn);
     ui::DrawTracked(dl, f.display, 12 * s, ImVec2(tx + 40 * s, y + 5 * s), color::kWarn,
@@ -1633,6 +1644,7 @@
       dl->AddRectFilled(ImVec2(ca.x, cb.y - 3 * s), ImVec2(ca.x + (cb.x - ca.x) * k, cb.y), color::kAccent);
     }
     y = cb.y + U(44);
+    coop_gate_h_ = y - top;
     split.SetCurrentChannel(dl, 0);
     dl->AddRectFilled(ImVec2(px, top), ImVec2(px + pw, y), color::kPanel);
     dl->AddRect(ImVec2(px, top), ImVec2(px + pw, y), kCoopHair, 0, 0, 1.0f);
