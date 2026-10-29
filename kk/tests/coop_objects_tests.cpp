@@ -9,7 +9,9 @@ using namespace kk::coop;
 namespace {
 void Check(bool value,const char* text) { if (!value) { std::fprintf(stderr,"FAIL: %s\n",text); std::exit(1); } }
 Message Packet(MessageType type=MessageType::ObjectState,ObjectKind kind=ObjectKind::Breakable) {
-  Message m; m.type=type; m.epoch=17; m.object={2,203,1,0x123456789abcdef0ull,kind,type==MessageType::ObjectRequest && kind==ObjectKind::Breakable ? 0u : 1u}; return m;
+  Message m; m.type=type; m.epoch=17; m.object={2,203,1,0x123456789abcdef0ull,kind,type==MessageType::ObjectRequest && kind==ObjectKind::Breakable ? 0u : 1u};
+  if (kind==ObjectKind::Breakable) m.object.direction={.6f,-.8f,.25f};
+  return m;
 }
 void Codec() {
   for (auto type : {MessageType::ObjectState,MessageType::ObjectRequest}) for (auto kind : {ObjectKind::Breakable,ObjectKind::Door,ObjectKind::Fire,ObjectKind::Raft,ObjectKind::Ode,ObjectKind::Tree,ObjectKind::SupportBody}) {
@@ -26,7 +28,7 @@ void Codec() {
     }
     if (kind==ObjectKind::SupportBody) { m.object.body.topology=123; m.object.body.pose[3]=m.object.body.pose[8]=1; }
     std::vector<uint8_t> bytes; Check(Encode(m,bytes),"object encodes");
-    Check(bytes.size()==kHeaderBytes+(kind==ObjectKind::Raft ? 91 : objects::SupportRoot(kind) ? 67 : kind==ObjectKind::SupportBody ? 81 : 33) && bytes[5]==kProtocolVersion,"bounded protocol 22 object wire");
+    Check(bytes.size()==kHeaderBytes+(kind==ObjectKind::Breakable ? 45 : kind==ObjectKind::Raft ? 91 : objects::SupportRoot(kind) ? 67 : kind==ObjectKind::SupportBody ? 81 : 33) && bytes[5]==kProtocolVersion,"bounded object wire with native barrier direction");
     Message out; Check(Decode(bytes,out) && out.object==m.object,"object round trip");
     for (size_t i=0;i<bytes.size();++i) {
       Message sentinel; sentinel.sequence=123;
@@ -340,7 +342,7 @@ void Policies() {
   objects::Requests requests; auto r=Packet(MessageType::ObjectRequest).object;
   Check(requests.Admit(r,1,3) && !requests.Admit(r,1.1,3),"request replay rejected");
   ++r.number; Check(!requests.Admit(r,1.1,81),"distant strike refused");
-  r.kind=ObjectKind::Door; r.value=0; ++r.number; Check(!requests.Admit(r,1.1,6.1),"lever needs near partner");
+  r.kind=ObjectKind::Door; r.direction={}; r.value=0; ++r.number; Check(!requests.Admit(r,1.1,6.1),"lever needs near partner");
   ++r.number; Check(requests.Admit(r,2.2,6),"near lever admitted");
   for (unsigned n=0;n<15;++n) { ++r.number; Check(requests.Admit(r,2.2,3),"bounded burst admitted"); }
   ++r.number; Check(!requests.Admit(r,2.2,3),"request rate cap");

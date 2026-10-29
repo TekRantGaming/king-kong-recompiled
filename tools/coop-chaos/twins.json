@@ -77,6 +77,11 @@
     "crab_player_release_zone": "crab_player_unstick",
     "crab_player_no_exclude": "crab_player_unstick",
     "probe_off": "guest_probe",
-    "probe_first_region": "guest_probe"
+    "probe_first_region": "guest_probe",
+    "barrier_direction": "barrier_relay",
+    "barrier_fixed_direction": "barrier_relay",
+    "barrier_wire_direction": "barrier_relay",
+    "partner_contact_filter": "player_contact",
+    "partner_contact_world": "player_contact"
   }
 }

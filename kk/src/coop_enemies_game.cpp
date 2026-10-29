@@ -19,6 +19,7 @@
 #include "coop_crab_unstick.h"
 #include "coop_void.h"
 #include "coop_observer.h"
+#include "coop_player_contact.h"
 #include <algorithm>
 #include <array>
 #include <bit>
@@ -2879,13 +2880,24 @@ void VoidBeforeGround(PPCContext& ctx,uint8_t* b);
 void ObserveHumanGround(PPCContext& ctx,uint8_t* b) {
   const bool observe=REXCVAR_GET(kk_coop_enabled) && Connected() && Load32(b,0x82CCBF6C)==Load32(b,0x82CCBF7C);
   const auto before=observe ? ReadHumanStatus(b):std::nullopt;
+  const auto void_before=before ? Load32(b,before->vars+15440):0;
   VoidBeforeGround(ctx,b);
   __imp__sub_826A1178(ctx,b);
   const auto after=before ? ReadHumanStatus(b):std::nullopt;
-  if (before && after && before->hero==after->hero && before->vars==after->vars && before->value!=after->value)
-    REXLOG_INFO("COOP HEALTH native-ground role={} level={} condition={}->{} fall={} off-ground-seconds={} ground-kind={} void={} last-floor-z={}",
+  if (!before || !after || before->hero!=after->hero || before->vars!=after->vars) return;
+  if (before->value!=after->value)
+    REXLOG_INFO("COOP HEALTH native-ground role={} level={} condition={}->{} fall={} off-ground-seconds={} ground-kind={} void={} last-floor-z={} pos=({},{},{}) last-floor-xy=({},{}) ground={:08X} partner={:08X}",
         Get().link.role==Role::Host ? "host":"guest",Get().identity.level,uint8_t(before->condition),uint8_t(after->condition),
-        LoadF(b,after->vars+13268),LoadF(b,after->vars+2840),Load32(b,after->vars+2844),Load32(b,after->vars+15440),LoadF(b,after->vars+2872));
+        LoadF(b,after->vars+13268),LoadF(b,after->vars+2840),Load32(b,after->vars+2844),Load32(b,after->vars+15440),LoadF(b,after->vars+2872),
+        LoadF(b,Ptr(b,after->hero,12,64)+48),LoadF(b,Ptr(b,after->hero,12,64)+52),LoadF(b,Ptr(b,after->hero,12,64)+56),
+        LoadF(b,after->vars+2864),LoadF(b,after->vars+2868),Load32(b,after->vars+4008),kk::PartnerBodyCombatActor(b));
+  if (!void_before && Load32(b,after->vars+15440)) {
+    const auto m=Ptr(b,after->hero,12,64);
+    REXLOG_INFO("COOP HEALTH void-probe role={} level={} pos=({},{},{}) last-floor=({},{},{}) fall={} air={} ground={:08X} partner={:08X}",
+        Get().link.role==Role::Host ? "host":"guest",Get().identity.level,LoadF(b,m+48),LoadF(b,m+52),LoadF(b,m+56),
+        LoadF(b,after->vars+2864),LoadF(b,after->vars+2868),LoadF(b,after->vars+2872),
+        LoadF(b,after->vars+13268),LoadF(b,after->vars+2840),Load32(b,after->vars+4008),kk::PartnerBodyCombatActor(b));
+  }
 }
 // The remote body cannot take part in native NPC weapon exchanges. When it
 // overlaps Jack, the interaction ray otherwise selects it in every direction
@@ -2893,6 +2905,32 @@ void ObserveHumanGround(PPCContext& ctx,uint8_t* b) {
 // and firearm queries look through the validated body. Native NPCs, terrain,
 // ground checks, enemy perception and all other queries keep their filters.
 thread_local uint32_t equipment_query_partner=0;
+bool SkipPeerContact(const uint8_t* b,uint32_t query) {
+  // contacts_pass / obj_collide set source at +8 and target at +0x70 in
+  // this exact native SceneBoundsState. Do not reinterpret other queries.
+  if (query!=0x828E89D0) return false;
+#if defined(KK_DEV_TOOLS)
+  // Counterfactual walking fixture only. Shipping always keeps the filter.
+  static const bool native_contact=std::getenv("KK_DEV_PLAYER_CONTACT_NATIVE")!=nullptr;
+  if (native_contact) return false;
+#endif
+  const auto local=Load32(b,0x82CCBF7C);
+  const auto a=Load32(b,query+8),c=Load32(b,query+0x70);
+  if (!local || (a!=local && c!=local)) return false;
+  const auto peer=a==local ? c:a;
+  if (!kk::PartnerBodyPlayerContact(b,peer)) return false;
+  if (!contact::PeerPair(a,c,local,peer)) return false;
+#if defined(KK_DEV_TOOLS)
+  static unsigned logged=0;
+  static bool logged_released=false;
+  const bool active=peer==kk::PartnerBodyCombatActor(b);
+  if (logged++<16 || (!active && !logged_released)) {
+    logged_released |= !active;
+    REXLOG_INFO("COOP PLAYER contact ignored local={:08X} peer={:08X} pair={:08X}/{:08X} active-lease={} native-world-and-enemy-contacts=unchanged",local,peer,a,c,active);
+  }
+#endif
+  return true;
+}
 struct EquipmentQueryScope {
   uint32_t previous=equipment_query_partner;
   EquipmentQueryScope(const uint8_t* b,bool enabled) {
@@ -4898,6 +4936,16 @@ REX_HOOK_RAW(sub_82403E38) {
 REX_HOOK_RAW(sub_82404490) {
   const kk::coop::EquipmentQueryScope scope(base,(ctx.r10.u32&0x7FFFFFFF)==0xB && ctx.r3.u32==kk::hfr::Load32(base,0x82CCBF7C));
   __imp__sub_82404490(ctx,base);
+}
+REX_EXTERN(__imp__sub_82877AF0);
+REX_HOOK_RAW(sub_82877AF0) {
+  if (kk::coop::SkipPeerContact(base,ctx.r3.u32)) {
+    // The native dispatcher returns 1 even when there are no eligible parts.
+    // Leave its contact count alone, exactly as that native empty path does.
+    ctx.r3.u64=1;
+    return;
+  }
+  __imp__sub_82877AF0(ctx,base);
 }
 REX_HOOK_RAW(sub_82425038) {
   const kk::coop::EquipmentQueryScope scope(base,true);
