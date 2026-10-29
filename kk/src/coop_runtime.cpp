@@ -128,6 +128,7 @@ struct View {
   std::optional<CheatSet> host_cheats;
   std::string partner_name;
   uint64_t epoch = 0;
+  uint64_t enemy_bytes = 0;
 #if defined(KK_DEV_TOOLS)
   UdpFaultStats faults;
   bool relay_model=false;
@@ -246,6 +247,7 @@ class Service {
         View view{config.role, session.State(), session.Rejection(), session.Stats(), local, session.Partner(now), now};
         view.local_failure = failure; view.poses = session.Poses();
         view.enemies = session.Enemies(now); view.enemies_sent = session.EnemiesSent();
+        view.enemy_bytes=session.EnemyBytes();
         view.shots_sent = session.ShotsSent();
         view.host_cheats = session.HostCheats();
         view.partner_name = session.PartnerName();
@@ -346,7 +348,7 @@ class Service {
     if (command.action==SocialAction::Open) return true;
     if (command.action==SocialAction::Leave) { Stop(); return true; }
     if (command.action==SocialAction::SetReady || command.action==SocialAction::Start) {
-      const Compatibility current{kProtocolVersion,KK_VERSION,KK_COOP_BUILD,mods::GameplayDigest(play::UserDir())};
+      const Compatibility current{kProtocolVersion,KK_VERSION,KK_COOP_BUILD,mods::GameplayDigest(play::UserDir()),REXCVAR_GET(kk_coop_actor_replication)};
       if (CheckCompatibility(compatibility_,current)!=RejectReason::None) { Stop(); return false; }
     }
     const auto m=SocialSnapshot();
@@ -441,7 +443,8 @@ View CurrentView() {
   if (service.Running()) return service.Snapshot();
   if (!steam) return {};
   const auto v = steam->SessionSnapshot();
-  return {v.role, v.state, v.rejection, v.stats, v.local, v.partner, v.updated, v.local_failure, v.poses, v.enemies, v.enemies_sent, v.shots_sent, v.host_cheats, v.partner_name, v.epoch};
+  View view{v.role, v.state, v.rejection, v.stats, v.local, v.partner, v.updated, v.local_failure, v.poses, v.enemies, v.enemies_sent, v.shots_sent, v.host_cheats, v.partner_name, v.epoch};
+  view.enemy_bytes=v.enemy_bytes; return view;
 }
 
 class PartnerOverlay final : public rex::ui::ImGuiDialog {
@@ -655,9 +658,9 @@ void Configure(const std::filesystem::path& user_data) {
   options.startup_lobby = CaptureStartupLobby();
   options.request_ui_paint = [] { RequestUiPaint(); };
   options.read_compatibility = [user_data] {
-    return Compatibility{kProtocolVersion, KK_VERSION, KK_COOP_BUILD, mods::GameplayDigest(user_data)};
+    return Compatibility{kProtocolVersion, KK_VERSION, KK_COOP_BUILD, mods::GameplayDigest(user_data),REXCVAR_GET(kk_coop_actor_replication)};
   };
-  if (options.enabled) options.compatibility = {kProtocolVersion, KK_VERSION, KK_COOP_BUILD, mods::GameplayDigest(user_data)};
+  if (options.enabled) options.compatibility = {kProtocolVersion, KK_VERSION, KK_COOP_BUILD, mods::GameplayDigest(user_data),REXCVAR_GET(kk_coop_actor_replication)};
   steam = std::make_unique<SteamRuntime>(std::move(options));
 #if defined(KK_DEV_TOOLS)
   if (DevSelected()) Start(user_data);
@@ -691,7 +694,7 @@ void Start(const std::filesystem::path& user_data) {
     config.epoch = (uint64_t(random()) << 32) ^ random();
     if (!config.epoch) config.epoch = 1;
   }
-  config.compatibility = {kProtocolVersion, KK_VERSION, KK_COOP_BUILD, mods::GameplayDigest(user_data)};
+  config.compatibility = {kProtocolVersion, KK_VERSION, KK_COOP_BUILD, mods::GameplayDigest(user_data),REXCVAR_GET(kk_coop_actor_replication)};
   REXLOG_INFO("KK co-op: dev link {} on 127.0.0.1:{}", role, port);
   config.join_code = "LDEV23";
   service.Start(std::move(config), {role == "host", "127.0.0.1", uint16_t(port), "LDEV23"});
@@ -754,7 +757,7 @@ bool OpenDirect(DirectUdpOptions options, uint64_t resume_token = 0) {
   config.display_name=options.host ? "Host" : "Guest";
   config.cheats=kk::OwnCheats(); config.join_code=options.join_code;
   config.wait_for_peer=options.host;
-  config.compatibility={kProtocolVersion,KK_VERSION,KK_COOP_BUILD,mods::GameplayDigest(play::UserDir())};
+  config.compatibility={kProtocolVersion,KK_VERSION,KK_COOP_BUILD,mods::GameplayDigest(play::UserDir()),REXCVAR_GET(kk_coop_actor_replication)};
   if (options.host) {
     std::random_device random; config.epoch=(uint64_t(random())<<32)^random();
     if (!config.epoch) config.epoch=1;
@@ -890,13 +893,13 @@ EnemyLink EnemyLinkSnapshot() {
   const auto v = CurrentView();
   const auto flow=SessionFlowSnapshot();
   if (flow.active && (flow.phase!=FlowPhase::Playing || flow.policy!=ChapterPolicy::Together)) return {};
-  return {v.state == SessionState::Connected && Now()-v.updated <= .5, v.role, v.enemies, v.enemies_sent, v.shots_sent, v.partner, v.epoch, v.state};
+  return {v.state == SessionState::Connected && Now()-v.updated <= .5, v.role, v.enemies, v.enemies_sent, v.shots_sent, v.partner, v.epoch, v.state,v.enemy_bytes};
 }
 #if defined(KK_DEV_TOOLS)
 EnemyLink WorldDevLinkSnapshot() {
   if (!REXCVAR_GET(kk_coop_enabled)) return {};
   const auto v=CurrentView();
-  return {v.state == SessionState::Connected && Now()-v.updated <= .5, v.role, v.enemies, v.enemies_sent, v.shots_sent, v.partner, v.epoch, v.state};
+  return {v.state == SessionState::Connected && Now()-v.updated <= .5, v.role, v.enemies, v.enemies_sent, v.shots_sent, v.partner, v.epoch, v.state,v.enemy_bytes};
 }
 #endif
 bool EnemyConnectionReady() {

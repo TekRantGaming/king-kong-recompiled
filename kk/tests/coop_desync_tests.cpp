@@ -26,7 +26,7 @@ void Codec() {
     Check(box.Submit(m) && Encode(m,bytes) && Decode(bytes,out) && out.digest==m.digest,
         "every shared native enemy family survives digest mailbox and wire codec");
   }
-  for (auto family:{EnemyFamily::None,EnemyFamily(unsigned(EnemyFamily::NativeKna)+1)}) {
+  for (auto family:{EnemyFamily::None,EnemyFamily(unsigned(EnemyFamily::Independent)+1)}) {
     Message m; m.type=MessageType::WorldDigest; m.digest=Page(); m.digest.enemies[0].id.family=family;
     std::vector<uint8_t> bytes;
     Check(!Encode(m,bytes),"unknown digest family rejected");

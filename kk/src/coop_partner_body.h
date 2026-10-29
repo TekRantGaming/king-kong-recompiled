@@ -26,6 +26,8 @@ bool PartnerBodyPlayerContact(const uint8_t* base, uint32_t actor);
 // Only an independently allocated native copy, never an authored donor.
 uint32_t PartnerBodyCombatCopy(const uint8_t* base);
 std::vector<coop::WorldProbe> PartnerNpcDigest(const uint8_t* base);
+// The selected stand in and all quarantined native copies are player bodies.
+bool PartnerBodyManagedActor(const uint8_t* base,uint32_t actor);
 // Proxy animation callbacks must not fire another damaging native shot.
 bool PartnerBodySuppressShot(const uint8_t* base);
 void PartnerBodyObserveAction(const PPCContext& ctx, const uint8_t* base);

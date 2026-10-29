@@ -68,8 +68,9 @@ class CoopSession {
   std::optional<PlayerPose> Partner(double now) const;
   PoseCounters Poses() const { return pose_counters_; }
   const std::string& PartnerName() const { return partner_name_; }
-  enemies::Frame Enemies(double now) const { return state_ == SessionState::Connected ? enemies_.Sample(now) : enemies::Frame{}; }
+  enemies::Frame Enemies(double now) const { return state_ == SessionState::Connected ? enemies_.Sample(now,config_.compatibility.actor_replication) : enemies::Frame{}; }
   uint64_t EnemiesSent() const { return enemies_sent_; }
+  uint64_t EnemyBytes() const { return enemy_bytes_; }
   bool QueueShot(const PendingShot& shot);
   void PublishInventory(const InventoryState& inventory);
   std::optional<CheatSet> HostCheats() const { return host_cheats_; }
@@ -122,6 +123,7 @@ class CoopSession {
   enemies::Channel enemies_;
   double last_enemies_ = -1;
   uint64_t enemies_sent_ = 0;
+  uint64_t enemy_bytes_ = 0;
   std::deque<PendingShot> outgoing_shots_;
   std::vector<ReceivedShot> incoming_shots_;
   std::deque<ShotReceipt> outgoing_receipts_;

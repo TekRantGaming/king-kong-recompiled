@@ -82,6 +82,15 @@
     "barrier_fixed_direction": "barrier_relay",
     "barrier_wire_direction": "barrier_relay",
     "partner_contact_filter": "player_contact",
-    "partner_contact_world": "player_contact"
+    "partner_contact_world": "player_contact",
+    "actor_digest_repair": "actor_freeze",
+    "actor_freeze_off": "actor_freeze",
+    "actor_freeze_host": "actor_freeze",
+    "actor_freeze_retire": "actor_freeze",
+    "actor_init_exact": "actor_freeze",
+    "actor_relevance_all": "actor_freeze",
+    "actor_interpolation_latest": "actor_interpolation",
+    "actor_interpolation_no_snap": "actor_interpolation",
+    "actor_clock_filter": "actor_interpolation"
   }
 }

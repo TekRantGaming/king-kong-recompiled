@@ -455,7 +455,7 @@ struct SteamRuntime::Impl
   }
   LobbyKeys ReadKeys(uint64_t lobby) {
     LobbyKeys keys;
-    for (const char* key : {kProductKey, "kkrc_protocol", "kkrc_version", "kkrc_build", "kkrc_mods"})
+    for (const char* key : {kProductKey, "kkrc_protocol", "kkrc_version", "kkrc_build", "kkrc_mods", "kkrc_actors"})
       keys[key] = Text(api.SteamAPI_ISteamMatchmaking_GetLobbyData(matchmaking, lobby, key));
     return keys;
   }
@@ -687,6 +687,13 @@ struct SteamRuntime::Impl
     if (d.m_ulSteamIDLobby != validating || d.m_ulSteamIDMember != validating) return;
     const auto lobby = validating; validating = 0;
     const auto owner = api.SteamAPI_ISteamMatchmaking_GetLobbyOwner(matchmaking, lobby);
+    Compatibility advertised;
+    if (d.m_bSuccess && Friend(owner) && DecodeLobbyKeys(ReadKeys(lobby),advertised)) {
+      const auto reason=CheckCompatibility(options.compatibility,advertised);
+      if (reason!=RejectReason::None) {
+        Status(SocialStatus::Idle,"Steam connected"); Error(RejectName(reason)); return;
+      }
+    }
     if (d.m_bSuccess && Friend(owner) && CompatibleLobby(ReadKeys(lobby),options.compatibility) && Data(lobby,"kkrc_rejoin")=="1") {
       handover::File record;
       if (ReadRejoinRecord(options.input_folder,record) && !record.host && record.plan.transport==StartTransport::Steam &&
@@ -876,6 +883,7 @@ struct SteamRuntime::Impl
     SteamSessionView view{session->SessionRole(), session->State(), session->Rejection(), session->Stats(), pose, session->Partner(now), now};
     view.local_failure = failure; view.poses = session->Poses();
     view.enemies = session->Enemies(now); view.enemies_sent = session->EnemiesSent();
+    view.enemy_bytes=session->EnemyBytes();
     view.shots_sent = session->ShotsSent();
     view.host_cheats = session->HostCheats();
     view.partner_name = session->PartnerName();

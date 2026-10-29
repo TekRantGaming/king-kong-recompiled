@@ -30,6 +30,8 @@
 
 REXCVAR_DEFINE_BOOL(kk_coop_enabled, KK_COOP_DEFAULT_ON != 0, "KK", "Enable the optional co-op session")
     .lifecycle(rex::cvar::Lifecycle::kRequiresRestart);
+REXCVAR_DEFINE_BOOL(kk_coop_actor_replication, false, "KK", "Host controls enemy and crew actors (both players must use the same setting)")
+    .lifecycle(rex::cvar::Lifecycle::kRequiresRestart);
 REXCVAR_DEFINE_BOOL(kk_launcher, true, "KK",
                     "Show the launcher before starting the game (hold Shift at start to force it)");
 REXCVAR_DEFINE_BOOL(kk_skip_launcher, false, "KK",

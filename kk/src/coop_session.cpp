@@ -29,6 +29,7 @@ const char* StateName(SessionState s) {
 }
 const char* RejectName(RejectReason r) {
   switch (r) {
+    case RejectReason::ActorReplication: return "actor replication setting differs; both players must use the same setting";
     case RejectReason::None: return "";
     case RejectReason::Protocol: return "different co-op version; both players need the same build";
     case RejectReason::Version: return "different game version";
@@ -120,6 +121,7 @@ bool CoopSession::Send(Message m, bool reliable) {
   if (!Encode(m, bytes) || !transport_.Send(bytes, reliable)) return false;
   if (m.type == MessageType::PlayerPose) ++pose_counters_.sent;
   if (m.type == MessageType::EnemySnapshot) enemies_sent_ += m.enemies.enemies.size();
+  if (m.type==MessageType::EnemySnapshot || m.type==MessageType::EnemyEvent) enemy_bytes_+=bytes.size();
   if (m.type == MessageType::ShotIntent) ++shots_sent_;
   return true;
 }
@@ -243,11 +245,13 @@ void CoopSession::Receive(const Message& packet, double now) {
         case MessageType::Bye: left_=true; Transition(SessionState::Ended); return;
         case MessageType::EnemySnapshot: case MessageType::EnemyEvent:
           if (state_ != SessionState::Connected) return;
+          if (config_.compatibility.actor_replication && config_.role==Role::Host) return;
+          if (!config_.compatibility.actor_replication && m.type==MessageType::EnemySnapshot && m.enemies.compressed) return;
           if (m.type == MessageType::EnemyEvent) {
             if ((m.enemy_event.enemy.owner == EnemyOwner::Host) == (config_.role == Role::Host)) return;
           } else for (const auto& e : m.enemies.enemies)
             if ((e.owner == EnemyOwner::Host) == (config_.role == Role::Host)) return;
-          enemies_.Receive(m, now); break;
+          enemies_.Receive(m, now,config_.compatibility.actor_replication); break;
         case MessageType::ShotReceipt:
           if (state_!=SessionState::Connected || config_.role!=Role::Guest) return;
           if (incoming_receipts_.size()<kMaxQueuedShots) incoming_receipts_.push_back(m.shot_receipt);
@@ -374,15 +378,15 @@ void CoopSession::Tick(double now, const std::optional<PlayerPose>& local, const
       std::erase_if(owned.records, [&](const auto& r) {
         return (r.enemy.owner == EnemyOwner::Host) != (config_.role == Role::Host);
       });
-      enemies_.Publish(owned);
+      enemies_.Publish(owned,config_.compatibility.actor_replication);
     }
     for (int i = 0; i < 8 && enemies_.Event(); ++i) {
       Message event; event.type = MessageType::EnemyEvent; event.enemy_event = *enemies_.Event();
       if (!Send(event, true)) break;
       enemies_.SentEvent();
     }
-    if (fresh && !owned.records.empty() && now-last_enemies_ >= .08) {
-      for (auto& batch : enemies_.Snapshots()) {
+    if (fresh && !owned.records.empty() && now-last_enemies_ >= (config_.compatibility.actor_replication ? .05 : .08)) {
+      for (auto& batch : enemies_.Snapshots(config_.compatibility.actor_replication)) {
         Message snapshot; snapshot.type = MessageType::EnemySnapshot; snapshot.enemies = std::move(batch);
         Send(snapshot, false);
       }

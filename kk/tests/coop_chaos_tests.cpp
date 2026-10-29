@@ -36,9 +36,9 @@ void Check(bool ok,const char* why) {
   if (!ok) { std::fprintf(stderr,"FAIL [%s]: %s\n",test_name,why); std::exit(1); }
 }
 Compatibility Compatible() { return {kProtocolVersion,"chaos","actual-core","none"}; }
-SessionConfig Config(bool host) {
+SessionConfig Config(bool host,bool actors=false) {
   SessionConfig c{true,host ? Role::Host : Role::Guest,host ? 1234567ull : 0,Compatible()};
-  c.join_code="CHAOS7"; return c;
+  c.join_code="CHAOS7"; c.compatibility.actor_replication=actors; return c;
 }
 std::unique_ptr<DirectUdpTransport> Host(UdpSimulation sim={}) {
   // Private loopback only. Search bounded ports so other test jobs may coexist.
@@ -53,9 +53,9 @@ struct Pair {
   CoopSession host,guest;
   double now=100;
   static constexpr double offset=12345;
-  Pair(UdpSimulation sim={}) : a(Host(sim)),
+  Pair(UdpSimulation sim={},bool actors=false) : a(Host(sim)),
       b(CreateDirectUdp({false,"127.0.0.1",a->LocalPort(),"CHAOS7",sim})),
-      host(Config(true),*a),guest(Config(false),*b) {
+      host(Config(true,actors),*a),guest(Config(false,actors),*b) {
     Check(b->State()==TransportState::Ready,"open guest");
   }
   void Step() {
@@ -73,6 +73,186 @@ struct Pair {
 StoryEvent Event(uint32_t n=1) { return {1,101,n,0x123456789abcdef0ull,0xfedcba9876543210ull,1,n,StoryPhase::Advance}; }
 EnemyState Enemy() {
   EnemyState e; e.id={0x123456789abcdef0ull,1,EnemyFamily::Raptor}; e.life=100; return e;
+}
+void ActorFreeze() {
+  Check(!actors::DigestRepairs(true),"actor snapshots own repairs while old digests only observe");
+  Check(actors::DigestRepairs(false),"setting off retains digest repair and recovery");
+  Check(actors::Freeze(true,true,true,true,true,false,true),"initialized guest actor is frozen");
+  Check(!actors::Freeze(true,false,true,true,true,false,true),"host AI must always run");
+  Check(!actors::Freeze(false,true,true,true,true,false,true),"setting off preserves AI");
+  Check(!actors::Freeze(true,true,false,true,true,false,true),"disconnect releases freeze");
+  Check(!actors::Freeze(true,true,true,false,true,false,true),"other worlds are untouched");
+  Check(!actors::Freeze(true,true,true,true,false,false,true),"recycled bindings are untouched");
+  Check(!actors::Freeze(true,true,true,true,true,true,true),"local Jack and partner are untouched");
+  Check(!actors::Freeze(true,true,true,true,true,false,false),"native initialization must finish");
+  Check(!actors::Freeze(true,true,true,true,true,false,true,true),"host retirement must run native destruction cleanup");
+  Check(actors::Initialize(true,true,true,true,false,true),"an exact host human can finish local native initialization");
+  Check(!actors::Initialize(true,true,true,false,false,true),"ambiguous authored humans must never be initialized by a packet");
+  Check(!actors::Initialize(true,false,true,true,false,true),"host initialization stays native");
+  Check(!actors::Initialize(false,true,true,true,false,true),"off mode never initializes a replica");
+  Check(!actors::Initialize(true,true,false,true,false,true),"stale or other world records cannot initialize actors");
+  Check(!actors::Initialize(true,true,true,true,true,true),"player initialization is never driven by replication");
+  Check(!actors::Initialize(true,true,true,true,false,false),"ordinary NPC tracks cannot run through initialization");
+  auto far=Enemy(); far.x=1000;
+  PlayerPose local,peer; peer.x=1000;
+  Check(!actors::InScope(true,false,far,&local,nullptr),"far live actors are omitted from snapshots and digests together");
+  Check(actors::InScope(true,false,far,&local,&peer),"actors near either player remain in scope");
+  Check(actors::InScope(true,true,far,&local,nullptr),"terminal events survive leaving relevance");
+  Check(actors::InScope(false,false,far,&local,nullptr),"old digests keep their original census");
+  far.x=160;
+  Check(actors::InScope(true,false,far,&local,nullptr),"160 metre boundary is included");
+  far.x=160.01f;
+  Check(!actors::InScope(true,false,far,&local,nullptr),"actors beyond the boundary are omitted");
+}
+void ActorInterpolation() {
+  enemies::Channel c;
+  auto a=Enemy(),b=a; a.x=0; b.x=2; a.animation_time=1; b.animation_time=1.2f;
+  Message m; m.type=MessageType::EnemySnapshot; m.sequence=1; m.enemies={{101,4,1},1000,{a}};
+  c.Receive(m,10); m.sequence=2; m.enemies.time=1000.2; m.enemies.enemies={b}; c.Receive(m,10.2);
+  const auto sample=c.Sample(10.2,true);
+  Check(sample.records.size()==1 && std::abs(sample.records[0].enemy.x-1)<.001f,"100 ms buffer interpolates between host samples");
+  Check(std::abs(sample.records[0].enemy.animation_time-1.1f)<.001f,"animation time follows buffered position");
+  Check(std::abs(sample.records[0].source_time-1000.1)<.001,"native audit identifies the buffered source time");
+  const auto before=c.Sample(10.29,true).records[0].source_time;
+  m.sequence=3; m.enemies.time=1000.25; m.enemies.enemies[0].x=2.5f;
+  m.enemies.enemies[0].animation_time=1.25f; c.Receive(m,10.30);
+  Check(c.Sample(10.30,true).records[0].source_time>=before,
+      "a delayed packet cannot move the actor clock backward");
+  b.x=20;
+  Check(actors::Interpolate(a,b,.5f).x==20,"teleports beyond 5 m snap instead of crossing geometry");
+  b.x=2; b.action=77;
+  Check(actors::Interpolate(a,b,.5f).animation_time==a.animation_time,"animation time never blends across clips");
+  a.facing=3.1f; b.facing=-3.1f;
+  Check(std::abs(actors::Interpolate(a,b,.5f).facing)>3.14f,"facing follows the short arc");
+  a.animation_time=1.95f; b.animation_time=.05f; a.animation_duration=b.animation_duration=2;
+  b.action=a.action;
+  Check(std::abs(actors::Interpolate(a,b,.5f).animation_time)<.001f,"looping animation crosses its wrap without seeking backward");
+  Check(c.Sample(11,true).records.empty(),"expired samples cannot extrapolate forever");
+  m.type=MessageType::EnemyEvent; m.enemy_event={{101,4,1},EnemyEventKind::Died,a};
+  m.enemy_event.enemy.life=0; c.Receive(m,11,true);
+  Check(c.Sample(11,true).records[0].source_time==0,"a death event cannot retain an older live pose timestamp");
+  m.type=MessageType::EnemySnapshot; m.sequence=10; a.life=0; a.animation_time=2;
+  m.enemies={{101,4,1},1001,{a}}; c.Receive(m,11.1,true);
+  Check(c.Sample(11.1,true).records[0].enemy.animation_time==2,"host corpse animation continues after death");
+  m.sequence=11; m.enemies.enemies[0].life=10; c.Receive(m,11.2,true);
+  Check(c.Sample(11.2,true).records[0].enemy.life==0,"late live packet cannot revive corpse");
+}
+void ActorWire() {
+  Message m; m.type=MessageType::EnemySnapshot; m.enemies.world={101,4,1}; m.enemies.time=1000;
+  for (unsigned i=0;i<10;++i) {
+    auto e=Enemy(); e.id.source+=i; e.id.family=i<7 ? EnemyFamily::Crab:EnemyFamily::Human;
+    e.x=float(i); e.animation_time=.25f; e.action=20; e.actor_flags=1; e.target=3; e.target_crew=2;
+    m.enemies.enemies.push_back(e);
+  }
+  std::vector<uint8_t> full,compressed,again; Message out;
+  Check(Encode(m,full),"full actor rows encode"); m.enemies.compressed=true;
+  Check(Encode(m,compressed) && compressed.size()<full.size(),"packet local byte deltas reduce a busy group");
+  Check(Decode(compressed,out) && out.enemies.compressed && Encode(out,again) && again==compressed,"compressed actor rows round trip exactly");
+  Check(out.enemies.enemies.back().animation_time==.25f && out.enemies.enemies.back().target_crew==2 &&
+      out.enemies.enemies.back().id.family==EnemyFamily::Human,"human and target metadata survive codec");
+  for (size_t n=0;n<compressed.size();++n) Check(!Decode(std::span(compressed.data(),n),out),"every compressed truncation refuses");
+  auto invalid=m; invalid.enemies.enemies[0].animation_time=NAN;
+  Check(!Encode(invalid,again),"invalid animation time refuses");
+  invalid=m; invalid.enemies.enemies[0].actor_flags=0x400000;
+  Check(!Encode(invalid,again),"network cannot set scheduler or component flags");
+  invalid=m; invalid.enemies.enemies[0].target=2;
+  Check(!Encode(invalid,again),"crew slot without crew target refuses");
+  invalid=m; invalid.enemies.enemies[0].target_crew=0;
+  Check(!Encode(invalid,again),"crew target requires a valid crew slot");
+  auto compat=Compatible(),other=compat; other.actor_replication=true;
+  Check(CheckCompatibility(compat,other)==RejectReason::ActorReplication,"mode mismatch refuses before playing");
+  Message hello; hello.type=MessageType::Hello; hello.hello=other;
+  Check(Encode(hello,again) && Decode(again,out) && out.hello.actor_replication,"Hello carries the mode");
+  auto old=compat; old.protocol=32;
+  Check(CheckCompatibility(compat,old)==RejectReason::Protocol,"old builds refuse with version reason");
+  for (bool enabled:{false,true}) {
+    hello.hello=compat; hello.hello.actor_replication=enabled;
+    Check(Encode(hello,again) && Decode(again,out) && out.hello.protocol==33 &&
+        out.hello.actor_replication==enabled,"Hello mode flag keeps the logical version");
+    auto legacy=hello; legacy.hello=old;
+    std::vector<uint8_t> expected;
+    Check(Encode(legacy,expected),"legacy Hello fixture encodes");
+    expected[kHeaderBytes]=enabled ? 0x80:0;
+    expected[kHeaderBytes+1]=33;
+    Check(again==expected,"old readers can parse the complete Hello and show a version refusal");
+    auto legacy_read=out.hello;
+    legacy_read.protocol=uint16_t((again[kHeaderBytes]<<8)|again[kHeaderBytes+1]);
+    Check(CheckCompatibility(old,legacy_read)==RejectReason::Protocol,"legacy readers refuse both new modes by version");
+  }
+  enemies::Channel tx; enemies::Frame f{m.enemies.world,10,{}};
+  for (const auto& e:m.enemies.enemies) f.records.push_back({e});
+  tx.Publish(f); const auto first=tx.Snapshots(true);
+  size_t first_count=0; for (const auto& batch:first) first_count+=batch.enemies.size();
+  Check(first_count==10,"first delta stream includes every actor");
+  f.time=10.05; tx.Publish(f); size_t unchanged=0;
+  for (const auto& batch:tx.Snapshots(true)) unchanged+=batch.enemies.size();
+  Check(!unchanged,"unchanged actor rows are omitted");
+  f.time=10.3; tx.Publish(f); size_t refreshed=0;
+  for (const auto& batch:tx.Snapshots(true)) refreshed+=batch.enemies.size();
+  Check(refreshed==10,"lost unchanged rows repair without a reliable baseline");
+  std::printf("actor codec fixture: full=%zu compressed=%zu ten actors at 20 Hz=%zu bytes/s before transport framing\n",
+      full.size(),compressed.size(),compressed.size()*20);
+}
+void ActorLoss() {
+  for (uint32_t seed=1;seed<=12;++seed) {
+    UdpSimulation profile; Check(UdpProfile("bad_wifi",profile),"actor fault profile exists"); profile.seed=seed;
+    Pair p(profile,true);
+    enemies::Frame f{{101,4,1},p.now,{}};
+    for (unsigned i=0;i<16;++i) {
+      auto e=Enemy(); e.id.source+=i; e.id.family=i<12 ? EnemyFamily::Crab:EnemyFamily::Human;
+      e.life=10; e.x=float(i); e.spawn_x=float(i); e.animation_time=.25f;
+      f.records.push_back({e});
+    }
+    // The host exists before the guest starts its handshake.
+    for (unsigned n=0;n<100;++n) { f.time=p.now; p.host.Tick(p.now,PlayerPose{p.now,101},&f); p.now+=.01; }
+    bool saw_live=false,saw_dead=false;
+    for (unsigned n=0;n<900;++n) {
+      f.time=p.now;
+      if (n==450) { f.records[0].enemy.life=0; f.records[0].kind=EnemyEventKind::Died; }
+      if (n==600) f.records[0].kind=EnemyEventKind::Removed;
+      p.host.Tick(p.now,PlayerPose{p.now,101},&f);
+      p.guest.Tick(p.now+Pair::offset,PlayerPose{p.now+Pair::offset,101});
+      p.now+=.01;
+      const auto frame=p.guest.Enemies(p.now+Pair::offset);
+      if (n<450 && frame.records.size()==16) saw_live=true;
+      for (const auto& r:frame.records) if (r.enemy.id==f.records[0].enemy.id && r.enemy.life<=0) saw_dead=true;
+    }
+    Check(p.Connected() && saw_live && saw_dead,"actor birth and death survive bad wifi and a late handshake");
+    const auto frame=p.guest.Enemies(p.now+Pair::offset);
+    Check(frame.records.size()==16,"all actor rows recover after losses");
+    Check(frame.records[0].kind==EnemyEventKind::Removed && frame.records[0].enemy.life==0,"retirement wins over delayed live poses");
+  }
+  for (bool replication:{false,true}) {
+    Pair p({},replication); p.Connect();
+    auto e=Enemy(); e.owner=EnemyOwner::Guest;
+    enemies::Frame f{{101,4,1},p.now+Pair::offset,{{e}}};
+    ShotIntent shot; shot.world=f.world; shot.number=1; shot.weapon=1; shot.time=f.time;
+    shot.origin={4,2,3}; shot.direction={1,0,0}; shot.ray_length=1; shot.hits={{e.id,{5,2,3},0}};
+    InventoryState inventory{f.world,f.time,1}; inventory.ammo[0]=30;
+    Check(p.guest.QueueShot({shot,inventory}),"guest shot queues with either actor setting");
+    for (unsigned n=0;n<50;++n) {
+      f.time=p.now+Pair::offset;
+      p.host.Tick(p.now,PlayerPose{p.now,101});
+      p.guest.Tick(p.now+Pair::offset,PlayerPose{p.now+Pair::offset,101,4,2,3},&f); p.now+=.01;
+    }
+    Check(p.host.Enemies(p.now).records.empty()==replication,
+        "new mode refuses guest actor authority while off preserves the old owner stream");
+    const auto shots=p.host.TakeShots();
+    Check(shots.size()==1 && shots[0].inventory && shots[0].intent.number==1,
+        "guest shot and inventory still reach the host exactly once with replication on");
+    if (replication) {
+      e.owner=EnemyOwner::Host; e.life=0;
+      enemies::Frame result{f.world,p.now,{{e,EnemyEventKind::Died}}};
+      for (unsigned n=0;n<50;++n) {
+        result.time=p.now;
+        p.host.Tick(p.now,PlayerPose{p.now,101},&result);
+        p.guest.Tick(p.now+Pair::offset,PlayerPose{p.now+Pair::offset,101,4,2,3}); p.now+=.01;
+      }
+      const auto received=p.guest.Enemies(p.now+Pair::offset);
+      Check(received.records.size()==1 && received.records[0].enemy.life==0,
+          "host result returns to the guest through actor snapshots");
+    }
+  }
 }
 void ProjectileSource() {
   // Sparse native memory fixture. at() makes any unexpected dereference a
@@ -1344,7 +1524,11 @@ void DigestAuditOrder() {
 int main(int argc,char** argv) {
   if(argc!=2) { std::fprintf(stderr,"choose one named chaos test\n"); return 2; }
   test_name=argv[1]; const std::string_view name(test_name);
-  if(name=="model") Model();
+  if(name=="actor_freeze") ActorFreeze();
+  else if(name=="actor_interpolation") ActorInterpolation();
+  else if(name=="actor_wire") ActorWire();
+  else if(name=="actor_loss") ActorLoss();
+  else if(name=="model") Model();
   else if(name=="profiles") Profiles();
   else if(name=="outages") Outages();
   else if(name=="ownership_generation") OwnershipGeneration();

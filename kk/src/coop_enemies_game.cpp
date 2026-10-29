@@ -20,6 +20,10 @@
 #include "coop_void.h"
 #include "coop_observer.h"
 #include "coop_player_contact.h"
+#include "coop_guest_probe.h"
+#include "coop_puppet.h"
+#include <rex/system/kernel_state.h>
+#include <rex/system/xmemory.h>
 #include <algorithm>
 #include <array>
 #include <bit>
@@ -32,9 +36,15 @@
 #include <set>
 #include <string>
 #include <utility>
+#include <filesystem>
+#include <fstream>
 
 REX_EXTERN(__imp__sub_8271D498);
 REX_EXTERN(__imp__sub_8271CCB8);
+REX_EXTERN(__imp__sub_8271D1D8);
+REX_EXTERN(__imp__sub_823F8AF0);
+REX_EXTERN(__imp__sub_823F8948);
+REX_EXTERN(__imp__sub_8270BED8);
 REX_EXTERN(__imp__sub_82715AC8);
 REX_EXTERN(__imp__sub_82714E40);
 REX_EXTERN(__imp__sub_826E1EE8);
@@ -150,6 +160,22 @@ namespace {
 using namespace hfr;
 using namespace enemies;
 double Now() { return std::chrono::duration<double>(std::chrono::steady_clock::now().time_since_epoch()).count(); }
+bool Replication() { return REXCVAR_GET(kk_coop_actor_replication); }
+// Newly followed animation chains must be committed, including their full
+// record arrays. C119 showed that address range alone is insufficient.
+bool ActorReadable(uint32_t p,uint32_t bytes) {
+  if (!PoseAddress(p,bytes)) return false;
+  auto* memory=rex::system::kernel_memory(); if (!memory) return false;
+  return guest_probe::Readable(p,bytes,[&](uint32_t a,guest_probe::Region& r) {
+    auto* heap=memory->LookupHeap(a); if (!heap || !heap->page_size()) return false;
+    r.base=a & ~(heap->page_size()-1); r.size=heap->page_size();
+    rex::memory::HeapAllocationInfo info{};
+    if (!heap->QueryRegionInfo(r.base,&info)) return false;
+    r.readable=(info.state & rex::memory::kMemoryAllocationCommit) &&
+        (info.protect & rex::memory::kMemoryProtectRead) && info.region_size;
+    return true;
+  });
+}
 uint32_t Ptr(const uint8_t* b, uint32_t p, uint32_t offset, uint32_t size) {
   if (!PoseAddress(p, offset+4)) return 0;
   const auto q = Load32(b, p+offset);
@@ -178,7 +204,15 @@ EnemyFamily Tracks(const uint8_t* b, uint32_t ai, uint32_t& state, bool& spawner
     const auto fn = Load32(b, block+20);
     if (initializing && Initializer(fn)) *initializing = true;
     spawner |= fn == 0x826EB8C0 || fn == 0x826E1EE8 || fn == 0x826F8BC8;
-    const auto f = Family(fn);
+    auto f = Family(fn);
+    if (Replication() && (fn==0x826718B8 || fn==0x8268D8E8)) {
+      f=EnemyFamily::Human;
+      if (initializing && fn==0x8268D8E8) *initializing=true;
+    }
+    if (Replication() && actors::IndependentTrack(fn)) {
+      f=EnemyFamily::Independent;
+      if (initializing && fn==0x826ECDF8) *initializing=true;
+    }
     if (f != EnemyFamily::None) {
       if (family != EnemyFamily::None && family != f) return EnemyFamily::None;
       family = f;
@@ -190,6 +224,11 @@ EnemyFamily Tracks(const uint8_t* b, uint32_t ai, uint32_t& state, bool& spawner
   return family;
 }
 uint32_t LifeCell(const uint8_t* b, const Binding& binding) {
+  if (binding.id.family==EnemyFamily::Human) {
+    if (!ActorReadable(binding.vars,8) || Load32(b,binding.vars)) return 0;
+    const auto slot=Load32(b,binding.vars+4),bank=Load32(b,0x82CC8848);
+    return slot>=1 && slot<=12 && ActorReadable(bank,7096+4*slot) ? bank+7092+4*slot:0;
+  }
   const auto offset = LifeOffset(binding.id.family);
   if (!offset) return 0;
   if (binding.id.family == EnemyFamily::VRex)
@@ -200,6 +239,7 @@ uint32_t LifeCell(const uint8_t* b, const Binding& binding) {
 }
 bool Read(const uint8_t* b, uint32_t actor, Binding& bind, EnemyState& e) {
   if (!PoseAddress(actor, 32) || actor == Load32(b, 0x82CCBF7C) || (Load32(b, actor)&0x00400001)) return false;
+  if (Replication() && kk::PartnerBodyManagedActor(b,actor)) return false;
   bind.actor = actor;
   bind.ai = Ptr(b, Ptr(b, actor, 24, 8), 4, 88);
   bool spawner = false, initializing = false;
@@ -207,6 +247,8 @@ bool Read(const uint8_t* b, uint32_t actor, Binding& bind, EnemyState& e) {
   if (family == EnemyFamily::None || initializing) return false;
   bind.vars = Ptr(b, bind.ai, 64, LifeBytes(family)); bind.matrix = Ptr(b, actor, 12, 64);
   if (!bind.vars || !bind.matrix) return false;
+  if (family==EnemyFamily::Human && (Load32(b,bind.vars)!=0 ||
+      !LifeCell(b,Binding{{0,0,family},actor,bind.ai,bind.vars,bind.matrix}))) return false;
   const auto hero = Load32(b, 0x82CCBF7C);
   const auto hero_ai = Ptr(b, Ptr(b, hero, 24, 8), 4, 88);
   if (bind.ai == hero_ai || bind.vars == Ptr(b, hero_ai, 64, 4) || bind.matrix == Ptr(b, hero, 12, 64)) return false;
@@ -231,6 +273,7 @@ bool Read(const uint8_t* b, uint32_t actor, Binding& bind, EnemyState& e) {
   e.action = 0xFFFF; // No animation component must not force action zero on a matched rig.
   const auto anim = Ptr(b, Ptr(b, actor, 20, 4), 0, 164);
   if (anim) { e.action = Load16(b, anim+156); e.item = b[anim+160]; }
+  if (Replication()) e.actor_flags=Load32(b,actor+4)&actors::kFlagsMask;
   // Supply a temporary nonzero key only to validate the value fields.
   e.id.source = 1;
   return ValidEnemy(e);
@@ -516,7 +559,12 @@ bool SharedSpawner(const uint8_t* b,uint32_t vars) {
     const auto source=Load32(b,vars+(slot<2 ? 1592+184*slot : 1972+4*(slot-2)));
     if (!source) { if (slot>=2) break; else continue; }
     bool nested=false; uint32_t fn=0;
-    const auto family=Tracks(b,Ptr(b,Ptr(b,source,24,8),4,88),fn,nested);
+    const auto template_ai=Ptr(b,Ptr(b,source,24,8),4,88);
+    const auto family=Tracks(b,template_ai,fn,nested);
+    if (family==EnemyFamily::Human) {
+      const auto variables=Ptr(b,template_ai,64,8);
+      if (!ActorReadable(variables,8) || Load32(b,variables)!=0) return false;
+    }
     if (nested || family==EnemyFamily::None) {
 #if defined(KK_DEV_TOOLS)
       REXLOG_INFO("ENEMIES birth admission refused vars={:08X} slot={} template={:08X} state={:08X} nested={}",vars,slot,source,fn,nested);
@@ -525,7 +573,7 @@ bool SharedSpawner(const uint8_t* b,uint32_t vars) {
     }
     any=true; centipede|=family==EnemyFamily::Centipede;
   }
-  return any && centipede;
+  return any && (centipede || Replication());
 }
 struct RaptorPlayerCache { Binding binding; uint32_t hero = 0, reference = 0; };
 #if defined(KK_DEV_TOOLS)
@@ -536,6 +584,11 @@ struct DevRaptorLog {
 #endif
 void ShotSummary(const char* boundary, bool end = true);
 struct State {
+  uint32_t retiring_actor=0;
+  uint64_t actor_holds=0,actor_last_bytes=0,actor_drifts=0,actor_native_runs=0;
+  double actor_log_at=0,actor_publish_at=0;
+  std::map<EnemyId,uint32_t> actor_init_attempts;
+  std::set<EnemyId> actor_init_blocked;
   uint32_t world = 0, game = 0;
   std::map<std::pair<uint32_t, uint32_t>, uint32_t> visits;
   bool capture = false, prepared = false, load_refused_logged = false;
@@ -638,6 +691,9 @@ struct State {
   Counters counts;
   double next_log = 0, prepared_at = 0;
   void ResetWorld() {
+    retiring_actor=0;
+    actor_holds=actor_last_bytes=actor_drifts=actor_native_runs=0; actor_log_at=actor_publish_at=0;
+    actor_init_attempts.clear(); actor_init_blocked.clear();
     ShotSummary("world-end");
     world = game = 0; capture = prepared = false; identity = {};
     load_refused_logged = false;
@@ -865,7 +921,7 @@ void Scan(const uint8_t* b) {
       continue;
     }
     auto existing = s.bindings.find(actor);
-    if (s.link.role == Role::Host && existing == s.bindings.end() && !Member(b, s.world, actor)) continue;
+    if (s.link.role == Role::Host && !Replication() && existing == s.bindings.end() && !Member(b, s.world, actor)) continue;
     if (existing != s.bindings.end()) {
       const auto& old = existing->second;
       if (old.ai != binding.ai || old.vars != binding.vars || old.matrix != binding.matrix || old.id.family != e.id.family) {
@@ -941,6 +997,38 @@ bool ValidBinding(const uint8_t* b, const Binding& binding) {
   Binding now; EnemyState e;
   return Member(b, Get().world, binding.actor, true) && Read(b, binding.actor, now, e) &&
       now.ai == binding.ai && now.vars == binding.vars && now.matrix == binding.matrix && e.id.family == binding.id.family;
+}
+bool FreezeActor(const uint8_t* b,uint32_t actor,uint32_t ai) {
+  auto& s=Get();
+  if (!Replication() || !s.prepared || Now()-s.prepared_at>.5) return false;
+  const auto it=s.bindings.find(actor);
+  const bool player=actor==Load32(b,0x82CCBF7C) || actor==kk::PartnerBodyCombatActor(b);
+  bool binding=it!=s.bindings.end() && it->second.ai==ai && ValidBinding(b,it->second);
+  if (!binding && !player && Member(b,s.world,actor,true)) {
+    Binding observed; EnemyState native;
+    // A known initialized actor waiting for its host id must not start its
+    // own AI while the reliable birth or authored binding is still pending.
+    binding=Read(b,actor,observed,native) && observed.ai==ai;
+  }
+  const bool session=s.link.session_state==SessionState::Connected || s.link.session_state==SessionState::Lost;
+  const bool freeze=actors::Freeze(Replication(),s.link.role==Role::Guest,session,Environment(b,s.world),
+      binding,player,binding,s.retiring_actor==actor);
+  if (freeze) ++s.actor_holds;
+  return freeze;
+}
+// Count actual fallthrough into either native AI entry independently of the
+// hold decision. Initializers, player bodies and host retirement are excluded.
+void ActorNativeRun(const uint8_t* b,uint32_t actor,uint32_t ai) {
+  auto& s=Get();
+  if (!Replication() || s.link.role!=Role::Guest ||
+      (s.link.session_state!=SessionState::Connected && s.link.session_state!=SessionState::Lost) ||
+      !Environment(b,s.world) || actor==s.retiring_actor) return;
+  Binding binding; EnemyState native;
+  if (!Member(b,s.world,actor,true) || !Read(b,actor,binding,native) || binding.ai!=ai) return;
+  ++s.actor_native_runs;
+  if (s.actor_native_runs<=8)
+    REXLOG_WARN("ACTORS native AI ran actor={:08X} family={} prepared={} age={:.3f}",
+        actor,uint16_t(native.id.family),s.prepared,Now()-s.prepared_at);
 }
 bool RetainedDamageSource(const uint8_t* b, const Binding& source) {
   // Preserve the last committed attack of a corpse still in the full registry.
@@ -1679,7 +1767,8 @@ void PlayerDamageHandle(uint8_t* b, uint32_t handle) {
   if (record.valid) PlayerDamageRecord(b,record.id,record.address);
 }
 void WriteLife(uint8_t* b, const Binding& binding, const EnemyState& e) {
-  if (const auto cell = LifeCell(b,binding)) StoreF(b,cell,NativeLife(binding.id.family,e.life));
+  if (const auto cell = LifeCell(b,binding)) StoreF(b,cell,
+      binding.id.family==EnemyFamily::Human && e.life<=0 ? LoadF(b,0x820B0C98):NativeLife(binding.id.family,e.life));
   if (const auto offset = SecondaryLifeOffset(binding.id.family)) StoreF(b, binding.vars+offset, e.secondary_life);
 }
 bool ControllerSafe(const uint8_t* b, uint32_t actor) {
@@ -1689,6 +1778,91 @@ bool ControllerSafe(const uint8_t* b, uint32_t actor) {
   p = Load32(b, p+4); if (!p) return true;
   if (!PoseAddress(p, 60)) return false;
   p = Load32(b, p+56); return PoseAddress(p, 60);
+}
+uint32_t ActorAnimation(const uint8_t* b,uint32_t actor,float* seconds=nullptr,float* duration=nullptr) {
+  auto pointer=[&](uint32_t p,uint32_t off,uint32_t bytes) {
+    if (!ActorReadable(p,off+4)) return 0u;
+    const auto q=Load32(b,p+off); return ActorReadable(q,bytes) ? q:0u;
+  };
+  const auto anim=pointer(pointer(actor,20,4),0,164);
+  const auto channel=pointer(anim,132,8),timing=pointer(channel,4,8),header=pointer(timing,0,8);
+  if (!header) return 0;
+  const auto count=Load16(b,header+4);
+  if (!count || count>512) return 0;
+  const auto descriptors=pointer(header,0,24*count),states=pointer(timing,4,12*count);
+  if (!descriptors || !states) return 0;
+  float elapsed=-1,length=-1;
+  for (uint32_t i=0;i<count;++i) {
+    const auto d=descriptors+24*i,number=uint32_t(Load16(b,d+16)),index=uint32_t(Load16(b,states+12*i+8));
+    if (number>8192 || (number && index>number)) return 0;
+    const auto records=number ? pointer(d,4,8*number):0;
+    if (number && !records) return 0;
+    if (!i && seconds) {
+      if (!number) return 0;
+      double time=LoadF(b,states),total=0;
+      const double scale=LoadF(b,0x820B0C68);
+      for (uint32_t n=0;n<(duration ? number:index);++n) {
+        const double length=(Load16(b,records+8*n)&0x7FFF)*scale;
+        if (n<index) time+=length;
+        total+=length;
+      }
+      if (!std::isfinite(time) || time<0 || time>=3600) return 0;
+      elapsed=float(time);
+      if (duration && std::isfinite(total) && total>0 && total<3600) length=float(total);
+    }
+  }
+  if (seconds) *seconds=elapsed;
+  if (duration) *duration=length;
+  return anim;
+}
+void ActorMetadata(const uint8_t* b,const Binding& binding,EnemyState& e) {
+  if (!Replication()) return;
+  ActorAnimation(b,binding.actor,&e.animation_time,&e.animation_duration);
+  e.actor_flags=Load32(b,binding.actor+4)&actors::kFlagsMask;
+  const uint32_t offset=actors::TargetOffset(binding.id.family);
+  uint32_t target=0,handle=0;
+  switch (binding.id.family) {
+    case EnemyFamily::Raptor: handle=5216; break;
+    case EnemyFamily::Worm: handle=2948; break;
+    case EnemyFamily::Scorpion: handle=2992; break;
+    case EnemyFamily::Crab: handle=1048; break;
+    case EnemyFamily::Centipede: handle=5888; break;
+    case EnemyFamily::Spider: handle=1420; break;
+    default: break;
+  }
+  if (offset && ActorReadable(binding.vars,offset+4)) target=Load32(b,binding.vars+offset);
+  if (handle && ActorReadable(binding.vars,handle+8)) {
+    const auto record=stimulus_debug::ReadHandle([&](uint32_t p){return Load32(b,p);},binding.vars+handle);
+    if (record.valid) target=record.target;
+  }
+  e.target=0; e.target_crew=0;
+  if (!target) return;
+  if (target==Load32(b,0x82CCBF7C)) e.target=1;
+  else if (target==kk::PartnerBodyCombatActor(b)) e.target=2;
+  else {
+    const auto crew=Get().bindings.find(target);
+    if (crew!=Get().bindings.end() && crew->second.id.family==EnemyFamily::Human &&
+        ActorReadable(crew->second.vars,8)) {
+      const auto slot=Load32(b,crew->second.vars+4);
+      if (slot>=1 && slot<=12) { e.target=3; e.target_crew=uint8_t(slot); }
+    }
+  }
+}
+void ActorTarget(uint8_t* b,const Binding& binding,const EnemyState& e) {
+  if (Get().link.role!=Role::Guest) return;
+  const auto offset=actors::TargetOffset(binding.id.family);
+  if (!offset || !e.target || !ActorReadable(binding.vars,offset+4)) return;
+  uint32_t target=0;
+  if (e.target==1) target=kk::PartnerBodyCombatActor(b);
+  else if (e.target==2) target=Load32(b,0x82CCBF7C);
+  else if (e.target==3) {
+    for (const auto& [actor,crew]:Get().bindings) if (crew.id.family==EnemyFamily::Human &&
+        ActorReadable(crew.vars,8) && Load32(b,crew.vars+4)==e.target_crew && ValidBinding(b,crew)) {
+      if (target) return; // A crew slot must resolve uniquely in this world.
+      target=actor;
+    }
+  }
+  if (target && Member(b,Get().world,target,true)) Store32(b,binding.vars+offset,target);
 }
 void DeathTransition(PPCContext& ctx, uint8_t* b, const Binding& binding) {
   auto& s = Get();
@@ -1737,6 +1911,33 @@ bool Drive(PPCContext& ctx, uint8_t* b, const Binding& binding, const EnemyState
       (Load16(b, anim+156) != e.action || b[anim+160] != e.item)) {
     ctx.r3.u64 = binding.actor; ctx.r4.u64 = e.action; ctx.r5.u64 = e.item; ctx.r6.u64 = 0;
     __imp__sub_82850100(ctx, b);
+  }
+  if (Replication() && ValidBinding(b,binding)) {
+    ActorTarget(b,binding,e);
+    float current=-1;
+    if (e.animation_time>=0 && ActorAnimation(b,binding.actor,&current) &&
+        Load16(b,anim+156)==e.action && b[anim+160]==e.item &&
+        std::abs(current-e.animation_time)>.08f) {
+      ctx.r3.u64=binding.actor; ctx.r4.u64=0;
+      ctx.r5.s64=int32_t(std::lround(e.animation_time*60.f));
+      __imp__sub_823F8948(ctx,b);
+    }
+    if (ValidBinding(b,binding)) {
+      ctx.r3.u64=binding.actor; ctx.r4.u64=(e.actor_flags&0x00200000)!=0;
+      __imp__sub_8270BED8(ctx,b);
+      const auto flags=Load32(b,binding.actor+4);
+      Store32(b,binding.actor+4,(flags&~1u)|(e.actor_flags&1));
+      if ((flags^e.actor_flags)&1) {
+        // Same list invalidation words used by native object activity changes.
+        for (uint32_t off:{8u,12u,16u}) Store32(b,Get().world+off,1);
+      }
+    }
+    // Native animation changes evaluate a pose immediately and can move the
+    // root. Commit the buffered transform after that work and its callbacks.
+    if (!ValidBinding(b,binding)) return false;
+    call(__imp__sub_827117E0,xyz);
+    if (!PerchedBat(binding.id.family,e.state)) call(__imp__sub_82711278,forward);
+    call(__imp__sub_82401AA8,xyz);
   }
   return true;
 }
@@ -1829,7 +2030,9 @@ void Replicas(PPCContext& ctx, uint8_t* b, bool drive) {
     }
     auto& authority = a->second;
     if (!authority.Accepts(r.enemy) || authority.owner == Side() || authority.Frozen()) continue;
-    authority.Observe(r.latest.id.source ? r.latest : r.enemy);
+    const auto& latest=r.latest.id.source ? r.latest:r.enemy;
+    if (Replication() && authority.dead && latest.life<=0) authority.last=latest;
+    else authority.Observe(latest);
     if (r.kind == EnemyEventKind::Removed) {
       // Death and retirement are separate reliable boundaries. A zero-life
       // replica still runs its corpse script until its owner removes the root.
@@ -1842,6 +2045,11 @@ void Replicas(PPCContext& ctx, uint8_t* b, bool drive) {
       constexpr uint32_t globals[]{0x82CCBF58,0x82CCBF5C,0x82CCBF60,0x82CCBF64,0x82CCBF68,0x82CCBF6C,0x82CCBF70};
       uint32_t saved[7];
       for (unsigned i=0;i<7;++i) saved[i]=Load32(b,globals[i]);
+      struct Retiring {
+        uint32_t& value; uint32_t previous;
+        ~Retiring() { value=previous; }
+      } retiring{s.retiring_actor,s.retiring_actor};
+      s.retiring_actor=actor;
       ctx.r3.u64=actor; __imp__sub_82714E40(ctx,b);
       for (unsigned i=0;i<7;++i) Store32(b,globals[i],saved[i]);
       if (auto local=s.records.find(binding->id);local!=s.records.end()) local->second.kind=EnemyEventKind::Removed;
@@ -1859,7 +2067,9 @@ void Replicas(PPCContext& ctx, uint8_t* b, bool drive) {
     const float before = Read(b,binding->actor,previous_binding,previous) ? previous.life : sample.life;
     ShotResultLog(sample, before, true);
     WriteLife(b, *binding, sample);
-    if (dead) { DeathTransition(ctx, b, *binding); continue; }
+    if (dead && !Replication()) { DeathTransition(ctx, b, *binding); continue; }
+    if (dead && (StateLife(binding->id.family) || binding->id.family==EnemyFamily::VRex))
+      DeathTransition(ctx,b,*binding); // Set the audited local terminal track without executing it.
     if (!drive || Drive(ctx, b, *binding, r.enemy)) {
       s.driving[binding->actor] = r;
       if (drive) ++s.counts.driven;
@@ -1991,7 +2201,7 @@ void OwnershipBeforeAi(PPCContext& ctx, uint8_t* b) {
       return value && std::strcmp(value,"1")==0 ? 1 : value && std::strcmp(value,"guest")==0 ? 2 : 0;
     }();
     const auto matched=s.matched_at.find(id);
-    if (dev_proximity && s.link.role==Role::Host && s.link.partner &&
+    if (dev_proximity && !Replication() && s.link.role==Role::Host && s.link.partner &&
         now-s.link.remote.time<=.5 && matched!=s.matched_at.end() && now-matched->second<=1.5 &&
         EnemyPartnerCombatReady() && ValidBinding(b,*binding) && ControllerSafe(b,binding->actor)) {
       const float host=PlayerDistance(b,binding->actor,Load32(b,0x82CCBF7C));
@@ -2030,7 +2240,9 @@ void HoldReplicas(PPCContext& ctx, uint8_t* b, bool drive) {
     const auto& state = a.Frozen() ? a.pending->enemy : a.last;
     if (state.life <= 0) {
       WriteLife(b, *binding, state);
-      DeathTransition(ctx, b, *binding); continue;
+      if (!Replication()) { DeathTransition(ctx, b, *binding); continue; }
+      if (StateLife(binding->id.family) || binding->id.family==EnemyFamily::VRex)
+        DeathTransition(ctx,b,*binding);
     }
     // Keep known replicas held even after live snapshots expire. Native AI
     // resumes only on a Commit, or when the connection/load guard releases it.
@@ -3334,7 +3546,14 @@ void BeforeAi(PPCContext& ctx, uint8_t* b, uint32_t w) {
   // the peer could otherwise hash actors that already moved locally.
   if (s.capture) Capture(b, w);
   if (s.world == w && Now() <= s.census_until && Environment(b, w)) Capture(b, w, false);
-  if (!Connected()) return;
+  if (Replication()) s.link=EnemyLinkSnapshot();
+  if (!Connected()) {
+    if (Replication() && s.link.role==Role::Guest &&
+        (s.link.session_state==SessionState::Connected || s.link.session_state==SessionState::Lost) && Environment(b,w)) {
+      s.prepared=true; s.prepared_at=Now(); HoldReplicas(ctx,b,false);
+    }
+    return;
+  }
   s.link = EnemyLinkSnapshot();
   const auto flow_revision=SessionFlowSnapshot().rejoin_revision;
   if (s.rejoin_revision!=flow_revision) {
@@ -3758,7 +3977,7 @@ void AfterAi(PPCContext& ctx, uint8_t* b, uint32_t w) {
       a->Observe(owned.enemy);
       frame.records.push_back(owned);
     }
-    PublishEnemyFrame(frame);
+    if (!Replication()) PublishEnemyFrame(frame);
 #if defined(KK_DEV_TOOLS)
     if (Now() >= s.next_numbers) {
       s.next_numbers = Now()+1;
@@ -3794,6 +4013,9 @@ void AfterAi(PPCContext& ctx, uint8_t* b, uint32_t w) {
 }
 bool Hold(PPCContext& ctx, uint8_t* b) {
   auto& s = Get();
+  if (FreezeActor(b,Load32(b,0x82CCBF6C),Load32(b,0x82CCBF64))) {
+    ctx.r3.u64=0; return true;
+  }
 #if defined(KK_DEV_TOOLS)
   // Encounter isolation only: other enemy families otherwise kill a bat or
   // injure the fixture player before its real attack can be observed. This
@@ -4281,6 +4503,7 @@ world::Json world::EnemySnapshot(const uint8_t* b,world::Capture& capture) {
   for (auto p=begin;p<end;p+=8) {
     const auto actor=Load32(b,p);
     if (!PoseAddress(actor,32) || (Load32(b,actor)&0x00400001)) continue;
+    if (Replication() && (actor==Load32(b,0x82CCBF7C) || kk::PartnerBodyManagedActor(b,actor))) continue;
     const auto ai=Ptr(b,Ptr(b,actor,24,8),4,88),matrix=Ptr(b,actor,12,64);
     bool spawner=false,initializing=false; uint32_t state=0;
     const auto family=Tracks(b,ai,state,spawner,&initializing);
@@ -4351,6 +4574,9 @@ void EnemyGuardRecoveryWorld(EnemyWorld world) {
 std::vector<WorldEnemy> EnemyWorldDigest(const uint8_t* b) {
   auto& s=Get(); std::vector<WorldEnemy> out;
   if (!Connected() || !Environment(b,s.world)) return out;
+  PlayerPose local_pose;
+  const auto hero=Ptr(b,Load32(b,0x82CCBF7C),12,64);
+  if (hero) { local_pose.x=LoadF(b,hero+48); local_pose.y=LoadF(b,hero+52); local_pose.z=LoadF(b,hero+56); }
   for (const auto& [local,r]:s.records) {
     auto* a=AuthorityFor(local); if (!a || r.kind==EnemyEventKind::Removed) continue;
     auto e=r.enemy;
@@ -4365,6 +4591,7 @@ std::vector<WorldEnemy> EnemyWorldDigest(const uint8_t* b) {
     }
     if (!ValidEnemy(e)) continue;
     if (a->dead || r.kind==EnemyEventKind::Died) e.life=std::min(0.f,e.life);
+    if (!actors::InScope(Replication(),e.life<=0,e,hero ? &local_pose:nullptr,s.link.partner ? &*s.link.partner:nullptr)) continue;
     out.push_back({Canonical(local),a->owner,a->generation,e.life,e.secondary_life,e.x,e.y,e.z});
   }
   return out;
@@ -4398,7 +4625,13 @@ desync::Evidence EnemyCompareDigest(uint8_t* b,const desync::State& state,bool r
     // Host digests never override guest-owned AI or an in-flight ownership change.
     if (h.owner!=EnemyOwner::Host) continue;
     const auto* binding=CanonicalBinding(b,h.id);
-    if (!binding) { if (h.life>0) missing(h.id,"host-alive-guest-unbound"); continue; }
+    if (!binding) {
+      if (h.life>0) {
+        if (actors::DigestRepairs(Replication())) missing(h.id,"host-alive-guest-unbound");
+        else ++result.differences;
+      }
+      continue;
+    }
     const auto auth=s.authority.find(h.id);
     if (auth==s.authority.end() || auth->second.owner!=h.owner || auth->second.generation!=h.generation ||
         auth->second.Frozen()) continue;
@@ -4407,6 +4640,7 @@ desync::Evidence EnemyCompareDigest(uint8_t* b,const desync::State& state,bool r
     const float life=current.life,secondary=current.secondary_life;
     if (rough(h.life,life) || rough(h.secondary_life,secondary) ||
         std::hypot(h.x-current.x,h.y-current.y,h.z-current.z)>5.f) ++result.differences;
+    if (!actors::DigestRepairs(Replication())) continue;
     if (!rough(h.life,life) && !rough(h.secondary_life,secondary)) continue;
     // Digest values can be old by the time the sweep completes. Repair only
     // from the normal fresh replicated stream, preserving terminal-event wins.
@@ -4416,6 +4650,7 @@ desync::Evidence EnemyCompareDigest(uint8_t* b,const desync::State& state,bool r
     if (!latest || (auth->second.dead && latest->enemy.life>0) || !s.link.connected || Now()-s.link.remote.time>.5 ||
         (!rough(latest->enemy.life,life) && !rough(latest->enemy.secondary_life,secondary))) continue;
     result.quiet=true;
+    if (reconcile && Replication()) ++s.actor_drifts;
     if (reconcile) {
       WriteLife(b,*binding,latest->enemy);
       Binding check_binding; EnemyState after;
@@ -4424,6 +4659,9 @@ desync::Evidence EnemyCompareDigest(uint8_t* b,const desync::State& state,bool r
           h.id.source,h.id.sequence,uint16_t(h.id.family),life,latest->enemy.life,read ? after.life:-1.f,read);
     }
   }
+  // Snapshots and explicit retirement own actors in the new model. Digest
+  // differences remain observable without competing writes or actor recovery.
+  if (Replication()) return result;
   std::set<EnemyId> host_ids;
   for (const auto& h:state.enemies) host_ids.insert(h.id);
   for (const auto& [actor,binding]:s.bindings) {
@@ -4438,6 +4676,150 @@ desync::Evidence EnemyCompareDigest(uint8_t* b,const desync::State& state,bool r
       missing(id,"guest-alive-host-absent");
   }
   return result;
+}
+void InitializeHostHumans(PPCContext& ctx,uint8_t* b) {
+  auto& s=Get();
+  const bool fresh=Connected() && s.link.remote.world==s.identity && Now()-s.link.remote.time<=.5;
+  if (!Replication() || s.link.role!=Role::Guest || !fresh || !Scratch::CanUse(ctx)) return;
+  bool attempted=false;
+  for (const auto& r:s.link.remote.records) {
+    if (r.enemy.id.family!=EnemyFamily::Human || r.enemy.id.sequence ||
+        r.kind!=EnemyEventKind::Spawned || r.enemy.life<=0) continue;
+    uint32_t actor=0; Authored authored{}; unsigned count=0;
+    for (const auto& [candidate,a]:s.authored) if (a.key==r.enemy.id.source && a.family==EnemyFamily::Human) {
+      ++count; if (!actor) { actor=candidate; authored=a; }
+    }
+    if (!actor || s.bindings.contains(actor) || !Member(b,s.world,actor,true)) continue;
+    const auto ai=Ptr(b,Ptr(b,actor,24,8),4,88);
+    const auto vars=Ptr(b,ai,64,16892),block=Ptr(b,ai,24,24),model=Ptr(b,ai,0,16);
+    const bool init=ai==authored.ai && vars && block && Load32(b,block+20)==0x8268D8E8 &&
+        Load16(b,ai+80)==0 && Load16(b,ai+82)==0 && !Load32(b,vars) &&
+        Load32(b,vars+4)>=1 && Load32(b,vars+4)<=12;
+    const bool player=actor==Load32(b,0x82CCBF7C) || kk::PartnerBodyManagedActor(b,actor);
+    if (!actors::Initialize(Replication(),s.link.role==Role::Guest,fresh,count==1,player,init)) continue;
+    auto& tries=s.actor_init_attempts[r.enemy.id];
+    if (!model || b[model+15] || tries>=120) {
+      if (s.actor_init_blocked.insert(r.enemy.id).second)
+        REXLOG_WARN("ACTORS init deferred id={:016X} model-off={} attempts={}",r.enemy.id.source,model ? b[model+15]:255,tries);
+      continue;
+    }
+    // A host live actor may still be outside the guest's native AI range.
+    // Run only its verified local two phase H initializer. The ordinary track
+    // hook holds every later NPC track as soon as initialization completes.
+    const auto node=Load32(b,ai+4);
+    {
+      Scratch scratch(ctx,b);
+      constexpr uint32_t globals[]{0x82CCBF58,0x82CCBF5C,0x82CCBF60,0x82CCBF64,0x82CCBF68,0x82CCBF6C,0x82CCBF70};
+      uint32_t saved[7];
+      for (unsigned i=0;i<7;++i) saved[i]=Load32(b,globals[i]);
+      Store32(b,0x82CCBF6C,actor); Store32(b,0x82CCBF70,actor);
+      ctx.r3.u64=ai; __imp__sub_8271D1D8(ctx,b);
+      for (unsigned i=0;i<7;++i) Store32(b,globals[i],saved[i]);
+    }
+    ++tries; attempted=true;
+    Binding ready; EnemyState native;
+    if (tries==1 || Read(b,actor,ready,native) || tries==120)
+      REXLOG_INFO("ACTORS init guest id={:016X} actor={:08X} node={} attempts={} ready={}",
+          r.enemy.id.source,actor,node,tries,Read(b,actor,ready,native));
+  }
+  if (attempted) Scan(b);
+}
+void ActorNativeAudit(const uint8_t* b,double sample_time=0) {
+  // Read only diagnostics are available in the shipping build too. The
+  // explicit opt in and private workspace path are required on both peers.
+  static const bool enabled=[] { const auto* p=std::getenv("KK_COOP_ACTOR_AUDIT"); return p && std::strcmp(p,"1")==0; }();
+  if (!enabled) return;
+  static double next=0;
+  const auto now=sample_time>0 ? sample_time:Now();
+  if (!sample_time && now<next) return;
+  next=now+.05;
+  const auto* path=std::getenv("KK_COOP_ACTOR_AUDIT_DIR"); if (!path || !*path) return;
+  const auto dir=std::filesystem::absolute(path).lexically_normal();
+  if (!dir.generic_string().starts_with("F:/kk-native-coop/") && !dir.generic_string().starts_with("f:/kk-native-coop/")) return;
+  auto& s=Get(); std::vector<world::Json> rows;
+  PlayerPose local;
+  const auto hero=Ptr(b,Load32(b,0x82CCBF7C),12,64);
+  if (hero) { local.x=LoadF(b,hero+48); local.y=LoadF(b,hero+52); local.z=LoadF(b,hero+56); }
+  for (const auto& [actor,binding]:s.bindings) {
+    Binding observed; EnemyState e;
+    if (!ValidBinding(b,binding) || !Read(b,actor,observed,e)) continue;
+    const auto id=Canonical(binding.id);
+    const auto driven=s.driving.find(actor);
+    float animation=-1; ActorAnimation(b,actor,&animation);
+    const auto cell=LifeCell(b,binding);
+    const auto record=s.records.find(binding.id);
+    const bool retired=s.retirement_applied.contains(binding.id) ||
+        (record!=s.records.end() && record->second.kind==EnemyEventKind::Removed);
+    rows.push_back(world::Json::Object({{"id",world::Hex(id.source)},{"sequence",id.sequence},
+        {"local_id",world::Hex(binding.id.source)},{"actor",world::Hex(actor)},
+        {"family",uint16_t(binding.id.family)},{"bound",id.source!=0},
+        {"retired",retired},
+        {"relevant",!hero || actors::Relevant(e,local) || (s.link.partner && actors::Relevant(e,*s.link.partner))},
+        {"x",e.x},{"y",e.y},{"z",e.z},{"facing",e.facing},{"life",e.life},
+        {"native_health",cell ? world::Json(LoadF(b,cell)):world::Json()},
+        {"action",e.action},{"item",e.item},{"animation_time",animation},
+        {"flags",Load32(b,actor+4)&actors::kFlagsMask},
+        {"buffered_x",driven==s.driving.end() ? world::Json():world::Json(driven->second.enemy.x)},
+        {"buffered_y",driven==s.driving.end() ? world::Json():world::Json(driven->second.enemy.y)},
+        {"buffered_z",driven==s.driving.end() ? world::Json():world::Json(driven->second.enemy.z)},
+        {"buffered_life",driven==s.driving.end() ? world::Json():world::Json(driven->second.enemy.life)},
+        {"buffered_secondary_life",driven==s.driving.end() ? world::Json():world::Json(driven->second.enemy.secondary_life)},
+        {"secondary_life",e.secondary_life},
+        {"source_time",driven==s.driving.end() ? 0.:driven->second.source_time}}));
+  }
+  const double utc=std::chrono::duration<double>(std::chrono::system_clock::now().time_since_epoch()).count();
+  const auto record=world::Json::Object({{"role",s.link.role==Role::Host ? "host":"guest"},
+      {"protocol",kProtocolVersion},
+      {"epoch",world::Hex(s.link.epoch)},{"level",s.identity.level},{"start",s.identity.start},{"visit",s.identity.serial},
+      {"native_time",now},{"utc",utc},{"replication",Replication()},{"rows",world::Json::Array(rows)}});
+  try {
+    std::filesystem::create_directories(dir);
+    std::ofstream out(dir/"actors-native.jsonl",std::ios::app|std::ios::binary); out<<record.text<<'\n';
+  } catch (const std::exception& ex) { REXLOG_WARN("ACTORS audit write failed {}",ex.what()); }
+}
+void ActorLateWorld(PPCContext& ctx,uint8_t* b,uint32_t w) {
+  auto& s=Get();
+  if (!s.prepared || !Environment(b,w)) return;
+  if (!Replication()) { ActorNativeAudit(b); return; }
+  const auto now=Now();
+  if (now-s.actor_log_at>=5) {
+    const auto bytes=s.link.bytes>=s.actor_last_bytes ? s.link.bytes-s.actor_last_bytes:0;
+    REXLOG_INFO("ACTORS status role={} level={} start={} tracked={} matched={} unmatched={} holds={} drift={} bytes={} bytes_per_second={:.1f} radius=160 buffer_ms=100 native_ai_runs={}",
+        s.link.role==Role::Host ? "host":"guest",s.identity.level,s.identity.start,s.bindings.size(),
+        s.counts.matched,s.counts.unmatched,s.actor_holds,s.actor_drifts,s.link.bytes,
+        s.actor_log_at ? double(bytes)/(now-s.actor_log_at):0.,s.actor_native_runs);
+    s.actor_last_bytes=s.link.bytes; s.actor_log_at=now;
+  }
+  if (s.link.role==Role::Guest) {
+    // Native root motion and physics run after the immediate AI pass. The
+    // final displayed transform must still be the buffered host pose.
+    if (Connected()) { InitializeHostHumans(ctx,b); Replicas(ctx,b,true); }
+    if (s.link.session_state==SessionState::Connected || s.link.session_state==SessionState::Lost)
+      HoldReplicas(ctx,b,true);
+    ActorNativeAudit(b);
+    return;
+  }
+  if (!Connected()) return;
+  if (now<s.actor_publish_at) return;
+  s.actor_publish_at=s.actor_publish_at>0 && now-s.actor_publish_at<.25 ? s.actor_publish_at+.05:now+.05;
+  Scan(b);
+  Frame frame{s.identity,Now(),{}};
+  const auto hero=Ptr(b,Load32(b,0x82CCBF7C),12,64);
+  PlayerPose local;
+  if (hero) { local.x=LoadF(b,hero+48); local.y=LoadF(b,hero+52); local.z=LoadF(b,hero+56); }
+  for (auto& [id,r]:s.records) {
+    auto* a=AuthorityFor(id); if (!a || !a->Runs(EnemyOwner::Host)) continue;
+    auto sample=r;
+    for (const auto& [actor,binding]:s.bindings) if (binding.id==id && ValidBinding(b,binding)) {
+      ActorMetadata(b,binding,sample.enemy); break;
+    }
+    if (!actors::InScope(true,sample.kind!=EnemyEventKind::Spawned || sample.enemy.life<=0,
+        sample.enemy,hero ? &local:nullptr,s.link.partner ? &*s.link.partner:nullptr)) continue;
+    sample.enemy.owner=EnemyOwner::Host; sample.enemy.generation=a->generation;
+    a->Observe(sample.enemy); frame.records.push_back(sample);
+  }
+  PublishEnemyFrame(frame);
+  ActorNativeAudit(b,frame.time);
 }
 void EnemyGameFrame() {
   if (!Connected()) {
@@ -4503,7 +4885,7 @@ bool EnemyNearPlayer(const uint8_t* b,const PlayerPose& player,float radius) {
   if (!Table(b,Load32(b,0x828E8388),begin,end)) return true;
   for (auto p=begin;p<end;p+=8) {
     Binding binding; EnemyState enemy;
-    if (Read(b,Load32(b,p),binding,enemy) && enemy.life>0 &&
+    if (Read(b,Load32(b,p),binding,enemy) && enemy.id.family!=EnemyFamily::Human && enemy.life>0 &&
         std::hypot(enemy.x-player.x,enemy.y-player.y,enemy.z-player.z)<=radius) return true;
   }
   // Include the other owner's current replicas, including a briefly unscheduled
@@ -4760,6 +5142,7 @@ std::optional<ShotVector> EnemyAimTarget(const uint8_t* b, ShotVector origin) {
   }();
   for (const auto& [actor, binding] : s.bindings) {
     if (family && unsigned(binding.id.family)!=family) continue;
+    if (binding.id.family==EnemyFamily::Human) continue;
     const auto* a = AuthorityFor(binding.id);
     if (!a || a->dead || a->last.life <= 0 || !ValidBinding(b, binding)) continue;
     if (s.retirement_applied.contains(binding.id)) continue;  // C108: never aim at a retired replica
@@ -5218,9 +5601,20 @@ REX_HOOK_RAW(sub_8271D498) {
   kk::coop::AfterAi(ctx, base, world);
   kk::coop::ObjectsAfterAi(ctx,base,world);
 }
+REX_HOOK_RAW(sub_8271D1D8) {
+  // Native model off returns one from ai_run_object. Intercept the same
+  // boundary for this exact initialized actor, including deferred buckets.
+  // Never set model->off: models are shared with the local player.
+  if (kk::coop::FreezeActor(base,kk::hfr::Load32(base,0x82CCBF6C),ctx.r3.u32)) {
+    ctx.r3.u64=1; return;
+  }
+  kk::coop::ActorNativeRun(base,kk::hfr::Load32(base,0x82CCBF6C),ctx.r3.u32);
+  __imp__sub_8271D1D8(ctx,base);
+}
 REX_HOOK_RAW(sub_8271CCB8) {
   if (kk::coop::Hold(ctx, base)) return;
   if (kk::PartnerBodyHold(ctx, base)) return;
+  kk::coop::ActorNativeRun(base,kk::hfr::Load32(base,0x82CCBF6C),kk::hfr::Load32(base,0x82CCBF64));
   __imp__sub_8271CCB8(ctx, base);
 }
 REX_HOOK_RAW(sub_82715AC8) {

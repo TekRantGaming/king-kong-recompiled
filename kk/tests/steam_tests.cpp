@@ -38,9 +38,15 @@ void DelayedLobbyReadiness() {
 void Keys() {
   const auto local = Compatible(); const auto keys = EncodeLobbyKeys(local);
   Compatibility out;
-  Check(keys.size() == 5 && DecodeLobbyKeys(keys, out), "keys round trip");
+  Check(keys.size() == 6 && DecodeLobbyKeys(keys, out), "keys round trip");
   Check(CheckCompatibility(local, out) == RejectReason::None, "decoded matches Hello compatibility");
   Check(CompatibleLobby(keys, local), "matching lobby");
+  auto actors=local; actors.actor_replication=true;
+  Check(DecodeLobbyKeys(EncodeLobbyKeys(actors),out) && out.actor_replication,
+      "actor replication mode survives Steam lobby metadata");
+  Check(!CompatibleLobby(EncodeLobbyKeys(actors),local),"different actor settings refuse the lobby");
+  auto bad_actors=keys; bad_actors["kkrc_actors"]="2";
+  Check(!DecodeLobbyKeys(bad_actors,out),"unknown actor replication mode refuses");
   for (const auto* field : {"kkrc_product", "kkrc_protocol", "kkrc_version", "kkrc_build", "kkrc_mods"}) {
     auto broken = keys; broken.erase(field);
     Check(!DecodeLobbyKeys(broken, out), "required key missing");
@@ -233,7 +239,7 @@ void EveryProtocolMessage() {
   };
   const MessageType unreliable[] = {MessageType::Ping, MessageType::Pong, MessageType::PlayerPose,
       MessageType::EnemySnapshot, MessageType::CameraPose};
-  static_assert(kProtocolVersion == 34 && std::size(reliable)+std::size(unreliable) == 38);
+  static_assert(kProtocolVersion == 35 && std::size(reliable)+std::size(unreliable) == 38);
   Backend a,b; a.self=1; b.self=2; a.remote=&b; b.remote=&a;
   SteamMessagesTransport at(a,2),bt(b,1);
   unsigned seen[unsigned(MessageType::WorldAudit)+1]{};

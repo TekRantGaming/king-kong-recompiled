@@ -18,6 +18,7 @@ void ReviveGuardFrame(PPCContext& ctx, uint8_t* base);
 void EnemyBeforeLoad();
 void EnemyAfterLoad(const uint8_t* base, uint32_t game);
 void EnemyGameFrame();
+void ActorLateWorld(PPCContext& ctx,uint8_t* base,uint32_t world);
 // Called by the single 8271E4E8 hook, before C25's general reference observer.
 // Returns true when the event was handled without native body/local damage.
 bool EnemyDamageEnqueue(PPCContext& ctx, uint8_t* base, uint32_t body);

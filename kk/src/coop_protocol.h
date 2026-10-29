@@ -13,9 +13,9 @@
 
 namespace kk::coop {
 constexpr uint32_t kMagic = 0x4B4B4331;  // KKC1, network byte order throughout
-// 34: combines C126 native probes and guest audit receipt with C125 native barrier
-// hit direction, retained with damage and raw requests. Both previously used 33.
-constexpr uint16_t kProtocolVersion = 34;
+// 35: combines native world probes, barrier direction and host actor replication.
+// Hello retains its legacy layout for a version refusal.
+constexpr uint16_t kProtocolVersion = 35;
 constexpr size_t kMaxDisplayNameBytes = 32;
 // Valid UTF-8, no controls or invisible direction/line formatting, bounded at a codepoint.
 // Empty or wholly invalid input becomes "Partner". Never log the input or result.
@@ -172,10 +172,11 @@ bool ValidSessionStart(const SessionStart& start);
 bool ValidFlowEvent(const FlowEvent& event);
 uint64_t SessionSaveHash(std::span<const uint8_t> bytes);
 bool IsFlowMessage(MessageType type);
-enum class RejectReason : uint16_t { None, Protocol, Version, Build, GameplayMods, Handshake };
+enum class RejectReason : uint16_t { None, Protocol, Version, Build, GameplayMods, Handshake, ActorReplication };
 struct Compatibility {
   uint16_t protocol = kProtocolVersion;
   std::string version, build, gameplay_digest;
+  bool actor_replication = false;
 };
 struct PlayerPose {
   double time = 0;
@@ -204,10 +205,10 @@ struct CameraPose {
 bool ValidCameraPose(const CameraPose& camera);
 enum class EnemyFamily : uint16_t {
   None, Raptor, Worm, Scorpion, Crab, Bat, Centipede, Native, Marine, VRex,
-  SwampCrawler, SwampCrawlerSmall, Spider, Pny, Prey, NativeKna
+  SwampCrawler, SwampCrawlerSmall, Spider, Pny, Prey, NativeKna, Human, Independent
 };
 inline bool ValidEnemyFamily(EnemyFamily family) {
-  return family >= EnemyFamily::Raptor && family <= EnemyFamily::NativeKna;
+  return family >= EnemyFamily::Raptor && family <= EnemyFamily::Independent;
 }
 enum class EnemyOwner : uint8_t { Host, Guest };
 // source is a signature of family + authored spawn point, or spawner + template.
@@ -236,6 +237,10 @@ struct EnemyState {
   float secondary_life = 0; // Scorpion type-2048 pool; firearm life is at V+5444.
   uint64_t birth_spawner = 0; // Authored identity, never an address. Zero for authored roots.
   uint8_t birth_template = 0, birth_point = 0; // Two fallback / 17 wave slots and 16 local points.
+  float animation_time = -1; // Native channel ticks divided by 60. Negative means absent.
+  float animation_duration = -1;
+  uint32_t actor_flags = 0; // Audited runtime visibility and collision bits only.
+  uint8_t target = 0, target_crew = 0; // 0 none, 1 host, 2 guest, 3 crew slot.
 };
 // Prepare freezes both copies; Ready returns the old owner's final pose. Only
 // the host's Commit changes authority. Matched confirms a usable guest binding.
@@ -248,7 +253,7 @@ struct OwnershipChange {
   EnemyState enemy; // last state, tagged with the OLD owner/generation until Commit
 };
 bool ValidOwnershipChange(const OwnershipChange& change);
-constexpr size_t kEnemyStateBytes = 72, kMaxEnemyBatch = 13, kMaxEnemies = 512;
+constexpr size_t kEnemyStateBytes = 86, kMaxEnemyBatch = 11, kMaxEnemies = 512;
 
 struct ShotVector { float x = 0, y = 0, z = 0; };
 enum class PlayerCondition : uint8_t { Alive = 1, Hurt, Dead };
@@ -330,6 +335,7 @@ struct EnemySnapshot {
   EnemyWorld world;
   double time = 0;
   std::vector<EnemyState> enemies;
+  bool compressed = false; // Byte deltas against the preceding row in this same packet.
 };
 struct EnemyEvent {
   EnemyWorld world;

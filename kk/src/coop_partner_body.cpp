@@ -2587,6 +2587,15 @@ bool PartnerBodyPlayerContact(const uint8_t* b,uint32_t actor) {
   const bool driver=s.driving && s.selected.actor==actor && actor==PartnerBodyCombatActor(b);
   return coop::contact::OwnedBody(own_copy,driver);
 }
+bool PartnerBodyManagedActor(const uint8_t* b,uint32_t actor) {
+  const auto& s=Get();
+  for (const auto& copy:s.spawned) if (copy.rig.actor==actor && SpawnIdentity(b,copy)) return true;
+  if (!s.driving || !s.prepared || actor!=s.selected.actor || !s.Environment(b,s.world)) return false;
+  const auto observation=s.humans.find(actor);
+  if (observation==s.humans.end() || observation->second.generation!=s.selected_generation) return false;
+  Rig rig;
+  return Registered(b,s.world,actor) && ReadRig(b,actor,rig) && Same(rig,s.selected);
+}
 bool PartnerBodyStimulus(PPCContext& ctx, uint8_t* b) {
   auto& s = Get();
   const auto body = PartnerBodyCombatActor(b);
@@ -2841,6 +2850,7 @@ REX_HOOK_RAW(sub_82881B70) {
   const uint32_t world = ctx.r3.u32;
   __imp__sub_82881B70(ctx, base);
   kk::PartnerBodyLateWorld(ctx, base, world);
+  kk::coop::ActorLateWorld(ctx,base,world);
   kk::coop::observer::LateWorld(ctx, base);
 #if defined(KK_DEV_TOOLS)
   kk::DevFishAfterWorld(ctx, base);
