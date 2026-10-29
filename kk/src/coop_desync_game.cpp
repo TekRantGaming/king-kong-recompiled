@@ -82,6 +82,8 @@ void Scope(const FlowView& v,uint64_t current,double now) {
   if (epoch!=current) {
     WorldGuardSummary(); epoch=current; summary_epoch=current;
     quiet_count=move_count=reload_count=0; samples=captures=0; generation=level=0; withheld={};
+    REXLOG_INFO("KK co-op desync: session checker role={} auto-repair={} source={}; when off, drift moves and guest reloads are logged, not applied",
+        v.host ? "host":"guest",REXCVAR_GET(kk_coop_auto_repair),int(rex::cvar::GetFlagSource("kk_coop_auto_repair")));
 #if defined(KK_DEV_TOOLS)
     forced_done=0; forced_injected=false; fixture_started=now;
 #endif
