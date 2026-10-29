@@ -57,9 +57,17 @@ inline bool Initialize(bool enabled,bool guest,bool fresh,bool exact,bool player
 inline bool DigestRepairs(bool enabled) {
   return !enabled || COOP_MUT_IF("actor_digest_repair");
 }
+inline bool SnapPose(const EnemyState& a,const EnemyState& b) {
+  if (COOP_MUT_IF("actor_interpolation_no_snap")) return false;
+  // Damage can start native knockback between publications. Blending an old
+  // approach pose through that step invents a path the host never followed.
+  if ((a.life!=b.life || a.secondary_life!=b.secondary_life) &&
+      !COOP_MUT_IF("actor_hit_interpolation")) return true;
+  return std::hypot(b.x-a.x,b.y-a.y,b.z-a.z)>kSnapDistance;
+}
 inline EnemyState Interpolate(const EnemyState& a, const EnemyState& b, float t) {
   if (COOP_MUT_IF("actor_interpolation_latest")) return b;
-  if (!COOP_MUT_IF("actor_interpolation_no_snap") && std::hypot(b.x-a.x,b.y-a.y,b.z-a.z)>kSnapDistance) return b;
+  if (SnapPose(a,b)) return b;
   auto out=a;
   out.x+=(b.x-a.x)*t; out.y+=(b.y-a.y)*t; out.z+=(b.z-a.z)*t;
   out.facing=std::remainder(a.facing+std::remainder(b.facing-a.facing,6.2831853f)*t,6.2831853f);

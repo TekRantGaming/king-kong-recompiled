@@ -105,6 +105,18 @@ void ActorFreeze() {
   Check(!actors::InScope(true,false,far,&local,nullptr),"actors beyond the boundary are omitted");
 }
 void ActorInterpolation() {
+  {
+    enemies::Channel hit;
+    auto before=Enemy(),after=before; after.life=98; after.x=.7f;
+    Message damage; damage.type=MessageType::EnemySnapshot; damage.sequence=1;
+    damage.enemies={{101,4,1},1000,{before}}; hit.Receive(damage,10,true);
+    damage.sequence=2; damage.enemies.time=1000.1; damage.enemies.enemies={after}; hit.Receive(damage,10.1,true);
+    const auto pose=hit.Sample(10.15,true).records.at(0);
+    Check(pose.enemy.x==.7f && pose.enemy.life==98 && std::abs(pose.source_time-1000.1)<1e-7,
+        "native hit knockback keeps the new pose and its actual source time together");
+    before.secondary_life=50; after=before; after.secondary_life=49; after.x=.7f;
+    Check(actors::Interpolate(before,after,.5f).x==.7f,"secondary health changes also retain native knockback");
+  }
   enemies::Channel c;
   auto a=Enemy(),b=a; a.x=0; b.x=2; a.animation_time=1; b.animation_time=1.2f;
   Message m; m.type=MessageType::EnemySnapshot; m.sequence=1; m.enemies={{101,4,1},1000,{a}};

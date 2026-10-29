@@ -421,7 +421,7 @@ class Channel {
             record.enemy.z += (b.enemy.z-a.enemy.z)*t;
             record.enemy.facing = std::remainder(a.enemy.facing + std::remainder(b.enemy.facing-a.enemy.facing, 6.2831853f)*t, 6.2831853f);
           }
-          record.source_time=replication && std::hypot(b.enemy.x-a.enemy.x,b.enemy.y-a.enemy.y,b.enemy.z-a.enemy.z)>actors::kSnapDistance ?
+          record.source_time=replication && actors::SnapPose(a.enemy,b.enemy) ?
               b.time:a.time+(b.time-a.time)*t;
           break;
         }

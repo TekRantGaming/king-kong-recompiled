@@ -91,6 +91,7 @@
     "actor_relevance_all": "actor_freeze",
     "actor_interpolation_latest": "actor_interpolation",
     "actor_interpolation_no_snap": "actor_interpolation",
+    "actor_hit_interpolation": "actor_interpolation",
     "actor_clock_filter": "actor_interpolation"
   }
 }
