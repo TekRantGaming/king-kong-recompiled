@@ -138,9 +138,10 @@ void Inputs(const uint8_t* b,const char* source,uint32_t caller) {
   if (watch.pending && watch.owner.actor==current.actor && watch.owner.ai==current.ai &&
       watch.owner.vars==v && watch.owner.matrix==current.matrix && Finite(b,current.matrix+48)) {
     const auto p=ReadPoint(b,current.matrix+48);
-    if (std::hypot(p[0]-watch.from[0],p[1]-watch.from[1],p[2]-watch.from[2])>=.25f) {
-      REXLOG_INFO("KK co op raptor recovery: native movement actor={:08X} from=({},{},{}) to=({},{},{})",
-          current.actor,watch.from[0],watch.from[1],watch.from[2],p[0],p[1],p[2]);
+    const auto travel=LoadF(b,v+5176);
+    if (std::hypot(p[0]-watch.from[0],p[1]-watch.from[1])>=.25f && Load32(b,v+2556) && std::isfinite(travel) && travel>0) {
+      REXLOG_INFO("KK co op raptor recovery: native movement actor={:08X} from=({},{},{}) to=({},{},{}) moving={} travel={} cells={}",
+          current.actor,watch.from[0],watch.from[1],watch.from[2],p[0],p[1],p[2],Load32(b,v+2556),travel,Load32(b,v+2644));
       watch.pending=false;
     }
   }
@@ -278,6 +279,7 @@ void Matrix(PPCContext& ctx,uint8_t* b,bool look_y,void (*native)(PPCContext&,ui
 }
 bool CurveStop(PPCContext& ctx,uint8_t* b,uint32_t out,uint32_t tangent,const Curve& curve,uint32_t caller,const char* reason) {
   if(!current.vars || !Readable(out,12) || !Readable(tangent,12)) return false;
+  if(Load32(b,current.actor)&1) return false; // Parent space needs the native world position resolver.
   if(uint64_t(out)<uint64_t(tangent)+12 && uint64_t(tangent)<uint64_t(out)+12) return false;
   const auto own=ReadPoint(b,current.matrix+48);
   if(!Finite(own)) return false;
