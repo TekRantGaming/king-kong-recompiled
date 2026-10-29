@@ -33,11 +33,10 @@ struct VoidQueryScope {
 bool VoidStaticFloor(const uint8_t* b,uint32_t floor) {
   // Terrain mesh only. Refuse collision items, physics bodies, AI objects,
   // destroyed or inactive surfaces, even if a raft or breakable is at rest.
-  if (!PoseAddress(floor,32) || !(Load32(b,floor)&0x4000) ||
-      (Load32(b,floor)&0x10000000) || (Load32(b,floor+4)&0x00600000) ||
-      !Ptr(b,floor,12,64)) return false;
+  if (!PoseAddress(floor,32) || !Ptr(b,floor,12,64)) return false;
   const auto ext=Load32(b,floor+24);
-  return !ext || (PoseAddress(ext,8) && !Load32(b,ext+4));
+  if (ext && !PoseAddress(ext,8)) return false;
+  return void_rescue::StaticSurface(Load32(b,floor),Load32(b,floor+4),ext && Load32(b,ext+4));
 }
 uint32_t VoidVelocity(const uint8_t* b,uint32_t hero) {
   const auto motion=Ptr(b,Ptr(b,hero,20,8),4,0x28);

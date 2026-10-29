@@ -6,6 +6,10 @@
 namespace kk::coop::void_rescue {
 constexpr double kSampleSeconds=.5, kMaxAge=30, kWindow=30;
 constexpr unsigned kSpots=60, kLimit=3;
+inline bool StaticSurface(uint32_t type,uint32_t flags,bool has_ai) {
+  // Model mesh, no physics or parent motion, no destroyed/inactive flag or AI.
+  return (type&0x4000) && !(type&0x10400000) && !(flags&0x00600000) && !has_ai;
+}
 struct Gate {
   bool coop=false, jack=false, playing=false, cinematic=false, dead=false;
   bool grounded=false, native_void=false, immune=false, scripted=false;

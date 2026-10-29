@@ -957,6 +957,11 @@ void MirrorGate() {
 }
 void VoidRescue() {
   using namespace void_rescue;
+  Check(StaticSurface(0x87180,0x0804008b,false),"the measured beach terrain is a static floor");
+  Check(!StaticSurface(0,0,false) && !StaticSurface(0x10004000,0,false) &&
+      !StaticSurface(0x404000,0,false),"physics bodies and attached moving meshes cannot become safe spots");
+  Check(!StaticSurface(0x4000,0x200000,false) && !StaticSurface(0x4000,0x400000,false) &&
+      !StaticSurface(0x4000,0,true),"destroyed, inactive and scripted breakable floors are refused");
   History h; Spot a; a.position={1,2,3}; a.floor=1;
   Gate g; g.coop=g.jack=g.playing=g.native_void=true; g.fall=3.1f;
   const auto valid=[](const Spot& s){return s.floor==1;};
