@@ -356,16 +356,12 @@ void Input::UpdateGamepads(double now) {
   };
   static constexpr Action kDirActions[6] = {Action::kUp,   Action::kDown,   Action::kLeft,
                                             Action::kRight, Action::kPageUp, Action::kPageDown};
-  // Always track RT, even in viewers/modals/off-state, so held RT never opens on a context change.
-  const bool social_press = social_trigger_.Update(dir[5], pads_active_);
-  if (social_triggers_ && social_press) press(Action::kSocial);
-  if (social_triggers_ && dir[5]) pad_held_at_[size_t(Action::kSocial)] = now;
   for (size_t i = 0; i < 6; ++i) {
     const bool repeated = RepeatHeld(dir_[i], dir[i], now);
-    if (repeated && !(social_triggers_ && i >= 4)) press(kDirActions[i]);
+    if (repeated) press(kDirActions[i]);
     if (dir[i]) {
       held_[size_t(kDirActions[i])] = float(now - dir_[i].since);
-      if (!(social_triggers_ && i >= 4)) pad_held_at_[size_t(kDirActions[i])] = now;
+      pad_held_at_[size_t(kDirActions[i])] = now;
     }
   }
   static constexpr Action kButtonActions[8] = {Action::kAccept,  Action::kBack,    Action::kDefault,
@@ -418,7 +414,6 @@ void Input::Update() {
         {ImGuiKey_Backspace, Action::kBack, false},     {ImGuiKey_Delete, Action::kDefault, false},
         {ImGuiKey_R, Action::kResetPage, false},        {ImGuiKey_Q, Action::kPrevTab, true},
         {ImGuiKey_E, Action::kNextTab, true},           {ImGuiKey_P, Action::kPlay, false},
-        {ImGuiKey_F4, Action::kSocial, false},
     };
     const bool ctrl_or_alt = io.KeyCtrl || io.KeyAlt;
     for (const Key& k : kKeys) {
@@ -516,7 +511,6 @@ rex::ui::ImmediateTexture* Glyphs::Get(Action a, const std::string& set, float* 
       case Action::kPrevTab: name = "Q"; break;
       case Action::kNextTab: name = "E"; break;
       case Action::kPlay: name = "P"; break;
-      case Action::kSocial: name = "F4"; break;
       default: return nullptr;
     }
     return Named("keyboard", name, aspect);
@@ -529,7 +523,6 @@ rex::ui::ImmediateTexture* Glyphs::Get(Action a, const std::string& set, float* 
     case Action::kRight: name = "dpad"; break;
     case Action::kPageUp: name = "lt"; break;
     case Action::kPageDown: name = "rt"; break;
-    case Action::kSocial: name = "rt"; break;
     case Action::kAccept: name = "a"; break;
     case Action::kBack: name = "b"; break;
     case Action::kDefault: name = "x"; break;
@@ -543,12 +536,10 @@ rex::ui::ImmediateTexture* Glyphs::Get(Action a, const std::string& set, float* 
   return t || set == "xbox_series" ? t : Named("xbox_series", name, aspect);
 }
 
-namespace {
-
 // One button picture `h` tall at (x, cy); a key name in a box if the picture
 // is missing. Returns its width.
 float DrawGlyph(ImDrawList* dl, Glyphs& glyphs, Action a, const std::string& set, float x, float cy, float h,
-                const Metrics& m, bool draw, ImU32 fallback_color = color::kText) {
+                const Metrics& m, bool draw, ImU32 fallback_color) {
   float aspect = 1.0f;
   if (auto* t = glyphs.Get(a, set, &aspect)) {
     const float w = h * aspect;
@@ -556,7 +547,7 @@ float DrawGlyph(ImDrawList* dl, Glyphs& glyphs, Action a, const std::string& set
     return w;
   }
   static const char* const kNames[] = {"Up", "Down", "Left", "Right", "PgUp", "PgDn", "Enter",
-                                       "Esc", "Del", "R", "Q", "E", "P", "F4"};
+                                       "Esc", "Del", "R", "Q", "E", "P"};
   const Fonts f = GetFonts();
   const char* name = size_t(a) < std::size(kNames) ? kNames[size_t(a)] : "?";
   const float fs = h * 0.5f;
@@ -567,6 +558,8 @@ float DrawGlyph(ImDrawList* dl, Glyphs& glyphs, Action a, const std::string& set
   }
   return w;
 }
+
+namespace {
 
 // A prompt's pictures: left/right and up/down are two keys on a keyboard.
 float DrawPromptGlyphs(ImDrawList* dl, Glyphs& glyphs, Action a, const std::string& set, float x, float cy, float h,
@@ -937,7 +930,7 @@ const Item* DrawList(ImDrawList* dl, std::vector<Item>& items, ListState& st, Im
   }
 
   // The mouse: hovering focuses (once it moves), clicks act, the wheel scrolls.
-  if (st.dragging >= 0 && ((!active && in.social_blocking()) || !ImGui::IsMouseDown(0) || !focusable(st.dragging))) st.dragging = -1;
+  if (st.dragging >= 0 && (!ImGui::IsMouseDown(0) || !focusable(st.dragging))) st.dragging = -1;
   const bool hover_list = active && MouseIn(p0, p1);
   if (hover_list && io.MouseWheel != 0) st.scroll_target -= io.MouseWheel * m.row_h * 2.5f;
   if (hover_list && st.dragging < 0) {

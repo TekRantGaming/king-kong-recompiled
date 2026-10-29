@@ -18,6 +18,7 @@
 #include "input_diag.h"
 #include "coop_runtime.h"
 #include "coop_resume.h"
+#include "coop_handover.h"
 #include "easter_egg.h"
 #include "easter_egg_logic.h"
 #include "countdown.h"
@@ -3053,9 +3054,8 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
       pads_active_ = active;
       input_.set_pads_active(active || egg_running_);  // task 357: Start over the Easter egg
     }
-    input_.set_social_triggers(GetBool("kk_coop_enabled") && play_ != PlayView::kArtbook);
     input_.Update();
-    input_diag::Launcher(pads_active_, input_.gamepad_count(), social_.blocking(), social_.editing());
+    input_diag::Launcher(pads_active_, input_.gamepad_count(), false, social_.editing());
     if (ui_sounds_) {
       const float volume = GetBool("kk_launcher_sounds") ? GetInt("kk_launcher_sounds_volume", 50) / 100.0f : 0.0f;
       ui_sounds_->SetVolume(volume * volume);
@@ -3174,14 +3174,7 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
       ImGui::End();
       return;
     }
-    // Beta 17 merge: on Home the Easter egg codes hold RT together with LB, RB or LT (task 364). RT with any of
-    // those held is part of a code, not the Social button; RT alone still opens Social.
-    if (!social_.blocking() && play_ == PlayView::kNone && page_ == kHome &&
-        (input_.pad_held() & (ui::Input::kPadLB | ui::Input::kPadRB | ui::Input::kPadLT)))
-      input_.Consume(Action::kSocial);
     CoopTick();  // C81
-    social_.Update(GetBool("kk_coop_enabled"), SocialContext(), input_, coop::Social());
-    input_.set_social_blocking(social_.blocking());
     DrawBackdrop(dl);
     if (ShaderScreen() || InSetup()) card_focus_ = -1;  // the Home countdown's buttons are Home's only
     if (ShaderScreen()) {
@@ -3209,23 +3202,8 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
         else DrawSettings(dl);
       }
     }
-    if (!social_.blocking()) {
-      ui::DrawModal(dl, modal_, o_, ImVec2(o_.x + w_, o_.y + h_), m_, input_);
-      DrawBottomBar(dl);  // over a pop-up's shade: its prompts stay clear
-    }
-    ui::SocialChapters social_chapters;
-    if (social_.blocking()) {
-      if (saves_.empty()) ReadSaves();
-      social_chapters.slot=ChapterSlot();
-      social_chapters.continue_slot=play::MostRecentSave(saves_);
-      if (SlotUsed(social_chapters.continue_slot)) social_chapters.continue_chapter=coop::FlowChapter(uint32_t(saves_[size_t(social_chapters.continue_slot)].continue_level));
-      social_chapters.picture=[this](int entry,float* aspect) {
-        return ChapterPicture(play::Chapters()[size_t(entry)].picture,aspect);
-      };
-    }
-    social_.SetOpenPage([this](bool join) { OpenCoop(join ? coop::CoopPage::Join : coop::CoopPage::Host); });
-    social_.Draw(dl, o_, ImVec2(w_, h_), m_, input_, glyphs_, PromptSet(), immediate_, coop::Social(),
-                 coop::SocialAllowed(GetBool("kk_coop_enabled"), SocialContext()), [this] { OpenSteamPrompt(); },std::move(social_chapters));
+    ui::DrawModal(dl, modal_, o_, ImVec2(o_.x + w_, o_.y + h_), m_, input_);
+    DrawBottomBar(dl);  // over a pop-up's shade: its prompts stay clear
     ImGui::End();
     NoteActivity(io);
     handoff::ContentDrawn();  // started by the game going back: it closes once this page is on screen
@@ -3249,7 +3227,7 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
                      (ShaderScreen() ? 100000 : 0) + (leaving_ ? 1000000 : 0);
     active = active || view != last_view_ || (toast_ && toast_->NeedsContinuousPaint()) || native_pack_.Working() ||
              installing_ || art_progress_.busy || (update_ && update_->busy) || status_focus_ != last_status_focus_ ||
-             social_.animating() ||
+             coop_gate_.open() ||  // UI1: the early access warning's countdown
              MoviesPending();  // task 332: the movies at their own frame rate
     last_view_ = view;
     last_status_focus_ = status_focus_;
@@ -3629,28 +3607,7 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
   }
 
   // ---------------------------------------------------------- bottom bar ---
-  bool PageInputBlocked() const { return modal_.open || social_.blocking(); }
-  coop::SocialPage SocialContext() {
-    if (!capturing_.empty() || editing_name_) return coop::SocialPage::Capture;
-    if (modal_.open) return coop::SocialPage::Modal;
-    if (ShaderScreen()) return coop::SocialPage::Shaders;
-    if (InSetup()) return coop::SocialPage::Setup;
-    using P = coop::SocialPage;
-    switch (play_) {
-      case PlayView::kArtbook: return P::Artbook;
-      case PlayView::kMenu: return P::PlayMenu;
-      case PlayView::kLoad: return P::Load;
-      case PlayView::kNew: return P::NewGame;
-      case PlayView::kChapters: return P::Chapters;
-      case PlayView::kExtras: return P::Extras;
-      case PlayView::kCoop: return P::PlayMenu;
-      case PlayView::kNone: break;
-    }
-    static constexpr P pages[] = {P::Page, P::Display, P::Graphics, P::Audio, P::Controls, P::Gameplay,
-        P::Cheats, P::Advanced, P::About, P::Achievements, P::Workshop};
-    static_assert(std::size(pages) == kPageCount);
-    return pages[page_];
-  }
+  bool PageInputBlocked() const { return modal_.open; }
   void DrawBottomBar(ImDrawList* dl) {
     const float s = S();
     const float cy = o_.y + h_ - 42 * s;
@@ -3665,9 +3622,7 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
       dl->AddText(f.text, 15 * s, ImVec2(o_.x + Margin(), cy - 9 * s), ui::WithAlpha(color::kTextFaint, a),
                   T("Settings saved"));
     }
-    auto prompts = Prompts();
-    if (coop::SocialAllowed(GetBool("kk_coop_enabled"), SocialContext()) && !social_.editing())
-      prompts.push_back({Action::kSocial, "Social"});
+    const auto prompts = Prompts();
     const Action clicked = ui::DrawPrompts(dl, glyphs_, PromptSet(), prompts, o_.x + w_ - Margin(), cy, m_,
                                            true);
     if (clicked != Action::kCount) pending_click_ = clicked;
@@ -3792,13 +3747,18 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
     std::string value;                // shown after the label (left/right change it)
     std::function<void(int)> change;  // -1 / +1
     bool starts_game = false;         // starts the game at once (no select sound: it would be cut off)
+    std::string badge;                // UI1: a small brass note after the label (waiting co-op invites)
   };
 
   std::vector<HomeEntry> HomeEntries() {
     std::vector<HomeEntry> e;
     e.push_back({"Play", CanPlay(), [this] { OpenPlayMenu(); }});
     // C81: directly under Play, only with co-op enabled (one text key; Craig may change its wording).
-    if (CoopEnabled()) e.push_back({"Play Online Co-op", CanPlay(), [this] { OpenCoop(coop::CoopPage::Hub); }});
+    if (CoopEnabled()) {
+      e.push_back({"Play Online Co-op", CanPlay(), [this] { OpenCoop(coop::CoopPage::Hub); }});
+      // UI1: the Social drawer showed Steam invites; it is gone, so Home shows how many are waiting.
+      e.back().badge = CoopInviteBadge();
+    }
     // An update that was found stays one press away; checking, reinstalling and the rest are on About.
     if (update_ && update_->found && !installing_update_)
       e.push_back({F("Update to v{0}", {update_->found->version}), true, [this] { OpenUpdatePrompt(); }});
@@ -3853,6 +3813,9 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
       float tw = ui::TrackedWidth(f.display, fs, label, tr);
       const std::string value = Upper(e.value);
       if (!value.empty()) tw += 30 * s + ui::TrackedWidth(f.display, fs, value, tr) + 30 * s;
+      const float badge_fs = std::round(fs * 0.58f);
+      const float badge_w = e.badge.empty() ? 0.0f : ui::TextSize(f.semibold, badge_fs, e.badge).x + 20 * s;
+      if (badge_w > 0) tw += 16 * s + badge_w;
       const ImVec2 r0(x - 12 * s, iy), r1(x + 40 * s + tw, iy + item_h);
       if (active && ImGui::IsMouseHoveringRect(r0, r1, false)) {
         if (input_.mouse_moved()) focus = i;
@@ -3871,6 +3834,14 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
       const ImU32 col = !e.enabled ? color::kTextFaint : on ? color::kText : color::kTextDim;
       const float ty = iy + (item_h - fs) * 0.5f;
       ui::DrawTracked(dl, f.display, fs, ImVec2(x + off, ty), ui::WithAlpha(col, alpha), label, tr);
+      if (badge_w > 0) {  // UI1: e.g. "1 invite" in a brass pill after PLAY ONLINE CO-OP
+        const float bx = x + off + ui::TrackedWidth(f.display, fs, label, tr) + 16 * s, cy = iy + item_h * 0.5f;
+        const float bh = badge_fs + 10 * s;
+        dl->AddRectFilled(ImVec2(bx, cy - bh * 0.5f), ImVec2(bx + badge_w, cy + bh * 0.5f),
+                          ui::WithAlpha(color::kAccent, alpha), bh * 0.5f);
+        dl->AddText(f.semibold, badge_fs, ImVec2(bx + 10 * s, cy - badge_fs * 0.5f - 1 * s),
+                    ui::WithAlpha(color::kOnFocus, alpha), e.badge.c_str());
+      }
       if (!value.empty()) {
         // The value between arrows when focused: < ENGLISH >
         const float vx = x + off + ui::TrackedWidth(f.display, fs, label, tr) + 30 * s;
@@ -4162,7 +4133,7 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
         OpenModal("Co-op","Could not select chapter",{"OK"},0,{});
         return;
       }
-      OpenModal("Co-op", "Chapter selected. Open Social and press Start when both players are Ready.", {"OK"}, 0, {});
+      OpenModal("Co-op", "Chapter selected. Open Play Online Co-op and press Start when both players are Ready.", {"OK"}, 0, {});
       return;
     }
     play::SetStartRequest(request);
@@ -4343,6 +4314,7 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
     const ui::Fonts f = ui::GetFonts();
     const float cy = o_.y + 44 * s;
     if (play_ == PlayView::kCoop) {
+      if (coop_gate_.open()) return;  // UI1: the early access warning covers the window
       if (DrawCrumbs(dl, "Play Online Co-op", coop_page_ != coop::CoopPage::Hub ? CoopPageName(coop_page_) : nullptr))
         CoopGo(coop::CoopPage::Hub);
       return;
@@ -4708,8 +4680,8 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
       return;
     }
     if (play_ == PlayView::kCoop) {  // C81: the text editor takes B and Start itself
-      if (social_.editing()) return;
-      for (const Action a : {Action::kPrevTab, Action::kNextTab, Action::kPlay}) in.Consume(a);
+      if (social_.editing() || coop_gate_.open()) return;  // UI1: the early access warning takes its own input
+      in.Consume(Action::kPlay);  // LB and RB stay for the page (Join: switch between its columns)
       if (in.Pressed(Action::kBack)) {
         in.Consume(Action::kBack);
         ui::Cue(ui::Sound::kBack);
@@ -9221,16 +9193,10 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
     if (t.rfind("pad:", 0) == 0) d = ui::Device::kXbox, t = t.substr(4);
     else if (t.rfind("ps:", 0) == 0) d = ui::Device::kPlayStation, t = t.substr(3);
     else if (t.rfind("kb:", 0) == 0) t = t.substr(3);
-    if (t == "rt" && GetBool("kk_coop_enabled") && play_ != PlayView::kArtbook) {
-      input_.Inject(Action::kSocial, d);
-      return;
-    }
-    if (t == "lt" && GetBool("kk_coop_enabled") && play_ != PlayView::kArtbook) return;
     static const std::map<std::string, Action> kNames = {
         {"up", Action::kUp},          {"down", Action::kDown},       {"left", Action::kLeft},
         {"right", Action::kRight},    {"lt", Action::kPageUp},
         {"rt", Action::kPageDown},
-        {"f4", Action::kSocial},
         {"a", Action::kAccept},       {"b", Action::kBack},          {"x", Action::kDefault},
         {"y", Action::kResetPage},    {"lb", Action::kPrevTab},      {"rb", Action::kNextTab},
         {"start", Action::kPlay}};
@@ -9275,7 +9241,13 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
   std::map<int, ui::ListState> coop_lists_;
   std::optional<play::StartRequest> coop_choice_;     // the host's chapter or save, before its lobby exists
   bool coop_startup_checked_ = false;                 // the Steam invite start (+connect_lobby) was looked at
-  coop::SocialRowKind coop_focus_kind_ = coop::SocialRowKind::Section;
+  // UI1 (Design 1): the pages' focus targets this frame, each page's focused target, the early access warning.
+  std::vector<CoopTarget> coop_targets_;
+  std::map<int, std::string> coop_focus_;
+  coop::EarlyAccessGate coop_gate_;
+  std::string coop_gate_focus_ = "continue";
+  coop::SocialId coop_gate_lobby_ = 0;  // a Steam invite start waits behind the warning
+  CoopRejoin coop_rejoin_;
   std::vector<play::SaveSlot> saves_;    // read as the Play menu opens and after a delete
   int chapter_slot_ = -1;               // the save Chapter select starts with (Load game's Y); -1 the last played
   std::vector<int> row_data_;           // the Play pages' rows: the slot or chapter entry each stands for
