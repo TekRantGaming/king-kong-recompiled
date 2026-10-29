@@ -238,7 +238,7 @@ void AskLoad(PPCContext& ctx,uint8_t* base,uint32_t g,const FlowView& v) {
   move_offer=false;
   move_request=0; pending_move=0;
   CancelCatchup(); catchup_notice_until=0;
-  catchup.Reset(v.world.generation,start);
+  catchup.Reset(v);
   behind=BehindRule{};
   local_checkpoint=recorded_checkpoint=start;
   REXLOG_INFO("KK co-op flow: load role={} generation {} level {} checkpoint {} world start {} rejoin={}",
@@ -850,7 +850,7 @@ void SessionReloadFrame(uint8_t* base) {
   observer::SetPartnerSpectating(false);
   if (recovery_generation!=v.world.generation) {
     recovery_generation=v.world.generation; recovery={}; private_load=private_request=reload_sent=false;
-    CancelCatchup(); catchup_notice_until=0; catchup.Reset(v.world.generation,v.world.start);
+    CancelCatchup(); catchup_notice_until=0; catchup.Reset(v);
     local_checkpoint=v.checkpoint;
     ++life_incarnation; life_number=0; life_sent=false; next_life=0;
   }

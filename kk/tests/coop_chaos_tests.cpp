@@ -890,6 +890,9 @@ void RejoinLoad() {
       const auto& v=peer->View();
       Check(v.world.start==1 && SessionLoadPoint(v)==s.start,
           "both peers load the checkpoint while retaining the original world identity");
+      CheckpointCatchup tracking; tracking.Reset(v); tracking.Observe(v.world.generation,s.start,1);
+      Check(tracking.WorldCheckpoint()==s.start && !tracking.Available(),
+          "recovery initialization retains the actual loaded checkpoint without a false catch up offer");
       std::map<uint32_t,uint32_t> words;
       constexpr uint32_t bank=0x42000000;
       // CarryOut has just loaded an older slot and chapter defaults. The

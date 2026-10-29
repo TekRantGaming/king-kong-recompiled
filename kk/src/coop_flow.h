@@ -175,6 +175,9 @@ class CheckpointCatchup {
   void Reset(uint32_t generation,uint32_t checkpoint) {
     *this={}; generation_=generation; world_=host_=checkpoint;
   }
+  void Reset(const FlowView& v) {
+    Reset(v.world.generation,COOP_MUT_IF("rejoin_tracking") ? v.world.start : SessionLoadPoint(v));
+  }
   void Observe(uint32_t generation,uint32_t checkpoint,double now) {
     if (generation!=generation_) { Reset(generation,checkpoint); return; }
     if (checkpoint!=host_) { host_=checkpoint; offered_until_=now+6; attempted_=false; }
