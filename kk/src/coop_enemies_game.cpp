@@ -49,6 +49,7 @@ REX_EXTERN(__imp__sub_82715AC8);
 REX_EXTERN(__imp__sub_82714E40);
 REX_EXTERN(__imp__sub_826E1EE8);
 REX_EXTERN(__imp__sub_826F8BC8);
+REX_EXTERN(__imp__sub_826EB8C0);
 REX_EXTERN(__imp__sub_827117E0);
 REX_EXTERN(__imp__sub_82711278);
 REX_EXTERN(__imp__sub_8270FCE0);
@@ -550,7 +551,7 @@ struct Pending {
   EnemyId id; uint32_t ai, matrix; float x, y, z;
   uint64_t birth_spawner=0; uint8_t birth_template=0,birth_point=0;
 };
-struct Spawner { uint64_t key; uint32_t ai, vars, sequence = 0; bool shared_births=false; };
+struct Spawner { uint64_t key; uint32_t ai, vars, sequence = 0; bool shared_births=false,initialized=false; };
 const EnemyState* replay_birth=nullptr;
 bool SharedSpawner(const uint8_t* b,uint32_t vars) {
   if (!PoseAddress(vars,0x2094)) return false;
@@ -863,6 +864,8 @@ void Capture(const uint8_t* b, uint32_t w, bool initial = true) {
     if (!spawner || !vars) continue;
     Spawner sp{key, ai, vars, 0};
     sp.shared_births=SharedSpawner(b,vars);
+    const auto block=Ptr(b,ai,24,24);
+    sp.initialized=block && (Load32(b,block+20)==0x826E1EE8 || Load32(b,block+20)==0x826F8BC8);
 #if defined(KK_DEV_TOOLS)
     if (initial) REXLOG_INFO("ENEMIES birth admission spawner={:016X} shared={}",key,sp.shared_births);
 #endif
@@ -4124,7 +4127,7 @@ void Spawned(const uint8_t* b, uint32_t spawner, uint32_t source, uint32_t actor
     }
   }
 }
-bool SpawnerStep(PPCContext& ctx,uint8_t* b) {
+bool SpawnerStep(PPCContext& ctx,uint8_t* b,bool host_birth=false) {
   const auto view=SessionFlowSnapshot();
   if (!REXCVAR_GET(kk_coop_enabled) || !view.active || view.host || view.policy!=ChapterPolicy::Together) return false;
   auto& s=Get();
@@ -4134,19 +4137,14 @@ bool SpawnerStep(PPCContext& ctx,uint8_t* b) {
   auto& sp=it->second;
   const auto ext=Ptr(b,actor,24,42);
   if (sp.ai!=ai || Ptr(b,ext,4,88)!=ai || Ptr(b,ai,64,0x2094)!=sp.vars ||
-      !Member(b,s.world,actor,true) || (Load32(b,actor+4)&0x00600000)) return false;
+      !Member(b,s.world,actor,true) || (!host_birth && (Load32(b,actor+4)&0x00600000))) return false;
+  if (!host_birth) sp.initialized=true; // This hook is reached only by the native loop or generate track.
   ctx.r3.u32=0;
   if (!Connected() || s.link.remote.world!=s.identity) return true;
   // Preserve native post-birth visibility, wave limits and callbacks. Only the
   // choice to create a new root comes from the host's reliable lifecycle.
   if (Load16(b,ext+40)&4) { __imp__sub_826F8BC8(ctx,b); return true; }
-  const Record* next=nullptr;
-  for (const auto& record:s.link.remote.records) {
-    const auto& e=record.enemy;
-    if (e.birth_spawner!=sp.key || sp.sequence==UINT32_MAX || e.id.sequence!=sp.sequence+1) continue;
-    if (next) return true; // A sequence cannot select competing templates.
-    next=&record;
-  }
+  const auto* next=NextSpawnerBirth(s.link.remote.records,sp.key,sp.sequence);
   if (!next) return true;
   const auto e=next->enemy;
   if (!ValidEnemy(e) || e.birth_template>=19 || e.birth_point>=16) return true;
@@ -4195,6 +4193,48 @@ bool SpawnerStep(PPCContext& ctx,uint8_t* b) {
   for (unsigned i=0;i<7;++i) Store32(b,globals[i],values[i]);
   ctx=saved; ctx.r3.u32=result;
   return true;
+}
+void ReplayHostBirths(PPCContext& ctx,uint8_t* b) {
+  auto& s=Get();
+  if (!Replication() || s.link.role!=Role::Guest || !Connected() ||
+      s.link.remote.world!=s.identity || Now()-s.link.remote.time>.5 || !Scratch::CanUse(ctx)) return;
+  for (auto& [actor,sp]:s.spawners) {
+    const auto* next=NextSpawnerBirth(s.link.remote.records,sp.key,sp.sequence);
+    if (!sp.shared_births || !next ||
+        !Member(b,s.world,actor,true) || Ptr(b,Ptr(b,actor,24,8),4,88)!=sp.ai ||
+        Ptr(b,sp.ai,64,0x2094)!=sp.vars) continue;
+    const auto& e=next->enemy;
+    if (!ValidEnemy(e) || e.birth_template>=19 || e.birth_point>=16) continue;
+    const auto offset=e.birth_template<2 ? 1592+184*e.birth_template : 1972+4*(e.birth_template-2);
+    const auto source=Ptr(b,sp.vars,offset,32);
+    bool nested=false; uint32_t template_state=0;
+    const auto family=Tracks(b,Ptr(b,Ptr(b,source,24,8),4,88),template_state,nested);
+    if (!source || nested || SpawnId(sp.key,Mix(sp.key,offset),e.id.sequence,family)!=e.id) continue;
+    const auto model=Ptr(b,sp.ai,0,16),block=Ptr(b,sp.ai,24,24);
+    if (!model || b[model+15]) continue;
+    const auto fn=block ? Load32(b,block+20):0;
+    // Initialize only a loaded local spawner. A host birth can precede the
+    // guest's activation range. Never copy scheduler flags or enable a model.
+    bool native_spawner=false; uint32_t state=0;
+    Tracks(b,sp.ai,state,native_spawner);
+    if (!native_spawner && fn!=0x826D6750 && fn!=0x826D6890 && !(sp.initialized && !block)) continue;
+    Scratch scratch(ctx,b);
+    constexpr uint32_t globals[]{0x82CCBF58,0x82CCBF5C,0x82CCBF60,0x82CCBF64,0x82CCBF68,0x82CCBF6C,0x82CCBF70};
+    uint32_t saved[7]; for (unsigned i=0;i<7;++i) saved[i]=Load32(b,globals[i]);
+    Store32(b,globals[0],0); Store32(b,globals[1],block); Store32(b,globals[2],sp.ai+4);
+    Store32(b,globals[3],sp.ai); Store32(b,globals[4],sp.ai);
+    Store32(b,globals[5],actor); Store32(b,globals[6],actor);
+    if (fn==0x826EB8C0) {
+      __imp__sub_826EB8C0(ctx,b);
+      const bool retained=Member(b,s.world,actor,true) && Ptr(b,Ptr(b,actor,24,8),4,88)==sp.ai &&
+          Ptr(b,sp.ai,64,0x2094)==sp.vars;
+      const auto ready=retained ? Ptr(b,sp.ai,24,24):0;
+      sp.initialized=ready && Load32(b,ready+20)!=0x826EB8C0;
+    } else if (native_spawner || fn==0x826D6750 || fn==0x826D6890) sp.initialized=true;
+    if (Member(b,s.world,actor,true) && Ptr(b,Ptr(b,actor,24,8),4,88)==sp.ai &&
+        Ptr(b,sp.ai,64,0x2094)==sp.vars && sp.initialized) SpawnerStep(ctx,b,true);
+    for (unsigned i=0;i<7;++i) Store32(b,globals[i],saved[i]);
+  }
 }
 void SpiderCopied(const uint8_t* b,uint32_t parent,uint32_t ordinal,uint32_t actor) {
   auto& s=Get();
@@ -4687,17 +4727,17 @@ desync::Evidence EnemyCompareDigest(uint8_t* b,const desync::State& state,bool r
   }
   return result;
 }
-void InitializeHostHumans(PPCContext& ctx,uint8_t* b) {
+void InitializeHostActors(PPCContext& ctx,uint8_t* b) {
   auto& s=Get();
   const bool fresh=Connected() && s.link.remote.world==s.identity && Now()-s.link.remote.time<=.5;
   if (!Replication() || s.link.role!=Role::Guest || !fresh || !Scratch::CanUse(ctx)) return;
   bool attempted=false;
   for (const auto& r:s.link.remote.records) {
-    if (r.enemy.id.family!=EnemyFamily::Human ||
-        r.kind!=EnemyEventKind::Spawned || r.enemy.life<=0) continue;
+    const auto family=r.enemy.id.family;
+    if (r.kind!=EnemyEventKind::Spawned || r.enemy.life<=0) continue;
     uint32_t actor=0; Authored authored{}; unsigned count=0;
     if (!r.enemy.id.sequence) {
-      for (const auto& [candidate,a]:s.authored) if (a.key==r.enemy.id.source && a.family==EnemyFamily::Human) {
+      for (const auto& [candidate,a]:s.authored) if (a.key==r.enemy.id.source && a.family==family && !a.ambiguous) {
         ++count; if (!actor) { actor=candidate; authored=a; }
       }
     } else {
@@ -4715,21 +4755,27 @@ void InitializeHostHumans(PPCContext& ctx,uint8_t* b) {
     }
     if (!actor || s.bindings.contains(actor) || !Member(b,s.world,actor,true)) continue;
     const auto ai=Ptr(b,Ptr(b,actor,24,8),4,88);
-    const auto vars=Ptr(b,ai,64,16892),block=Ptr(b,ai,24,24),model=Ptr(b,ai,0,16);
-    const bool init=ai==authored.ai && Ptr(b,actor,12,64)==authored.matrix && vars && block && Load32(b,block+20)==0x8268D8E8 &&
-        Load16(b,ai+80)==0 && Load16(b,ai+82)==0 && !Load32(b,vars) &&
-        Load32(b,vars+4)>=1 && Load32(b,vars+4)<=12;
+    // Preserve the original audited H variable span and single init track.
+    const auto vars=Ptr(b,ai,64,family==EnemyFamily::Human ? 16892:LifeBytes(family)),model=Ptr(b,ai,0,16);
+    bool initializing=false,spawner=false; uint32_t state=0;
+    const auto local_family=Tracks(b,ai,state,spawner,&initializing);
+    const bool human=family!=EnemyFamily::Human || (ActorReadable(vars,8) && !Load32(b,vars) &&
+        Load32(b,vars+4)>=1 && Load32(b,vars+4)<=12);
+    const bool init=ai==authored.ai && Ptr(b,actor,12,64)==authored.matrix && vars &&
+        local_family==family && initializing && !spawner && human;
     const bool player=actor==Load32(b,0x82CCBF7C) || kk::PartnerBodyManagedActor(b,actor);
-    if (!actors::Initialize(Replication(),s.link.role==Role::Guest,fresh,count==1,player,init)) continue;
+    if (!actors::Initialize(Replication(),s.link.role==Role::Guest,fresh,count==1,player,init,
+        ai ? Load16(b,ai+80):UINT16_MAX,ai ? Load16(b,ai+82):UINT16_MAX)) continue;
     auto& tries=s.actor_init_attempts[r.enemy.id];
     if (!model || b[model+15] || tries>=120) {
       if (s.actor_init_blocked.insert(r.enemy.id).second)
         REXLOG_WARN("ACTORS init deferred id={:016X} model-off={} attempts={}",r.enemy.id.source,model ? b[model+15]:255,tries);
       continue;
     }
-    // A host live actor may still be outside the guest's native AI range.
-    // Run only its verified local two phase H initializer. The ordinary track
-    // hook holds every later NPC track as soon as initialization completes.
+    // The host can activate an authored actor outside the guest scheduler.
+    // Enter its loaded local initializer through ai_run_object, retaining the
+    // native timer, model and grid readiness checks. The ordinary track hook
+    // holds later tracks as soon as the initializer has installed them.
     const auto node=Load32(b,ai+4);
     {
       Scratch scratch(ctx,b);
@@ -4748,6 +4794,106 @@ void InitializeHostHumans(PPCContext& ctx,uint8_t* b) {
   }
   if (attempted) Scan(b);
 }
+world::Json ActorNativeCensus(const uint8_t* b) {
+  auto& s=Get(); std::vector<world::Json> rows,spawners,read_errors;
+  unsigned empty_tracks=0;
+  const auto tracks_readable=[&](uint32_t ai) {
+    if (!ActorReadable(ai,88)) return false;
+    const auto first=Load16(b,ai+80),last=Load16(b,ai+82);
+    // ai_run_object treats an empty inclusive range as a completed AI, not
+    // an unreadable track table. Spawner_stop can leave exactly this state.
+    if (first>last) { ++empty_tracks; return true; }
+    if (last>4096 || last-first>=64 || !ActorReadable(ai,(last+12)*4)) return false;
+    for (unsigned t=first;t<=last;++t) {
+      const auto block=Ptr(b,ai,(t+6)*4,24);
+      if (block && !ActorReadable(block,24)) return false;
+    }
+    return true;
+  };
+  uint32_t begin=0,end=0; unsigned unreadable=0;
+  const bool registry=Table(b,s.world,begin,end,true) && ActorReadable(begin,end-begin);
+  const auto hero=Load32(b,0x82CCBF7C),hero_matrix=ActorReadable(hero,32) ? Ptr(b,hero,12,64):0;
+  PlayerPose player;
+  if (ActorReadable(hero_matrix,64)) {
+    player.x=LoadF(b,hero_matrix+48); player.y=LoadF(b,hero_matrix+52); player.z=LoadF(b,hero_matrix+56);
+  }
+  if (registry) for (auto p=begin;p<end;p+=8) {
+    const auto actor=Load32(b,p);
+    if (!PoseAddress(actor,36)) continue;
+    if (!ActorReadable(actor,36)) { ++unreadable; continue; }
+    if ((Load32(b,actor)&0x00400001) || actor==hero || kk::PartnerBodyManagedActor(b,actor)) continue;
+    const auto ext=Ptr(b,actor,24,8);
+    if (!ActorReadable(ext,8)) continue;
+    const auto ai=Ptr(b,ext,4,88);
+    if (!ActorReadable(ai,88)) continue;
+    if (!tracks_readable(ai)) {
+      ++unreadable;
+      if (read_errors.size()<32) read_errors.push_back(world::Json::Object({{"actor",world::Hex(actor)},
+          {"reason","track-span"},{"first",Load16(b,ai+80)},{"last",Load16(b,ai+82)}}));
+      continue;
+    }
+    bool spawner=false,initializing=false; uint32_t state=0;
+    const auto family=Tracks(b,ai,state,spawner,&initializing);
+    if (spawner || family==EnemyFamily::None) continue;
+    const auto matrix=Ptr(b,actor,12,64),vars=Ptr(b,ai,64,LifeBytes(family));
+    if (!ActorReadable(matrix,64) || !ActorReadable(vars,LifeBytes(family))) {
+      ++unreadable;
+      if (read_errors.size()<32) read_errors.push_back(world::Json::Object({{"actor",world::Hex(actor)},
+          {"reason","actor-fields"},{"family",uint16_t(family)}}));
+      continue;
+    }
+    EnemyId id; bool bound=false,pending=false,retired=false;
+    const auto binding=s.bindings.find(actor);
+    if (binding!=s.bindings.end() && binding->second.ai==ai && binding->second.matrix==matrix && binding->second.vars==vars && binding->second.id.family==family) {
+      id=Canonical(binding->second.id); bound=id.source!=0;
+      const auto record=s.records.find(binding->second.id);
+      retired=s.retirement_applied.contains(binding->second.id) ||
+          (record!=s.records.end() && record->second.kind==EnemyEventKind::Removed);
+    } else if (const auto birth=s.pending.find(actor); birth!=s.pending.end() && birth->second.ai==ai && birth->second.matrix==matrix && birth->second.id.family==family) {
+      id=birth->second.id; pending=true;
+    } else if (const auto authored=s.authored.find(actor); authored!=s.authored.end() && !authored->second.ambiguous &&
+        authored->second.ai==ai && authored->second.matrix==matrix && authored->second.family==family) {
+      id={authored->second.key,0,family};
+    }
+    EnemyState native; native.x=LoadF(b,matrix+48); native.y=LoadF(b,matrix+52); native.z=LoadF(b,matrix+56);
+    Binding observed; observed.actor=actor; observed.ai=ai; observed.vars=vars; observed.matrix=matrix; observed.id.family=family;
+    const auto cell=initializing ? 0:LifeCell(b,observed);
+    world::Json life;
+    if (!initializing && StateLife(family)) life=ReplicatedLife(family,state,0);
+    else if (!initializing && ActorReadable(cell,4)) life=ReplicatedLife(family,state,LoadF(b,cell));
+    const auto model=Ptr(b,ai,0,16);
+    rows.push_back(world::Json::Object({{"actor",world::Hex(actor)},{"id",world::Hex(id.source)},
+        {"sequence",id.sequence},{"family",uint16_t(family)},{"bound",bound},{"pending",pending},
+        {"initializing",initializing},{"retired",retired},{"scheduled",Member(b,s.world,actor)},
+        {"model_off",ActorReadable(model,16) ? world::Json(bool(b[model+15])):world::Json()},
+        {"file_key",world::Hex(Load32(b,actor+32))},{"flags",Load32(b,actor+4)},
+        {"relevant",!hero_matrix || actors::Relevant(native,player) || (s.link.partner && actors::Relevant(native,*s.link.partner))},
+        {"x",native.x},{"y",native.y},{"z",native.z},{"life",life},{"state",state}}));
+  }
+  for (const auto& [actor,sp]:s.spawners) {
+    if (!Member(b,s.world,actor,true) || !ActorReadable(actor,32) || !ActorReadable(sp.vars,0x2094)) continue;
+    const auto ext=Ptr(b,actor,24,8);
+    if (!ActorReadable(ext,8) || Ptr(b,ext,4,88)!=sp.ai || !tracks_readable(sp.ai) || Ptr(b,sp.ai,64,0x2094)!=sp.vars) continue;
+    const auto block=Ptr(b,sp.ai,24,24);
+    std::vector<world::Json> templates;
+    for (unsigned slot=0;slot<19;++slot) {
+      const auto source=Load32(b,sp.vars+(slot<2 ? 1592+184*slot:1972+4*(slot-2)));
+      if (!source) { if (slot>=2) break; else continue; }
+      const auto ext=ActorReadable(source,32) ? Ptr(b,source,24,8):0;
+      const auto ai=ActorReadable(ext,8) ? Ptr(b,ext,4,88):0;
+      bool nested=false; uint32_t state=0;
+      const bool readable=tracks_readable(ai);
+      const auto family=readable ? Tracks(b,ai,state,nested):EnemyFamily::None;
+      templates.push_back(world::Json::Object({{"slot",slot},{"family",uint16_t(family)},{"readable",readable}}));
+    }
+    spawners.push_back(world::Json::Object({{"id",world::Hex(sp.key)},{"actor",world::Hex(actor)},
+        {"sequence",sp.sequence},{"initialized",sp.initialized},{"shared",sp.shared_births},
+        {"state",ActorReadable(block,24) ? Load32(b,block+20):0},{"templates",world::Json::Array(templates)}}));
+  }
+  return world::Json::Object({{"registry_readable",registry},{"unreadable",unreadable},
+      {"empty_tracks",empty_tracks},{"read_errors",world::Json::Array(read_errors)},
+      {"actors",world::Json::Array(rows)},{"spawners",world::Json::Array(spawners)}});
+}
 void ActorNativeAudit(const uint8_t* b,double sample_time=0) {
   // Read only diagnostics are available in the shipping build too. The
   // explicit opt in and private workspace path are required on both peers.
@@ -4761,6 +4907,10 @@ void ActorNativeAudit(const uint8_t* b,double sample_time=0) {
   const auto dir=std::filesystem::absolute(path).lexically_normal()/(Get().link.role==Role::Host ? "host":"join");
   if (!dir.generic_string().starts_with("F:/kk-native-coop/") && !dir.generic_string().starts_with("f:/kk-native-coop/")) return;
   auto& s=Get(); std::vector<world::Json> rows;
+  const auto flow=SessionFlowSnapshot();
+  const auto current=EnemyLinkSnapshot();
+  const bool session=current.session_state==SessionState::Connected || current.session_state==SessionState::Lost;
+  const bool authority=actors::WorldAuthority(session,flow.active,flow.phase==FlowPhase::Playing,flow.policy==ChapterPolicy::Together);
   PlayerPose local;
   const auto hero=Ptr(b,Load32(b,0x82CCBF7C),12,64);
   if (hero) { local.x=LoadF(b,hero+48); local.y=LoadF(b,hero+52); local.z=LoadF(b,hero+56); }
@@ -4768,7 +4918,9 @@ void ActorNativeAudit(const uint8_t* b,double sample_time=0) {
     Binding observed; EnemyState e;
     if (!ValidBinding(b,binding) || !Read(b,actor,observed,e)) continue;
     const auto id=Canonical(binding.id);
-    const auto driven=s.driving.find(actor);
+    // A reload can release this world after its AI pass. Retain the native
+    // row, but do not attach an old buffered pose to an actor no longer driven.
+    const auto driven=authority ? s.driving.find(actor):s.driving.end();
     float animation=-1; ActorAnimation(b,actor,&animation);
     const auto cell=LifeCell(b,binding);
     const auto record=s.records.find(binding.id);
@@ -4795,10 +4947,21 @@ void ActorNativeAudit(const uint8_t* b,double sample_time=0) {
   const auto record=world::Json::Object({{"role",s.link.role==Role::Host ? "host":"guest"},
       {"protocol",kProtocolVersion},
       {"epoch",world::Hex(s.link.epoch)},{"level",s.identity.level},{"start",s.identity.start},{"visit",s.identity.serial},
-      {"native_time",now},{"utc",utc},{"replication",Replication()},{"rows",world::Json::Array(rows)}});
+      {"native_time",now},{"utc",utc},{"replication",Replication()},{"authority_active",authority},
+      {"session_active",session},{"flow_active",flow.active},{"flow_playing",flow.phase==FlowPhase::Playing},
+      {"flow_together",flow.policy==ChapterPolicy::Together},{"rows",world::Json::Array(rows)}});
   try {
     std::filesystem::create_directories(dir);
     std::ofstream out(dir/"actors-native.jsonl",std::ios::app|std::ios::binary); out<<record.text<<'\n';
+    static double next_census=0;
+    if (now>=next_census) {
+      next_census=now+.5;
+      const auto census=world::Json::Object({{"role",s.link.role==Role::Host ? "host":"guest"},
+          {"epoch",world::Hex(s.link.epoch)},{"level",s.identity.level},{"start",s.identity.start},{"visit",s.identity.serial},
+          {"native_time",now},{"utc",utc},{"replication",Replication()},{"authority_active",authority},
+          {"census",ActorNativeCensus(b)}});
+      std::ofstream inventory(dir/"actors-census.jsonl",std::ios::app|std::ios::binary); inventory<<census.text<<'\n';
+    }
   } catch (const std::exception& ex) { REXLOG_WARN("ACTORS audit write failed {}",ex.what()); }
 }
 void ActorLateWorld(PPCContext& ctx,uint8_t* b,uint32_t w) {
@@ -4817,7 +4980,7 @@ void ActorLateWorld(PPCContext& ctx,uint8_t* b,uint32_t w) {
   if (s.link.role==Role::Guest) {
     // Native root motion and physics run after the immediate AI pass. The
     // final displayed transform must still be the buffered host pose.
-    if (Connected()) { InitializeHostHumans(ctx,b); Replicas(ctx,b,true); }
+    if (Connected()) { ReplayHostBirths(ctx,b); InitializeHostActors(ctx,b); Replicas(ctx,b,true); }
     if (s.link.session_state==SessionState::Connected || s.link.session_state==SessionState::Lost)
       HoldReplicas(ctx,b,true);
     ActorNativeAudit(b);

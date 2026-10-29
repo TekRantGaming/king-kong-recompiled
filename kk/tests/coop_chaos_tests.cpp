@@ -97,6 +97,21 @@ void ReloadFrameWait() {
       "independent chapter completion still waits for the other player");
 }
 void ActorFreeze() {
+  Check(actors::WorldAuthority(true,true,true,true),"playing together retains a pose reference");
+  Check(actors::WorldAuthority(true,false,false,false),"the local developer link retains its pose reference");
+  Check(!actors::WorldAuthority(true,true,false,true),"a released reload world has no buffered pose authority");
+  Check(!actors::WorldAuthority(false,false,true,true),"a completed session has no buffered pose authority");
+  Check(!actors::WorldAuthority(true,true,true,false),"an independent chapter has no buffered pose authority");
+  std::vector<enemies::Record> births(1);
+  births[0].enemy=Enemy(); births[0].enemy.birth_spawner=123;
+  Check(enemies::NextSpawnerBirth(births,123,0)==&births[0],"host birth selects the next local ordinal");
+  Check(!enemies::NextSpawnerBirth(births,123,1),"a duplicate birth cannot create another native actor");
+  Check(!enemies::NextSpawnerBirth(births,124,0),"another spawner cannot choose a local template");
+  Check(!enemies::NextSpawnerBirth(births,123,UINT32_MAX),"a full sequence cannot wrap");
+  births.push_back(births[0]);
+  Check(!enemies::NextSpawnerBirth(births,123,0),"competing templates at one ordinal are refused");
+  births.pop_back(); births[0].kind=EnemyEventKind::Removed;
+  Check(enemies::NextSpawnerBirth(births,123,0)==&births[0],"a retired birth consumes its ordinal without resurrection");
   bool borrowed=true; unsigned rechecked=0;
   Check(actors::HoldDispatch([&]{return !borrowed;},[&]{borrowed=false; return false;},
       [&]{++rechecked; return actors::Freeze(true,true,true,true,true,borrowed,true);}) && rechecked==1,
@@ -126,6 +141,8 @@ void ActorFreeze() {
   Check(!actors::Initialize(true,true,false,true,false,true),"stale or other world records cannot initialize actors");
   Check(!actors::Initialize(true,true,true,true,true,true),"player initialization is never driven by replication");
   Check(!actors::Initialize(true,true,true,true,false,false),"ordinary NPC tracks cannot run through initialization");
+  Check(!actors::Initialize(true,true,true,true,false,true,0,1),"a packet cannot run ordinary tracks beside an initializer");
+  Check(!actors::Initialize(true,true,true,true,false,true,1,1),"only the audited initial native track can be pumped");
   auto far=Enemy(); far.x=1000;
   PlayerPose local,peer; peer.x=1000;
   Check(!actors::InScope(true,false,far,&local,nullptr),"far live actors are omitted from snapshots and digests together");
@@ -138,6 +155,19 @@ void ActorFreeze() {
   Check(!actors::InScope(true,false,far,&local,nullptr),"actors beyond the boundary are omitted");
 }
 void ActorInterpolation() {
+  {
+    enemies::Channel hurt;
+    auto a=Enemy(),b=a; a.id.family=b.id.family=EnemyFamily::Human;
+    a.life=b.life=3; a.action=b.action=91; a.x=0; b.x=.7f;
+    Message m; m.type=MessageType::EnemySnapshot; m.sequence=1;
+    m.enemies={{101,4,1},1000,{a}}; hurt.Receive(m,10,true);
+    m.sequence=3; m.enemies.time=1000.0659309; m.enemies.enemies={b}; hurt.Receive(m,10.0659309,true);
+    const auto pose=hurt.Sample(10.1321445,true).records.at(0);
+    Check(pose.enemy.x==b.x && std::abs(pose.source_time-1000.0659309)<1e-7,
+        "a hurt NPC keeps an actual host pose across an intervening publication");
+    const auto legacy=hurt.Sample(10.1321445,false).records.at(0);
+    Check(legacy.enemy.x>0 && legacy.enemy.x<b.x,"off mode retains its existing interpolation");
+  }
   {
     enemies::Channel hit;
     auto before=Enemy(),after=before; after.life=98; after.x=.7f;

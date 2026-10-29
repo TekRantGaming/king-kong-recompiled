@@ -60,16 +60,27 @@ inline bool HoldDispatch(ReplicaHold replica,PartnerHold partner,Recheck recheck
   // That donor is a replica again before any native script may execute.
   return !COOP_MUT_IF("actor_freeze_release") && recheck();
 }
-inline bool Initialize(bool enabled,bool guest,bool fresh,bool exact,bool player,bool initializer) {
-  return enabled && guest && fresh && (exact || COOP_MUT_IF("actor_init_exact")) && !player && initializer;
+inline bool Initialize(bool enabled,bool guest,bool fresh,bool exact,bool player,bool initializer,
+                       uint16_t first=0,uint16_t last=0) {
+  return enabled && guest && fresh && (exact || COOP_MUT_IF("actor_init_exact")) && !player && initializer &&
+      (COOP_MUT_IF("actor_init_tracks") || (first==0 && last==0));
 }
 // Digest pages describe an older instant than the buffered actor stream.
 // Keep their diagnostics, but let snapshots alone repair replicated actors.
 inline bool DigestRepairs(bool enabled) {
   return !enabled || COOP_MUT_IF("actor_digest_repair");
 }
+inline bool WorldAuthority(bool session,bool flow_active,bool playing,bool together) {
+  if (COOP_MUT_IF("actor_pose_release")) return true;
+  return session && (!flow_active || (playing && together));
+}
 inline bool SnapPose(const EnemyState& a,const EnemyState& b) {
   if (COOP_MUT_IF("actor_interpolation_no_snap")) return false;
+  // Human wire life 3 is native condition 1, hurt. Knockback and contact
+  // correction can bend its root path between publications without another
+  // condition change. Keep an actual native pose during that state.
+  if (!COOP_MUT_IF("actor_hurt_pose") && a.id.family==EnemyFamily::Human &&
+      (a.life==3.f || b.life==3.f)) return true;
   // Damage can start native knockback between publications. Blending an old
   // approach pose through that step invents a path the host never followed.
   if ((a.life!=b.life || a.secondary_life!=b.secondary_life) &&
