@@ -1,5 +1,4 @@
 #pragma once
-#if defined(KK_DEV_TOOLS)
 #include <charconv>
 #include <cmath>
 #include <cstdint>
@@ -48,6 +47,7 @@ inline std::string Hex(uint64_t v) {
   char b[17]; auto r=std::to_chars(b,b+16,v,16);
   return std::string(16-(r.ptr-b),'0')+std::string(b,r.ptr);
 }
+#if defined(KK_DEV_TOOLS)
 struct Capture {
   std::vector<std::string> errors;
   void Error(std::string s) { errors.push_back(std::move(s)); }
@@ -63,5 +63,5 @@ void CheckpointEntering(const uint8_t* base);
 void CheckpointTrace(const uint8_t* base,const char* where);
 bool RouteStopped();
 uint32_t ConfirmedShots();
-}
 #endif
+}

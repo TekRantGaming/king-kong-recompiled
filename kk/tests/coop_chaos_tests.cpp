@@ -167,13 +167,13 @@ void ActorWire() {
   Check(CheckCompatibility(compat,old)==RejectReason::Protocol,"old builds refuse with version reason");
   for (bool enabled:{false,true}) {
     hello.hello=compat; hello.hello.actor_replication=enabled;
-    Check(Encode(hello,again) && Decode(again,out) && out.hello.protocol==33 &&
+    Check(Encode(hello,again) && Decode(again,out) && out.hello.protocol==kProtocolVersion &&
         out.hello.actor_replication==enabled,"Hello mode flag keeps the logical version");
     auto legacy=hello; legacy.hello=old;
     std::vector<uint8_t> expected;
     Check(Encode(legacy,expected),"legacy Hello fixture encodes");
     expected[kHeaderBytes]=enabled ? 0x80:0;
-    expected[kHeaderBytes+1]=33;
+    expected[kHeaderBytes+1]=uint8_t(kProtocolVersion);
     Check(again==expected,"old readers can parse the complete Hello and show a version refusal");
     auto legacy_read=out.hello;
     legacy_read.protocol=uint16_t((again[kHeaderBytes]<<8)|again[kHeaderBytes+1]);
