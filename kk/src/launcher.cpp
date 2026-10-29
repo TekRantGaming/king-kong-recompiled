@@ -4282,7 +4282,8 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
 
   // Instead of the tabs: PLAY (or WORKSHOP), then the page's name (`sub`, nullptr on the menu itself), with
   // the brass underline under the last. A click on the first goes back to its menu: returns true.
-  bool DrawCrumbs(ImDrawList* dl, const char* root, const char* sub) {
+  // `slash`: the co-op pages join the two with " / " as in the Design 1 mockups (no dash looking line there).
+  bool DrawCrumbs(ImDrawList* dl, const char* root, const char* sub, bool slash = false) {
     const float s = S();
     const ui::Fonts f = ui::GetFonts();
     const float fs = 15 * s, tr = 1.6f * s, cy = o_.y + 44 * s;
@@ -4297,9 +4298,16 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
                     sub ? (hot ? color::kText : color::kTextDim) : color::kText, first, tr);
     float ux = x, uw = pw;
     if (sub) {
-      x += pw + 14 * s;
-      dl->AddRectFilled(ImVec2(x, cy - 1 * s), ImVec2(x + 8 * s, cy + 1 * s), color::kTextFaint);
-      x += 8 * s + 14 * s;
+      if (slash) {
+        x += pw + 18 * s;
+        const float sw = ui::TrackedWidth(f.display, fs, "/", tr);
+        ui::DrawTracked(dl, f.display, fs, ImVec2(x, cy - fs * 0.5f), color::kTextFaint, "/", tr);
+        x += sw + 18 * s;
+      } else {
+        x += pw + 14 * s;
+        dl->AddRectFilled(ImVec2(x, cy - 1 * s), ImVec2(x + 8 * s, cy + 1 * s), color::kTextFaint);
+        x += 8 * s + 14 * s;
+      }
       const std::string name = Upper(T(sub));
       ui::DrawTracked(dl, f.display, fs, ImVec2(x, cy - fs * 0.5f), color::kText, name, tr);
       ux = x;
@@ -4322,7 +4330,8 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
     const float cy = o_.y + 44 * s;
     if (play_ == PlayView::kCoop) {
       if (coop_gate_.open()) return;  // UI1: the early access warning covers the window
-      if (DrawCrumbs(dl, "Play Online Co-op", coop_page_ != coop::CoopPage::Hub ? CoopPageName(coop_page_) : nullptr))
+      if (DrawCrumbs(dl, "Play Online Co-op", coop_page_ != coop::CoopPage::Hub ? CoopPageName(coop_page_) : nullptr,
+                     /*slash=*/true))
         CoopGo(coop::CoopPage::Hub);
       return;
     }
