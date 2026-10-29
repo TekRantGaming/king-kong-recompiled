@@ -8,6 +8,8 @@
   "jobs": 1,
   "scan": ["../../kk/src/coop_*.h", "../../kk/src/coop_*.cpp"],
   "twins": {
+    "reload_blocking_sleep": "reload_frame_wait",
+    "reload_wait_timeout": "reload_frame_wait",
     "ownership_generation": "ownership_generation",
     "udp_duplicate": "udp_duplicate",
     "udp_order": "udp_order",

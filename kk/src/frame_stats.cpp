@@ -13,6 +13,7 @@
 #include "frame_pacer.h"
 #include "menu_scene.h"
 #include "benchmark.h"
+#include "coop_runtime.h"
 
 #include <algorithm>
 #include <array>
@@ -118,6 +119,7 @@ void RecordFrameTime(double frame_ms) {
 }
 
 void OnGuestSwap() {
+  coop::SessionWaitAudit("frame");
 #if defined(KK_DEV_TOOLS) && defined(_WIN32)
   dev::GameWatchFrame();  // task 217 (dev_game_watch.cpp)
 #endif

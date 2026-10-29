@@ -492,6 +492,7 @@ void Finish() {
 }
 
 void HostPresent() {
+  coop::SessionWaitAudit("present");
   kk::handoff::OnPresent();  // this observer replaces the handoff's (handoff.h)
   if (recording_route) return;
   if (phase != Phase::kRunning) return;
@@ -766,7 +767,7 @@ std::filesystem::path Prepare(const std::filesystem::path& root) {
 }
 
 void InstallPresentObserver() {
-  if (!Active()) return;
+  if (!Active() && !coop::SessionWaitAuditEnabled()) return;
 #if defined(_WIN32)
   using Setter = void (*)(void (*)());
   const auto runtime = GetModuleHandleW(L"rexruntime.dll");

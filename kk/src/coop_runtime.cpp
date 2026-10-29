@@ -452,6 +452,7 @@ class PartnerOverlay final : public rex::ui::ImGuiDialog {
   explicit PartnerOverlay(rex::ui::ImGuiDrawer* drawer) : ImGuiDialog(drawer) {}
  protected:
   void OnDraw(ImGuiIO& io) override {
+    SessionWaitAudit("ui");
     service.LogDiagnostics();
     if (REXCVAR_GET(kk_coop_enabled)) {
       // Movies can run inside the synchronous loader, before Loaded/LoadRelease
@@ -460,12 +461,14 @@ class PartnerOverlay final : public rex::ui::ImGuiDialog {
       const auto flow=SessionFlowSnapshot();
       // Only the waiting guest owns the reconnect buttons. The host's normal
       // corner notice must not capture a live player's controller or B button.
-      if (flow.active && !flow.host && (flow.reconnecting || flow.reconnect_expired)) {
+      if (flow.active && (SessionWaiting() || (!flow.host && (flow.reconnecting || flow.reconnect_expired)))) {
         ImGui::SetNextWindowPos(ImVec2(24,64),ImGuiCond_Always);
         ImGui::SetNextWindowBgAlpha(.92f);
         if (ImGui::Begin("##coop-rejoin-wait",nullptr,ImGuiWindowFlags_AlwaysAutoResize|ImGuiWindowFlags_NoDecoration)) {
-          ImGui::TextUnformatted(flow.status);
-          if (ImGui::Button("Back to menu (B)") || ImGui::IsKeyPressed(ImGuiKey_GamepadFaceRight,false)) RejoinBackToMenu();
+          ImGui::TextUnformatted(*flow.status ? flow.status : "Waiting for partner...");
+          ImGui::Text("%s",std::string(size_t(int(ImGui::GetTime()*2)%4),'.').c_str());
+          if (ImGui::Button("Back to menu (B)") || ImGui::IsKeyPressed(ImGuiKey_GamepadFaceRight,false) ||
+              ImGui::IsKeyPressed(ImGuiKey_Escape,false)) RejoinBackToMenu();
         }
         ImGui::End();
       }
@@ -849,6 +852,10 @@ bool SocialFakeScenario(std::string_view scenario) {
 #endif
 void GameFrame(uint8_t* base) {
   RefreshSessionCheats();
+  if (REXCVAR_GET(kk_coop_enabled) && SessionWorldHeld()) {
+    SessionReloadFrame(base);
+    return;
+  }
   kk::PartnerBodyGameFrame(base);
   StoryGameFrame(base);
 #if defined(KK_DEV_TOOLS)
@@ -857,6 +864,7 @@ void GameFrame(uint8_t* base) {
   WorldGuardFrame(base);
   if (!REXCVAR_GET(kk_coop_enabled)) { observer::GameFrame(base); return; }
   SessionReloadFrame(base);
+  if (SessionWorldHeld()) return;
   observer::GameFrame(base);
   EnemyGameFrame();
   if (service.Running()) service.Publish(ReadJack(base));

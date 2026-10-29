@@ -2847,6 +2847,9 @@ REX_HOOK_RAW(sub_82449F18) {
 }
 
 REX_HOOK_RAW(sub_82881B70) {
+  // Keep engine display, sound and input running while a session barrier holds
+  // world AI and physics. The universe still reaches uni_go each frame.
+  if (kk::coop::SessionWorldHeld()) return;
   const uint32_t world = ctx.r3.u32;
   __imp__sub_82881B70(ctx, base);
   kk::PartnerBodyLateWorld(ctx, base, world);

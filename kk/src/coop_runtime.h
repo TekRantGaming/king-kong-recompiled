@@ -39,6 +39,10 @@ void SessionCheckpoint(uint32_t level, uint32_t checkpoint);
 void SessionNativeCheckpointPass();  // game thread: native ES_CheckPoint ran (C123 mirror gate)
 void SessionAiPass();                // game thread: one main world AI pass
 void SessionReloadFrame(uint8_t* base);
+bool SessionWorldHeld();             // game thread: hold native AI and physics only
+bool SessionWaiting();               // UI and presenter: a frame wait is active
+bool SessionWaitAuditEnabled();
+void SessionWaitAudit(const char* source);
 void PublishRejoinState(const SessionStart& state);
 void RejoinBackToMenu();
 #if defined(KK_DEV_TOOLS)

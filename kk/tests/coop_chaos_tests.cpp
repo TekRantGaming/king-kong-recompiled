@@ -22,6 +22,8 @@
 #include "coop_barrier.h"
 #include "coop_player_contact.h"
 #include "coop_raptor_route.h"
+#include "coop_frame_wait.h"
+#include <chrono>
 #include <algorithm>
 #include <map>
 #include <vector>
@@ -74,6 +76,25 @@ struct Pair {
 StoryEvent Event(uint32_t n=1) { return {1,101,n,0x123456789abcdef0ull,0xfedcba9876543210ull,1,n,StoryPhase::Advance}; }
 EnemyState Enemy() {
   EnemyState e; e.id={0x123456789abcdef0ull,1,EnemyFamily::Raptor}; e.life=100; return e;
+}
+void ReloadFrameWait() {
+  FrameWait wait;
+  const auto began=std::chrono::steady_clock::now();
+  Check(!wait.Poll(FrameWaitReason::Reconnect,1,1000),"a new reconnect waits without expiring");
+  const auto elapsed=std::chrono::duration<double,std::milli>(std::chrono::steady_clock::now()-began).count();
+  Check(elapsed<250,"a waiting frame returns in under 250 ms; a blocking sleep freezes presentation");
+  for (unsigned i=1;i<7200;++i)
+    Check(!wait.Poll(FrameWaitReason::Reconnect,1,1000+i/60.),"repeated frames keep the original reconnect deadline");
+  Check(wait.Poll(FrameWaitReason::Reconnect,1,1120),"the game thread also bounds a worker that never expires");
+  Check(!wait.Poll(FrameWaitReason::Load,1,1120),"a recovered connection starts the separate load budget");
+  Check(wait.Poll(FrameWaitReason::Load,1,1240),"a slow load ends through the finite failure path");
+  Check(!wait.Poll(FrameWaitReason::Transition,2,1240),"a new generation owns its transition deadline");
+  Check(wait.Poll(FrameWaitReason::Transition,2,1360),"a missing host transition cannot wait forever");
+  wait.Clear();
+  Check(wait.Reason()==FrameWaitReason::None,"released waits stop holding the native world");
+  Check(!wait.Poll(FrameWaitReason::Reconnect,2,1400),"a later outage gets a fresh reconnect budget");
+  Check(!wait.Poll(FrameWaitReason::Chapter,2,2000) && !wait.Poll(FrameWaitReason::Chapter,2,9000),
+      "independent chapter completion still waits for the other player");
 }
 void ActorFreeze() {
   bool borrowed=true; unsigned rechecked=0;
@@ -1659,7 +1680,8 @@ void DigestAuditOrder() {
 int main(int argc,char** argv) {
   if(argc!=2) { std::fprintf(stderr,"choose one named chaos test\n"); return 2; }
   test_name=argv[1]; const std::string_view name(test_name);
-  if(name=="actor_freeze") ActorFreeze();
+  if(name=="reload_frame_wait") ReloadFrameWait();
+  else if(name=="actor_freeze") ActorFreeze();
   else if(name=="actor_interpolation") ActorInterpolation();
   else if(name=="actor_wire") ActorWire();
   else if(name=="actor_loss") ActorLoss();

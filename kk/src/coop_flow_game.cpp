@@ -15,6 +15,7 @@
 #include "coop_handover.h"
 #include "coop_resume.h"
 #include "coop_objects_game.h"
+#include "coop_frame_wait.h"
 #include <random>
 #include <rex/cvar.h>
 #include <rex/hook.h>
@@ -26,7 +27,6 @@
 #include <cstdlib>
 #include <fstream>
 #include <string_view>
-#include <thread>
 
 REX_EXTERN(__imp__sub_82413190);
 REX_EXTERN(__imp__sub_82413080);
@@ -70,6 +70,12 @@ bool private_load=false, private_request=false, reload_sent=false;
 std::optional<FlowEvent> independent_load;
 bool sent_downed=false, life_sent=false;
 double next_life=0;
+FrameWait frame_wait;
+std::atomic<FrameWaitReason> wait_reason{FrameWaitReason::None};
+#if defined(KK_DEV_TOOLS)
+uint32_t release_delay_generation=0;
+double release_delay_until=0;
+#endif
 #if defined(KK_DEV_TOOLS)
 DevFollowHost dev_follow;
 DevFollowResult dev_follow_pad;
@@ -148,43 +154,24 @@ void RecordProgress(const FlowView& v) {
   if (play::ApplyTogetherProgress(personal,progress_slot,v.completed)) applied_progress=v.completed;
   else { Send(MessageType::FlowAbort,v.world); REXLOG_ERROR("KK co-op flow: personal chapter unlock could not be recorded"); }
 }
-FlowView Wait(uint32_t generation, bool load_barrier, bool host_transition=false) {
-  // Use the shared load budget for an early observer script exit too. Steam
-  // relay queueing and host frame stalls can exceed the old two second grace.
-  const double began=Now(),until=began+125;
-  double next_wait_log=began+5;
-  double paint=0;
-  bool waiting_logged=false;
-  for (;;) {
-    auto v=SessionFlowSnapshot();
-    if (Now()>=next_wait_log) {
-      next_wait_log=Now()+5;
-      REXLOG_INFO("KK co-op flow wait: role={} generation={} level={} phase={} save={}/{} ready={} barrier={} host-transition={} elapsed={:.1f}s",
-          v.host ? "host":"guest",v.world.generation,v.world.level,int(v.phase),v.save.size(),v.start.save_bytes,
-          v.start_ready,load_barrier,host_transition,Now()-began);
-    }
-    if (stopping || !v.active || v.phase==FlowPhase::Failed || v.world.generation!=generation ||
-        (load_barrier && v.phase==FlowPhase::Playing)) {
-      if (waiting_logged && v.world.generation!=generation)
-        REXLOG_INFO("KK co-op flow: regroup released role={} generation {} -> {} level {}",
-            v.host ? "host" : "guest",generation,v.world.generation,v.world.level);
-      return v;
-    }
-    if (!waiting_logged && v.phase==FlowPhase::Waiting) {
-      waiting_logged=true;
-      REXLOG_INFO("KK co-op flow: chapter finished role={} generation {} level {}; waiting for partner to finish",
-          v.host ? "host" : "guest",generation,v.world.level);
-    }
-    if (!host_transition && !load_barrier && v.phase==FlowPhase::Playing && !v.host &&
-        v.policy==ChapterPolicy::Observer && !observer::HoldWorld()) return v;
-    if (host_transition && Now()>=until) {
-      observer::Fallback("Observer unavailable: the host's next load did not arrive.");
-      return v;
-    }
-    const bool chapter_wait=v.phase==FlowPhase::Waiting || (v.policy==ChapterPolicy::Observer && !v.host && v.phase==FlowPhase::Playing);
-    if (Now()>=until && !chapter_wait) { Send(MessageType::FlowAbort,v.world); return v; }
-    if (Now()>=paint) { RequestUiPaint(); paint=Now()+.1; }
-    std::this_thread::sleep_for(std::chrono::milliseconds(10));
+void ClearFrameWait() {
+  if (wait_reason.exchange(FrameWaitReason::None)!=FrameWaitReason::None) {
+    REXLOG_INFO("KK co op frame wait: released");
+    RequestUiPaint();
+  }
+  frame_wait.Clear();
+}
+void HoldFrame(const FlowView& v,FrameWaitReason reason) {
+  if (wait_reason.exchange(reason)!=reason) {
+    REXLOG_INFO("KK co op frame wait: role={} reason={} generation={} level={}",
+        v.host ? "host":"guest",int(reason),v.world.generation,v.world.level);
+    RequestUiPaint();
+  }
+  if (frame_wait.Poll(reason,v.world.generation,Now())) {
+    Send(MessageType::FlowAbort,v.world);
+    stopping=true;
+    REXLOG_WARN("KK co op frame wait: timed out; returning to menu");
+    play::ReturnToLauncher("co op wait timed out","play");
   }
 }
 void AskLoad(PPCContext& ctx,uint8_t* base,uint32_t g,const FlowView& v) {
@@ -269,6 +256,43 @@ void MoveToPartner(bool checkpoint_recovery) {
 }
 void StopSessionFlow() { WorldGuardSummary(); stopping=true; move_request=catchup_request=0; catchup_offer=false; catchup_notice_until=0; observer::SetPartnerSpectating(false); }
 bool SessionInProcess() { return launched; }
+bool SessionWorldHeld() {
+  if (!REXCVAR_GET(kk_coop_enabled) || !launched) return false;
+  const auto v=SessionFlowSnapshot();
+  if (!v.active || (v.host && v.reconnect_expired)) return false;
+  return stopping || frame_wait.Reason()!=FrameWaitReason::None || v.phase!=FlowPhase::Playing ||
+      (!v.host && (v.reconnecting || v.reconnect_expired ||
+          (v.start_ready && v.rejoin_revision!=loaded_rejoin_revision)));
+}
+bool SessionWaiting() { return wait_reason.load()!=FrameWaitReason::None; }
+bool SessionWaitAuditEnabled() {
+  static const bool enabled=[] {
+    const char* value=std::getenv("KK_COOP_WAIT_AUDIT");
+    return value && std::string_view(value)=="1";
+  }();
+  return enabled;
+}
+void SessionWaitAudit(const char* source) {
+  if (!SessionWaitAuditEnabled()) return;
+  struct Sample { double last=0, began=0, next=0, maximum=0; uint64_t count=0; bool waiting=false; };
+  // Each source has a single calling thread. Thread local storage also keeps
+  // the native loading screen swap thread separate from the regular game loop.
+  static thread_local Sample samples[3];
+  auto& s=samples[std::string_view(source)=="frame" ? 0 : std::string_view(source)=="ui" ? 1 : 2];
+  const double now=Now();
+  const bool waiting=SessionWaiting();
+  if (waiting && !s.waiting) { s.began=now; s.next=now+1; s.maximum=0; s.count=0; }
+  if (waiting || s.waiting) {
+    if (s.last) s.maximum=std::max(s.maximum,(now-s.last)*1000);
+    ++s.count;
+    if (!waiting || now>=s.next) {
+      REXLOG_INFO("KK co op wait audit: source={} waiting={} seconds={:.3f} samples={} max_ms={:.3f}",
+          source,waiting,now-s.began,s.count,s.maximum);
+      s.next=now+1;
+    }
+  }
+  s.waiting=waiting; s.last=now;
+}
 bool SessionPrivateReload() { return private_load; }
 bool SessionCheckpointCatchup() { return catchup_phase==CatchupPhase::Loading || catchup_phase==CatchupPhase::Placing; }
 uint32_t SessionNativeCheckpoint() { return catchup.WorldCheckpoint(); }
@@ -488,13 +512,18 @@ bool SessionBeforeGo(PPCContext& ctx,uint8_t* base,uint32_t g) {
   if (!v.active) return false;
   // Once the reconnect window ends the host is ordinary local play. It must
   // still be able to cross a native chapter boundary without a dead barrier.
-  if (v.host && v.reconnect_expired) return false;
-  if (v.phase==FlowPhase::Failed) {
+  if (v.host && v.reconnect_expired) { ClearFrameWait(); return false; }
+  if (stopping) { Store32(base,g+4,0); return false; }
+  if (v.phase==FlowPhase::Failed || (!v.host && v.reconnect_expired)) {
     RecordProgress(v);
-    play::ReturnToLauncher("co-op session ended","play"); Store32(base,g+4,0); return false;
+    stopping=true;
+    play::ReturnToLauncher("co op session ended","play"); Store32(base,g+4,0); return false;
   }
   RecordProgress(v);
+  if (!v.host && v.reconnecting) { HoldFrame(v,FrameWaitReason::Reconnect); return true; }
   if ((!v.host && v.rejoin_revision!=loaded_rejoin_revision && v.start_ready) || v.world.generation>loaded_generation) {
+    if (!v.start_ready) { HoldFrame(v,FrameWaitReason::Load); return true; }
+    ClearFrameWait();
     loaded_rejoin_revision=v.rejoin_revision;
     private_load=private_request=false;
     independent_load.reset();
@@ -503,11 +532,29 @@ bool SessionBeforeGo(PPCContext& ctx,uint8_t* base,uint32_t g) {
   // A dev finish is submitted directly to the worker, without a native load
   // flag. Hold the first finisher just as for an authored chapter exit.
   if (v.phase==FlowPhase::Waiting) {
-    v=Wait(v.world.generation,false);
-    RecordProgress(v);
-    if (v.world.generation>loaded_generation) { AskLoad(ctx,base,g,v); return false; }
+    HoldFrame(v,FrameWaitReason::Chapter);
     return true;
   }
+  if (v.phase!=FlowPhase::Playing) { HoldFrame(v,FrameWaitReason::Load); return true; }
+  if (frame_wait.Reason()==FrameWaitReason::Transition || frame_wait.Reason()==FrameWaitReason::Chapter) {
+    HoldFrame(v,frame_wait.Reason()); return true;
+  }
+#if defined(KK_DEV_TOOLS)
+  if (release_delay_generation!=loaded_generation) {
+    release_delay_generation=loaded_generation;
+    if (const char* s=std::getenv("KK_DEV_RELEASE_DELAY_MS"); s && !v.host) {
+      const int ms=std::clamp(std::atoi(s),0,2000);
+      release_delay_until=Now()+ms/1000.;
+      REXLOG_INFO("KK dev checkpoint trace: guest holds {} ms after the load barrier",ms);
+    }
+  }
+  if (Now()<release_delay_until) { HoldFrame(v,FrameWaitReason::Load); return true; }
+#endif
+  if (frame_wait.Reason()==FrameWaitReason::Load)
+    REXLOG_INFO("KK co-op flow: load barrier released role={} generation {} level {} policy={}",
+        v.host ? "host":"guest",loaded_generation,v.world.level,
+        v.policy==ChapterPolicy::Together ? "together" : v.policy==ChapterPolicy::SoloRegroup ? "solo-regroup" : "observer");
+  if (frame_wait.Reason()!=FrameWaitReason::Observer) ClearFrameWait();
   // An authored transition or the user's Quit request takes precedence over
   // recovery. Its normal flow handler below advances/ends the session.
   if (private_request && Load32(base,g+4)==0) {
@@ -561,11 +608,10 @@ bool SessionBeforeGo(PPCContext& ctx,uint8_t* base,uint32_t g) {
   }
   if (!v.host && v.policy==ChapterPolicy::Observer && observer::HoldWorld()) {
     Store32(base,g+4,0);
-    v=Wait(v.world.generation,false);
-    RecordProgress(v);
-    if (v.world.generation>loaded_generation) { AskLoad(ctx,base,g,v); return false; }
+    HoldFrame(v,FrameWaitReason::Observer);
     return true;
   }
+  ClearFrameWait();
   // C123: never mirror before this load's native ES_EnterMap pass has read G+0xC.
 #if defined(KK_DEV_TOOLS)
   // Test aid: KK_DEV_MIRROR_GATE=0 restores the old immediate mirror for before/after runs.
@@ -612,10 +658,8 @@ bool SessionBeforeGo(PPCContext& ctx,uint8_t* base,uint32_t g) {
     if (v.host) Send(MessageType::LevelChange,{v.world.generation,level,start,v.completed});
     else if (v.policy==ChapterPolicy::SoloRegroup)
       Send(MessageType::ChapterFinished,v.world);
-    v=Wait(v.world.generation,false,host_transition);
-    RecordProgress(v);
-    if (v.world.generation>loaded_generation) AskLoad(ctx,base,g,v);
-    return false;
+    HoldFrame(v,v.policy==ChapterPolicy::SoloRegroup ? FrameWaitReason::Chapter : FrameWaitReason::Transition);
+    return true;
   }
   // Offer recovery rather than silently resetting a living partner's world.
   if (!v.host && v.phase==FlowPhase::Playing && v.policy==ChapterPolicy::Together) {
@@ -705,22 +749,9 @@ void SessionAfterGo(PPCContext& ctx,uint8_t* base,uint32_t g,bool loaded) {
   RecordProgress(v);
   Send(MessageType::Loaded,v.world);
   REXLOG_INFO("KK co-op flow: loaded generation {}, waiting for both",loaded_generation);
-  // uni_go's loader is synchronous. Stay at this boundary, with the network
-  // worker and UI running, before any next simulation step or AI pass.
-  const auto released=Wait(loaded_generation,true);
-  if (released.phase==FlowPhase::Playing && released.world.generation==loaded_generation)
-    REXLOG_INFO("KK co-op flow: load barrier released role={} generation {} level {} policy={}",
-        released.host ? "host" : "guest",loaded_generation,released.world.level,
-        released.policy==ChapterPolicy::Together ? "together" :
-        released.policy==ChapterPolicy::SoloRegroup ? "solo-regroup" : "observer");
-#if defined(KK_DEV_TOOLS)
-  // C123 test aid: KK_DEV_RELEASE_DELAY_MS holds this peer after the barrier, as a slow guest frame would.
-  if (const char* s=std::getenv("KK_DEV_RELEASE_DELAY_MS"); s && !released.host) {
-    const int ms=std::clamp(std::atoi(s),0,2000);
-    REXLOG_INFO("KK dev checkpoint trace: guest holds {} ms after the load barrier",ms);
-    std::this_thread::sleep_for(std::chrono::milliseconds(ms));
-  }
-#endif
+  // Leave the synchronous native loader. The world update hook holds all
+  // native AI and physics until SessionBeforeGo observes LoadRelease.
+  HoldFrame(v,FrameWaitReason::Load);
 }
 void SessionCheckpoint(uint32_t level,uint32_t checkpoint) {
   if (!launched) return;
@@ -764,6 +795,7 @@ void SessionReloadFrame(uint8_t* base) {
   if (!REXCVAR_GET(kk_coop_enabled) || !launched || !base) {
     observer::SetPartnerSpectating(false); return;
   }
+  if (stopping) return;
   const auto v=SessionFlowSnapshot();
 #if defined(KK_DEV_TOOLS)
   if (staggered && Now()>=staggered_at) {
@@ -779,17 +811,9 @@ void SessionReloadFrame(uint8_t* base) {
     play::ReturnToLauncher("co-op reconnect cancelled","play"); return;
   }
   if (v.host && v.reconnect_expired) { observer::SetPartnerSpectating(false); return; }
-  if (v.active && !v.host && (v.reconnecting || v.reconnect_expired)) {
-    REXLOG_INFO("KK co-op rejoin: guest waits for host; native simulation held");
-    while (!stopping) {
-      const auto wait=SessionFlowSnapshot();
-      if (!wait.reconnecting && !wait.reconnect_expired && wait.start_ready && wait.phase!=FlowPhase::Failed) break;
-      if (rejoin_cancel.exchange(false)) {
-        stopping=true; play::ReturnToLauncher("co-op reconnect cancelled","play"); return;
-      }
-      RequestUiPaint(); std::this_thread::sleep_for(std::chrono::milliseconds(10));
-    }
-    REXLOG_INFO("KK co-op rejoin: host reachable; preparing guest checkpoint load");
+  if (v.active && !v.host && v.phase!=FlowPhase::Failed && !v.reconnect_expired && v.reconnecting) {
+    HoldFrame(v,FrameWaitReason::Reconnect);
+    return;
   }
   const auto current=SessionFlowSnapshot();
   if (current.active && !current.host && current.start_ready && current.rejoin_revision!=loaded_rejoin_revision) {
@@ -797,12 +821,12 @@ void SessionReloadFrame(uint8_t* base) {
     if (PoseAddress(g,0x6000)) hfr::Store32(base,g+4,1);
     return;
   }
-  if (v.active && v.phase==FlowPhase::Failed && !v.reconnect_expired) {
+  if (v.active && (v.phase==FlowPhase::Failed || (!v.host && v.reconnect_expired))) {
     // Disconnects can arrive while normal gameplay never calls uni_go. Use
     // the regular save-aware launcher return instead of waiting for a load.
     observer::SetPartnerSpectating(false);
     RecordProgress(v);
-    play::ReturnToLauncher("co-op session ended","play");
+    if (!stopping.exchange(true)) play::ReturnToLauncher("co op session ended","play");
     return;
   }
   if (!v.active || v.phase!=FlowPhase::Playing) {
