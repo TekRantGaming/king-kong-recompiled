@@ -1,6 +1,7 @@
 param([int]$First=1,[int]$Last=10,[string]$Suffix='',
       [ValidateSet('kk-dev-vulkan','kk-beta')][string]$Preset='kk-dev-vulkan',[switch]$NativeResume,
-      [ValidateRange(0,360)][int]$FrameRateOverride=0)
+      [ValidateRange(0,360)][int]$FrameRateOverride=0,[ValidateSet('','vulkan','d3d12')][string]$BackendOverride='',
+      [switch]$Overlap,[switch]$RequireContactFilter)
 $ErrorActionPreference='Stop'
 foreach($index in $First..$Last) {
     $breaker=if($index%2) {'host'} else {'guest'}
@@ -19,6 +20,8 @@ foreach($index in $First..$Last) {
         $extraEnv='KK_DEV_FACE_POINT=22:0.05,92.0,99.133,33.0'
     }
     if($FrameRateOverride) {$frameRate=$FrameRateOverride}
+    if($BackendOverride) {$backend=$BackendOverride}
+    if($Overlap) {$joinPoint=$point}
     $name="c125-final-$index$Suffix"
     $driver="F:\kk-native-coop\codex\state\$name-driver.log"
     do {
@@ -27,6 +30,7 @@ foreach($index in $First..$Last) {
             '-Backend',$backend,'-FrameRate',"$frameRate",'-Walk',$walk,'-FloorAt','15')
         if($extraEnv) {$driverArgs+=@('-ExtraEnv',$extraEnv)}
         if($NativeResume) {$driverArgs+='-NativeResume'}
+        if($RequireContactFilter) {$driverArgs+='-RequireContactFilter'}
         & powershell @driverArgs *> $driver
         $code=$LASTEXITCODE
         if($code -in @(3,4)) {Write-Output "$name refused $code";Start-Sleep -Seconds 30}

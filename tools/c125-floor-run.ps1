@@ -4,7 +4,8 @@ param([Parameter(Mandatory)][string]$Name,[int]$Entry=1,[int]$Start=3,
       [ValidateSet('vulkan','d3d12')][string]$Backend='d3d12',[int]$FrameRate=120,
       [int]$FloorAt=15,[switch]$AuditOnly,
       [string]$Source='',[string]$Walk='21.5:LSUP/2,25:LSLEFT/1,28:LSUP/1',[string]$ExtraEnv='',[string]$JoinPoint='',
-      [switch]$NativeResume)
+      [switch]$NativeResume,[ValidateSet('fixed','baseline_native_floor')][string]$ProofVariant='fixed',
+      [switch]$RequireContactFilter)
 $ErrorActionPreference='Stop'
 $worktree=Split-Path $PSScriptRoot -Parent
 $state='F:\kk-native-coop\codex\state'
@@ -42,9 +43,13 @@ if ($AuditOnly) {
     $Breaker=$fixture.breaker; $result=0
 } else {
   $fixture=[ordered]@{name=$Name;entry=$Entry;start=$Start;breaker=$Breaker;preset=$Preset;seed=$Seed;
-    point=$Point;join_point=$JoinPoint;object_source=$Source;walk=$Walk;backend=$Backend;frame_rate=$FrameRate;floor_at=$FloorAt;extra_env=$ExtraEnv;native_resume=[bool]$NativeResume;
-    source_commit=(& git -C $worktree rev-parse HEAD);dirty_paths=@(& git -C $worktree status --short);
+    point=$Point;join_point=$JoinPoint;object_source=$Source;walk=$Walk;backend=$Backend;frame_rate=$FrameRate;floor_at=$FloorAt;extra_env=$ExtraEnv;native_resume=[bool]$NativeResume;require_contact_filter=[bool]$RequireContactFilter;
+    source_commit=(& git -C $worktree rev-parse HEAD);dirty_paths=@(& git -C $worktree status --short);proof_variant=$ProofVariant;
+    source_files=@('kk/src/coop_objects_game.cpp','kk/src/coop_protocol.cpp','kk/src/coop_protocol.h','kk/src/coop_enemies_game.cpp','kk/src/coop_barrier.h','kk/src/coop_player_contact.h' | ForEach-Object {
+        [ordered]@{path=$_;sha256=(Get-FileHash -LiteralPath "$worktree\$_").Hash}
+    });
     developer_tools=@(Select-String -LiteralPath "$worktree\kk\out\build\$Preset\CMakeCache.txt" -Pattern '^KK_DEV_TOOLS:BOOL=' | ForEach-Object {$_.Line});
+    protocol=@(Select-String -LiteralPath "$worktree\kk\src\coop_protocol.h" -Pattern 'constexpr uint16_t kProtocolVersion = ' | ForEach-Object {$_.Line.Trim()});
     binary_sha256=(Get-FileHash -LiteralPath "$worktree\kk\out\build\$Preset\king_kong.exe").Hash;
     environment=$hostText;join_environment=$joinText;extra=$extra;seconds=$Seconds}
 $fixture | ConvertTo-Json -Depth 4 | Set-Content -LiteralPath "$state\$Name-fixture.json"
@@ -95,6 +100,8 @@ foreach ($role in 'host','join') {
         consequences=@(LogLines $lines 'barrier consequences:');
         game_crashes=@(LogLines $lines 'Access violation|unhandled exception|\[critical\]').Count;
         session_ends=@(LogLines $lines 'KK co-op: ended');
+        native_reloads=@(LogLines $lines 'KK co-op flow: death/reload fallback');
+        contact_filter_logs=@(LogLines $lines 'COOP PLAYER contact ignored');
         failures=@(LogLines $lines 'probe: expired|Access violation|\[error\]')}
 }
 $operatorRole=if ($Breaker -eq 'host') {0} else {1}
@@ -123,9 +130,14 @@ $earlyEnd=@($audit.roles | ForEach-Object {$_.session_ends} | Where-Object {
     ([datetime]::ParseExact($_.Substring(1,23),'yyyy-MM-dd HH:mm:ss.fff',[Globalization.CultureInfo]::InvariantCulture)-
      [datetime]::ParseExact($firstInput.Substring(1,23),'yyyy-MM-dd HH:mm:ss.fff',[Globalization.CultureInfo]::InvariantCulture)).TotalSeconds -lt 30
 }).Count
+$earlyReload=@($audit.roles | ForEach-Object {$_.native_reloads} | Where-Object {
+    $crossed -and $_.Substring(0,24) -gt $firstInput -and $_.Substring(0,24) -lt $firstCross[$walkerRole].Substring(0,24)
+}).Count
 $audit['target']=$target
 $audit['first_cross']=$firstCross
-$audit['valid_crossing']=[bool]($nativeInput -and $partnerFirst -and -not $earlyDeath -and -not $earlyEnd -and $audit.roles[0].load_released -and $audit.roles[1].load_released -and $audit.roles[0].impulses.Count -and $audit.roles[1].impulses.Count -and -not $audit.roles[0].game_crashes -and -not $audit.roles[1].game_crashes)
+$audit['contact_filter_observed']=[bool]($audit.roles[0].contact_filter_logs.Count -and $audit.roles[1].contact_filter_logs.Count)
+$audit['valid_crossing']=[bool]($nativeInput -and $partnerFirst -and -not $earlyDeath -and -not $earlyEnd -and -not $earlyReload -and $audit.roles[0].load_released -and $audit.roles[1].load_released -and $audit.roles[0].impulses.Count -and $audit.roles[1].impulses.Count -and -not $audit.roles[0].game_crashes -and -not $audit.roles[1].game_crashes)
+if($fixture.require_contact_filter -and -not $audit.contact_filter_observed) {$audit.valid_crossing=$false}
 $copies=@(Get-ChildItem -LiteralPath $run.FullName -Directory -Recurse | Where-Object Name -in @('bin','cache'))
 if ($copies) { throw "Run copies remain: $($copies.FullName -join ', ')" }
 $audit | ConvertTo-Json -Depth 5 -Compress | Set-Content -LiteralPath "$state\$Name-audit.json"

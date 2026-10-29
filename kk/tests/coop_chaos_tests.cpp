@@ -19,6 +19,7 @@
 #include "coop_partner_selection.h"
 #include "coop_objects.h"
 #include "coop_barrier.h"
+#include "coop_player_contact.h"
 #include <algorithm>
 #include <map>
 #include <vector>
@@ -1157,6 +1158,18 @@ void BarrierRelay() {
     Check(!ValidObjectState(invalid),"damage without a usable native impulse cannot be replayed");
   }
 }
+void PlayerContact() {
+  constexpr uint32_t local=0x414E8A24,peer=0x41FA0260,terrain=0x42CE2004,enemy=0x42B2C284,retired=0x41FA0200;
+  Check(contact::PeerPair(local,peer,local,peer) && contact::PeerPair(peer,local,local,peer),
+      "both orders of the two player contact are excluded from native pushing");
+  for (const auto a:{local,peer,terrain,enemy,retired}) for (const auto b:{local,peer,terrain,enemy,retired}) {
+    const bool player_pair=(a==local && b==peer) || (a==peer && b==local);
+    Check(contact::PeerPair(a,b,local,peer)==player_pair,"terrain, enemies and a retired body keep native contacts");
+  }
+  Check(!contact::PeerPair(local,peer,0,peer) && !contact::PeerPair(local,peer,local,0) &&
+        !contact::PeerPair(local,peer,local,local) && !contact::PeerPair(0,peer,local,peer),
+      "an absent or aliased player identity cannot suppress native collision");
+}
 void GuestProbe() {
   namespace gp=guest_probe;
   // The c118-beach-fix6 host: 64 KB pages committed around the crab blocks,
@@ -1249,6 +1262,7 @@ int main(int argc,char** argv) {
   else if(name=="crab_player_unstick") CrabPlayerUnstick();
   else if(name=="guest_probe") GuestProbe();
   else if(name=="barrier_relay") BarrierRelay();
+  else if(name=="player_contact") PlayerContact();
   else { std::fprintf(stderr,"unknown test\n"); return 2; }
   std::printf("PASS [%s]\n",test_name); return 0;
 }

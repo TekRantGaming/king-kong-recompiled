@@ -17,6 +17,7 @@
 #include "coop_event_budget.h"
 #include "coop_rebirth.h"
 #include "coop_crab_unstick.h"
+#include "coop_player_contact.h"
 #include <algorithm>
 #include <array>
 #include <bit>
@@ -2899,6 +2900,21 @@ void ObserveHumanGround(PPCContext& ctx,uint8_t* b) {
 // and firearm queries look through the validated body. Native NPCs, terrain,
 // ground checks, enemy perception and all other queries keep their filters.
 thread_local uint32_t equipment_query_partner=0;
+bool SkipPeerContact(const uint8_t* b,uint32_t query) {
+  // contacts_pass / obj_collide set source at +8 and target at +0x70 in
+  // this exact native SceneBoundsState. Do not reinterpret other queries.
+  if (query!=0x828E89D0 || !REXCVAR_GET(kk_coop_enabled) || !Connected()) return false;
+  const auto local=Load32(b,0x82CCBF7C);
+  const auto a=Load32(b,query+8),c=Load32(b,query+0x70);
+  if (!local || (a!=local && c!=local)) return false;
+  const auto peer=kk::PartnerBodyCombatActor(b);
+  if (!contact::PeerPair(a,c,local,peer)) return false;
+#if defined(KK_DEV_TOOLS)
+  static unsigned logged=0;
+  if (logged++<16) REXLOG_INFO("COOP PLAYER contact ignored local={:08X} peer={:08X} pair={:08X}/{:08X} native-world-and-enemy-contacts=unchanged",local,peer,a,c);
+#endif
+  return true;
+}
 struct EquipmentQueryScope {
   uint32_t previous=equipment_query_partner;
   EquipmentQueryScope(const uint8_t* b,bool enabled) {
@@ -4892,6 +4908,16 @@ REX_HOOK_RAW(sub_82403E38) {
 REX_HOOK_RAW(sub_82404490) {
   const kk::coop::EquipmentQueryScope scope(base,(ctx.r10.u32&0x7FFFFFFF)==0xB && ctx.r3.u32==kk::hfr::Load32(base,0x82CCBF7C));
   __imp__sub_82404490(ctx,base);
+}
+REX_EXTERN(__imp__sub_82877AF0);
+REX_HOOK_RAW(sub_82877AF0) {
+  if (kk::coop::SkipPeerContact(base,ctx.r3.u32)) {
+    // The native dispatcher returns 1 even when there are no eligible parts.
+    // Leave its contact count alone, exactly as that native empty path does.
+    ctx.r3.u64=1;
+    return;
+  }
+  __imp__sub_82877AF0(ctx,base);
 }
 REX_HOOK_RAW(sub_82425038) {
   const kk::coop::EquipmentQueryScope scope(base,true);
