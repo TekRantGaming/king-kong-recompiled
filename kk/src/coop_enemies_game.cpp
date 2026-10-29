@@ -4217,7 +4217,9 @@ void ReplayHostBirths(PPCContext& ctx,uint8_t* b) {
     Store32(b,globals[5],actor); Store32(b,globals[6],actor);
     if (fn==0x826EB8C0) {
       __imp__sub_826EB8C0(ctx,b);
-      const auto ready=Ptr(b,sp.ai,24,24);
+      const bool retained=Member(b,s.world,actor,true) && Ptr(b,Ptr(b,actor,24,8),4,88)==sp.ai &&
+          Ptr(b,sp.ai,64,0x2094)==sp.vars;
+      const auto ready=retained ? Ptr(b,sp.ai,24,24):0;
       sp.initialized=ready && Load32(b,ready+20)!=0x826EB8C0;
     } else if (native_spawner || fn==0x826D6750 || fn==0x826D6890) sp.initialized=true;
     if (Member(b,s.world,actor,true) && Ptr(b,Ptr(b,actor,24,8),4,88)==sp.ai &&
@@ -4782,11 +4784,15 @@ void InitializeHostActors(PPCContext& ctx,uint8_t* b) {
   if (attempted) Scan(b);
 }
 world::Json ActorNativeCensus(const uint8_t* b) {
-  auto& s=Get(); std::vector<world::Json> rows,spawners;
+  auto& s=Get(); std::vector<world::Json> rows,spawners,read_errors;
+  unsigned empty_tracks=0;
   const auto tracks_readable=[&](uint32_t ai) {
     if (!ActorReadable(ai,88)) return false;
     const auto first=Load16(b,ai+80),last=Load16(b,ai+82);
-    if (first>last || last>4096 || last-first>=64 || !ActorReadable(ai,(last+12)*4)) return false;
+    // ai_run_object treats an empty inclusive range as a completed AI, not
+    // an unreadable track table. Spawner_stop can leave exactly this state.
+    if (first>last) { ++empty_tracks; return true; }
+    if (last>4096 || last-first>=64 || !ActorReadable(ai,(last+12)*4)) return false;
     for (unsigned t=first;t<=last;++t) {
       const auto block=Ptr(b,ai,(t+6)*4,24);
       if (block && !ActorReadable(block,24)) return false;
@@ -4809,20 +4815,30 @@ world::Json ActorNativeCensus(const uint8_t* b) {
     if (!ActorReadable(ext,8)) continue;
     const auto ai=Ptr(b,ext,4,88);
     if (!ActorReadable(ai,88)) continue;
-    if (!tracks_readable(ai)) { ++unreadable; continue; }
+    if (!tracks_readable(ai)) {
+      ++unreadable;
+      if (read_errors.size()<32) read_errors.push_back(world::Json::Object({{"actor",world::Hex(actor)},
+          {"reason","track-span"},{"first",Load16(b,ai+80)},{"last",Load16(b,ai+82)}}));
+      continue;
+    }
     bool spawner=false,initializing=false; uint32_t state=0;
     const auto family=Tracks(b,ai,state,spawner,&initializing);
     if (spawner || family==EnemyFamily::None) continue;
     const auto matrix=Ptr(b,actor,12,64),vars=Ptr(b,ai,64,LifeBytes(family));
-    if (!ActorReadable(matrix,64) || !ActorReadable(vars,LifeBytes(family))) { ++unreadable; continue; }
+    if (!ActorReadable(matrix,64) || !ActorReadable(vars,LifeBytes(family))) {
+      ++unreadable;
+      if (read_errors.size()<32) read_errors.push_back(world::Json::Object({{"actor",world::Hex(actor)},
+          {"reason","actor-fields"},{"family",uint16_t(family)}}));
+      continue;
+    }
     EnemyId id; bool bound=false,pending=false,retired=false;
     const auto binding=s.bindings.find(actor);
-    if (binding!=s.bindings.end() && binding->second.ai==ai && binding->second.matrix==matrix && binding->second.vars==vars) {
+    if (binding!=s.bindings.end() && binding->second.ai==ai && binding->second.matrix==matrix && binding->second.vars==vars && binding->second.id.family==family) {
       id=Canonical(binding->second.id); bound=id.source!=0;
       const auto record=s.records.find(binding->second.id);
       retired=s.retirement_applied.contains(binding->second.id) ||
           (record!=s.records.end() && record->second.kind==EnemyEventKind::Removed);
-    } else if (const auto birth=s.pending.find(actor); birth!=s.pending.end() && birth->second.ai==ai && birth->second.matrix==matrix) {
+    } else if (const auto birth=s.pending.find(actor); birth!=s.pending.end() && birth->second.ai==ai && birth->second.matrix==matrix && birth->second.id.family==family) {
       id=birth->second.id; pending=true;
     } else if (const auto authored=s.authored.find(actor); authored!=s.authored.end() && !authored->second.ambiguous &&
         authored->second.ai==ai && authored->second.matrix==matrix && authored->second.family==family) {
@@ -4864,6 +4880,7 @@ world::Json ActorNativeCensus(const uint8_t* b) {
         {"state",ActorReadable(block,24) ? Load32(b,block+20):0},{"templates",world::Json::Array(templates)}}));
   }
   return world::Json::Object({{"registry_readable",registry},{"unreadable",unreadable},
+      {"empty_tracks",empty_tracks},{"read_errors",world::Json::Array(read_errors)},
       {"actors",world::Json::Array(rows)},{"spawners",world::Json::Array(spawners)}});
 }
 void ActorNativeAudit(const uint8_t* b,double sample_time=0) {
