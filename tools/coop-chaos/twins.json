@@ -108,6 +108,9 @@
     "actor_interpolation_no_snap": "actor_interpolation",
     "actor_hit_interpolation": "actor_interpolation",
     "actor_gap_interpolation": "actor_interpolation",
-    "actor_clock_filter": "actor_interpolation"
+    "actor_clock_filter": "actor_interpolation",
+    "auto_repair_default": "auto_repair",
+    "auto_repair_gate": "auto_repair",
+    "auto_repair_log_flood": "auto_repair"
   }
 }

@@ -7,6 +7,8 @@
 using namespace kk::coop;
 namespace {
 void Check(bool ok,const char* why) { if (!ok) { std::fprintf(stderr,"FAIL: %s\n",why); std::exit(1); } }
+// RO1: tests that expect a guest move or reload turn kk_coop_auto_repair on explicitly.
+constexpr bool kRepairOn=true;
 WorldDigestPage Page(uint16_t part=0) {
   WorldDigestPage p; p.generation=1; p.level=101; p.start=1; p.checkpoint=2; p.sweep=1;
   p.parts=2; p.part=part; p.script_count=17; p.enemy_count=13;
@@ -93,14 +95,14 @@ void Hysteresis() {
   Check(!desync::FreshForPose(page,PlayerPose{100006,101}) && !desync::FreshForPose(page,{}),"reliable backlog or missing pose cannot become fresh drift evidence");
   using desync::Tier; desync::Guard g; desync::Evidence lag; lag.lag=true; lag.progress=7;
   for (double t=1;t<=19;t+=3) Check(g.Observe(1,101,1,lag,t)==Tier::None,"normal lag grace");
-  Check(g.Observe(1,101,1,lag,22)==Tier::Move,"persistent stationary lag moves automatically");
+  Check(desync::Applied(g.Observe(1,101,1,lag,22),kRepairOn)==Tier::Move,"persistent stationary lag moves automatically");
   g.Acted(Tier::Move,22);
   for (double t=25;t<=43;t+=3) Check(g.Observe(1,101,1,lag,t)==Tier::None,"post-move grace");
-  Check(g.Observe(1,101,1,lag,46)==Tier::Reload,"persistent post-move lag reloads guest");
+  Check(desync::Applied(g.Observe(1,101,1,lag,46),kRepairOn)==Tier::Reload,"persistent post-move lag reloads guest");
   g.Acted(Tier::Reload,46);
   for (double t=49;t<300;t+=3) Check(g.Observe(1,101,1,lag,t)==Tier::None,"same checkpoint never loops");
   for (double t=301;t<=319;t+=3) Check(g.Observe(1,101,2,lag,t)==Tier::None,"new checkpoint starts fresh grace");
-  Check(g.Observe(1,101,2,lag,322)==Tier::Move,"new checkpoint has bounded recovery budget");
+  Check(desync::Applied(g.Observe(1,101,2,lag,322),kRepairOn)==Tier::Move,"new checkpoint has bounded recovery budget");
   for (double t=325;t<380;t+=3) Check(g.Observe(1,101,1,lag,t)==Tier::None,"checkpoint rollback cannot renew a consumed budget");
   g={};
   for (double t=1;t<180;t+=3) { ++lag.progress; Check(g.Observe(1,101,1,lag,t)==Tier::None,"native progress prevents false recovery"); }
@@ -118,10 +120,10 @@ void Hysteresis() {
   Check(g.Observe(1,101,1,quiet,10)==Tier::None,"pause resets small repair grace");
   g={}; desync::Evidence wrong; wrong.wrong_level=true;
   for (double t=1;t<=19;t+=3) Check(g.Observe(1,101,1,wrong,t)==Tier::None,"wrong-level grace survives transitions");
-  Check(g.Observe(1,101,1,wrong,22)==Tier::Reload,"large drift bypasses pointless teleport");
+  Check(desync::Applied(g.Observe(1,101,1,wrong,22),kRepairOn)==Tier::Reload,"large drift bypasses pointless teleport");
   g={}; wrong.quiet=true;
   for (double t=1;t<=19;t+=3) Check(g.Observe(1,101,1,wrong,t)==Tier::None,"small drift never permits repair in the wrong world");
-  Check(g.Observe(1,101,1,wrong,22)==Tier::Reload,"wrong world retains reload priority over small drift");
+  Check(desync::Applied(g.Observe(1,101,1,wrong,22),kRepairOn)==Tier::Reload,"wrong world retains reload priority over small drift");
   CheckpointCatchup catchup; catchup.Reset(1,1);
   Check(!catchup.Begin() && catchup.Begin(false,true) && !catchup.Begin(false,true),"same initial checkpoint reload allowed once only for guard");
   catchup.Reset(1,3); catchup.Observe(1,1,1);
@@ -131,10 +133,10 @@ void PersistentMissingActor() {
   using desync::Tier;
   desync::Guard guard; desync::Evidence e; e.structural=true; e.structural_anchor=42;
   for (double t=1;t<=19;t+=3) { ++e.progress; Check(guard.Observe(1,201,3,e,t)==Tier::None,"a missing actor retains the full normal grace"); }
-  ++e.progress; Check(guard.Observe(1,201,3,e,22)==Tier::Move,"new births and script progress cannot hide a persistently missing actor");
+  ++e.progress; Check(desync::Applied(guard.Observe(1,201,3,e,22),kRepairOn)==Tier::Move,"new births and script progress cannot hide a persistently missing actor");
   guard.Acted(Tier::Move,22);
   for (double t=25;t<=43;t+=3) { ++e.progress; Check(guard.Observe(1,201,3,e,t)==Tier::None,"missing actor retains post-move grace"); }
-  ++e.progress; Check(guard.Observe(1,201,3,e,46)==Tier::Reload,"unchanged missing actor reaches guest-only reload despite unrelated progress");
+  ++e.progress; Check(desync::Applied(guard.Observe(1,201,3,e,46),kRepairOn)==Tier::Reload,"unchanged missing actor reaches guest-only reload despite unrelated progress");
   guard.Acted(Tier::Reload,46);
   for (double t=49;t<180;t+=3) { ++e.progress; Check(guard.Observe(1,201,3,e,t)==Tier::None,"structural anchor cannot renew the checkpoint reload budget"); }
   guard={}; e.progress=0;
@@ -142,6 +144,22 @@ void PersistentMissingActor() {
   e.structural_anchor=43;
   Check(guard.Observe(1,201,3,e,22)==Tier::None,"repairing the old missing actor renews grace for a different one");
   e={}; Check(guard.Observe(1,201,3,e,25)==Tier::None,"equal worlds never recover because of an old anchor");
+}
+void AutoRepairOff() {
+  using desync::Tier;
+  Check(!desync::AutoRepairDefault(),"kk_coop_auto_repair defaults to off");
+  desync::Guard g; desync::Evidence lag; lag.lag=true; lag.progress=7;
+  for (double t=1;t<=19;t+=3) g.Observe(1,101,1,lag,t);
+  const auto decision=g.Observe(1,101,1,lag,22);
+  Check(decision==Tier::Move && desync::Applied(decision,false)==Tier::None,"setting off measures the move decision but never applies it");
+  // Nothing was acted on, so the measurement keeps reporting the same drift.
+  Check(g.Observe(1,101,1,lag,25)==Tier::Move && desync::Applied(Tier::Move,false)==Tier::None,"withheld move keeps measuring without a guest move");
+  desync::Evidence wrong; wrong.wrong_level=true; g={};
+  for (double t=1;t<=19;t+=3) g.Observe(1,101,1,wrong,t);
+  Check(desync::Applied(g.Observe(1,101,1,wrong,22),false)==Tier::None,"wrong world drift never privately reloads the guest when off");
+  g={}; desync::Evidence quiet; quiet.quiet=true;
+  g.Observe(1,101,1,quiet,1); g.Observe(1,101,1,quiet,4);
+  Check(desync::Applied(g.Observe(1,101,1,quiet,7),false)==Tier::Quiet,"quiet value repair is unchanged when off");
 }
 void Mailbox() {
   StoryMailbox box; Message m; m.type=MessageType::WorldDigest; m.epoch=17; m.digest=Page();
@@ -163,4 +181,4 @@ void Mailbox() {
   receipt.audit.diffs[0]=4; Check(!Encode(receipt,bytes) && !box.Submit(receipt),"audit cannot claim more differing samples than samples");
 }
 }
-int main() { Codec(); Assembly(); Hysteresis(); PersistentMissingActor(); Mailbox(); std::puts("World digest codec, complete census, recovery tiers and loop guards passed"); }
+int main() { Codec(); Assembly(); Hysteresis(); PersistentMissingActor(); AutoRepairOff(); Mailbox(); std::puts("World digest codec, complete census, recovery tiers and loop guards passed"); }

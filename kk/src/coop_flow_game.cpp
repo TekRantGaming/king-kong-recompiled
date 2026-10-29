@@ -931,7 +931,10 @@ void SessionReloadFrame(uint8_t* base) {
         !observer::Active() && !observer::InCutscene(base) && !play::StartLevelLoading() &&
         !play::CoverScreen() && !play::PauseMenuOpen() && !play::GamePausePageUp();
     const uint32_t accepted=catchup_request.exchange(0);
-    const auto guard_action=WorldGuardPending();
+    // RO1: the guard withholds these itself; recheck here so nothing pending from
+    // before a settings change can still move or reload the guest.
+    const bool auto_repair=REXCVAR_GET(kk_coop_auto_repair);
+    const auto guard_action=desync::Applied(WorldGuardPending(),auto_repair);
     if (eligible && guard_action==desync::Tier::Reload) {
       BeginCatchup(v,now,"persistent world digest drift",false,true);
       return;
@@ -948,7 +951,17 @@ void SessionReloadFrame(uint8_t* base) {
       REXLOG_INFO("KK co-op catch-up: checkpoint offer generation {} guest checkpoint {} host checkpoint {}; no nearby enemy or cutscene",
           v.world.generation,catchup.WorldCheckpoint(),catchup.Target());
     catchup_offer=immediate;
-    const bool automatic=eligible && catchup.Available() && StoryCatchupReady();
+    const bool story_lag_reload=eligible && catchup.Available() && StoryCatchupReady();
+    // RO1: this private reload follows story checksum drift by itself, with no
+    // button press. With auto repair off it is only logged; the offered buttons stay.
+    const bool automatic=story_lag_reload && desync::Applied(desync::Tier::Reload,auto_repair)==desync::Tier::Reload;
+    // Count each episode once, not every frame it stays ready.
+    static bool story_withheld=false;
+    const bool withheld_now=story_lag_reload && !automatic;
+    if (withheld_now && !story_withheld && WorldGuardWithhold(desync::Withheld::kStoryCatchup))
+      REXLOG_INFO("KK co-op desync: decision=story-catchup not applied (auto repair off) generation={} level={} guest checkpoint {} host checkpoint {} withheld-story-catchups={}; guest stays, host continues",
+          v.world.generation,v.world.level,catchup.WorldCheckpoint(),catchup.Target(),WorldGuardWithheld(desync::Withheld::kStoryCatchup));
+    story_withheld=withheld_now;
     if (automatic || (accepted==v.world.generation && immediate)) {
       BeginCatchup(v,now,automatic ? "persistent lag after soft move" : "checkpoint offer accepted",!automatic);
       return;

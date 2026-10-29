@@ -1,5 +1,6 @@
 // C41 source handoff. Claude builds/runs this SDK/game-free executable.
 #include "coop_story.h"
+#include "coop_desync.h"
 #include "coop_session.h"
 #include "coop_runtime.h"
 #include <algorithm>
@@ -408,6 +409,9 @@ void PersistentLagAndSoftFix() {
   for (double t : {120.,123.,126.,129.,132.,135.,138.,140.})
     Check(lag.Sample(authority,guest,t)==Stage::AfterMove,"native teleport grants a second full convergence interval");
   Check(lag.Sample(authority,guest,141)==Stage::Reload,"only stationary lag after completed soft fix offers checkpoint recovery");
+  // RO1: this stage starts a private guest reload by itself only with kk_coop_auto_repair on.
+  Check(desync::Applied(desync::Tier::Reload,true)==desync::Tier::Reload &&
+      desync::Applied(desync::Tier::Reload,false)==desync::Tier::None,"story lag after a soft fix reloads the guest only with auto repair on");
   guest.record=2;
   Check(lag.Sample(authority,guest,144)==Stage::AfterMove,"partial progress renews grace but retains the completed soft fix");
   for (double t : {147.,150.,153.,156.,159.,162.,164.})
