@@ -102,7 +102,9 @@ void VoidBeforeGround(PPCContext& ctx,uint8_t* b) {
   void_rescue::Gate gate;
   gate.coop=enabled; gate.jack=true; gate.playing=true;
   gate.cinematic=observer::InCutscene(b) || observer::Active();
-  gate.dead=h->condition==PlayerCondition::Dead;
+  // H_ETAT_IA_mort enters state 701 before all health bookkeeping finishes.
+  // A scripted death that has entered that state must retain its native result.
+  gate.dead=h->condition==PlayerCondition::Dead || Load32(b,h->vars+0xA98)==701;
   const auto bank=Load32(b,0x82CC87F8);
   gate.scripted=Load32(b,h->vars+0x337C)!=0 || !PoseAddress(bank,0x1D8C) || Load32(b,bank+0x1D88)!=0;
   gate.native_void=Load32(b,h->vars+kVoid)!=0;
