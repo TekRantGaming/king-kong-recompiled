@@ -2,10 +2,13 @@
 // an established driver stall. Its two loop limits became INT_MAX. Refuse
 // an invalid line before conversion; the native return value 0 means blocked.
 #include "coop_grid_guard.h"
+#include "coop_raptor_route.h"
 #include "hfr.h"
 #include "coop_pose.h"
 #include "coop_stimulus_debug.h"
 #include <chrono>
+#include <cstdlib>
+#include <cstring>
 #include <rex/hook.h>
 #include <rex/logging.h>
 
@@ -25,11 +28,23 @@ REX_EXTERN(__imp__sub_827117E0);
 REX_EXTERN(__imp__sub_82711718);
 REX_EXTERN(__imp__sub_82710E20);
 REX_EXTERN(__imp__sub_82409B80);
+REX_EXTERN(__imp__sub_82447DB0);
+#if defined(KK_DEV_TOOLS)
+namespace kk { double DevSecondsSinceMenu(); }
+#endif
 
 namespace kk::coop::raptor_route {
 using namespace kk::hfr;
 struct Owner { uint32_t actor=0, ai=0, vars=0, matrix=0; };
 thread_local Owner current;
+thread_local uint64_t grid_refusals=0, recovered_grid=0;
+thread_local Owner refused_grid, refused_orientation;
+bool Same(Owner a,Owner b) { return a.vars && a.actor==b.actor && a.ai==b.ai && a.vars==b.vars && a.matrix==b.matrix; }
+bool PendingGrid() { return grid_refusals!=recovered_grid && Same(current,refused_grid); }
+bool PendingOrientation() { return Same(current,refused_orientation); }
+struct ResumeWatch { Owner owner; Point3 from; bool pending=false; };
+ResumeWatch watch;
+Point3 ReadPoint(const uint8_t* b,uint32_t p) { return {LoadF(b,p),LoadF(b,p+4),LoadF(b,p+8)}; }
 struct Scope {
   Owner saved=current;
   explicit Scope(uint8_t* b) {
@@ -62,6 +77,15 @@ void Point(const uint8_t* b,uint32_t p,const char* source,uint32_t caller) {
 void Inputs(const uint8_t* b,const char* source,uint32_t caller) {
   if (!current.vars) return;
   const auto v=current.vars;
+  if (watch.pending && watch.owner.actor==current.actor && watch.owner.ai==current.ai &&
+      watch.owner.vars==v && watch.owner.matrix==current.matrix && Finite(b,current.matrix+48)) {
+    const auto p=ReadPoint(b,current.matrix+48);
+    if (std::hypot(p[0]-watch.from[0],p[1]-watch.from[1],p[2]-watch.from[2])>=.25f) {
+      REXLOG_INFO("KK co op raptor recovery: native movement actor={:08X} from=({},{},{}) to=({},{},{})",
+          current.actor,watch.from[0],watch.from[1],watch.from[2],p[0],p[1],p[2]);
+      watch.pending=false;
+    }
+  }
   Point(b,current.matrix+48,"actor position",caller);
   Point(b,v+2572,source,caller);
   Point(b,v+2584,"retained step",caller);
@@ -76,6 +100,48 @@ void Inputs(const uint8_t* b,const char* source,uint32_t caller) {
   const auto count=Load32(b,v+2644);
   if (count<=100) for (uint32_t i=0;i<count;++i) Point(b,v+2652+12*i,"cached path",caller);
 }
+bool Recover(PPCContext& ctx,uint8_t* b,const char* reason) {
+  const auto v=current.vars;
+  if (!v || Load32(b,0x82CCBF64)!=current.ai || Load32(b,0x82CCBF6C)!=current.actor ||
+      Load32(b,current.ai+64)!=v || Load32(b,current.actor+12)!=current.matrix || (Load32(b,current.actor)&1)) return false;
+  const auto own=ReadPoint(b,current.matrix+48);
+  const bool reset=ResetRoute([&](uint32_t p){return Load32(b,p);},
+      [&](uint32_t p,uint32_t value){Store32(b,p,value);},
+      [&](uint32_t p,float value){StoreF(b,p,value);},[&]{
+        const PPCContext saved=ctx;
+        __imp__sub_82447DB0(ctx,b);
+        ctx=saved;
+      },v,own);
+  if (!reset) return false;
+  recovered_grid=grid_refusals;
+  if (PendingOrientation()) refused_orientation={};
+  watch={current,own,true};
+  static grid_guard::Reports reports;
+  const double now=std::chrono::duration<double>(std::chrono::steady_clock::now().time_since_epoch()).count();
+  if (reports.Note(now)) REXLOG_WARN("KK co op raptor recovery: route cleared actor={:08X} ai={:08X} reason={} own=({},{},{}) count={}",
+      current.actor,current.ai,reason,own[0],own[1],own[2],reports.refused);
+  return true;
+}
+bool BadRoute(const uint8_t* b) {
+  if (!current.vars) return false;
+  const auto v=current.vars;
+  if (!Finite(b,current.matrix+48) || !Finite(b,v+2572) || !Finite(b,v+2584)) return true;
+  const auto count=Load32(b,v+2644);
+  if (count>100) return true;
+  for (uint32_t i=0;i<count;++i) if (!Finite(b,v+2652+12*i)) return true;
+  return false;
+}
+#if defined(KK_DEV_TOOLS)
+bool Force(const uint8_t* b,const char* mode) {
+  static bool done=false;
+  const char* value=std::getenv("KK_DEV_RAPTOR_NAN");
+  if (done || !value || std::strcmp(value,mode)!=0 || !current.vars ||
+      Load32(b,current.vars+5108)!=2 || kk::DevSecondsSinceMenu()<35) return false;
+  done=true;
+  REXLOG_WARN("KK dev raptor force: mode={} actor={:08X} ai={:08X}",mode,current.actor,current.ai);
+  return true;
+}
+#endif
 bool Raptor(const uint8_t* b) {
   const auto ai=Load32(b,0x82CCBF64);
   if (!PoseAddress(ai,88)) return false;
@@ -104,6 +170,25 @@ void WriteOutput(uint8_t* b,uint32_t actor,uint32_t caller,const char* source) {
   Scope scope(b);
   for (uint32_t off : {0u,16u,32u,48u}) Point(b,m+off,source,caller);
 }
+bool Orientation(PPCContext& ctx,uint8_t* b) {
+  if (!REXCVAR_GET(kk_coop_enabled) || !PoseAddress(ctx.r4.u32,12) || !PoseAddress(ctx.r5.u32,12)) return false;
+  const auto first=ReadPoint(b,ctx.r4.u32), second=ReadPoint(b,ctx.r5.u32);
+  if (Normalizable(first) && Normalizable(second)) return false;
+  if (ctx.r3.u32!=Load32(b,0x82CCBF6C) || !Raptor(b)) return false;
+  Scope scope(b);
+#if defined(KK_DEV_TOOLS)
+  if (const auto off=std::getenv("KK_DEV_RAPTOR_SOURCE_OFF"); off && std::strcmp(off,"1")==0) return false;
+#endif
+  if (!RefuseOrientation(true,true,first,second)) return false;
+  static grid_guard::Reports reports;
+  const double now=std::chrono::duration<double>(std::chrono::steady_clock::now().time_since_epoch()).count();
+  if (reports.Note(now)) REXLOG_WARN("KK co op raptor orientation refused: actor={:08X} caller={:08X} first=({},{},{}) second=({},{},{}) count={}",
+      current.actor,uint32_t(ctx.lr),first[0],first[1],first[2],second[0],second[1],second[2],reports.refused);
+  // The caller can still be following its waypoint pointers. Clear the route
+  // only after its native compute, fight or blend function has returned.
+  refused_orientation=current;
+  return true;
+}
 } // namespace kk::coop::raptor_route
 
 REX_HOOK_RAW(sub_82593B98) {
@@ -111,12 +196,14 @@ REX_HOOK_RAW(sub_82593B98) {
   kk::coop::raptor_route::Inputs(base,"blend input",uint32_t(ctx.lr));
   __imp__sub_82593B98(ctx,base);
   kk::coop::raptor_route::Inputs(base,"blend output",0x82593B98);
+  if (kk::coop::raptor_route::PendingOrientation()) kk::coop::raptor_route::Recover(ctx,base,"orientation input");
 }
 REX_HOOK_RAW(sub_825E2178) {
   kk::coop::raptor_route::Scope scope(base);
   kk::coop::raptor_route::Inputs(base,"fight input",uint32_t(ctx.lr));
   __imp__sub_825E2178(ctx,base);
   kk::coop::raptor_route::Inputs(base,"fight output",0x825E2178);
+  if (kk::coop::raptor_route::PendingOrientation()) kk::coop::raptor_route::Recover(ctx,base,"orientation input");
 }
 REX_HOOK_RAW(sub_825B7BA8) {
   kk::coop::raptor_route::Scope scope(base);
@@ -138,9 +225,23 @@ REX_HOOK_RAW(sub_82711718) {
 }
 REX_HOOK_RAW(sub_82710E20) {
   const auto actor=ctx.r3.u32, caller=uint32_t(ctx.lr);
+#if defined(KK_DEV_TOOLS)
+  uint32_t injected=0, words[3]{};
+  {
+    kk::coop::raptor_route::Scope scope(base);
+    if (actor==kk::coop::raptor_route::current.actor && kk::coop::raptor_route::Raptor(base) && ctx.r4.u32>=ctx.r1.u32 &&
+        uint64_t(ctx.r4.u32)+12<=uint64_t(ctx.r1.u32)+4096 && kk::coop::raptor_route::Force(base,"orientation")) {
+      injected=ctx.r4.u32;
+      for (unsigned i=0;i<3;++i) { words[i]=kk::hfr::Load32(base,injected+4*i); kk::hfr::Store32(base,injected+4*i,0); }
+    }
+  }
+#endif
   kk::coop::raptor_route::WriteInput(ctx,base,"orientation setter input",true);
-  __imp__sub_82710E20(ctx,base);
+  if (!kk::coop::raptor_route::Orientation(ctx,base)) __imp__sub_82710E20(ctx,base);
   kk::coop::raptor_route::WriteOutput(base,actor,caller,"orientation setter output");
+#if defined(KK_DEV_TOOLS)
+  if(injected) for(unsigned i=0;i<3;++i) kk::hfr::Store32(base,injected+4*i,words[i]);
+#endif
 }
 REX_HOOK_RAW(sub_82409B80) {
   kk::coop::raptor_route::WriteInput(ctx,base,"velocity setter input");
@@ -152,6 +253,8 @@ REX_HOOK_RAW(sub_825924A8) {
   kk::coop::raptor_route::Inputs(base,"destination input",uint32_t(ctx.lr));
   __imp__sub_825924A8(ctx,base);
   kk::coop::raptor_route::Inputs(base,"destination output",0x825924A8);
+  if (kk::coop::raptor_route::PendingGrid())
+    kk::coop::raptor_route::Recover(ctx,base,"destination grid refusal");
 }
 REX_HOOK_RAW(sub_825757B0) {
   kk::coop::raptor_route::Scope scope(base);
@@ -161,9 +264,19 @@ REX_HOOK_RAW(sub_825757B0) {
 }
 REX_HOOK_RAW(sub_82572298) {
   kk::coop::raptor_route::Scope scope(base);
+#if defined(KK_DEV_TOOLS)
+  if (kk::coop::raptor_route::Force(base,"goal")) kk::hfr::Store32(base,kk::coop::raptor_route::current.vars+2572,0x7FC00000);
+#endif
   kk::coop::raptor_route::Inputs(base,"compute input",uint32_t(ctx.lr));
+  if (kk::coop::raptor_route::BadRoute(base) || kk::coop::raptor_route::PendingOrientation()) {
+    kk::coop::raptor_route::Recover(ctx,base,"invalid compute input");
+    ctx.r3.u64=0;
+    return;
+  }
   __imp__sub_82572298(ctx,base);
   kk::coop::raptor_route::Inputs(base,"compute output",0x82572298);
+  if (kk::coop::raptor_route::PendingGrid() || kk::coop::raptor_route::BadRoute(base))
+    kk::coop::raptor_route::Recover(ctx,base,"compute grid refusal");
 }
 REX_HOOK_RAW(sub_824759C0) {
   kk::coop::raptor_route::Inputs(base,"collision input",uint32_t(ctx.lr));
@@ -190,7 +303,10 @@ REX_HOOK_RAW(sub_826D5CD8) {
 }
 
 REX_HOOK_RAW(sub_82556890) {
-  const kk::coop::grid_guard::Line line{ctx.r3.u64, ctx.r4.u64, ctx.r5.u64, ctx.r6.u64, ctx.f1.f64};
+  kk::coop::grid_guard::Line line{ctx.r3.u64, ctx.r4.u64, ctx.r5.u64, ctx.r6.u64, ctx.f1.f64};
+#if defined(KK_DEV_TOOLS)
+  if (kk::coop::raptor_route::Force(base,"grid")) line.from_z=uint64_t(0x7FC00000)<<32;
+#endif
   if (!kk::coop::grid_guard::Refuse(REXCVAR_GET(kk_coop_enabled), line)) {
     __imp__sub_82556890(ctx, base);
     return;
@@ -199,6 +315,10 @@ REX_HOOK_RAW(sub_82556890) {
   // Preserve the native helper's initial scratch flag clear. Do not read an
   // actor, AI or world pointer to reject an invalid query.
   kk::hfr::Store32(base, 0x82CCBFC0, 0);
+  if (kk::coop::raptor_route::current.vars) {
+    ++kk::coop::raptor_route::grid_refusals;
+    kk::coop::raptor_route::refused_grid=kk::coop::raptor_route::current;
+  }
   static kk::coop::grid_guard::Reports reports;
   const double now = std::chrono::duration<double>(std::chrono::steady_clock::now().time_since_epoch()).count();
   if (reports.Note(now)) {

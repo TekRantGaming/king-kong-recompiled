@@ -21,6 +21,7 @@
 #include "coop_objects.h"
 #include "coop_barrier.h"
 #include "coop_player_contact.h"
+#include "coop_raptor_route.h"
 #include <algorithm>
 #include <map>
 #include <vector>
@@ -848,6 +849,52 @@ void RaptorBiteSound() {
   d.flags=0x4104; d.magnitude=1000; d.projectile=true;
   Check(!ValidDamageEvent(d),"projectile cannot request a bite sound");
 }
+void RaptorRoute() {
+  namespace route=raptor_route;
+  const float nan=std::numeric_limits<float>::quiet_NaN();
+  const route::Point3 forward{0,1,0}, up{0,0,1}, zero{};
+  Check(route::RefuseOrientation(true,true,zero,up),"zero aim cannot poison the native actor basis");
+  Check(route::RefuseOrientation(true,true,forward,zero),"zero up cannot poison the native actor basis");
+  Check(route::RefuseOrientation(true,true,{nan,1,0},up),"invalid native aim refused before transform writes");
+  Check(!route::RefuseOrientation(false,true,zero,up) && !route::RefuseOrientation(true,false,zero,up),
+      "only enabled co op raptors change");
+  Check(!route::RefuseOrientation(true,true,forward,up),"ordinary native orientation passes unchanged");
+  for (unsigned axis=0;axis<3;++axis) {
+    auto p=forward;p[axis]=nan;
+    Check(route::RefuseOrientation(true,true,p,up),"each invalid direction coordinate refused");
+  }
+  const auto initial=[] {
+    std::map<uint32_t,uint32_t> memory{{20,100},{5108,2},{5216,0x10000007},{5220,19},
+      {2552,0},{2556,1},{2644,17},{6760,3},{6776,2},{7028,0x40001000},{7032,0x40002000},
+      {6732,0x01225E08},{7152,0x40003000},{7156,0x40004000}};
+    for (uint32_t off : {2572u,2584u}) memory[off]=std::bit_cast<uint32_t>(std::numeric_limits<float>::quiet_NaN());
+    return memory;
+  };
+  auto memory=initial();unsigned clears=0;
+  auto reset=[&](route::Point3 p) {
+    return route::ResetRoute([&](uint32_t a){return memory[a];},
+        [&](uint32_t a,uint32_t value){memory[a]=value;},
+        [&](uint32_t a,float value){memory[a]=std::bit_cast<uint32_t>(value);},[&]{
+          ++clears;Check(memory[6776]<=30,"native clear receives a bounded graph count");
+          while(memory[6776]) {--memory[6776];memory[7028+4*memory[6776]]=0;}
+          for (uint32_t off : {7152u,7156u,7160u,7164u}) memory[off]=0;
+        },0,p);
+  };
+  Check(reset({82.426918f,95.611893f,14.4547f}),"invalid route is recovered using its finite native position");
+  Check(clears==1 && !memory[2644] && !memory[2556] && memory[2552]==1 && !memory[6776] && !memory[7152],
+      "native route is cleared and movement stops for this frame");
+  Check(memory[6760]==UINT32_MAX,"native destination choice is requested again next frame");
+  Check(memory[6732]==0x01000000,"only stale route flags are cleared");
+  for (uint32_t offset : {2560u,2572u,2584u})
+    Check(std::bit_cast<float>(memory[offset])==82.426918f && std::bit_cast<float>(memory[offset+8])==14.4547f,
+        "stop goal uses the actor position without moving its transform");
+  Check(memory[20]==100 && memory[5108]==2 && memory[5216]==0x10000007 && memory[5220]==19,
+      "health, state and native threat choice survive recovery");
+  memory=initial();const auto before=memory;
+  Check(!reset({nan,2,3}) && memory==before && clears==1,"invalid own position never creates a guessed location");
+  memory=initial();memory[6776]=UINT32_MAX;
+  Check(reset({1,2,3}) && clears==2 && memory[6776]==0,"corrupt graph count cannot hang the native clear loop");
+}
 void RaptorCamera() {
   const ShotVector foot{1,2,3},view{1.1f,2.1f,4.6f};
   const auto height=[&](EnemyFamily family=EnemyFamily::Raptor,uint32_t kind=16,uint32_t caller=0x82464320,
@@ -1621,6 +1668,7 @@ int main(int argc,char** argv) {
   else if(name=="native_script_target") NativeScriptTarget();
   else if(name=="bat_contact_sound") BatContactSound();
   else if(name=="raptor_camera") RaptorCamera();
+  else if(name=="raptor_route") RaptorRoute();
   else if(name=="raptor_bite_sound") RaptorBiteSound();
   else if(name=="centipede_contact_sound") CentipedeContactSound();
   else if(name=="body_hit_class") BodyHitClass();
