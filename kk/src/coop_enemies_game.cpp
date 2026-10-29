@@ -5627,8 +5627,11 @@ REX_HOOK_RAW(sub_8271D1D8) {
   __imp__sub_8271D1D8(ctx,base);
 }
 REX_HOOK_RAW(sub_8271CCB8) {
-  if (kk::coop::Hold(ctx, base)) return;
-  if (kk::PartnerBodyHold(ctx, base)) return;
+  if (kk::coop::actors::HoldDispatch([&]{return kk::coop::Hold(ctx,base);},
+      [&]{return kk::PartnerBodyHold(ctx,base);},[&]{
+        if (!kk::coop::FreezeActor(base,kk::hfr::Load32(base,0x82CCBF6C),kk::hfr::Load32(base,0x82CCBF64))) return false;
+        ctx.r3.u64=0; return true;
+      })) return;
   kk::coop::ActorNativeRun(base,kk::hfr::Load32(base,0x82CCBF6C),kk::hfr::Load32(base,0x82CCBF64));
   __imp__sub_8271CCB8(ctx, base);
 }

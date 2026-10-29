@@ -75,6 +75,13 @@ EnemyState Enemy() {
   EnemyState e; e.id={0x123456789abcdef0ull,1,EnemyFamily::Raptor}; e.life=100; return e;
 }
 void ActorFreeze() {
+  bool borrowed=true; unsigned rechecked=0;
+  Check(actors::HoldDispatch([&]{return !borrowed;},[&]{borrowed=false; return false;},
+      [&]{++rechecked; return actors::Freeze(true,true,true,true,true,borrowed,true);}) && rechecked==1,
+      "an authored donor released by the partner hold is frozen before native AI resumes");
+  rechecked=0;
+  Check(actors::HoldDispatch([]{return false;},[]{return true;},[&]{++rechecked; return true;}) && !rechecked,
+      "a still managed partner body keeps its existing hold without a replica recheck");
   Check(actors::Freeze(true,true,true,true,true,false,true,false,true,.684),
       "a long shipping frame cannot release guest AI authority");
   Check(actors::Freeze(true,true,true,true,true,false,true,false,false,10),

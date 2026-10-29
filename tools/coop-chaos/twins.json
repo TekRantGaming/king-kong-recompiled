@@ -88,6 +88,7 @@
     "actor_digest_repair": "actor_freeze",
     "actor_freeze_off": "actor_freeze",
     "actor_freeze_prepared": "actor_freeze",
+    "actor_freeze_release": "actor_freeze",
     "actor_freeze_host": "actor_freeze",
     "actor_freeze_retire": "actor_freeze",
     "actor_init_exact": "actor_freeze",

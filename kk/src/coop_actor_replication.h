@@ -53,6 +53,13 @@ inline bool Freeze(bool enabled, bool guest, bool connected, bool world,
   return enabled && (guest || COOP_MUT_IF("actor_freeze_host")) && connected && world &&
       binding && !player && initialized && (!retiring || COOP_MUT_IF("actor_freeze_retire"));
 }
+template<class ReplicaHold,class PartnerHold,class Recheck>
+inline bool HoldDispatch(ReplicaHold replica,PartnerHold partner,Recheck recheck) {
+  if (replica() || partner()) return true;
+  // The partner service can release an authored donor inside its hold call.
+  // That donor is a replica again before any native script may execute.
+  return !COOP_MUT_IF("actor_freeze_release") && recheck();
+}
 inline bool Initialize(bool enabled,bool guest,bool fresh,bool exact,bool player,bool initializer) {
   return enabled && guest && fresh && (exact || COOP_MUT_IF("actor_init_exact")) && !player && initializer;
 }
