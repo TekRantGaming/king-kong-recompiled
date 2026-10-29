@@ -551,7 +551,7 @@ struct Pending {
   EnemyId id; uint32_t ai, matrix; float x, y, z;
   uint64_t birth_spawner=0; uint8_t birth_template=0,birth_point=0;
 };
-struct Spawner { uint64_t key; uint32_t ai, vars, sequence = 0; bool shared_births=false; };
+struct Spawner { uint64_t key; uint32_t ai, vars, sequence = 0; bool shared_births=false,initialized=false; };
 const EnemyState* replay_birth=nullptr;
 bool SharedSpawner(const uint8_t* b,uint32_t vars) {
   if (!PoseAddress(vars,0x2094)) return false;
@@ -864,6 +864,8 @@ void Capture(const uint8_t* b, uint32_t w, bool initial = true) {
     if (!spawner || !vars) continue;
     Spawner sp{key, ai, vars, 0};
     sp.shared_births=SharedSpawner(b,vars);
+    const auto block=Ptr(b,ai,24,24);
+    sp.initialized=block && (Load32(b,block+20)==0x826E1EE8 || Load32(b,block+20)==0x826F8BC8);
 #if defined(KK_DEV_TOOLS)
     if (initial) REXLOG_INFO("ENEMIES birth admission spawner={:016X} shared={}",key,sp.shared_births);
 #endif
@@ -4127,6 +4129,7 @@ bool SpawnerStep(PPCContext& ctx,uint8_t* b,bool host_birth=false) {
   const auto ext=Ptr(b,actor,24,42);
   if (sp.ai!=ai || Ptr(b,ext,4,88)!=ai || Ptr(b,ai,64,0x2094)!=sp.vars ||
       !Member(b,s.world,actor,true) || (!host_birth && (Load32(b,actor+4)&0x00600000))) return false;
+  if (!host_birth) sp.initialized=true; // This hook is reached only by the native loop or generate track.
   ctx.r3.u32=0;
   if (!Connected() || s.link.remote.world!=s.identity) return true;
   // Preserve native post-birth visibility, wave limits and callbacks. Only the
@@ -4199,22 +4202,26 @@ void ReplayHostBirths(PPCContext& ctx,uint8_t* b) {
     const auto family=Tracks(b,Ptr(b,Ptr(b,source,24,8),4,88),template_state,nested);
     if (!source || nested || SpawnId(sp.key,Mix(sp.key,offset),e.id.sequence,family)!=e.id) continue;
     const auto model=Ptr(b,sp.ai,0,16),block=Ptr(b,sp.ai,24,24);
-    if (!model || b[model+15] || !block) continue;
-    const auto fn=Load32(b,block+20);
+    if (!model || b[model+15]) continue;
+    const auto fn=block ? Load32(b,block+20):0;
     // Initialize only a loaded local spawner. A host birth can precede the
     // guest's activation range. Never copy scheduler flags or enable a model.
     bool native_spawner=false; uint32_t state=0;
     Tracks(b,sp.ai,state,native_spawner);
-    if (!native_spawner && fn!=0x826D6750 && fn!=0x826D6890) continue;
+    if (!native_spawner && fn!=0x826D6750 && fn!=0x826D6890 && !(sp.initialized && !block)) continue;
     Scratch scratch(ctx,b);
     constexpr uint32_t globals[]{0x82CCBF58,0x82CCBF5C,0x82CCBF60,0x82CCBF64,0x82CCBF68,0x82CCBF6C,0x82CCBF70};
     uint32_t saved[7]; for (unsigned i=0;i<7;++i) saved[i]=Load32(b,globals[i]);
     Store32(b,globals[0],0); Store32(b,globals[1],block); Store32(b,globals[2],sp.ai+4);
     Store32(b,globals[3],sp.ai); Store32(b,globals[4],sp.ai);
     Store32(b,globals[5],actor); Store32(b,globals[6],actor);
-    if (fn==0x826EB8C0) __imp__sub_826EB8C0(ctx,b);
+    if (fn==0x826EB8C0) {
+      __imp__sub_826EB8C0(ctx,b);
+      const auto ready=Ptr(b,sp.ai,24,24);
+      sp.initialized=ready && Load32(b,ready+20)!=0x826EB8C0;
+    } else if (native_spawner || fn==0x826D6750 || fn==0x826D6890) sp.initialized=true;
     if (Member(b,s.world,actor,true) && Ptr(b,Ptr(b,actor,24,8),4,88)==sp.ai &&
-        Ptr(b,sp.ai,64,0x2094)==sp.vars) SpawnerStep(ctx,b,true);
+        Ptr(b,sp.ai,64,0x2094)==sp.vars && sp.initialized) SpawnerStep(ctx,b,true);
     for (unsigned i=0;i<7;++i) Store32(b,globals[i],saved[i]);
   }
 }
