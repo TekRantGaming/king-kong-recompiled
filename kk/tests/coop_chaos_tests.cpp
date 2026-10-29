@@ -1700,6 +1700,31 @@ void DigestProbes() {
   Check(desync::CompareProbes(host,{})==std::array<uint64_t,2>{1,1},"missing local native identities are visible");
   Check(desync::CompareProbes({},host)==std::array<uint64_t,2>{1,1},"extra local native identities are visible");
 }
+void AutoRepair() {
+  // RO1 (29a play test): drift decisions are measured but never move or privately
+  // reload the guest unless the testing setting is on.
+  Check(!desync::AutoRepairDefault(),"automatic guest moves and reloads are off by default");
+  for (const auto t:{desync::Tier::Move,desync::Tier::Reload}) {
+    Check(desync::Applied(t,false)==desync::Tier::None,"auto repair off withholds guest moves and guest reloads");
+    Check(desync::Applied(t,true)==t,"auto repair on keeps the old guest move and reload behaviour");
+  }
+  Check(desync::Applied(desync::Tier::Quiet,false)==desync::Tier::Quiet,"quiet value repairs are not moves or reloads");
+  Check(desync::Applied(desync::Tier::None,true)==desync::Tier::None,"no decision stays no decision");
+  desync::Withheld w;
+  Check(w.Note(desync::Withheld::kMove,10),"first withheld move is logged");
+  Check(!w.Note(desync::Withheld::kMove,13) && !w.Note(desync::Withheld::kMove,69),"withheld moves log at most once a minute");
+  Check(w.Note(desync::Withheld::kReload,13),"each decision kind has its own minute");
+  Check(w.Note(desync::Withheld::kMove,70),"a later minute logs again");
+  Check(w.Count(desync::Withheld::kMove)==4 && w.Count(desync::Withheld::kReload)==1,"every withheld decision is counted");
+  // Early access: the "Catch up with partner" private reload button is hidden by default.
+  using B=desync::PartnerButton;
+  const bool off=desync::AutoRepairDefault();
+  Check(desync::OfferedButton(true,true,off)==B::None,"catch up button is hidden by default and not swapped for a move");
+  Check(desync::OfferedButton(true,false,off)==B::Move,"move to partner stays by default");
+  Check(desync::OfferedButton(false,true,off)==B::None && desync::OfferedButton(false,false,true)==B::None,"no offer shows no button");
+  Check(desync::OfferedButton(true,true,true)==B::Catchup && desync::OfferedButton(true,false,true)==B::Move,"auto repair on keeps both buttons");
+  Check(!desync::CatchupButtonAllowed(off) && desync::CatchupButtonAllowed(true),"the overlay cannot start the private catch up reload by default");
+}
 void DigestAuditOrder() {
   WorldAudit old; old.sweep=10; old.samples=40;
   auto next=old; next.sweep=11; next.samples=1;
@@ -1727,6 +1752,7 @@ int main(int argc,char** argv) {
   else if(name=="digest_quiet_progress") DigestQuietProgress();
   else if(name=="digest_probes") DigestProbes();
   else if(name=="digest_audit_order") DigestAuditOrder();
+  else if(name=="auto_repair") AutoRepair();
   else if(name=="false_quiet") FalseQuiet();
   else if(name=="unarmed_gait") UnarmedGait();
   else if(name=="rebirth_adoption") RebirthAdoption();

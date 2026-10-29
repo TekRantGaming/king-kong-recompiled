@@ -22,6 +22,7 @@
 #include "graphics_presets.h"
 #include "ultrawide_logic.h"
 #include "update_channel.h"
+#include "coop_desync.h"
 
 // Standalone settings test targets also compile this file without the game definition.
 #ifndef KK_COOP_DEFAULT_ON
@@ -32,6 +33,9 @@ REXCVAR_DEFINE_BOOL(kk_coop_enabled, KK_COOP_DEFAULT_ON != 0, "KK", "Enable the 
     .lifecycle(rex::cvar::Lifecycle::kRequiresRestart);
 REXCVAR_DEFINE_BOOL(kk_coop_actor_replication, false, "KK", "Host controls enemy and crew actors (both players must use the same setting)")
     .lifecycle(rex::cvar::Lifecycle::kRequiresRestart);
+// RO1: off in every build (default from coop_desync.h). Testing only.
+REXCVAR_DEFINE_BOOL(kk_coop_auto_repair, kk::coop::desync::AutoRepairDefault(), "KK/Debug",
+                    "Testing only: when the partner world drifts, move the guest beside the host or reload the guest");
 REXCVAR_DEFINE_BOOL(kk_launcher, true, "KK",
                     "Show the launcher before starting the game (hold Shift at start to force it)");
 REXCVAR_DEFINE_BOOL(kk_skip_launcher, false, "KK",

@@ -26,6 +26,7 @@ uint64_t epoch=0;
 uint32_t generation=0,level=0,sweep=0;
 double next_sample=0,grace=0,received_at=0,next_status=0,pending_at=0;
 desync::Tier pending=desync::Tier::None,in_flight=desync::Tier::None;
+desync::Withheld withheld;
 EnemyWorld recovery_world;
 std::atomic<uint64_t> summary_epoch{0},quiet_count{0},move_count{0},reload_count{0};
 std::atomic<uint64_t> samples{0},captures{0};
@@ -80,7 +81,9 @@ desync::Tier Fixture(double now) {
 void Scope(const FlowView& v,uint64_t current,double now) {
   if (epoch!=current) {
     WorldGuardSummary(); epoch=current; summary_epoch=current;
-    quiet_count=move_count=reload_count=0; samples=captures=0; generation=level=0;
+    quiet_count=move_count=reload_count=0; samples=captures=0; generation=level=0; withheld={};
+    REXLOG_INFO("KK co-op desync: session checker role={} auto-repair={} source={}; when off, drift moves and guest reloads are logged, not applied",
+        v.host ? "host":"guest",REXCVAR_GET(kk_coop_auto_repair),int(rex::cvar::GetFlagSource("kk_coop_auto_repair")));
 #if defined(KK_DEV_TOOLS)
     forced_done=0; forced_injected=false; fixture_started=now;
 #endif
@@ -201,6 +204,22 @@ void WorldGuardFrame(uint8_t* base) {
   }
   const auto decision=guard.Observe(generation,level,v.checkpoint,evidence,now);
   if (decision==desync::Tier::None) pending=desync::Tier::None;
+  if (desync::Applied(decision,REXCVAR_GET(kk_coop_auto_repair))!=decision) {
+    // RO1: measured and logged, never applied. The guard budget is not consumed,
+    // so persistent drift keeps reporting once a minute and quiet repairs keep
+    // their own cadence.
+    pending=desync::Tier::None;
+    const auto kind=decision==desync::Tier::Move ? desync::Withheld::kMove : desync::Withheld::kReload;
+    if (withheld.Note(kind,now))
+      REXLOG_INFO("KK co-op desync: decision={} not applied (auto repair off) generation={} level={} checkpoint={} quiet={} lag={} structural={} wrong-world={} scripts={} enemies={} withheld-moves={} withheld-reloads={}; guest stays, host continues",
+          desync::Name(decision),generation,level,v.checkpoint,evidence.quiet,evidence.lag,evidence.structural,evidence.wrong_level,
+          state.scripts.size(),state.enemies.size(),withheld.Count(desync::Withheld::kMove),withheld.Count(desync::Withheld::kReload));
+#if defined(KK_DEV_TOOLS)
+    // A forced fixture sequence continues to its next tier, as after a completed repair.
+    if (Fixture(now)==decision) forced_done|=1u<<unsigned(decision);
+#endif
+    return;
+  }
   if (decision!=desync::Tier::None && pending==desync::Tier::None) {
     REXLOG_INFO("KK co-op desync: decision={} generation={} level={} checkpoint={} quiet={} lag={} structural={} wrong-world={} scripts={} enemies={}",
         desync::Name(decision),generation,level,v.checkpoint,evidence.quiet,evidence.lag,evidence.structural,evidence.wrong_level,
@@ -212,6 +231,8 @@ void WorldGuardFrame(uint8_t* base) {
   }
 }
 desync::Tier WorldGuardPending() { return Now()-pending_at<=4 ? pending : desync::Tier::None; }
+bool WorldGuardWithhold(desync::Withheld::Kind kind) { return withheld.Note(kind,Now()); }
+uint64_t WorldGuardWithheld(desync::Withheld::Kind kind) { return withheld.Count(kind); }
 void WorldGuardStarted(desync::Tier tier) {
   if (tier==desync::Tier::Reload) EnemyGuardRecoveryWorld(recovery_world);
   pending=desync::Tier::None; in_flight=tier;
@@ -239,8 +260,10 @@ void WorldGuardCancelled(desync::Tier tier) {
 }
 void WorldGuardSummary() {
   const auto ended=summary_epoch.exchange(0);
-  if (ended) REXLOG_INFO("KK co-op desync session-end: local quiet={} moves={} guest-reloads={} captures={} samples={}; guest-report samples={} quiet={} moves={} guest-reloads={}",
+  if (ended) REXLOG_INFO("KK co-op desync session-end: local quiet={} moves={} guest-reloads={} captures={} samples={}; guest-report samples={} quiet={} moves={} guest-reloads={}; auto-repair={} not-applied moves={} guest-reloads={} story-catchups={}",
       quiet_count.load(),move_count.load(),reload_count.load(),captures.load(),samples.load(),
-      peer_summary[0].load(),peer_summary[1].load(),peer_summary[2].load(),peer_summary[3].load());
+      peer_summary[0].load(),peer_summary[1].load(),peer_summary[2].load(),peer_summary[3].load(),
+      REXCVAR_GET(kk_coop_auto_repair),withheld.Count(desync::Withheld::kMove),withheld.Count(desync::Withheld::kReload),
+      withheld.Count(desync::Withheld::kStoryCatchup));
 }
 } // namespace kk::coop

@@ -13,6 +13,47 @@ inline const char* Name(Tier t) {
   switch (t) { case Tier::Quiet:return "quiet"; case Tier::Move:return "move";
     case Tier::Reload:return "guest-reload"; default:return "none"; }
 }
+// RO1 (29 Oct, early access): the checker keeps sampling and logging, but a
+// drift decision never moves the guest beside the host or privately reloads the
+// guest unless kk_coop_auto_repair (testing only) is on. Each PC still runs its
+// own human NPC scripts, so in the 29a play test every private reload left Ann
+// and the crew at an earlier story stage on the guest. Quiet value repairs are
+// neither a move nor a reload and stay as they are.
+// settings.cpp takes the setting's default from here, in every build.
+inline bool AutoRepairDefault() { return COOP_MUT_IF("auto_repair_default"); }
+// The drift decision the game applies; a withheld Move or Reload becomes None.
+inline Tier Applied(Tier decision,bool auto_repair) {
+  if (decision!=Tier::Move && decision!=Tier::Reload) return decision;
+  return auto_repair || COOP_MUT_IF("auto_repair_gate") ? decision : Tier::None;
+}
+// Early access (Craig, 29 Oct): the overlay's "Catch up with partner" button
+// starts a private guest reload, so it is hidden unless auto repair is on. That
+// state shows no button at all; "Move to partner" stays as it is.
+enum class PartnerButton { None, Move, Catchup };
+inline PartnerButton OfferedButton(bool offered,bool checkpoint_recovery,bool auto_repair) {
+  if (!offered) return PartnerButton::None;
+  if (!checkpoint_recovery) return PartnerButton::Move;
+  if (auto_repair || COOP_MUT_IF("catchup_button_default")) return PartnerButton::Catchup;
+  return COOP_MUT_IF("catchup_button_swap") ? PartnerButton::Move : PartnerButton::None;
+}
+// The overlay may start the private catch up reload only when its button exists.
+inline bool CatchupButtonAllowed(bool auto_repair) { return auto_repair || COOP_MUT_IF("catchup_request_open"); }
+// Every withheld decision is counted; each kind is logged at most once a minute.
+class Withheld {
+ public:
+  enum Kind { kMove, kReload, kStoryCatchup, kKinds };
+  bool Note(Kind kind,double now) {
+    if (kind<0 || kind>=kKinds || !std::isfinite(now)) return false;
+    ++count_[kind];
+    if (seen_[kind] && now>=next_[kind]-60 && now<next_[kind] && !COOP_MUT_IF("auto_repair_log_flood")) return false;
+    seen_[kind]=true; next_[kind]=now+60; return true;
+  }
+  uint64_t Count(Kind kind) const { return kind>=0 && kind<kKinds ? count_[kind] : 0; }
+ private:
+  std::array<uint64_t,kKinds> count_{};
+  std::array<double,kKinds> next_{};
+  std::array<bool,kKinds> seen_{};
+};
 struct State {
   WorldDigestPage header;
   std::vector<WorldScript> scripts;
