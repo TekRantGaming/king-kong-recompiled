@@ -4683,16 +4683,30 @@ void InitializeHostHumans(PPCContext& ctx,uint8_t* b) {
   if (!Replication() || s.link.role!=Role::Guest || !fresh || !Scratch::CanUse(ctx)) return;
   bool attempted=false;
   for (const auto& r:s.link.remote.records) {
-    if (r.enemy.id.family!=EnemyFamily::Human || r.enemy.id.sequence ||
+    if (r.enemy.id.family!=EnemyFamily::Human ||
         r.kind!=EnemyEventKind::Spawned || r.enemy.life<=0) continue;
     uint32_t actor=0; Authored authored{}; unsigned count=0;
-    for (const auto& [candidate,a]:s.authored) if (a.key==r.enemy.id.source && a.family==EnemyFamily::Human) {
-      ++count; if (!actor) { actor=candidate; authored=a; }
+    if (!r.enemy.id.sequence) {
+      for (const auto& [candidate,a]:s.authored) if (a.key==r.enemy.id.source && a.family==EnemyFamily::Human) {
+        ++count; if (!actor) { actor=candidate; authored=a; }
+      }
+    } else {
+      // The local native factory recorded this exact host birth. A packet
+      // cannot choose an actor address, template or executable initializer.
+      for (const auto& [candidate,p]:s.pending) if (p.id==r.enemy.id &&
+          p.birth_spawner==r.enemy.birth_spawner && p.birth_template==r.enemy.birth_template &&
+          p.birth_point==r.enemy.birth_point && p.birth_spawner) {
+        ++count;
+        if (!actor) {
+          actor=candidate; authored.key=p.id.source; authored.ai=p.ai;
+          authored.matrix=p.matrix; authored.family=p.id.family;
+        }
+      }
     }
     if (!actor || s.bindings.contains(actor) || !Member(b,s.world,actor,true)) continue;
     const auto ai=Ptr(b,Ptr(b,actor,24,8),4,88);
     const auto vars=Ptr(b,ai,64,16892),block=Ptr(b,ai,24,24),model=Ptr(b,ai,0,16);
-    const bool init=ai==authored.ai && vars && block && Load32(b,block+20)==0x8268D8E8 &&
+    const bool init=ai==authored.ai && Ptr(b,actor,12,64)==authored.matrix && vars && block && Load32(b,block+20)==0x8268D8E8 &&
         Load16(b,ai+80)==0 && Load16(b,ai+82)==0 && !Load32(b,vars) &&
         Load32(b,vars+4)>=1 && Load32(b,vars+4)<=12;
     const bool player=actor==Load32(b,0x82CCBF7C) || kk::PartnerBodyManagedActor(b,actor);
@@ -4719,8 +4733,8 @@ void InitializeHostHumans(PPCContext& ctx,uint8_t* b) {
     ++tries; attempted=true;
     Binding ready; EnemyState native;
     if (tries==1 || Read(b,actor,ready,native) || tries==120)
-      REXLOG_INFO("ACTORS init guest id={:016X} actor={:08X} node={} attempts={} ready={}",
-          r.enemy.id.source,actor,node,tries,Read(b,actor,ready,native));
+      REXLOG_INFO("ACTORS init guest id={:016X}/{} actor={:08X} node={} attempts={} ready={} native-birth={}",
+          r.enemy.id.source,r.enemy.id.sequence,actor,node,tries,Read(b,actor,ready,native),r.enemy.id.sequence!=0);
   }
   if (attempted) Scan(b);
 }
