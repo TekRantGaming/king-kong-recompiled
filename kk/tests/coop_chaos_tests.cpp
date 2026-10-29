@@ -80,6 +80,13 @@ void ActorFreeze() {
   Check(!actors::Freeze(true,true,true,true,true,true,true),"local Jack and partner are untouched");
   Check(!actors::Freeze(true,true,true,true,true,false,false),"native initialization must finish");
   Check(!actors::Freeze(true,true,true,true,true,false,true,true),"host retirement must run native destruction cleanup");
+  Check(actors::Initialize(true,true,true,true,false,true),"an exact host human can finish local native initialization");
+  Check(!actors::Initialize(true,true,true,false,false,true),"ambiguous authored humans must never be initialized by a packet");
+  Check(!actors::Initialize(true,false,true,true,false,true),"host initialization stays native");
+  Check(!actors::Initialize(false,true,true,true,false,true),"off mode never initializes a replica");
+  Check(!actors::Initialize(true,true,false,true,false,true),"stale or other world records cannot initialize actors");
+  Check(!actors::Initialize(true,true,true,true,true,true),"player initialization is never driven by replication");
+  Check(!actors::Initialize(true,true,true,true,false,false),"ordinary NPC tracks cannot run through initialization");
 }
 void ActorInterpolation() {
   enemies::Channel c;

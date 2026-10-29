@@ -45,6 +45,9 @@ inline bool Freeze(bool enabled, bool guest, bool connected, bool world,
   return enabled && (guest || COOP_MUT_IF("actor_freeze_host")) && connected && world &&
       binding && !player && initialized && (!retiring || COOP_MUT_IF("actor_freeze_retire"));
 }
+inline bool Initialize(bool enabled,bool guest,bool fresh,bool exact,bool player,bool initializer) {
+  return enabled && guest && fresh && (exact || COOP_MUT_IF("actor_init_exact")) && !player && initializer;
+}
 inline EnemyState Interpolate(const EnemyState& a, const EnemyState& b, float t) {
   if (COOP_MUT_IF("actor_interpolation_latest")) return b;
   if (!COOP_MUT_IF("actor_interpolation_no_snap") && std::hypot(b.x-a.x,b.y-a.y,b.z-a.z)>kSnapDistance) return b;

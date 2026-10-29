@@ -71,6 +71,7 @@
     "actor_freeze_off": "actor_freeze",
     "actor_freeze_host": "actor_freeze",
     "actor_freeze_retire": "actor_freeze",
+    "actor_init_exact": "actor_freeze",
     "actor_interpolation_latest": "actor_interpolation",
     "actor_interpolation_no_snap": "actor_interpolation",
     "actor_clock_filter": "actor_interpolation"

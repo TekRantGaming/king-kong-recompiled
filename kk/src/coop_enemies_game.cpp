@@ -585,6 +585,8 @@ struct State {
   uint32_t retiring_actor=0;
   uint64_t actor_holds=0,actor_last_bytes=0,actor_drifts=0;
   double actor_log_at=0,actor_publish_at=0;
+  std::map<EnemyId,uint32_t> actor_init_attempts;
+  std::set<EnemyId> actor_init_blocked;
   uint32_t world = 0, game = 0;
   std::map<std::pair<uint32_t, uint32_t>, uint32_t> visits;
   bool capture = false, prepared = false, load_refused_logged = false;
@@ -689,6 +691,7 @@ struct State {
   void ResetWorld() {
     retiring_actor=0;
     actor_holds=actor_last_bytes=actor_drifts=0; actor_log_at=actor_publish_at=0;
+    actor_init_attempts.clear(); actor_init_blocked.clear();
     ShotSummary("world-end");
     world = game = 0; capture = prepared = false; identity = {};
     load_refused_logged = false;
@@ -4587,6 +4590,53 @@ desync::Evidence EnemyCompareDigest(uint8_t* b,const desync::State& state,bool r
   }
   return result;
 }
+void InitializeHostHumans(PPCContext& ctx,uint8_t* b) {
+  auto& s=Get();
+  const bool fresh=Connected() && s.link.remote.world==s.identity && Now()-s.link.remote.time<=.5;
+  if (!Replication() || s.link.role!=Role::Guest || !fresh || !Scratch::CanUse(ctx)) return;
+  bool attempted=false;
+  for (const auto& r:s.link.remote.records) {
+    if (r.enemy.id.family!=EnemyFamily::Human || r.enemy.id.sequence ||
+        r.kind!=EnemyEventKind::Spawned || r.enemy.life<=0) continue;
+    uint32_t actor=0; Authored authored{}; unsigned count=0;
+    for (const auto& [candidate,a]:s.authored) if (a.key==r.enemy.id.source && a.family==EnemyFamily::Human) {
+      ++count; if (!actor) { actor=candidate; authored=a; }
+    }
+    if (!actor || s.bindings.contains(actor) || !Member(b,s.world,actor,true)) continue;
+    const auto ai=Ptr(b,Ptr(b,actor,24,8),4,88);
+    const auto vars=Ptr(b,ai,64,16892),block=Ptr(b,ai,24,24),model=Ptr(b,ai,0,16);
+    const bool init=ai==authored.ai && vars && block && Load32(b,block+20)==0x8268D8E8 &&
+        Load16(b,ai+80)==0 && Load16(b,ai+82)==0 && !Load32(b,vars) &&
+        Load32(b,vars+4)>=1 && Load32(b,vars+4)<=12;
+    const bool player=actor==Load32(b,0x82CCBF7C) || kk::PartnerBodyManagedActor(b,actor);
+    if (!actors::Initialize(Replication(),s.link.role==Role::Guest,fresh,count==1,player,init)) continue;
+    auto& tries=s.actor_init_attempts[r.enemy.id];
+    if (!model || b[model+15] || tries>=120) {
+      if (s.actor_init_blocked.insert(r.enemy.id).second)
+        REXLOG_WARN("ACTORS init deferred id={:016X} model-off={} attempts={}",r.enemy.id.source,model ? b[model+15]:255,tries);
+      continue;
+    }
+    // A host live actor may still be outside the guest's native AI range.
+    // Run only its verified local two phase H initializer. The ordinary track
+    // hook holds every later NPC track as soon as initialization completes.
+    const auto node=Load32(b,ai+4);
+    {
+      Scratch scratch(ctx,b);
+      constexpr uint32_t globals[]{0x82CCBF58,0x82CCBF5C,0x82CCBF60,0x82CCBF64,0x82CCBF68,0x82CCBF6C,0x82CCBF70};
+      uint32_t saved[7];
+      for (unsigned i=0;i<7;++i) saved[i]=Load32(b,globals[i]);
+      Store32(b,0x82CCBF6C,actor); Store32(b,0x82CCBF70,actor);
+      ctx.r3.u64=ai; __imp__sub_8271D1D8(ctx,b);
+      for (unsigned i=0;i<7;++i) Store32(b,globals[i],saved[i]);
+    }
+    ++tries; attempted=true;
+    Binding ready; EnemyState native;
+    if (tries==1 || Read(b,actor,ready,native) || tries==120)
+      REXLOG_INFO("ACTORS init guest id={:016X} actor={:08X} node={} attempts={} ready={}",
+          r.enemy.id.source,actor,node,tries,Read(b,actor,ready,native));
+  }
+  if (attempted) Scan(b);
+}
 void ActorNativeAudit(const uint8_t* b,double sample_time=0) {
 #if defined(KK_DEV_TOOLS)
   static const bool enabled=[] { const auto* p=std::getenv("KK_DEV_ACTOR_AUDIT"); return p && std::strcmp(p,"1")==0; }();
@@ -4651,7 +4701,7 @@ void ActorLateWorld(PPCContext& ctx,uint8_t* b,uint32_t w) {
   if (s.link.role==Role::Guest) {
     // Native root motion and physics run after the immediate AI pass. The
     // final displayed transform must still be the buffered host pose.
-    if (Connected()) Replicas(ctx,b,true);
+    if (Connected()) { InitializeHostHumans(ctx,b); Replicas(ctx,b,true); }
     if (s.link.session_state==SessionState::Connected || s.link.session_state==SessionState::Lost)
       HoldReplicas(ctx,b,true);
     ActorNativeAudit(b);
