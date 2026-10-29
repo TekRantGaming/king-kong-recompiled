@@ -4781,6 +4781,91 @@ void InitializeHostActors(PPCContext& ctx,uint8_t* b) {
   }
   if (attempted) Scan(b);
 }
+world::Json ActorNativeCensus(const uint8_t* b) {
+  auto& s=Get(); std::vector<world::Json> rows,spawners;
+  const auto tracks_readable=[&](uint32_t ai) {
+    if (!ActorReadable(ai,88)) return false;
+    const auto first=Load16(b,ai+80),last=Load16(b,ai+82);
+    if (first>last || last>4096 || last-first>=64 || !ActorReadable(ai,(last+12)*4)) return false;
+    for (unsigned t=first;t<=last;++t) {
+      const auto block=Ptr(b,ai,(t+6)*4,24);
+      if (block && !ActorReadable(block,24)) return false;
+    }
+    return true;
+  };
+  uint32_t begin=0,end=0; unsigned unreadable=0;
+  const bool registry=Table(b,s.world,begin,end,true) && ActorReadable(begin,end-begin);
+  const auto hero=Load32(b,0x82CCBF7C),hero_matrix=ActorReadable(hero,32) ? Ptr(b,hero,12,64):0;
+  PlayerPose player;
+  if (ActorReadable(hero_matrix,64)) {
+    player.x=LoadF(b,hero_matrix+48); player.y=LoadF(b,hero_matrix+52); player.z=LoadF(b,hero_matrix+56);
+  }
+  if (registry) for (auto p=begin;p<end;p+=8) {
+    const auto actor=Load32(b,p);
+    if (!PoseAddress(actor,36)) continue;
+    if (!ActorReadable(actor,36)) { ++unreadable; continue; }
+    if ((Load32(b,actor)&0x00400001) || actor==hero || kk::PartnerBodyManagedActor(b,actor)) continue;
+    const auto ext=Ptr(b,actor,24,8);
+    if (!ActorReadable(ext,8)) continue;
+    const auto ai=Ptr(b,ext,4,88);
+    if (!ActorReadable(ai,88)) continue;
+    if (!tracks_readable(ai)) { ++unreadable; continue; }
+    bool spawner=false,initializing=false; uint32_t state=0;
+    const auto family=Tracks(b,ai,state,spawner,&initializing);
+    if (spawner || family==EnemyFamily::None) continue;
+    const auto matrix=Ptr(b,actor,12,64),vars=Ptr(b,ai,64,LifeBytes(family));
+    if (!ActorReadable(matrix,64) || !ActorReadable(vars,LifeBytes(family))) { ++unreadable; continue; }
+    EnemyId id; bool bound=false,pending=false,retired=false;
+    const auto binding=s.bindings.find(actor);
+    if (binding!=s.bindings.end() && binding->second.ai==ai && binding->second.matrix==matrix && binding->second.vars==vars) {
+      id=Canonical(binding->second.id); bound=id.source!=0;
+      const auto record=s.records.find(binding->second.id);
+      retired=s.retirement_applied.contains(binding->second.id) ||
+          (record!=s.records.end() && record->second.kind==EnemyEventKind::Removed);
+    } else if (const auto birth=s.pending.find(actor); birth!=s.pending.end() && birth->second.ai==ai && birth->second.matrix==matrix) {
+      id=birth->second.id; pending=true;
+    } else if (const auto authored=s.authored.find(actor); authored!=s.authored.end() && !authored->second.ambiguous &&
+        authored->second.ai==ai && authored->second.matrix==matrix && authored->second.family==family) {
+      id={authored->second.key,0,family};
+    }
+    EnemyState native; native.x=LoadF(b,matrix+48); native.y=LoadF(b,matrix+52); native.z=LoadF(b,matrix+56);
+    Binding observed; observed.actor=actor; observed.ai=ai; observed.vars=vars; observed.matrix=matrix; observed.id.family=family;
+    const auto cell=initializing ? 0:LifeCell(b,observed);
+    world::Json life;
+    if (!initializing && StateLife(family)) life=ReplicatedLife(family,state,0);
+    else if (!initializing && ActorReadable(cell,4)) life=ReplicatedLife(family,state,LoadF(b,cell));
+    const auto model=Ptr(b,ai,0,16);
+    rows.push_back(world::Json::Object({{"actor",world::Hex(actor)},{"id",world::Hex(id.source)},
+        {"sequence",id.sequence},{"family",uint16_t(family)},{"bound",bound},{"pending",pending},
+        {"initializing",initializing},{"retired",retired},{"scheduled",Member(b,s.world,actor)},
+        {"model_off",ActorReadable(model,16) ? world::Json(bool(b[model+15])):world::Json()},
+        {"file_key",world::Hex(Load32(b,actor+32))},{"flags",Load32(b,actor+4)},
+        {"relevant",!hero_matrix || actors::Relevant(native,player) || (s.link.partner && actors::Relevant(native,*s.link.partner))},
+        {"x",native.x},{"y",native.y},{"z",native.z},{"life",life},{"state",state}}));
+  }
+  for (const auto& [actor,sp]:s.spawners) {
+    if (!Member(b,s.world,actor,true) || !ActorReadable(actor,32) || !ActorReadable(sp.vars,0x2094)) continue;
+    const auto ext=Ptr(b,actor,24,8);
+    if (!ActorReadable(ext,8) || Ptr(b,ext,4,88)!=sp.ai || !tracks_readable(sp.ai) || Ptr(b,sp.ai,64,0x2094)!=sp.vars) continue;
+    const auto block=Ptr(b,sp.ai,24,24);
+    std::vector<world::Json> templates;
+    for (unsigned slot=0;slot<19;++slot) {
+      const auto source=Load32(b,sp.vars+(slot<2 ? 1592+184*slot:1972+4*(slot-2)));
+      if (!source) { if (slot>=2) break; else continue; }
+      const auto ext=ActorReadable(source,32) ? Ptr(b,source,24,8):0;
+      const auto ai=ActorReadable(ext,8) ? Ptr(b,ext,4,88):0;
+      bool nested=false; uint32_t state=0;
+      const bool readable=tracks_readable(ai);
+      const auto family=readable ? Tracks(b,ai,state,nested):EnemyFamily::None;
+      templates.push_back(world::Json::Object({{"slot",slot},{"family",uint16_t(family)},{"readable",readable}}));
+    }
+    spawners.push_back(world::Json::Object({{"id",world::Hex(sp.key)},{"actor",world::Hex(actor)},
+        {"sequence",sp.sequence},{"initialized",sp.initialized},{"shared",sp.shared_births},
+        {"state",ActorReadable(block,24) ? Load32(b,block+20):0},{"templates",world::Json::Array(templates)}}));
+  }
+  return world::Json::Object({{"registry_readable",registry},{"unreadable",unreadable},
+      {"actors",world::Json::Array(rows)},{"spawners",world::Json::Array(spawners)}});
+}
 void ActorNativeAudit(const uint8_t* b,double sample_time=0) {
   // Read only diagnostics are available in the shipping build too. The
   // explicit opt in and private workspace path are required on both peers.
@@ -4832,6 +4917,14 @@ void ActorNativeAudit(const uint8_t* b,double sample_time=0) {
   try {
     std::filesystem::create_directories(dir);
     std::ofstream out(dir/"actors-native.jsonl",std::ios::app|std::ios::binary); out<<record.text<<'\n';
+    static double next_census=0;
+    if (now>=next_census) {
+      next_census=now+.5;
+      const auto census=world::Json::Object({{"role",s.link.role==Role::Host ? "host":"guest"},
+          {"epoch",world::Hex(s.link.epoch)},{"level",s.identity.level},{"start",s.identity.start},{"visit",s.identity.serial},
+          {"native_time",now},{"utc",utc},{"replication",Replication()},{"census",ActorNativeCensus(b)}});
+      std::ofstream inventory(dir/"actors-census.jsonl",std::ios::app|std::ios::binary); inventory<<census.text<<'\n';
+    }
   } catch (const std::exception& ex) { REXLOG_WARN("ACTORS audit write failed {}",ex.what()); }
 }
 void ActorLateWorld(PPCContext& ctx,uint8_t* b,uint32_t w) {
