@@ -134,6 +134,19 @@ void ActorFreeze() {
 }
 void ActorInterpolation() {
   {
+    enemies::Channel hurt;
+    auto a=Enemy(),b=a; a.id.family=b.id.family=EnemyFamily::Human;
+    a.life=b.life=3; a.action=b.action=91; a.x=0; b.x=.7f;
+    Message m; m.type=MessageType::EnemySnapshot; m.sequence=1;
+    m.enemies={{101,4,1},1000,{a}}; hurt.Receive(m,10,true);
+    m.sequence=3; m.enemies.time=1000.0659309; m.enemies.enemies={b}; hurt.Receive(m,10.0659309,true);
+    const auto pose=hurt.Sample(10.1321445,true).records.at(0);
+    Check(pose.enemy.x==b.x && std::abs(pose.source_time-1000.0659309)<1e-7,
+        "a hurt NPC keeps an actual host pose across an intervening publication");
+    const auto legacy=hurt.Sample(10.1321445,false).records.at(0);
+    Check(legacy.enemy.x>0 && legacy.enemy.x<b.x,"off mode retains its existing interpolation");
+  }
+  {
     enemies::Channel hit;
     auto before=Enemy(),after=before; after.life=98; after.x=.7f;
     Message damage; damage.type=MessageType::EnemySnapshot; damage.sequence=1;

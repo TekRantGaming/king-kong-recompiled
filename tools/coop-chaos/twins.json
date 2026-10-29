@@ -8,6 +8,7 @@
   "jobs": 1,
   "scan": ["../../kk/src/coop_*.h", "../../kk/src/coop_*.cpp"],
   "twins": {
+    "actor_hurt_pose": "actor_interpolation",
     "actor_init_tracks": "actor_freeze",
     "actor_pose_release": "actor_freeze",
     "actor_birth_ordinal": "actor_freeze",

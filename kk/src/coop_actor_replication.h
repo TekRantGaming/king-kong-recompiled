@@ -76,6 +76,11 @@ inline bool WorldAuthority(bool session,bool flow_active,bool playing,bool toget
 }
 inline bool SnapPose(const EnemyState& a,const EnemyState& b) {
   if (COOP_MUT_IF("actor_interpolation_no_snap")) return false;
+  // Human wire life 3 is native condition 1, hurt. Knockback and contact
+  // correction can bend its root path between publications without another
+  // condition change. Keep an actual native pose during that state.
+  if (!COOP_MUT_IF("actor_hurt_pose") && a.id.family==EnemyFamily::Human &&
+      (a.life==3.f || b.life==3.f)) return true;
   // Damage can start native knockback between publications. Blending an old
   // approach pose through that step invents a path the host never followed.
   if ((a.life!=b.life || a.secondary_life!=b.secondary_life) &&
