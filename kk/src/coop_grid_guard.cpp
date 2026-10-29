@@ -6,6 +6,9 @@
 #include "hfr.h"
 #include "coop_pose.h"
 #include "coop_stimulus_debug.h"
+#include "coop_guest_probe.h"
+#include <rex/system/kernel_state.h>
+#include <rex/system/xmemory.h>
 #include <chrono>
 #include <cstdlib>
 #include <cstring>
@@ -29,12 +32,30 @@ REX_EXTERN(__imp__sub_82711718);
 REX_EXTERN(__imp__sub_82710E20);
 REX_EXTERN(__imp__sub_82409B80);
 REX_EXTERN(__imp__sub_82447DB0);
+REX_EXTERN(__imp__sub_8285AB30);
+REX_EXTERN(__imp__sub_8285ADE8);
+REX_EXTERN(__imp__sub_82491B50);
+REX_EXTERN(__imp__sub_8245B0D0);
+REX_EXTERN(__imp__sub_8261D338);
 #if defined(KK_DEV_TOOLS)
 namespace kk { double DevSecondsSinceMenu(); }
 #endif
 
 namespace kk::coop::raptor_route {
 using namespace kk::hfr;
+bool Readable(uint32_t p,uint32_t bytes) {
+  if (!PoseAddress(p,bytes)) return false;
+  auto* memory=rex::system::kernel_memory(); if(!memory) return false;
+  return guest_probe::Readable(p,bytes,[&](uint32_t a,guest_probe::Region& r) {
+    auto* heap=memory->LookupHeap(a); if(!heap || !heap->page_size()) return false;
+    r.base=a & ~(heap->page_size()-1);r.size=heap->page_size();
+    rex::memory::HeapAllocationInfo info{};
+    if(!heap->QueryRegionInfo(r.base,&info)) return false;
+    r.readable=(info.state & rex::memory::kMemoryAllocationCommit) &&
+        (info.protect & rex::memory::kMemoryProtectRead) && info.region_size;
+    return true;
+  });
+}
 struct Owner { uint32_t actor=0, ai=0, vars=0, matrix=0; };
 thread_local Owner current;
 thread_local uint64_t grid_refusals=0, recovered_grid=0;
@@ -50,23 +71,52 @@ struct Scope {
   explicit Scope(uint8_t* b) {
     current={};
     if (!REXCVAR_GET(kk_coop_enabled)) return;
+    if (!saved.vars) {refused_grid={};refused_orientation={};recovered_grid=grid_refusals;}
     const auto actor=Load32(b,0x82CCBF6C), ai=Load32(b,0x82CCBF64);
-    if (!PoseAddress(actor,28) || !PoseAddress(ai,68)) return;
+    if (!Readable(actor,28) || !Readable(ai,68)) return;
     const auto vars=Load32(b,ai+64), matrix=Load32(b,actor+12);
-    if (PoseAddress(vars,14240) && PoseAddress(matrix,64)) current={actor,ai,vars,matrix};
+    if (Readable(vars,14240) && Readable(matrix,64)) current={actor,ai,vars,matrix};
   }
   ~Scope() { current=saved; }
 };
 bool Finite(const uint8_t* b,uint32_t p) {
   return std::isfinite(LoadF(b,p)) && std::isfinite(LoadF(b,p+4)) && std::isfinite(LoadF(b,p+8));
 }
+stimulus_debug::Record Event(const uint8_t* b,uint32_t handle) {
+  return stimulus_debug::ReadHandle([&](uint32_t p){return Readable(p,4) ? Load32(b,p):0u;},handle);
+}
 void Point(const uint8_t* b,uint32_t p,const char* source,uint32_t caller) {
-  if (!current.vars || !PoseAddress(p,12) || Finite(b,p)) return;
+  const bool owned=(p>=current.vars && uint64_t(p)+12<=uint64_t(current.vars)+14240) ||
+      (p>=current.matrix && uint64_t(p)+12<=uint64_t(current.matrix)+64);
+  if (!current.vars || !PoseAddress(p,12) || (!owned && !Readable(p,12)) || Finite(b,p)) return;
   static grid_guard::Reports reports;
+  struct Seen {Owner owner;uint32_t mask=0;};
+  static std::array<Seen,64> seen{};
+  static uint32_t world=0;
+  const auto now_world=Load32(b,0x828E8388);
+  if(world!=now_world) {world=now_world;seen={};}
+  uint32_t bit=128;
+  if(p==current.matrix+48) bit=1;
+  else if(p==current.vars+2572) bit=2;
+  else if(p==current.vars+2584) bit=4;
+  else if(p>=current.vars+2652 && p<current.vars+3852) bit=8;
+  else if(std::strcmp(source,"threat event")==0) bit=16;
+  else if(std::strcmp(source,"follow position")==0) bit=32;
+  else if(std::strcmp(source,"waypoint position")==0) bit=64;
+  else if(std::strcmp(source,"native matrix output")==0) bit=256;
+  else if(std::strcmp(source,"velocity setter input")==0) bit=512;
+  else if(std::strcmp(source,"position setter input")==0) bit=1024;
+  else if(std::strcmp(source,"selected target position")==0) bit=2048;
+  else if(std::strcmp(source,"candidate position")==0) bit=4096;
+  bool first=false;
+  for(auto& entry:seen) if(!entry.owner.vars || Same(entry.owner,current)) {
+    if(!entry.owner.vars) entry.owner=current;
+    first=!(entry.mask&bit);entry.mask|=bit;break;
+  }
   const double now=std::chrono::duration<double>(std::chrono::steady_clock::now().time_since_epoch()).count();
-  if (!reports.Note(now)) return;
+  if (!reports.Note(now) && !first) return;
   const auto v=current.vars;
-  const auto event=stimulus_debug::ReadHandle([&](uint32_t a){return Load32(b,a);},v+5216);
+  const auto event=Event(b,v+5216);
   REXLOG_WARN("KK co op raptor invalid: source={} actor={:08X} ai={:08X} vars={:08X} caller={:08X} "
       "point={:08X} value=({},{},{}) bits={:08X}/{:08X}/{:08X} action={} flags={:08X} "
       "event={:08X} target={:08X} follow={:08X} node={:08X} count={} refused={}",
@@ -76,6 +126,13 @@ void Point(const uint8_t* b,uint32_t p,const char* source,uint32_t caller) {
 }
 void Inputs(const uint8_t* b,const char* source,uint32_t caller) {
   if (!current.vars) return;
+  // A native callback can destroy its actor. Do not follow its old graph or
+  // event pointers after return, even if the freed allocation stays mapped.
+  if (!Readable(current.actor,28) || !Readable(current.ai,68) ||
+      Load32(b,current.actor+12)!=current.matrix || Load32(b,current.ai+64)!=current.vars ||
+      !Readable(current.vars,14240) || !Readable(current.matrix,64)) return;
+  const auto ext=Load32(b,current.actor+24);
+  if (!Readable(ext,8) || Load32(b,ext+4)!=current.ai) return;
   const auto v=current.vars;
   if (watch.pending && watch.owner.actor==current.actor && watch.owner.ai==current.ai &&
       watch.owner.vars==v && watch.owner.matrix==current.matrix && Finite(b,current.matrix+48)) {
@@ -89,13 +146,21 @@ void Inputs(const uint8_t* b,const char* source,uint32_t caller) {
   Point(b,current.matrix+48,"actor position",caller);
   Point(b,v+2572,source,caller);
   Point(b,v+2584,"retained step",caller);
-  const auto event=stimulus_debug::ReadHandle([&](uint32_t a){return Load32(b,a);},v+5216);
-  if (event.valid) Point(b,event.address+32,"threat event",caller);
+  const auto event=Event(b,v+5216);
+  if (event.valid) {
+    Point(b,event.address+32,"threat event",caller);
+    if(Readable(event.target,16)) {
+      const auto matrix=Load32(b,event.target+12);
+      if(Readable(matrix,64)) Point(b,matrix+48,"selected target position",caller);
+    }
+  }
+  const auto candidates=Load32(b,v+5236);
+  if(candidates<=20) for(uint32_t i=0;i<candidates;++i) Point(b,v+6000+12*i,"candidate position",caller);
   for (auto offset : {7148u,7152u}) {
     const auto object=Load32(b,v+offset);
-    if (!PoseAddress(object,16)) continue;
+    if (!Readable(object,16)) continue;
     const auto matrix=Load32(b,object+12);
-    if (PoseAddress(matrix,64)) Point(b,matrix+48,offset==7148 ? "follow position":"waypoint position",caller);
+    if (Readable(matrix,64)) Point(b,matrix+48,offset==7148 ? "follow position":"waypoint position",caller);
   }
   const auto count=Load32(b,v+2644);
   if (count<=100) for (uint32_t i=0;i<count;++i) Point(b,v+2652+12*i,"cached path",caller);
@@ -126,9 +191,9 @@ bool BadRoute(const uint8_t* b) {
   if (!current.vars) return false;
   const auto v=current.vars;
   if (!Finite(b,current.matrix+48) || !Finite(b,v+2572) || !Finite(b,v+2584)) return true;
-  const auto count=Load32(b,v+2644);
+  const auto count=int32_t(Load32(b,v+2644));
   if (count>100) return true;
-  for (uint32_t i=0;i<count;++i) if (!Finite(b,v+2652+12*i)) return true;
+  for (int32_t i=0;i<count;++i) if (!Finite(b,v+2652+12*i)) return true;
   return false;
 }
 #if defined(KK_DEV_TOOLS)
@@ -136,7 +201,8 @@ bool Force(const uint8_t* b,const char* mode) {
   static bool done=false;
   const char* value=std::getenv("KK_DEV_RAPTOR_NAN");
   if (done || !value || std::strcmp(value,mode)!=0 || !current.vars ||
-      Load32(b,current.vars+5108)!=2 || kk::DevSecondsSinceMenu()<35) return false;
+      (std::strcmp(mode,"orientation")!=0 && Load32(b,current.vars+5108)!=2) ||
+      !(LoadF(b,current.vars+20)>0) || kk::DevSecondsSinceMenu()<35) return false;
   done=true;
   REXLOG_WARN("KK dev raptor force: mode={} actor={:08X} ai={:08X}",mode,current.actor,current.ai);
   return true;
@@ -170,24 +236,43 @@ void WriteOutput(uint8_t* b,uint32_t actor,uint32_t caller,const char* source) {
   Scope scope(b);
   for (uint32_t off : {0u,16u,32u,48u}) Point(b,m+off,source,caller);
 }
-bool Orientation(PPCContext& ctx,uint8_t* b) {
-  if (!REXCVAR_GET(kk_coop_enabled) || !PoseAddress(ctx.r4.u32,12) || !PoseAddress(ctx.r5.u32,12)) return false;
-  const auto first=ReadPoint(b,ctx.r4.u32), second=ReadPoint(b,ctx.r5.u32);
-  if (Normalizable(first) && Normalizable(second)) return false;
-  if (ctx.r3.u32!=Load32(b,0x82CCBF6C) || !Raptor(b)) return false;
+void Matrix(PPCContext& ctx,uint8_t* b,bool look_y,void (*native)(PPCContext&,uint8_t*)) {
+  if (!REXCVAR_GET(kk_coop_enabled)) {native(ctx,b);return;}
+  const auto actor=Load32(b,0x82CCBF6C);
+  if (!PoseAddress(actor,16) || ctx.r3.u32!=Load32(b,actor+12)) {native(ctx,b);return;}
   Scope scope(b);
+  if (!current.vars || !Raptor(b)) {native(ctx,b);return;}
+  const auto caller=uint32_t(ctx.lr), matrix=ctx.r3.u32;
+  const auto first=ctx.r4.u32 ? ctx.r4.u32 : matrix+16;
+  const auto second=ctx.r5.u32 ? ctx.r5.u32 : matrix+32;
+  if (!PoseAddress(first,12) || !PoseAddress(second,12)) {native(ctx,b);return;}
+  // mat_look_z has optional up in r4 and mandatory direction in r5.
+  // mat_look_y has mandatory direction in r4 and optional up in r5.
 #if defined(KK_DEV_TOOLS)
-  if (const auto off=std::getenv("KK_DEV_RAPTOR_SOURCE_OFF"); off && std::strcmp(off,"1")==0) return false;
+  uint32_t injected=0, words[3]{};
+  const auto direction=look_y ? ctx.r4.u32:ctx.r5.u32;
+  if (direction>=ctx.r1.u32 && uint64_t(direction)+12<=uint64_t(ctx.r1.u32)+4096 && Force(b,"orientation")) {
+    injected=direction;
+    for(unsigned i=0;i<3;++i) {words[i]=Load32(b,injected+4*i);Store32(b,injected+4*i,0);}
+  }
+  const auto off=std::getenv("KK_DEV_RAPTOR_SOURCE_OFF");
+  const bool enabled=!(off && std::strcmp(off,"1")==0);
+#else
+  constexpr bool enabled=true;
 #endif
-  if (!RefuseOrientation(true,true,first,second)) return false;
-  static grid_guard::Reports reports;
-  const double now=std::chrono::duration<double>(std::chrono::steady_clock::now().time_since_epoch()).count();
-  if (reports.Note(now)) REXLOG_WARN("KK co op raptor orientation refused: actor={:08X} caller={:08X} first=({},{},{}) second=({},{},{}) count={}",
-      current.actor,uint32_t(ctx.lr),first[0],first[1],first[2],second[0],second[1],second[2],reports.refused);
-  // The caller can still be following its waypoint pointers. Clear the route
-  // only after its native compute, fight or blend function has returned.
-  refused_orientation=current;
-  return true;
+  const auto a=ReadPoint(b,first), c=ReadPoint(b,second);
+  if (RefuseOrientation(enabled,true,a,c)) {
+    static grid_guard::Reports reports;
+    const double now=std::chrono::duration<double>(std::chrono::steady_clock::now().time_since_epoch()).count();
+    if (reports.Note(now)) REXLOG_WARN("KK co op raptor orientation refused: actor={:08X} caller={:08X} look_y={} first=({},{},{}) second=({},{},{}) count={}",
+        current.actor,caller,look_y,a[0],a[1],a[2],c[0],c[1],c[2],reports.refused);
+    // A caller may still follow waypoint pointers. Clear only after return.
+    refused_orientation=current;
+  } else native(ctx,b);
+  for(uint32_t off:{0u,16u,32u,48u}) Point(b,matrix+off,"native matrix output",caller);
+#if defined(KK_DEV_TOOLS)
+  if(injected) for(unsigned i=0;i<3;++i) Store32(b,injected+4*i,words[i]);
+#endif
 }
 } // namespace kk::coop::raptor_route
 
@@ -225,23 +310,45 @@ REX_HOOK_RAW(sub_82711718) {
 }
 REX_HOOK_RAW(sub_82710E20) {
   const auto actor=ctx.r3.u32, caller=uint32_t(ctx.lr);
+  kk::coop::raptor_route::WriteInput(ctx,base,"orientation setter input",true);
+  __imp__sub_82710E20(ctx,base);
+  kk::coop::raptor_route::WriteOutput(base,actor,caller,"orientation setter output");
+}
+REX_HOOK_RAW(sub_8285AB30) { kk::coop::raptor_route::Matrix(ctx,base,false,__imp__sub_8285AB30); }
+REX_HOOK_RAW(sub_8285ADE8) { kk::coop::raptor_route::Matrix(ctx,base,true,__imp__sub_8285ADE8); }
+REX_HOOK_RAW(sub_82491B50) {
+  if (!REXCVAR_GET(kk_coop_enabled) || !kk::coop::raptor_route::Raptor(base)) {__imp__sub_82491B50(ctx,base);return;}
+  kk::coop::raptor_route::Scope scope(base);
+  kk::coop::raptor_route::Inputs(base,"motion input",uint32_t(ctx.lr));
 #if defined(KK_DEV_TOOLS)
-  uint32_t injected=0, words[3]{};
-  {
-    kk::coop::raptor_route::Scope scope(base);
-    if (actor==kk::coop::raptor_route::current.actor && kk::coop::raptor_route::Raptor(base) && ctx.r4.u32>=ctx.r1.u32 &&
-        uint64_t(ctx.r4.u32)+12<=uint64_t(ctx.r1.u32)+4096 && kk::coop::raptor_route::Force(base,"orientation")) {
-      injected=ctx.r4.u32;
-      for (unsigned i=0;i<3;++i) { words[i]=kk::hfr::Load32(base,injected+4*i); kk::hfr::Store32(base,injected+4*i,0); }
+  const auto v=kk::coop::raptor_route::current.vars;
+  if (v && kk::hfr::LoadF(base,v+8580)>0 && kk::hfr::LoadF(base,v+8604)==0 &&
+      kk::coop::raptor_route::Finite(base,v+2584)) {
+    const auto own=kk::coop::raptor_route::ReadPoint(base,kk::coop::raptor_route::current.matrix+48);
+    const auto step=kk::coop::raptor_route::ReadPoint(base,v+2584);
+    if (std::hypot(step[0]-own[0],step[1]-own[1])>2 && kk::coop::raptor_route::Force(base,"path")) {
+      // Reuse an existing native destination twice. No actor is moved and no
+      // new destination is supplied. Exercise the native zero segment case.
+      kk::hfr::Store32(base,v+2644,2);
+      for (unsigned row=0;row<2;++row) for(unsigned axis=0;axis<3;++axis)
+        kk::hfr::StoreF(base,v+2652+12*row+4*axis,step[axis]);
+      kk::hfr::Store32(base,v+6732,kk::hfr::Load32(base,v+6732)|0x1000);
     }
   }
 #endif
-  kk::coop::raptor_route::WriteInput(ctx,base,"orientation setter input",true);
-  if (!kk::coop::raptor_route::Orientation(ctx,base)) __imp__sub_82710E20(ctx,base);
-  kk::coop::raptor_route::WriteOutput(base,actor,caller,"orientation setter output");
-#if defined(KK_DEV_TOOLS)
-  if(injected) for(unsigned i=0;i<3;++i) kk::hfr::Store32(base,injected+4*i,words[i]);
-#endif
+  __imp__sub_82491B50(ctx,base);
+  kk::coop::raptor_route::Inputs(base,"motion output",0x82491B50);
+  if (kk::coop::raptor_route::PendingOrientation()) kk::coop::raptor_route::Recover(ctx,base,"orientation input");
+}
+REX_HOOK_RAW(sub_8245B0D0) {
+  const auto out=ctx.r3.u32, caller=uint32_t(ctx.lr);
+  __imp__sub_8245B0D0(ctx,base);
+  kk::coop::raptor_route::Point(base,out,"cell curve output",caller);
+}
+REX_HOOK_RAW(sub_8261D338) {
+  const auto out=ctx.r3.u32, caller=uint32_t(ctx.lr);
+  __imp__sub_8261D338(ctx,base);
+  kk::coop::raptor_route::Point(base,out,"Bezier output",caller);
 }
 REX_HOOK_RAW(sub_82409B80) {
   kk::coop::raptor_route::WriteInput(ctx,base,"velocity setter input");
