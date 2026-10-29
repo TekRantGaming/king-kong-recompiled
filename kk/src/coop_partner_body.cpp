@@ -14,6 +14,7 @@
 #include "coop_world_snapshot.h"
 #include "coop_event_budget.h"
 #include "coop_guest_probe.h"
+#include "coop_player_contact.h"
 #if defined(KK_DEV_TOOLS)
 #include "art.h"
 #include "dev_puppet_mesh.h"
@@ -53,6 +54,9 @@
 #include "coop_objects_game.h"
 #include "photo_mode.h"
 #include "settings.h"
+#if defined(KK_DEV_TOOLS)
+namespace kk { double DevSecondsSinceMenu(); }
+#endif
 
 REX_EXTERN(__imp__sub_8268D8E8);
 REX_EXTERN(__imp__sub_827117E0);
@@ -2118,6 +2122,18 @@ void PartnerBodyBeforeAi(PPCContext& ctx, uint8_t* b, uint32_t w) {
     if (!PartnerReady(b, w)) return;
     if (s.updated_frame == s.frame || photo::Active()) return;
   }
+#if defined(KK_DEV_TOOLS)
+  // C125: exercise release without destroying or hiding the allocated copy.
+  // This switch is absent from normal builds and changes no collision flags.
+  static const double retire_at=[] {
+    const auto* value=std::getenv("KK_DEV_PLAYER_BODY_RETIRE"); return value ? std::atof(value) : -1.;
+  }();
+  static bool retired=false;
+  if (!retired && retire_at>=0 && kk::DevSecondsSinceMenu()>=retire_at && s.driving && s.selected_copy) {
+    REXLOG_INFO("COOP PLAYER dev retire body={:08X} kept-allocated=true",s.selected.actor);
+    s.Abort("dev-contact-retire"); s.terminal=true; retired=true; return;
+  }
+#endif
   s.dt = FrameTime(b);
   if (!std::isfinite(s.dt) || s.dt < 0 || s.dt > 0.25f) { s.Abort("invalid-simulation-dt"); return; }
   if (!Scratch::CanUse(ctx)) { s.Abort("invalid-guest-scratch-stack"); return; }
@@ -2561,6 +2577,15 @@ uint32_t PartnerBodyCombatActor(const uint8_t* b) {
 }
 uint32_t PartnerBodyCombatCopy(const uint8_t* b) {
   return Get().selected_copy ? PartnerBodyCombatActor(b):0;
+}
+bool PartnerBodyPlayerContact(const uint8_t* b,uint32_t actor) {
+  if (!actor) return false;
+  const auto& s=Get();
+  bool own_copy=false;
+  for (const auto& copy:s.spawned)
+    if (copy.rig.actor==actor && SpawnIdentity(b,copy)) { own_copy=true; break; }
+  const bool driver=s.driving && s.selected.actor==actor && actor==PartnerBodyCombatActor(b);
+  return coop::contact::OwnedBody(own_copy,driver);
 }
 bool PartnerBodyStimulus(PPCContext& ctx, uint8_t* b) {
   auto& s = Get();
