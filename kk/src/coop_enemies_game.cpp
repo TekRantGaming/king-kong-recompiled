@@ -4896,6 +4896,10 @@ void ActorNativeAudit(const uint8_t* b,double sample_time=0) {
   const auto dir=std::filesystem::absolute(path).lexically_normal()/(Get().link.role==Role::Host ? "host":"join");
   if (!dir.generic_string().starts_with("F:/kk-native-coop/") && !dir.generic_string().starts_with("f:/kk-native-coop/")) return;
   auto& s=Get(); std::vector<world::Json> rows;
+  const auto flow=SessionFlowSnapshot();
+  const auto current=EnemyLinkSnapshot();
+  const bool session=current.session_state==SessionState::Connected || current.session_state==SessionState::Lost;
+  const bool authority=actors::WorldAuthority(session,flow.active,flow.phase==FlowPhase::Playing,flow.policy==ChapterPolicy::Together);
   PlayerPose local;
   const auto hero=Ptr(b,Load32(b,0x82CCBF7C),12,64);
   if (hero) { local.x=LoadF(b,hero+48); local.y=LoadF(b,hero+52); local.z=LoadF(b,hero+56); }
@@ -4903,7 +4907,9 @@ void ActorNativeAudit(const uint8_t* b,double sample_time=0) {
     Binding observed; EnemyState e;
     if (!ValidBinding(b,binding) || !Read(b,actor,observed,e)) continue;
     const auto id=Canonical(binding.id);
-    const auto driven=s.driving.find(actor);
+    // A reload can release this world after its AI pass. Retain the native
+    // row, but do not attach an old buffered pose to an actor no longer driven.
+    const auto driven=authority ? s.driving.find(actor):s.driving.end();
     float animation=-1; ActorAnimation(b,actor,&animation);
     const auto cell=LifeCell(b,binding);
     const auto record=s.records.find(binding.id);
@@ -4930,7 +4936,9 @@ void ActorNativeAudit(const uint8_t* b,double sample_time=0) {
   const auto record=world::Json::Object({{"role",s.link.role==Role::Host ? "host":"guest"},
       {"protocol",kProtocolVersion},
       {"epoch",world::Hex(s.link.epoch)},{"level",s.identity.level},{"start",s.identity.start},{"visit",s.identity.serial},
-      {"native_time",now},{"utc",utc},{"replication",Replication()},{"rows",world::Json::Array(rows)}});
+      {"native_time",now},{"utc",utc},{"replication",Replication()},{"authority_active",authority},
+      {"session_active",session},{"flow_active",flow.active},{"flow_playing",flow.phase==FlowPhase::Playing},
+      {"flow_together",flow.policy==ChapterPolicy::Together},{"rows",world::Json::Array(rows)}});
   try {
     std::filesystem::create_directories(dir);
     std::ofstream out(dir/"actors-native.jsonl",std::ios::app|std::ios::binary); out<<record.text<<'\n';
@@ -4939,7 +4947,8 @@ void ActorNativeAudit(const uint8_t* b,double sample_time=0) {
       next_census=now+.5;
       const auto census=world::Json::Object({{"role",s.link.role==Role::Host ? "host":"guest"},
           {"epoch",world::Hex(s.link.epoch)},{"level",s.identity.level},{"start",s.identity.start},{"visit",s.identity.serial},
-          {"native_time",now},{"utc",utc},{"replication",Replication()},{"census",ActorNativeCensus(b)}});
+          {"native_time",now},{"utc",utc},{"replication",Replication()},{"authority_active",authority},
+          {"census",ActorNativeCensus(b)}});
       std::ofstream inventory(dir/"actors-census.jsonl",std::ios::app|std::ios::binary); inventory<<census.text<<'\n';
     }
   } catch (const std::exception& ex) { REXLOG_WARN("ACTORS audit write failed {}",ex.what()); }

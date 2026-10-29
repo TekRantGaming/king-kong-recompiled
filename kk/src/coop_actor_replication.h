@@ -68,6 +68,10 @@ inline bool Initialize(bool enabled,bool guest,bool fresh,bool exact,bool player
 inline bool DigestRepairs(bool enabled) {
   return !enabled || COOP_MUT_IF("actor_digest_repair");
 }
+inline bool WorldAuthority(bool session,bool flow_active,bool playing,bool together) {
+  if (COOP_MUT_IF("actor_pose_release")) return true;
+  return session && (!flow_active || (playing && together));
+}
 inline bool SnapPose(const EnemyState& a,const EnemyState& b) {
   if (COOP_MUT_IF("actor_interpolation_no_snap")) return false;
   // Damage can start native knockback between publications. Blending an old

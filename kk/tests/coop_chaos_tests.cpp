@@ -75,6 +75,11 @@ EnemyState Enemy() {
   EnemyState e; e.id={0x123456789abcdef0ull,1,EnemyFamily::Raptor}; e.life=100; return e;
 }
 void ActorFreeze() {
+  Check(actors::WorldAuthority(true,true,true,true),"playing together retains a pose reference");
+  Check(actors::WorldAuthority(true,false,false,false),"the local developer link retains its pose reference");
+  Check(!actors::WorldAuthority(true,true,false,true),"a released reload world has no buffered pose authority");
+  Check(!actors::WorldAuthority(false,false,true,true),"a completed session has no buffered pose authority");
+  Check(!actors::WorldAuthority(true,true,true,false),"an independent chapter has no buffered pose authority");
   std::vector<enemies::Record> births(1);
   births[0].enemy=Enemy(); births[0].enemy.birth_spawner=123;
   Check(enemies::NextSpawnerBirth(births,123,0)==&births[0],"host birth selects the next local ordinal");
