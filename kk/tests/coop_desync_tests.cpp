@@ -72,6 +72,20 @@ void Assembly() {
   Check(!a.Push(Page(1),10),"expired complete sweep never creates evidence");
   a={}; auto duplicate=Page(1); duplicate.enemies[0]=Page().enemies[0];
   a.Push(Page(),1); Check(!a.Push(duplicate,2),"duplicate enemy identities rejected across pages");
+  auto first=Page(),last=Page(1); first.parts=last.parts=3; first.probe_count=last.probe_count=32;
+  auto probe=first; probe.part=2; probe.scripts.clear(); probe.enemies.clear();
+  for (unsigned i=0;i<32;++i) probe.probes.push_back({i+1,WorldArea::Objects,i,float(i),0,0});
+  for (auto page:{first,last,probe}) {
+    Message m; m.type=MessageType::WorldDigest; m.digest=page;
+    std::vector<uint8_t> bytes; Message out;
+    Check(Encode(m,bytes) && bytes.size()<=kMaxPacketBytes && Decode(bytes,out) && out.digest==page,
+        "native probe pages remain bounded and round trip");
+    for (size_t n=0;n<bytes.size();++n) Check(!Decode(std::span(bytes).first(n),out),"probe truncation fails");
+  }
+  a={}; a.Push(first,1); a.Push(last,2); auto complete=a.Push(probe,3);
+  Check(complete && complete->probes.size()==32,"probes required for complete sweep");
+  a={}; a.Push(first,1); a.Push(last,2); probe.probes[1]=probe.probes[0];
+  Check(!a.Push(probe,3),"duplicate native probe identities rejected");
 }
 void Hysteresis() {
   auto page=Page(); page.captured=100000;
@@ -97,9 +111,17 @@ void Hysteresis() {
       g.Observe(1,101,1,quiet,7)==Tier::Quiet,"small drift reconciles after repeated samples");
   quiet.quiet=false;
   Check(g.Observe(1,101,1,quiet,10)==Tier::None,"convergence clears evidence");
+  g={}; quiet.quiet=true;
+  for (double t:{1.,4.}) { ++quiet.progress; Check(g.Observe(1,101,1,quiet,t)==Tier::None,"changing story retains small repair grace"); }
+  ++quiet.progress; Check(g.Observe(1,101,1,quiet,7)==Tier::Quiet,"unrelated story cannot starve a repeated health repair");
+  g.Suspend();
+  Check(g.Observe(1,101,1,quiet,10)==Tier::None,"pause resets small repair grace");
   g={}; desync::Evidence wrong; wrong.wrong_level=true;
   for (double t=1;t<=19;t+=3) Check(g.Observe(1,101,1,wrong,t)==Tier::None,"wrong-level grace survives transitions");
   Check(g.Observe(1,101,1,wrong,22)==Tier::Reload,"large drift bypasses pointless teleport");
+  g={}; wrong.quiet=true;
+  for (double t=1;t<=19;t+=3) Check(g.Observe(1,101,1,wrong,t)==Tier::None,"small drift never permits repair in the wrong world");
+  Check(g.Observe(1,101,1,wrong,22)==Tier::Reload,"wrong world retains reload priority over small drift");
   CheckpointCatchup catchup; catchup.Reset(1,1);
   Check(!catchup.Begin() && catchup.Begin(false,true) && !catchup.Begin(false,true),"same initial checkpoint reload allowed once only for guard");
   catchup.Reset(1,3); catchup.Observe(1,1,1);
@@ -132,6 +154,13 @@ void Mailbox() {
   Message action; action.type=MessageType::StoryEvent;
   for (size_t i=0;i<kStoryQueue;++i) Check(RetainStoryMessage(paused,action),"real story actions displace optional observations during a load");
   Check(!RetainStoryMessage(paused,action),"real action overflow still fails closed");
+  Message receipt; receipt.type=MessageType::WorldAudit; receipt.epoch=17;
+  receipt.audit={1,101,2,3,1,0,0,{1,2,3,0,0}};
+  std::vector<uint8_t> bytes; Message decoded;
+  Check(box.Submit(receipt) && Encode(receipt,bytes) && Decode(bytes,decoded) && decoded.audit==receipt.audit,
+      "guest report survives shipping mailbox and wire");
+  Check(StorySender(receipt.type,Role::Guest) && !StorySender(receipt.type,Role::Host),"only guest sends audit receipts");
+  receipt.audit.diffs[0]=4; Check(!Encode(receipt,bytes) && !box.Submit(receipt),"audit cannot claim more differing samples than samples");
 }
 }
 int main() { Codec(); Assembly(); Hysteresis(); PersistentMissingActor(); Mailbox(); std::puts("World digest codec, complete census, recovery tiers and loop guards passed"); }

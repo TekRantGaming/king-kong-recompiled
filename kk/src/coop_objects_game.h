@@ -1,8 +1,10 @@
 #pragma once
 #include <cstdint>
+#include "coop_protocol.h"
 struct PPCContext;
 namespace kk::coop {
 void ObjectsLoaded(uint8_t* base);
+std::vector<WorldProbe> ObjectsWorldDigest(const uint8_t* base);
 void ObjectsBeforeAi(PPCContext& ctx,uint8_t* base,uint32_t world);
 void ObjectsAfterAi(PPCContext& ctx,uint8_t* base,uint32_t world);
 void ObjectsDestroy(PPCContext& ctx,uint8_t* base);

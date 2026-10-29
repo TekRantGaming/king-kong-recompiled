@@ -17,7 +17,14 @@ struct State {
   WorldDigestPage header;
   std::vector<WorldScript> scripts;
   std::vector<WorldEnemy> enemies;
+  std::vector<WorldProbe> probes;
 };
+inline bool AuditFollows(const WorldAudit& next,const WorldAudit& previous,uint32_t host_sweep) {
+  // A guest process may restart within the same campaign and load generation.
+  // Its counters restart, while the host's sweep remains the ordering clock.
+  return next.sweep && next.sweep<=host_sweep &&
+      (COOP_MUT_IF("digest_audit_order") || next.sweep>=previous.sweep);
+}
 // Reliable pages are self-contained and versioned. Incomplete, stale, duplicate,
 // inconsistent or oversized sweeps never become evidence of a divergent world.
 class Assembly {
@@ -26,23 +33,26 @@ class Assembly {
     if (!ValidWorldDigest(p) || !std::isfinite(now)) return {};
     if (p.sweep<=finished_) return {};
     if (p.part==0 && p.sweep>current_.header.sweep) {
-      current_={}; current_.header=p; current_.header.scripts.clear(); current_.header.enemies.clear();
+      current_={}; current_.header=p; current_.header.scripts.clear(); current_.header.enemies.clear(); current_.header.probes.clear();
       next_=0; began_=now;
     }
     const auto& h=current_.header;
     if (p.sweep!=h.sweep || p.part!=next_ || now<began_ || now-began_>8 ||
         p.parts!=h.parts || p.generation!=h.generation || p.level!=h.level || p.checkpoint!=h.checkpoint ||
         p.start!=h.start || p.captured!=h.captured || p.enemy_world!=h.enemy_world || p.completed!=h.completed || p.script_count!=h.script_count ||
-        p.enemy_count!=h.enemy_count || p.extensions!=h.extensions) return {};
+        p.enemy_count!=h.enemy_count || p.probe_count!=h.probe_count || p.extensions!=h.extensions) return {};
     current_.scripts.insert(current_.scripts.end(),p.scripts.begin(),p.scripts.end());
     current_.enemies.insert(current_.enemies.end(),p.enemies.begin(),p.enemies.end());
+    current_.probes.insert(current_.probes.end(),p.probes.begin(),p.probes.end());
     if (++next_!=h.parts) return {};
     finished_=h.sweep;
-    if (current_.scripts.size()!=h.script_count || current_.enemies.size()!=h.enemy_count) return {};
+    if (current_.scripts.size()!=h.script_count || current_.enemies.size()!=h.enemy_count || current_.probes.size()!=h.probe_count) return {};
     std::set<std::pair<uint64_t,uint64_t>> scripts;
     std::set<EnemyId> enemies;
     for (const auto& s:current_.scripts) if (!scripts.emplace(s.source,s.script).second) return {};
     for (const auto& e:current_.enemies) if (!enemies.insert(e.id).second) return {};
+    std::set<std::pair<WorldArea,uint64_t>> probes;
+    for (const auto& p:current_.probes) if (!probes.emplace(p.area,p.source).second) return {};
     return current_;
   }
  private:
@@ -55,8 +65,27 @@ struct Evidence {
   bool quiet=false, lag=false, structural=false, wrong_level=false;
   uint64_t progress=0;
   uint64_t structural_anchor=0;
+  uint32_t differences=0;
   bool Any() const { return quiet || lag || structural || wrong_level; }
 };
+inline std::array<uint64_t,2> CompareProbes(const std::vector<WorldProbe>& host,const std::vector<WorldProbe>& local) {
+  std::array<uint64_t,2> differences{};
+  if (COOP_MUT_IF("digest_probe_skip")) return differences;
+  std::map<std::pair<WorldArea,uint64_t>,const WorldProbe*> rows;
+  for (const auto& p:local) rows[{p.area,p.source}]=&p;
+  for (const auto& h:host) {
+    const auto it=rows.find({h.area,h.source});
+    const auto area=size_t(h.area)-1;
+    if (area>=differences.size()) continue;
+    const auto* p=it==rows.end() ? nullptr:it->second;
+    const float tolerance=h.area==WorldArea::Npcs ? 5.f:.1f;
+    if (!p || p->value!=h.value || std::hypot(p->x-h.x,p->y-h.y,p->z-h.z)>tolerance)
+      ++differences[area];
+    if (it!=rows.end()) rows.erase(it);
+  }
+  for (const auto& [key,p]:rows) if (size_t(key.first)>=1 && size_t(key.first)<=2) ++differences[size_t(key.first)-1];
+  return differences;
+}
 // C108: a host owned enemy the guest still holds alive is structural drift only
 // while the guest has not applied that owner's retirement. After the guest's
 // native destroy of a retired centipede its actor stayed bound with its last
@@ -83,8 +112,12 @@ class Guard {
       *this={}; generation_=generation; level_=level; checkpoint_=checkpoint;
     }
     if (checkpoint_!=checkpoint) {
-      checkpoint_=checkpoint; seen_=false; samples_=0; last_=0; cooldown_=0; next_quiet_=0;
+      checkpoint_=checkpoint; seen_=false; samples_=0; last_=0; cooldown_=0; next_quiet_=0; quiet_samples_=0;
     }
+    // A health or metadata repair is independent of unrelated script progress.
+    // Keep the same repeated fresh sample rule, including pause/gap resets.
+    if (!e.quiet || now<last_ || now-last_>8) quiet_samples_=0;
+    if (e.quiet && !quiet_samples_++) quiet_since_=now;
     // Unrelated script progress or another birth cannot repair a specific
     // missing host actor. Retain grace while that same structural anchor stays
     // missing; convergence, a new anchor, stale samples and world changes reset it.
@@ -96,6 +129,10 @@ class Guard {
     last_=now; progress_=progress; anchored_=anchored; seen_=true;
     if (!e.Any() || now<cooldown_) return Tier::None;
     if (!samples_++) since_=now;
+    if (e.quiet && !e.wrong_level && quiet_samples_>=3 && now-quiet_since_>=6 && now>=next_quiet_ &&
+        !COOP_MUT_IF("digest_quiet_progress")) {
+      next_quiet_=now+6; return Tier::Quiet;
+    }
     if (samples_<3) return Tier::None;
     if (e.wrong_level) {
       if (now-since_>20 && !reloaded_.contains(checkpoint_)) return Tier::Reload;
@@ -117,13 +154,15 @@ class Guard {
       since_=last_=now; samples_=0; cooldown_=now+(tier==Tier::Reload ? 30 : 3);
     }
   }
-  void Suspend() { seen_=false; samples_=0; last_=0; }
+  void Suspend() { seen_=false; samples_=quiet_samples_=0; last_=0; }
  private:
   uint32_t generation_=0,level_=0,checkpoint_=0;
   uint64_t progress_=0;
   bool seen_=false,anchored_=false;
   std::set<uint32_t> moved_,reloaded_;
   unsigned samples_=0;
+  unsigned quiet_samples_=0;
+  double quiet_since_=0;
   double since_=0,last_=0,cooldown_=0,next_quiet_=0;
 };
 } // namespace kk::coop::desync

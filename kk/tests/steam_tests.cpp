@@ -229,14 +229,14 @@ void EveryProtocolMessage() {
     MessageType::PlayerDowned, MessageType::PlayerRevived, MessageType::CameraCut,
     MessageType::StoryEvent, MessageType::TriggerRequest, MessageType::WorldDigest, MessageType::ShotReceipt,
     MessageType::StartPlan, MessageType::StartPlanAck,
-    MessageType::ObjectState, MessageType::ObjectRequest, MessageType::RejoinRequest
+    MessageType::ObjectState, MessageType::ObjectRequest, MessageType::RejoinRequest, MessageType::WorldAudit
   };
   const MessageType unreliable[] = {MessageType::Ping, MessageType::Pong, MessageType::PlayerPose,
       MessageType::EnemySnapshot, MessageType::CameraPose};
-  static_assert(kProtocolVersion == 32 && std::size(reliable)+std::size(unreliable) == 37);
+  static_assert(kProtocolVersion == 33 && std::size(reliable)+std::size(unreliable) == 38);
   Backend a,b; a.self=1; b.self=2; a.remote=&b; b.remote=&a;
   SteamMessagesTransport at(a,2),bt(b,1);
-  unsigned seen[unsigned(MessageType::RejoinRequest)+1]{};
+  unsigned seen[unsigned(MessageType::WorldAudit)+1]{};
   for (bool r : {true,false}) {
     const auto types = r ? std::span<const MessageType>(reliable) : std::span<const MessageType>(unreliable);
     for (auto type : types) {
@@ -261,7 +261,7 @@ void EveryProtocolMessage() {
       if (type==MessageType::ShotIntent) Check(packet.size()==558,"maximum shotgun hits fit packet cap");
     }
   }
-  for (unsigned i=1;i<=unsigned(MessageType::RejoinRequest);++i) Check(seen[i]==1,"all distinct protocol IDs covered");
+  for (unsigned i=1;i<=unsigned(MessageType::WorldAudit);++i) Check(seen[i]==1,"all distinct protocol IDs covered");
 }
 void StoryOverMessages() {
   Backend a,b; a.self=1; b.self=2; a.remote=&b; b.remote=&a;
@@ -306,6 +306,17 @@ void StoryOverMessages() {
     }
     now+=.01;
   }
+  auto digest=SteamProbeMessage(MessageType::WorldDigest);
+  Check(h.Submit(digest),"host submits native digest through Steam mailbox");
+  h.Exchange(host); host.Tick(now); guest.Tick(now); g.Exchange(guest);
+  auto census=g.Take();
+  Check(census.size()==1 && census[0].digest==digest.digest,"complete host digest reaches guest through Steam session");
+  auto audit=SteamProbeMessage(MessageType::WorldAudit);
+  Check(g.Submit(audit),"guest submits audit receipt through Steam mailbox");
+  g.Exchange(guest); guest.Tick(now+.001); host.Tick(now+.001); h.Exchange(host);
+  auto receipt=h.Take();
+  Check(receipt.size()==1 && receipt[0].audit==audit.audit,"host receives guest samples and area counts through Steam session");
+  now+=.01;
   auto stale=SteamProbeMessage(MessageType::StoryEvent); ++stale.epoch;
   Check(h.Submit(stale),"stale story work can enter game mailbox before reconnect check");
   h.Exchange(host); host.Tick(now); guest.Tick(now); g.Exchange(guest);

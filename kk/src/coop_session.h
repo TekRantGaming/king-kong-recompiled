@@ -154,15 +154,15 @@ inline bool OwnershipSender(OwnershipPhase phase, Role role) {
 }
 inline bool StorySender(MessageType type, Role role) {
   return ((type==MessageType::StoryEvent || type==MessageType::WorldDigest) && role==Role::Host) ||
-      (type==MessageType::TriggerRequest && role==Role::Guest);
+      ((type==MessageType::TriggerRequest || type==MessageType::WorldAudit) && role==Role::Guest);
 }
 // A periodic digest is replaceable evidence, unlike a numbered story action.
 // A paused/loading game may drop a whole sweep, but must retain real actions
 // and must not end a healthy session because optional observations filled it.
 inline bool RetainStoryMessage(std::vector<Message>& queue,const Message& message) {
   if (queue.size()>=kStoryQueue) {
-    if (message.type==MessageType::WorldDigest) return true;
-    const auto observation=std::find_if(queue.begin(),queue.end(),[](const auto& m) { return m.type==MessageType::WorldDigest; });
+    if (message.type==MessageType::WorldDigest || message.type==MessageType::WorldAudit) return true;
+    const auto observation=std::find_if(queue.begin(),queue.end(),[](const auto& m) { return m.type==MessageType::WorldDigest || m.type==MessageType::WorldAudit; });
     if (observation==queue.end()) return false;
     queue.erase(observation);
   }
@@ -172,7 +172,7 @@ class StoryMailbox {
  public:
   bool Submit(Message m) {
     if (!IsStoryMessage(m.type) || !m.epoch ||
-        (m.type==MessageType::WorldDigest ? !ValidWorldDigest(m.digest) : !ValidStoryEvent(m.story)) ||
+        (m.type==MessageType::WorldDigest ? !ValidWorldDigest(m.digest) : m.type==MessageType::WorldAudit ? !ValidWorldAudit(m.audit) : !ValidStoryEvent(m.story)) ||
         (m.type==MessageType::TriggerRequest && !ValidStoryRequest(m.story.phase))) return false;
     std::lock_guard lock(mutex_);
     if (m.type==MessageType::WorldDigest && outgoing_.size()>=kStoryQueue/4) return false;

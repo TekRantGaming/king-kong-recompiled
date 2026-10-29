@@ -919,7 +919,7 @@ struct SteamRuntime::Impl
     // Steam self-send was unsupported in the C47 run. Keep the real DLL probe
     // for diagnostics; a failed round trip requires testing with two accounts.
     transport = std::make_unique<SteamMessagesTransport>(*this, model.self);
-    for (unsigned i=1;i<=unsigned(MessageType::RejoinRequest);++i) {
+    for (unsigned i=1;i<=unsigned(MessageType::WorldAudit);++i) {
       const auto type=MessageType(i);
       const bool reliable=type!=MessageType::Ping && type!=MessageType::Pong &&
           type!=MessageType::PlayerPose && type!=MessageType::EnemySnapshot && type!=MessageType::CameraPose;

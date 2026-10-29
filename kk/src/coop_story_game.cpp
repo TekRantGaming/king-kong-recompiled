@@ -748,7 +748,7 @@ desync::Evidence StoryCompareDigest(const uint8_t* b,const desync::State& state,
   for (const auto& h:state.scripts) {
     const auto* bind=story::Match(h.source,h.script,bindings);
     if (!bind || Vars(b,bind->ai,19824)!=bind->vars || Shape(b,bind->vars)!=bind->script) {
-      if (h.run && (h.flags&3)) { result.structural=true; mix(h.source); mix(0); }
+      if (h.run && (h.flags&3)) { ++result.differences; result.structural=true; mix(h.source); mix(0); }
       continue;
     }
     auto& s=scripts.at(bind->actor); const auto index=Load32(b,bind->vars+19812);
@@ -756,6 +756,7 @@ desync::Evidence StoryCompareDigest(const uint8_t* b,const desync::State& state,
     StoryEvent e{state.header.generation,state.header.level,1,h.source,h.script,h.run,h.record,
         (h.flags&2) ? StoryPhase::SnapshotFinished : StoryPhase::SnapshotLoop};
     if (CheckpointCovers(b,s,e) || SnapshotReached(b,s,e)) continue;
+    ++result.differences;
     mix(h.source); mix(s.run); mix(index); mix(s.finished);
     // Only activation bookkeeping may be quietly aligned, with independently
     // matching native cursor/track state. Never write a received native cursor,
@@ -871,7 +872,7 @@ void StoryGameFrame(uint8_t* b) {
     Refuse("private load or reconnect requires checkpoint catch-up");
   }
   for (const auto& m : TakeStory()) {
-    if (m.type==MessageType::WorldDigest) { WorldGuardReceive(m); continue; }
+    if (m.type==MessageType::WorldDigest || m.type==MessageType::WorldAudit) { WorldGuardReceive(m); continue; }
     const auto& e=m.story;
     if (host && e.phase!=StoryPhase::Checksum) Note("request received",e);
     if (m.epoch!=epoch || e.generation!=generation || e.level!=level) {

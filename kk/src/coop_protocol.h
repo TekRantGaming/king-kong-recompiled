@@ -1,5 +1,6 @@
 #pragma once
 #include <array>
+#include <algorithm>
 
 #include <cstdint>
 #include <compare>
@@ -14,7 +15,7 @@ namespace kk::coop {
 constexpr uint32_t kMagic = 0x4B4B4331;  // KKC1, network byte order throughout
 // 32: union of 31 (audited native attack cues, scorpion grab status) and 27 (native authored birth provenance,
 // player capabilities, door retirement, story Stopped phase).
-constexpr uint16_t kProtocolVersion = 32;
+constexpr uint16_t kProtocolVersion = 33; // C126: native probes and guest audit receipt.
 constexpr size_t kMaxDisplayNameBytes = 32;
 // Valid UTF-8, no controls or invisible direction/line formatting, bounded at a codepoint.
 // Empty or wholly invalid input becomes "Partner". Never log the input or result.
@@ -28,7 +29,8 @@ enum class MessageType : uint16_t {
   DamageEvent = 22, PlayerStatus = 23, OwnershipChange = 24,
   PlayerDowned = 25, PlayerRevived = 26, CameraPose = 27, CameraCut = 28,
   StoryEvent = 29, TriggerRequest = 30, WorldDigest = 31, ShotReceipt = 32,
-  StartPlan = 33, StartPlanAck = 34, ObjectState = 35, ObjectRequest = 36, RejoinRequest = 37
+  StartPlan = 33, StartPlanAck = 34, ObjectState = 35, ObjectRequest = 36, RejoinRequest = 37,
+  WorldAudit = 38
 };
 
 enum class ObjectKind : uint8_t { Breakable=1, Door=2, Fire=3, Raft=4, Ode=5, Tree=6, SupportBody=7 };
@@ -116,7 +118,7 @@ inline bool StorySnapshotEntry(StoryPhase phase) {
   return phase==StoryPhase::SnapshotIdle || phase==StoryPhase::SnapshotLoop || phase==StoryPhase::SnapshotFinished;
 }
 inline bool IsStoryMessage(MessageType t) {
-  return t == MessageType::StoryEvent || t == MessageType::TriggerRequest || t == MessageType::WorldDigest;
+  return t == MessageType::StoryEvent || t == MessageType::TriggerRequest || t == MessageType::WorldDigest || t == MessageType::WorldAudit;
 }
 
 // Session control is reliable and scoped by the packet epoch and a load generation.
@@ -348,9 +350,28 @@ struct WorldEnemy {
   EnemyOwner owner=EnemyOwner::Host;
   uint32_t generation=0;
   float life=0,secondary_life=0;
+  float x=0,y=0,z=0;
   auto operator<=>(const WorldEnemy&) const = default;
 };
 constexpr size_t kDigestScriptsPerPage=16,kDigestEnemiesPerPage=12;
+enum class WorldArea : uint8_t { Npcs=1, Objects=2 };
+// Authored identities and native values only. No received address is used.
+struct WorldProbe {
+  uint64_t source=0;
+  WorldArea area=WorldArea::Npcs;
+  uint32_t value=0;
+  float x=0,y=0,z=0;
+  auto operator<=>(const WorldProbe&) const = default;
+};
+constexpr size_t kDigestProbesPerPage=32,kMaxWorldProbes=kObjectCensus+128;
+struct WorldAudit {
+  uint32_t generation=0,level=0,sweep=0;
+  uint64_t samples=0,quiet=0,moves=0,reloads=0;
+  // Cumulative comparisons with differences, one count per area per sample.
+  std::array<uint64_t,5> diffs{}; // enemies, NPCs, story, objects, players
+  auto operator<=>(const WorldAudit&) const = default;
+};
+bool ValidWorldAudit(const WorldAudit& audit);
 struct WorldDigestPage {
   uint32_t generation=0,level=0,start=0,checkpoint=0,sweep=0;
   double captured=0; // host steady clock, compared only with the host's pose clock
@@ -358,11 +379,16 @@ struct WorldDigestPage {
   uint64_t completed=0;
   uint16_t part=0,parts=1,script_count=0,enemy_count=0;
   uint32_t extensions=0;
+  uint16_t probe_count=0;
   std::vector<WorldScript> scripts;
   std::vector<WorldEnemy> enemies;
+  std::vector<WorldProbe> probes;
   auto operator<=>(const WorldDigestPage&) const = default;
 };
 bool ValidWorldDigest(const WorldDigestPage& page);
+inline size_t DigestCoreParts(const WorldDigestPage& p) {
+  return std::max<size_t>({1,(size_t(p.script_count)+15)/16,(size_t(p.enemy_count)+11)/12});
+}
 struct Message {
   MessageType type = MessageType::Hello;
   uint16_t protocol = kProtocolVersion;
@@ -396,6 +422,7 @@ struct Message {
   StoryEvent story;
   ObjectState object;
   WorldDigestPage digest;
+  WorldAudit audit;
 };
 // Encoders also reject invalid input. Decoding leaves out untouched on failure.
 bool Encode(const Message& message, std::vector<uint8_t>& out);

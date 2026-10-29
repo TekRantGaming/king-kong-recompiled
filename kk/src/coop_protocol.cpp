@@ -303,26 +303,39 @@ bool ValidPlayerStatus(const PlayerStatus& p) {
 }
 bool ValidWorldDigest(const WorldDigestPage& p) {
   if (!p.generation || !p.level || p.level>100000 || p.start>10000 || p.checkpoint>10000 || !p.sweep ||
-      !p.parts || p.parts>256 || p.part>=p.parts || p.script_count>kStorySnapshotScripts || p.enemy_count>kMaxEnemies ||
+      !p.parts || p.parts>512 || p.part>=p.parts || p.script_count>kStorySnapshotScripts || p.enemy_count>kMaxEnemies || p.probe_count>kMaxWorldProbes ||
       p.extensions || !std::isfinite(p.captured) || p.captured<0 || p.captured>=1e12 ||
       !ValidEnemyWorld(p.enemy_world) || p.enemy_world.level!=p.level || p.enemy_world.start!=p.start ||
       p.scripts.size()>kDigestScriptsPerPage || p.enemies.size()>kDigestEnemiesPerPage ||
       p.scripts.size()>p.script_count || p.enemies.size()>p.enemy_count ||
-      p.parts!=std::max<size_t>({1,(size_t(p.script_count)+15)/16,(size_t(p.enemy_count)+11)/12})) return false;
+      p.parts!=DigestCoreParts(p)+(p.probe_count+kDigestProbesPerPage-1)/kDigestProbesPerPage) return false;
   const auto expected=[](size_t total,size_t part,size_t per) { return std::min(per,total-std::min(total,part*per)); };
   if (p.scripts.size()!=expected(p.script_count,p.part,kDigestScriptsPerPage) ||
-      p.enemies.size()!=expected(p.enemy_count,p.part,kDigestEnemiesPerPage)) return false;
+      p.enemies.size()!=expected(p.enemy_count,p.part,kDigestEnemiesPerPage) ||
+      p.probes.size()!=(p.part<DigestCoreParts(p) ? 0:expected(p.probe_count,p.part-DigestCoreParts(p),kDigestProbesPerPage))) return false;
+  for (const auto& q:p.probes) if (!q.source || (q.area!=WorldArea::Npcs && q.area!=WorldArea::Objects) ||
+      !Point({q.x,q.y,q.z})) return false;
   for (const auto& s:p.scripts) if (!s.source || !s.script || s.record>kStoryRecords || s.flags>7 ||
       (!s.run && s.flags)) return false;
   for (const auto& e:p.enemies) if (!e.id.source || !ValidEnemyFamily(e.id.family) ||
       e.owner>EnemyOwner::Guest || !std::isfinite(e.life) || std::abs(e.life)>=1000000 ||
       !std::isfinite(e.secondary_life) || e.secondary_life<0 || e.secondary_life>=1000000 ||
-      (e.id.family!=EnemyFamily::Scorpion && e.secondary_life!=0)) return false;
+      (e.id.family!=EnemyFamily::Scorpion && e.secondary_life!=0) || !Point({e.x,e.y,e.z})) return false;
   return true;
+}
+bool ValidWorldAudit(const WorldAudit& a) {
+  return a.generation && a.level && a.level<=100000 && a.sweep && a.samples &&
+      std::all_of(a.diffs.begin(),a.diffs.end(),[&](uint64_t n) { return n<=a.samples; });
 }
 bool Encode(const Message& m, std::vector<uint8_t>& out) {
   Writer payload;
   switch (m.type) {
+    case MessageType::WorldAudit:
+      if (!ValidWorldAudit(m.audit)) return false;
+      for (uint32_t v:{m.audit.generation,m.audit.level,m.audit.sweep}) payload.U(v,4);
+      for (uint64_t v:{m.audit.samples,m.audit.quiet,m.audit.moves,m.audit.reloads}) payload.U(v,8);
+      for (auto v:m.audit.diffs) payload.U(v,8);
+      break;
     case MessageType::ObjectState: case MessageType::ObjectRequest:
       if (!(m.type==MessageType::ObjectRequest ? ValidObjectRequest(m.object) : ValidObjectState(m.object))) return false;
       payload.U(m.object.generation,4); payload.U(m.object.level,4); payload.U(m.object.number,4);
@@ -349,6 +362,7 @@ bool Encode(const Message& m, std::vector<uint8_t>& out) {
       payload.U(p.completed,8);
       for (uint16_t v:{p.part,p.parts,p.script_count,p.enemy_count}) payload.U(v,2);
       payload.U(p.extensions,4); payload.U(p.scripts.size(),1); payload.U(p.enemies.size(),1);
+      payload.U(p.probe_count,2); payload.U(p.probes.size(),1);
       for (const auto& s:p.scripts) {
         payload.U(s.source,8); payload.U(s.script,8); payload.U(s.run,4); payload.U(s.record,4); payload.U(s.flags,1);
       }
@@ -356,6 +370,11 @@ bool Encode(const Message& m, std::vector<uint8_t>& out) {
         payload.U(e.id.source,8); payload.U(e.id.sequence,4); payload.U(uint16_t(e.id.family),2);
         payload.U(uint8_t(e.owner),1); payload.U(e.generation,4);
         payload.U(std::bit_cast<uint32_t>(e.life),4); payload.U(std::bit_cast<uint32_t>(e.secondary_life),4);
+        WriteVector(payload,{e.x,e.y,e.z});
+      }
+      for (const auto& q:p.probes) {
+        payload.U(q.source,8); payload.U(uint8_t(q.area),1); payload.U(q.value,4);
+        WriteVector(payload,{q.x,q.y,q.z});
       }
       break;
     }
@@ -564,7 +583,8 @@ bool Decode(std::span<const uint8_t> bytes, Message& out) {
       p.enemy_world=ReadWorld(r); p.completed=r.U(8);
       p.part=uint16_t(r.U(2)); p.parts=uint16_t(r.U(2)); p.script_count=uint16_t(r.U(2)); p.enemy_count=uint16_t(r.U(2));
       p.extensions=uint32_t(r.U(4)); const size_t scripts=r.U(1),enemies=r.U(1);
-      if (scripts>kDigestScriptsPerPage || enemies>kDigestEnemiesPerPage) return false;
+      p.probe_count=uint16_t(r.U(2)); const size_t probes=r.U(1);
+      if (scripts>kDigestScriptsPerPage || enemies>kDigestEnemiesPerPage || probes>kDigestProbesPerPage) return false;
       for (size_t i=0;i<scripts;++i) {
         WorldScript s; s.source=r.U(8); s.script=r.U(8); s.run=uint32_t(r.U(4)); s.record=uint32_t(r.U(4)); s.flags=uint8_t(r.U(1));
         p.scripts.push_back(s);
@@ -573,11 +593,22 @@ bool Decode(std::span<const uint8_t> bytes, Message& out) {
         WorldEnemy e; e.id={r.U(8),uint32_t(r.U(4)),EnemyFamily(r.U(2))};
         e.owner=EnemyOwner(r.U(1)); e.generation=uint32_t(r.U(4));
         e.life=std::bit_cast<float>(uint32_t(r.U(4))); e.secondary_life=std::bit_cast<float>(uint32_t(r.U(4)));
+        const auto position=ReadVector(r); e.x=position.x; e.y=position.y; e.z=position.z;
         p.enemies.push_back(e);
+      }
+      for (size_t i=0;i<probes;++i) {
+        WorldProbe q; q.source=r.U(8); q.area=WorldArea(r.U(1)); q.value=uint32_t(r.U(4));
+        const auto p=ReadVector(r); q.x=p.x; q.y=p.y; q.z=p.z; m.digest.probes.push_back(q);
       }
       if (!ValidWorldDigest(p)) return false;
       break;
     }
+    case MessageType::WorldAudit:
+      m.audit.generation=uint32_t(r.U(4)); m.audit.level=uint32_t(r.U(4)); m.audit.sweep=uint32_t(r.U(4));
+      m.audit.samples=r.U(8); m.audit.quiet=r.U(8); m.audit.moves=r.U(8); m.audit.reloads=r.U(8);
+      for (auto& v:m.audit.diffs) v=r.U(8);
+      if (!ValidWorldAudit(m.audit)) return false;
+      break;
     case MessageType::StoryEvent: case MessageType::TriggerRequest:
       m.story.generation=uint32_t(r.U(4)); m.story.level=uint32_t(r.U(4)); m.story.number=uint32_t(r.U(4));
       m.story.source=r.U(8); m.story.script=r.U(8);
