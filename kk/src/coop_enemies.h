@@ -364,6 +364,7 @@ class Channel {
           const bool died=r.terminal && r.record.kind==EnemyEventKind::Died;
           r.terminal = true;
           r.record.enemy = e;
+          if (replication) r.record.source_time=0; // Events have no pose timestamp.
           // Scripted retirement also removes living templates. It must not
           // synthesize a kill, while a previously confirmed death stays dead.
           if (kind==EnemyEventKind::Died || died || e.life<=0) r.record.enemy.life=0;

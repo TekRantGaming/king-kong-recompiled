@@ -107,6 +107,7 @@ void ActorInterpolation() {
   Check(c.Sample(11,true).records.empty(),"expired samples cannot extrapolate forever");
   m.type=MessageType::EnemyEvent; m.enemy_event={{101,4,1},EnemyEventKind::Died,a};
   m.enemy_event.enemy.life=0; c.Receive(m,11,true);
+  Check(c.Sample(11,true).records[0].source_time==0,"a death event cannot retain an older live pose timestamp");
   m.type=MessageType::EnemySnapshot; m.sequence=10; a.life=0; a.animation_time=2;
   m.enemies={{101,4,1},1001,{a}}; c.Receive(m,11.1,true);
   Check(c.Sample(11.1,true).records[0].enemy.animation_time==2,"host corpse animation continues after death");

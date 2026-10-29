@@ -4587,12 +4587,14 @@ desync::Evidence EnemyCompareDigest(uint8_t* b,const desync::State& state,bool r
   }
   return result;
 }
-void ActorNativeAudit(const uint8_t* b) {
+void ActorNativeAudit(const uint8_t* b,double sample_time=0) {
 #if defined(KK_DEV_TOOLS)
   static const bool enabled=[] { const auto* p=std::getenv("KK_DEV_ACTOR_AUDIT"); return p && std::strcmp(p,"1")==0; }();
   if (!enabled) return;
   static double next=0;
-  const auto now=Now(); if (now<next) return; next=now+.05;
+  const auto now=sample_time>0 ? sample_time:Now();
+  if (!sample_time && now<next) return;
+  next=now+.05;
   const auto* path=std::getenv("KK_DEV_WORLD_DIR"); if (!path || !*path) return;
   const auto dir=std::filesystem::absolute(path).lexically_normal();
   if (!dir.generic_string().starts_with("F:/kk-native-coop/") && !dir.generic_string().starts_with("f:/kk-native-coop/")) return;
@@ -4626,7 +4628,7 @@ void ActorNativeAudit(const uint8_t* b) {
     std::ofstream out(dir/"actors-native.jsonl",std::ios::app|std::ios::binary); out<<record.text<<'\n';
   } catch (const std::exception& ex) { REXLOG_WARN("ACTORS audit write failed {}",ex.what()); }
 #else
-  (void)b;
+  (void)b; (void)sample_time;
 #endif
 }
 void ActorLateWorld(PPCContext& ctx,uint8_t* b,uint32_t w) {
@@ -4671,7 +4673,7 @@ void ActorLateWorld(PPCContext& ctx,uint8_t* b,uint32_t w) {
     a->Observe(sample.enemy); frame.records.push_back(sample);
   }
   PublishEnemyFrame(frame);
-  ActorNativeAudit(b);
+  ActorNativeAudit(b,frame.time);
 }
 void EnemyGameFrame() {
   if (!Connected()) {
