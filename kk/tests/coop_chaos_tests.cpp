@@ -1088,6 +1088,38 @@ void ReloadMarkChaos() {
       "a coordinated reload restores the checkpoint snapshot on both peers");
 }
 void RejoinLoad() {
+  {
+    SessionFlow host{true},guest{false};
+    SessionStart s; s.chapter=8; s.level=305; s.start=1;
+    Check(host.Begin(s,{},0),"begin world before a rejoin load race");
+    FlowTransfer(host,guest,0);
+    auto loaded=[&](SessionFlow& peer,double now) {
+      Message m; m.type=MessageType::Loaded; m.flow=peer.View().world; peer.Local(m,now);
+    };
+    loaded(host,1); loaded(guest,1); FlowTransfer(guest,host,1); FlowTransfer(host,guest,1);
+    Message checkpoint; checkpoint.type=MessageType::Checkpoint; checkpoint.flow=host.View().world;
+    checkpoint.flow.start=3; host.Local(checkpoint,2); FlowTransfer(host,guest,2);
+    s.start=3; s.visit=1; host.PublishRejoinState(s); host.Rejoin(3); FlowTransfer(host,guest,3);
+    Check(guest.View().start.rejoin && guest.View().phase==FlowPhase::Loading,"guest begins the older reconnect load");
+    Message retry; retry.type=MessageType::ReloadRequest; retry.flow=host.View().world;
+    host.Local(retry,4); FlowTransfer(host,guest,4);
+    Check(guest.View().world.generation==2 && guest.View().start.generation==1,
+        "ordinary retry can supersede a reconnect before the guest finishes loading");
+    loaded(host,5);
+    Check(host.View().phase==FlowPhase::Playing,"superseded reconnect never traps the host in its load barrier");
+    s.generation=2; s.world_start=3; s.visit=3; s.weapon=2; s.stock={0,38,3,0,0,80,12,0};
+    host.PublishRejoinState(s); host.Tick(6);
+    Check(!host.Outgoing().empty() && host.Outgoing().front().type==MessageType::SessionStart,
+        "host replaces the superseded reconnect with fresh native visit metadata");
+    const auto fresh=host.Outgoing().front(); FlowTransfer(host,guest,6);
+    Check(guest.View().start.generation==2 && guest.View().start.visit==3 && guest.View().start.stock==s.stock,
+        "newer reconnect start replaces an in flight ordinary load and restores the host actor visit");
+    const auto revision=guest.View().rejoin_revision; guest.Remote(fresh,6.1);
+    Check(guest.View().rejoin_revision==revision,"duplicate reconnect start cannot repeat the native load");
+    loaded(guest,7); FlowTransfer(guest,host,7); FlowTransfer(host,guest,7);
+    Check(host.View().phase==FlowPhase::Playing && guest.View().phase==FlowPhase::Playing,
+        "superseded reconnect releases both peers in the fresh world");
+  }
   for (const auto chapter : {8u,24u}) {
     SessionStart s;
     s.rejoin=true; s.chapter=uint16_t(chapter); s.level=kChapterRules[chapter].level;

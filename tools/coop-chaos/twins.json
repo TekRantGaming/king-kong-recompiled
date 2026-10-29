@@ -67,6 +67,8 @@
     "rejoin_equipment": "rejoin_load",
     "rejoin_after_load": "rejoin_load",
     "rejoin_tracking": "rejoin_load",
+    "rejoin_superseded_retry": "rejoin_load",
+    "rejoin_superseded_start": "rejoin_load",
     "mirror_gate": "mirror_gate",
     "crab_unstick_player_target": "crab_unstick",
     "crab_unstick_single_player": "crab_unstick",

@@ -318,6 +318,13 @@ class SessionFlow {
     view_.status="Loading..."; deadline_=now;
   }
   void World(FlowEvent f, double now) {
+    // A native retry can overtake the checkpoint being sent to a returning
+    // guest. Its local visit counter has missed the host's intervening loads.
+    // Send a fresh rejoin start after the new host world metadata is ready.
+    if (view_.host && guest_rejoining_ && !COOP_MUT_IF("rejoin_superseded_retry")) {
+      guest_rejoining_=false;
+      rejoin_deferred_=true;
+    }
     view_.reload=!COOP_MUT_IF("reload_mark") && reload_from_ && f.generation==reload_from_+1 &&
         f.level==view_.world.level && f.start==view_.checkpoint;
     reload_from_=0;
@@ -347,7 +354,9 @@ class SessionFlow {
     if (m.type==MessageType::SessionStart) {
       if (local || view_.host || (view_.active && !m.start.rejoin) || !ValidSessionStart(m.start) || FlowChapter(m.start.level)!=m.start.chapter) return;
       // A repeated start from the same handshake cannot load twice.
-      if (view_.active && m.start.rejoin && !view_.reconnecting && view_.phase==FlowPhase::Loading) return;
+      const bool newer=m.start.generation>view_.start.generation &&
+          m.start.generation>=view_.world.generation && !COOP_MUT_IF("rejoin_superseded_start");
+      if (view_.active && m.start.rejoin && !view_.reconnecting && view_.phase==FlowPhase::Loading && !newer) return;
       outgoing_.clear(); view_.reconnecting=false; view_.reconnect_expired=false;
       Setup(m.start,now); view_.phase=FlowPhase::Preparing; view_.save.clear();
       view_.start_ready=m.start.save_bytes==0;
