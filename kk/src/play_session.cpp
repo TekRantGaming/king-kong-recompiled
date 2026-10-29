@@ -1368,7 +1368,7 @@ REX_HOOK_RAW(sub_8253DB80) {
   if (request) kk::coop::EnemyBeforeLoad();
   if (request) kk::PartnerBodyBeforeLoad();
   __imp__sub_8253DB80(ctx, base);
-  kk::coop::SessionAfterGo(base, g, request);
+  kk::coop::SessionAfterGo(ctx, base, g, request);
   if (request) kk::coop::EnemyAfterLoad(base, g);
   if (request) kk::PartnerBodyAfterLoad(base, g);
 #if defined(KK_DEV_TOOLS)

@@ -877,6 +877,53 @@ void ReloadMarkChaos() {
   Check(guest.View().world.generation==2 && guest.View().reload && host.View().reload,
       "a coordinated reload restores the checkpoint snapshot on both peers");
 }
+void RejoinLoad() {
+  for (const auto chapter : {8u,24u}) {
+    SessionStart s;
+    s.rejoin=true; s.chapter=uint16_t(chapter); s.level=kChapterRules[chapter].level;
+    s.start=chapter==8 ? 3 : 7; s.world_start=1; s.generation=9;
+    s.weapon=2; s.stock={5,38,3,8,15,16,17,18};
+    SessionFlow host{true},guest{false};
+    Check(host.Begin(s,{},0),"restarted host begins at its durable checkpoint");
+    FlowTransfer(host,guest,0);
+    for (const auto* peer : {&host,&guest}) {
+      const auto& v=peer->View();
+      Check(v.world.start==1 && SessionLoadPoint(v)==s.start,
+          "both peers load the checkpoint while retaining the original world identity");
+      CheckpointCatchup tracking; tracking.Reset(v); tracking.Observe(v.world.generation,s.start,1);
+      Check(tracking.WorldCheckpoint()==s.start && !tracking.Available(),
+          "recovery initialization retains the actual loaded checkpoint without a false catch up offer");
+      std::map<uint32_t,uint32_t> words;
+      constexpr uint32_t bank=0x42000000;
+      // CarryOut has just loaded an older slot and chapter defaults. The
+      // checkpoint must replace those values, including an empty magazine.
+      auto equipment=s; equipment.stock[0]=0;
+      RestoreRejoinEquipment(equipment,bank,[&](uint32_t a,uint32_t x){words[a]=x;});
+      Check(words[bank+13128]==2 && words[bank+13432]==0 && words[bank+13504]==38 &&
+          words[bank+14880]==15 && words[bank+15096]==18,
+          "host checkpoint equipment replaces the older slot on both peers");
+      Check(RejoinEquipmentMatches(equipment,bank,[&](uint32_t a){return words.at(a);}),
+          "restored native equipment is accepted");
+      ++words[bank+13504];
+      Check(!RejoinEquipmentMatches(equipment,bank,[&](uint32_t a){return words.at(a);}),
+          "native equipment drift is detected before Loaded");
+      auto retry=words;
+      RestoreRejoinAfterLoad(equipment,bank,[&](uint32_t a,uint32_t x){words[a]=x;},[&]{retry=words;});
+      Check(words[bank+13504]==38 && retry[bank+13504]==38 && retry[bank+13432]==0,
+          "after the native loader both live equipment and the retry snapshot contain host stock");
+    }
+    Message loaded; loaded.type=MessageType::Loaded; loaded.flow=guest.View().world;
+    Check(loaded.flow.start==1,"Loaded acknowledges identity, not the native checkpoint");
+    guest.Local(loaded,1); host.Local(loaded,1);
+    FlowTransfer(guest,host,1); FlowTransfer(host,guest,1);
+    Check(host.View().phase==FlowPhase::Playing && guest.View().phase==FlowPhase::Playing,
+        "restart releases both peers using the unchanged identity");
+    auto next=guest.View(); ++next.world.generation; next.world.start=4;
+    Check(SessionLoadPoint(next)==4,"later world generations do not reuse the restart checkpoint");
+    next.start.rejoin=false; next.start.generation=next.world.generation;
+    Check(SessionLoadPoint(next)==4,"ordinary chapter load uses its world start");
+  }
+}
 // C123: level 201 start 4. The host's own load runs checkpoint 4 -> 3 -> 4 in
 // one frame; the guest got the 3 before its ES_EnterMap pass (AI pass 2),
 // which then picked start point 3's setup. The guest mirror must wait for the
@@ -1215,6 +1262,7 @@ int main(int argc,char** argv) {
   else if(name=="placement_wait") PlacementWait();
   else if(name=="void_guard") VoidGuard();
   else if(name=="reload_mark") ReloadMarkChaos();
+  else if(name=="rejoin_load") RejoinLoad();
   else if(name=="mirror_gate") MirrorGate();
   else if(name=="udp_duplicate" || name=="udp_order") Reliable();
   else if(name=="event_pause") EventPause();

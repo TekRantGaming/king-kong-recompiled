@@ -123,6 +123,34 @@ struct FlowView {
   // coordinated ReloadRequest (death or scripted fail), not a story transition.
   bool reload = false;
 };
+// The shared world keeps its original start for actor identity and control
+// messages. A returning peer loads the host's current checkpoint instead.
+inline uint32_t SessionLoadPoint(const FlowView& v) {
+  return !COOP_MUT_IF("rejoin_load_point") && v.start.rejoin &&
+      v.start.generation==v.world.generation ? v.start.start : v.world.start;
+}
+template<class Store>
+void RestoreRejoinEquipment(const SessionStart& start,uint32_t g,Store store) {
+  if (COOP_MUT_IF("rejoin_equipment")) return;
+  store(g+13128,start.weapon);
+  for (unsigned i=0;i<4;++i) {
+    store(g+13432+i*72,start.stock[i]);
+    store(g+14880+i*72,start.stock[i+4]);
+  }
+}
+template<class Load>
+bool RejoinEquipmentMatches(const SessionStart& start,uint32_t g,Load load) {
+  if (load(g+13128)!=start.weapon) return false;
+  for (unsigned i=0;i<4;++i)
+    if (load(g+13432+i*72)!=start.stock[i] || load(g+14880+i*72)!=start.stock[i+4]) return false;
+  return true;
+}
+template<class Store,class Snapshot>
+void RestoreRejoinAfterLoad(const SessionStart& start,uint32_t g,Store store,Snapshot snapshot) {
+  if (COOP_MUT_IF("rejoin_after_load")) return;
+  RestoreRejoinEquipment(start,g,store);
+  snapshot();
+}
 // Continuous evidence only; loading, stale poses or solo policy reset the timer.
 class BehindRule {
  public:
@@ -146,6 +174,9 @@ class CheckpointCatchup {
  public:
   void Reset(uint32_t generation,uint32_t checkpoint) {
     *this={}; generation_=generation; world_=host_=checkpoint;
+  }
+  void Reset(const FlowView& v) {
+    Reset(v.world.generation,COOP_MUT_IF("rejoin_tracking") ? v.world.start : SessionLoadPoint(v));
   }
   void Observe(uint32_t generation,uint32_t checkpoint,double now) {
     if (generation!=generation_) { Reset(generation,checkpoint); return; }

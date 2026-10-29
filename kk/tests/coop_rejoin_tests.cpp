@@ -137,6 +137,50 @@ void UdpRestart(bool host_crash) {
     std::fprintf(stderr,"UDP restart host-crash=%d host=%s guest=%s\n",host_crash,StateName(h->State()),StateName(g->State()));
   Check(h->State()==SessionState::Connected && g->State()==SessionState::Connected,"UDP process restart replaces nonce and endpoint");
 }
+void UdpHostCheckpointRestart(unsigned chapter,uint32_t seed) {
+  UdpSimulation sim; Check(UdpProfile("bad_wifi",sim),"restart fault profile"); sim.seed=seed;
+  static uint16_t next_port=32020;
+  DirectUdpOptions ho{true,"127.0.0.1",next_port++,"ABC234",sim}; ho.resume_token=9600;
+  auto ht=CreateDirectUdp(ho);
+  DirectUdpOptions go{false,"127.0.0.1",ht->LocalPort(),"ABC234",sim}; go.resume_token=9600;
+  auto gt=CreateDirectUdp(go);
+  auto h=std::make_unique<CoopSession>(Config(true,101),*ht);
+  CoopSession guest(Config(false,202),*gt);
+  auto hb=std::make_unique<FlowMailbox>(); FlowMailbox gb;
+  double now=0; uint32_t host_load=0,guest_load=0;
+  const auto step=[&] {
+    h->Tick(now); hb->Exchange(*h,now); guest.Tick(now+1000); gb.Exchange(guest,now+1000);
+    const auto loaded=[&](FlowMailbox& box,uint32_t& point) {
+      const auto v=box.Snapshot();
+      if (!v.start_ready || v.phase!=FlowPhase::Loading) return;
+      point=SessionLoadPoint(v);
+      Message m; m.type=MessageType::Loaded; m.flow=v.world; box.Submit(m);
+    };
+    loaded(*hb,host_load); loaded(gb,guest_load); now+=.02;
+  };
+  SessionStart s; s.chapter=uint16_t(chapter); s.level=kChapterRules[chapter].level; s.start=1;
+  Check(hb->Begin(s,{}),"queue initial world before host restart");
+  for (unsigned i=0;i<2000 && gb.Snapshot().phase!=FlowPhase::Playing;++i) step();
+  Check(hb->Snapshot().phase==FlowPhase::Playing && gb.Snapshot().phase==FlowPhase::Playing,
+      "bad wifi initial load barrier releases");
+  h.reset(); ht->Close();
+  for (unsigned i=0;i<400;++i) { guest.Tick(now+1000); gb.Exchange(guest,now+1000); now+=.02; }
+  s.rejoin=true; s.start=chapter==8 ? 3 : 7; s.world_start=1;
+  s.weapon=2; s.stock={0,38,3,0,0,80,12,0};
+  ht=CreateDirectUdp(ho); h=std::make_unique<CoopSession>(Config(true,303),*ht);
+  hb=std::make_unique<FlowMailbox>(); host_load=guest_load=0;
+  Check(hb->Begin(s,{}),"restarted host queues its durable checkpoint");
+  for (unsigned i=0;i<3000;++i) {
+    step();
+    if (hb->Snapshot().phase==FlowPhase::Playing && gb.Snapshot().phase==FlowPhase::Playing &&
+        gb.Snapshot().rejoin_revision && host_load==s.start && guest_load==s.start) break;
+  }
+  const auto hv=hb->Snapshot(),gv=gb.Snapshot();
+  Check(hv.phase==FlowPhase::Playing && gv.phase==FlowPhase::Playing && host_load==s.start && guest_load==s.start,
+      "bad wifi host restart loads the host checkpoint on both peers");
+  Check(hv.world.start==1 && gv.world.start==1 && gv.start.weapon==s.weapon && gv.start.stock==s.stock,
+      "bad wifi rejoin carries equipment while Loaded retains identity start 1");
+}
 void LostProbes() {
   Backend a,b; a.self=1; b.self=2; a.other=&b; b.other=&a;
   SteamMessagesTransport at(a,2,true),bt(b,1,true);
@@ -182,6 +226,7 @@ int main() {
   HostReloadWhileAbsent();
   for (auto seconds : {10.,60.}) for (bool one_way : {false,true}) SteamOutage(seconds,one_way);
   UdpRestart(false); UdpRestart(true);
+  for (unsigned chapter : {8u,24u}) for (uint32_t seed : {128u,2028u}) UdpHostCheckpointRestart(chapter,seed);
   LostProbes();
   std::printf("coop rejoin: %d checks passed\n",checks);
 }
