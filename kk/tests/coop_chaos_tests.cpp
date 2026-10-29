@@ -87,6 +87,16 @@ void ActorFreeze() {
   Check(!actors::Initialize(true,true,false,true,false,true),"stale or other world records cannot initialize actors");
   Check(!actors::Initialize(true,true,true,true,true,true),"player initialization is never driven by replication");
   Check(!actors::Initialize(true,true,true,true,false,false),"ordinary NPC tracks cannot run through initialization");
+  auto far=Enemy(); far.x=1000;
+  PlayerPose local,peer; peer.x=1000;
+  Check(!actors::InScope(true,false,far,&local,nullptr),"far live actors are omitted from snapshots and digests together");
+  Check(actors::InScope(true,false,far,&local,&peer),"actors near either player remain in scope");
+  Check(actors::InScope(true,true,far,&local,nullptr),"terminal events survive leaving relevance");
+  Check(actors::InScope(false,false,far,&local,nullptr),"old digests keep their original census");
+  far.x=160;
+  Check(actors::InScope(true,false,far,&local,nullptr),"160 metre boundary is included");
+  far.x=160.01f;
+  Check(!actors::InScope(true,false,far,&local,nullptr),"actors beyond the boundary are omitted");
 }
 void ActorInterpolation() {
   enemies::Channel c;

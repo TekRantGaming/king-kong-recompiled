@@ -39,6 +39,10 @@ inline uint32_t TargetOffset(EnemyFamily family) {
 inline bool Relevant(const EnemyState& e, const PlayerPose& player) {
   return std::hypot(e.x-player.x,e.y-player.y,e.z-player.z)<=kRadius;
 }
+inline bool InScope(bool enabled,bool terminal,const EnemyState& e,const PlayerPose* local,const PlayerPose* peer) {
+  if (COOP_MUT_IF("actor_relevance_all")) return true;
+  return !enabled || terminal || !local || Relevant(e,*local) || (peer && Relevant(e,*peer));
+}
 inline bool Freeze(bool enabled, bool guest, bool connected, bool world,
                    bool binding, bool player, bool initialized,bool retiring=false) {
   if (COOP_MUT_IF("actor_freeze_off")) return false;

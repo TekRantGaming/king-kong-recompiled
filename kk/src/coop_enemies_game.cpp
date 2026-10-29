@@ -4517,6 +4517,9 @@ void EnemyGuardRecoveryWorld(EnemyWorld world) {
 std::vector<WorldEnemy> EnemyWorldDigest(const uint8_t* b) {
   auto& s=Get(); std::vector<WorldEnemy> out;
   if (!Connected() || !Environment(b,s.world)) return out;
+  PlayerPose local_pose;
+  const auto hero=Ptr(b,Load32(b,0x82CCBF7C),12,64);
+  if (hero) { local_pose.x=LoadF(b,hero+48); local_pose.y=LoadF(b,hero+52); local_pose.z=LoadF(b,hero+56); }
   for (const auto& [local,r]:s.records) {
     auto* a=AuthorityFor(local); if (!a || r.kind==EnemyEventKind::Removed) continue;
     auto e=r.enemy;
@@ -4525,11 +4528,13 @@ std::vector<WorldEnemy> EnemyWorldDigest(const uint8_t* b) {
       if (Read(b,actor,observed,current)) {
         e.life=current.life;
         e.secondary_life=current.secondary_life;
+        if (Replication()) { e.x=current.x; e.y=current.y; e.z=current.z; }
       }
       break;
     }
     if (!ValidEnemy(e)) continue;
     if (a->dead || r.kind==EnemyEventKind::Died) e.life=std::min(0.f,e.life);
+    if (!actors::InScope(Replication(),e.life<=0,e,hero ? &local_pose:nullptr,s.link.partner ? &*s.link.partner:nullptr)) continue;
     out.push_back({Canonical(local),a->owner,a->generation,e.life,e.secondary_life});
   }
   return out;
@@ -4581,6 +4586,10 @@ desync::Evidence EnemyCompareDigest(uint8_t* b,const desync::State& state,bool r
     if (reconcile && Replication()) ++s.actor_drifts;
     if (reconcile) WriteLife(b,*binding,latest->enemy);
   }
+  // The host intentionally omits live actors outside relevance. Only its
+  // explicit retirement relay removes a replica in the new model. Missing
+  // relevant host actors and life mismatches above still take part in recovery.
+  if (Replication()) return result;
   std::set<EnemyId> host_ids;
   for (const auto& h:state.enemies) host_ids.insert(h.id);
   for (const auto& [actor,binding]:s.bindings) {
@@ -4730,8 +4739,8 @@ void ActorLateWorld(PPCContext& ctx,uint8_t* b,uint32_t w) {
     for (const auto& [actor,binding]:s.bindings) if (binding.id==id && ValidBinding(b,binding)) {
       ActorMetadata(b,binding,sample.enemy); break;
     }
-    if (sample.kind==EnemyEventKind::Spawned && sample.enemy.life>0 && hero &&
-        !actors::Relevant(sample.enemy,local) && (!s.link.partner || !actors::Relevant(sample.enemy,*s.link.partner))) continue;
+    if (!actors::InScope(true,sample.kind!=EnemyEventKind::Spawned || sample.enemy.life<=0,
+        sample.enemy,hero ? &local:nullptr,s.link.partner ? &*s.link.partner:nullptr)) continue;
     sample.enemy.owner=EnemyOwner::Host; sample.enemy.generation=a->generation;
     a->Observe(sample.enemy); frame.records.push_back(sample);
   }
