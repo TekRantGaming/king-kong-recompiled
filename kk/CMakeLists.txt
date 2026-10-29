@@ -36,6 +36,7 @@ set(KINGKONG_SOURCES
     src/coop_observer.cpp
     src/coop_enemies_game.cpp
     src/coop_human_guard.cpp
+    src/coop_grid_guard.cpp
     src/steam_runtime.cpp
     src/steam_lobby.cpp
     src/steam_transport.cpp
@@ -368,6 +369,9 @@ if(KK_DEV_TOOLS)
     add_executable(kk-coop-tests tests/coop_tests.cpp src/coop_protocol.cpp src/coop_session.cpp)
     target_include_directories(kk-coop-tests PRIVATE src)
     add_test(NAME coop-net-core COMMAND kk-coop-tests)
+    add_executable(kk-coop-grid-tests tests/coop_grid_guard_tests.cpp)
+    target_include_directories(kk-coop-grid-tests PRIVATE src)
+    add_test(NAME coop-grid-guard COMMAND kk-coop-grid-tests)
     add_executable(kk-direct-tests tests/direct_udp_tests.cpp src/coop_direct_udp.cpp src/coop_protocol.cpp src/coop_session.cpp src/steam_lobby.cpp)
     target_include_directories(kk-direct-tests PRIVATE src)
     target_compile_definitions(kk-direct-tests PRIVATE KK_DEV_TOOLS=1)
