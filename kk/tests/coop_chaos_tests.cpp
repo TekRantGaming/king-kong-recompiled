@@ -15,6 +15,7 @@
 #include "coop_puppet.h"
 #include "coop_rebirth.h"
 #include "coop_revive.h"
+#include "coop_void.h"
 #include "coop_support.h"
 #include "coop_partner_selection.h"
 #include <algorithm>
@@ -951,6 +952,48 @@ void MirrorGate() {
   Guest d; for (int i=0;i<3;++i) d.Frame(); d.host=6; d.Frame();
   Check(d.g==6,"without a new load the mirror is immediate");
 }
+void VoidRescue() {
+  using namespace void_rescue;
+  History h; Spot a; a.position={1,2,3}; a.floor=1;
+  Gate g; g.coop=g.jack=g.playing=g.native_void=true; g.fall=3.1f;
+  const auto valid=[](const Spot& s){return s.floor==1;};
+  Check(!h.Find(g,1,valid),"empty history retains the native death path");
+  h.Remember(a,1);
+  Check(h.Find(g,2,valid).has_value(),"confirmed native void fall rescues the local Jack");
+  for (unsigned n=0;n<9;++n) {
+    auto blocked=g;
+    if (n==0) blocked.coop=false;
+    if (n==1) blocked.jack=false;
+    if (n==2) blocked.playing=false;
+    if (n==3) blocked.cinematic=true;
+    if (n==4) blocked.dead=true;
+    if (n==5) blocked.scripted=true;
+    if (n==6) blocked.native_void=false;
+    if (n==7) blocked.grounded=true;
+    if (n==8) blocked.immune=true;
+    Check(!h.Find(blocked,2,valid),"ordinary deaths, Kong, solo, cinematics and native immunity keep native policy");
+  }
+  auto edge=g; edge.fall=3;
+  Check(!h.Find(edge,2,valid),"the exact three unit boundary is not confirmed");
+  edge.fall=std::numeric_limits<float>::quiet_NaN();
+  Check(!h.Find(edge,2,valid),"invalid fall is not rescued");
+  Check(!h.Find(g,32,valid) && !h.Find(g,.5,valid),"stale and future spots are refused");
+  auto b=a; b.floor=2; b.position.x=9; h.Remember(b,1.5);
+  Check(h.Find(g,2,valid)->position.x==1,"a removed or moving latest floor falls back to an older checked spot");
+  Check(!h.Find(g,2,[](const Spot&){return false;}),"no spot passes fresh native checks so the native path runs");
+  h.Rescued(2); h.Rescued(3); h.Rescued(4);
+  Check(!h.Find(g,5,valid),"a fourth rescue within thirty seconds keeps native death");
+  h.Remember(a,31);
+  Check(h.Find(g,32,valid).has_value(),"the oldest rescue expires at thirty seconds");
+  h.Rescued(32);
+  Check(!h.Find(g,32.5,valid) && h.Find(g,33,valid).has_value(),"rolling rescue timestamps retain the newer two rescues");
+  h.ClearSpots();
+  Check(!h.Find(g,33,valid) && !h.Allowed(32.5),"loads clear positions without resetting the rescue budget");
+  Check(h.Due(1),"a new history needs a sample"); h.Sampled(1);
+  Check(!h.Due(1.49) && h.Due(1.5),"ground samples use a half second interval");
+  for (unsigned i=0;i<200;++i) { a.position.x=float(i); h.Remember(a,33+i*.01); }
+  Check(h.Find(g,36,valid)->position.x==199,"bounded history returns the newest valid spot after wrap");
+}
 void VoidGuard() {
   revive::VoidGuard g; const ShotVector home{1,2,3};
   g.Arm(home,true,10);
@@ -1261,6 +1304,7 @@ int main(int argc,char** argv) {
   else if(name=="placement_side") PlacementSide();
   else if(name=="placement_wait") PlacementWait();
   else if(name=="void_guard") VoidGuard();
+  else if(name=="void_rescue") VoidRescue();
   else if(name=="reload_mark") ReloadMarkChaos();
   else if(name=="rejoin_load") RejoinLoad();
   else if(name=="mirror_gate") MirrorGate();

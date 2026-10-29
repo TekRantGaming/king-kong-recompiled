@@ -17,6 +17,8 @@
 #include "coop_event_budget.h"
 #include "coop_rebirth.h"
 #include "coop_crab_unstick.h"
+#include "coop_void.h"
+#include "coop_observer.h"
 #include <algorithm>
 #include <array>
 #include <bit>
@@ -50,6 +52,7 @@ REX_EXTERN(__imp__sub_8261DE68);
 REX_EXTERN(__imp__sub_826A0920);
 REX_EXTERN(__imp__sub_826C12C8);
 REX_EXTERN(__imp__sub_826A1178);
+REX_EXTERN(__imp__sub_82808310);
 REX_EXTERN(__imp__sub_820D2298);
 REX_EXTERN(__imp__sub_82403E38);
 REX_EXTERN(__imp__sub_82404490);
@@ -2872,9 +2875,11 @@ void ObserveHumanReflex(PPCContext& ctx,uint8_t* b) {
         LoadF(b,after->vars+13432),LoadF(b,after->vars+2892),Load32(b,after->vars+4008),
         Load32(b,after->vars+3212),Load32(b,after->vars+3204));
 }
+void VoidBeforeGround(PPCContext& ctx,uint8_t* b);
 void ObserveHumanGround(PPCContext& ctx,uint8_t* b) {
   const bool observe=REXCVAR_GET(kk_coop_enabled) && Connected() && Load32(b,0x82CCBF6C)==Load32(b,0x82CCBF7C);
   const auto before=observe ? ReadHumanStatus(b):std::nullopt;
+  VoidBeforeGround(ctx,b);
   __imp__sub_826A1178(ctx,b);
   const auto after=before ? ReadHumanStatus(b):std::nullopt;
   if (before && after && before->hero==after->hero && before->vars==after->vars && before->value!=after->value)
@@ -4068,6 +4073,7 @@ void ResetGround(uint8_t* b,uint32_t vars,const ShotVector& p,bool clear_void) {
   StoreF(b,vars+kLastGround,p.x); StoreF(b,vars+kLastGround+4,p.y); StoreF(b,vars+kLastGround+8,p.z);
   if (clear_void) Store32(b,vars+kVoid,0);
 }
+#include "coop_void_game.inc"
 } // namespace
 revive::Place ReviveTeleport(PPCContext& ctx,uint8_t* b,const PlayerPose& partner) {
   const auto h=ReadHumanStatus(b);
@@ -4145,6 +4151,7 @@ void ReviveGuardFrame(PPCContext& ctx,uint8_t* b) {
       at.x,at.y,at.z,fall_ref,rescue->x,rescue->y,rescue->z);
 }
 void EnemyBeforeLoad() {
+  void_history.ClearSpots(); void_scope={};
 #if defined(KK_DEV_TOOLS)
   DevWakeBeforeLoad();
 #endif
