@@ -240,7 +240,9 @@ void AskLoad(PPCContext& ctx,uint8_t* base,uint32_t g,const FlowView& v) {
   CancelCatchup(); catchup_notice_until=0;
   catchup.Reset(v);
   behind=BehindRule{};
-  local_checkpoint=recorded_checkpoint=start;
+  local_checkpoint=start;
+  // Keep the first host retry mirror behind C123's native checkpoint gate.
+  recorded_checkpoint=v.world.start;
   REXLOG_INFO("KK co-op flow: load role={} generation {} level {} checkpoint {} world start {} rejoin={}",
       v.host ? "host":"guest",v.world.generation,v.world.level,start,v.world.start,rejoin);
 #if defined(KK_DEV_TOOLS)
