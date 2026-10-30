@@ -1,0 +1,42 @@
+Subject: [PATCH] POSIX memory: a commit checks its range with msync, not /proc/self/maps
+
+AllocFixed's commit on an existing reservation (the EEXIST path) read and parsed /proc/self/maps to check the
+range is mapped: about 0.2 ms per commit with some 1,150 mappings. King Kong commits guest pages one at a time
+(300 in a row at one spot of Skull Island coast, over 1,000 a second while a chapter loads), so the game
+stalled for 80 ms there on Linux (ROG Ally, every pass of the benchmark route at a 16:9 picture).
+msync(MS_ASYNC) fails with ENOMEM where any page is unmapped and does nothing else.
+---
+--- a/src/core/memory_posix.cpp	2026-10-30 11:22:16.697240200 +0000
++++ b/src/core/memory_posix.cpp	2026-10-30 11:32:52.729573100 +0000
+@@ -200,25 +200,12 @@
+     return false;
+   }
+ 
+-  std::ifstream maps("/proc/self/maps");
+-  if (!maps.is_open())
+-    return false;
+-
+-  uintptr_t cursor = begin;
+-  std::string line;
+-  while (std::getline(maps, line)) {
+-    LinuxMapEntry e;
+-    if (!ParseProcMapsLine(line, e))
+-      continue;
+-    if (e.end <= cursor)
+-      continue;
+-    if (e.start > cursor)
+-      return false;  // gap found
+-    cursor = e.end;
+-    if (cursor >= end)
+-      return true;
+-  }
+-  return cursor >= end;
++  // msync with MS_ASYNC fails with ENOMEM where any page of the range is not mapped and does nothing else. It
++  // replaces reading /proc/self/maps, which took about 0.2 ms on every commit: a game committing 300 pages one
++  // by one stalled for 80 ms (King Kong, ROG Ally).
++  const uintptr_t page = static_cast<uintptr_t>(sysconf(_SC_PAGESIZE));
++  const uintptr_t aligned = begin & ~(page - 1);
++  return msync(reinterpret_cast<void*>(aligned), end - aligned, MS_ASYNC) == 0;
+ }
+ 
+ // Convert /proc/self/maps permission chars to PageAccess
