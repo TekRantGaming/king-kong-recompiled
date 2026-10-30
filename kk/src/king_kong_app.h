@@ -579,7 +579,19 @@ class KingKongApp : public rex::ReXApp {
               PPCImageConfig.image_size);
   }
 
+  // The window's title bar (owner, 30 Oct): the game's name and version, not the SDK's app name and build.
+  static constexpr const char* kWindowTitle = "King Kong Remastered v" KK_VERSION;
+
+  void OnPostLaunchModule(rex::system::XThread* thread) override {
+    rex::ReXApp::OnPostLaunchModule(thread);
+    // Again once the game runs, in case the SDK titles the window when it starts the module.
+    app_context().CallInUIThreadDeferred([this] {
+      if (window()) window()->SetTitle(kWindowTitle);
+    });
+  }
+
   void OnCreateDialogs(rex::ui::ImGuiDrawer* drawer) override {
+    if (window()) window()->SetTitle(kWindowTitle);
     // F4 opened the old Social drawer (removed in UI1, 29 Oct) and stays reserved
     // with co-op on: otherwise the SDK also opens its settings overlay behind the
     // launcher and its active callback can zero both native pad and MnK reads
