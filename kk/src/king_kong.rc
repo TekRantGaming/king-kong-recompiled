@@ -1,0 +1,2 @@
+// The program icon, the same mark as the website's favicon. SDL also takes the window icon from here.
+1 ICON "king_kong.ico"

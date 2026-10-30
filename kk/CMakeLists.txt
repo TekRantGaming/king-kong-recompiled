@@ -287,6 +287,9 @@ if(WIN32)
     # UTF-8 as the program's code page (src/king_kong.manifest, issue #37).
     target_link_options(king_kong PRIVATE "LINKER:/MANIFEST:EMBED" "LINKER:/MANIFESTUAC:NO"
                         "LINKER:/MANIFESTINPUT:${CMAKE_CURRENT_SOURCE_DIR}/src/king_kong.manifest")
+    # The program icon. Not in KINGKONG_SOURCES: the co-op build id stays the same as Linux.
+    enable_language(RC)
+    target_sources(king_kong PRIVATE src/king_kong.rc)
 endif()
 if(KK_DEV_TOOLS)
     target_compile_definitions(king_kong PRIVATE KK_DEV_TOOLS=1)
