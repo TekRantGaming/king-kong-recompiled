@@ -172,6 +172,8 @@ class Input {
   bool injected_ = false;
   double settle_until_ = 0;  // Settle: no presses before this steady clock time
   ImVec2 last_mouse_{-1, -1};
+  ImVec2 last_display_{0, 0};
+  int mouse_move_frames_ = 0;  // frames in a row the pointer moved (one alone is the system placing it)
   bool sdl_ready_ = false;
   std::vector<void*> pads_;  // SDL_Gamepad*
   struct FedPad {

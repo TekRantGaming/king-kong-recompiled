@@ -390,15 +390,24 @@ void Input::Update() {
   const double now = ImGui::GetTime();
   const ImGuiIO& io = ImGui::GetIO();
 
-  // The mouse: moving it or clicking switches the prompts to the keyboard's.
+  // The mouse: moving it or clicking switches the prompts to the keyboard's. Moving means on two frames in a
+  // row: a pointer put somewhere by the system jumps on one frame (gamescope at the start, 640,360 to 0,0 on
+  // the ROG Ally; a window resized under a still pointer), and with a controller in hand the prompts stayed
+  // the keyboard's.
   mouse_moved_ = false;
+  const bool resized = io.DisplaySize.x != last_display_.x || io.DisplaySize.y != last_display_.y;
+  last_display_ = io.DisplaySize;
   if (ImGui::IsMousePosValid(&io.MousePos)) {
-    if (last_mouse_.x >= 0 &&
+    if (last_mouse_.x >= 0 && !resized &&
         (std::abs(io.MousePos.x - last_mouse_.x) > 1.5f || std::abs(io.MousePos.y - last_mouse_.y) > 1.5f)) {
       mouse_moved_ = true;
-      ToKeyboard("the mouse moved", last_mouse_, io.MousePos);
+      if (++mouse_move_frames_ >= 2) ToKeyboard("the mouse moved", last_mouse_, io.MousePos);
+    } else {
+      mouse_move_frames_ = 0;
     }
     last_mouse_ = io.MousePos;
+  } else {
+    mouse_move_frames_ = 0;
   }
   if (ImGui::IsMouseClicked(0) || io.MouseWheel != 0) ToKeyboard("a mouse click or wheel", io.MousePos, io.MousePos);
 
