@@ -110,6 +110,8 @@ class Input {
   // How long a direction has been held.
   float HeldFor(Action a) const;
   void Inject(Action a, Device d);  // testing aid
+  // The prompts start as the controller's, not the keyboard's, until a key or the mouse is used (PadPromptsFirst).
+  void StartOnPad() { device_ = pad_device_; }
   bool injected() const { return injected_; }  // this frame's input includes an injected press (testing aid)
   Device device() const { return device_; }
   // The kind of controller last used (for controller pictures while the
@@ -152,6 +154,7 @@ class Input {
  private:
   using Repeat = DirectionRepeat;
   bool RepeatHeld(Repeat& r, bool down, double now);
+  void ToKeyboard(const char* why, ImVec2 from, ImVec2 to);
   void UpdateGamepads(double now);
 
   std::array<bool, kActionCount> pressed_{};
@@ -169,6 +172,8 @@ class Input {
   bool injected_ = false;
   double settle_until_ = 0;  // Settle: no presses before this steady clock time
   ImVec2 last_mouse_{-1, -1};
+  ImVec2 last_display_{0, 0};
+  int mouse_move_frames_ = 0;  // frames in a row the pointer moved (one alone is the system placing it)
   bool sdl_ready_ = false;
   std::vector<void*> pads_;  // SDL_Gamepad*
   struct FedPad {

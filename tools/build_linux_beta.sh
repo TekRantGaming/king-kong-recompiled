@@ -139,6 +139,9 @@ fi
 export KK_EXTRA_FILES
 export KK_EGG_ASAR="${KK_EGG_ASAR:-$(pick launcher/easter-egg/resources/app.asar)}"
 export KK_EGG_ELECTRON_ZIP="${KK_EGG_ELECTRON_ZIP:-$F/downloads/electron-v45.0.0-linux-x64/electron-v45.0.0-linux-x64.zip}"
+# The version the game shows and the updater compares (v2.0.0 -> 2.0.0); the channel follows it unless
+# KK_RELEASE_CHANNEL is set. A stable release also sets KK_COOP_DEFAULT_ON=ON, as the Windows kk-stable preset.
+export KK_VERSION="${KK_VERSION:-${VERSION#v}}"
 export KK_SKIP_PACKAGES=ON KK_WORK="$WORKDIR" REXGLUE_SDK_DIR="$BASE/sdk" KK_DXC_DIR="$BASE/dxc" \
        KK_FFMPEG_DIR="$BASE/ffmpeg" CMAKE_BUILD_PARALLEL_LEVEL="$JOBS" KK_DEV_TOOLS="${KK_DEV_TOOLS:-OFF}"
 [ -z "${KK_APPIMAGETOOL:-}" ] || export KK_APPIMAGETOOL
@@ -161,7 +164,7 @@ for f in usr/bin/king_kong usr/bin/librexgpu-native.so usr/bin/librexruntime.so 
          usr/bin/THIRD-PARTY-NOTICES.txt usr/share/licenses/ffmpeg usr/share/licenses/dxc usr/bin/glyphs \
          usr/bin/launcher/easter-egg/LegallyDistinctGorilla usr/bin/launcher/easter-egg/resources/egg.asar \
          usr/bin/launcher/easter-egg/resources/app/main.js \
-         usr/bin/launcher/video/save-notice-loop.mp4 usr/bin/launcher/video/returning-loop.mp4 usr/bin/launcher/video/trg-startup.mp4 AppRun; do
+         usr/bin/libsteam_api.so usr/bin/launcher/video/save-notice-loop.mp4 usr/bin/launcher/video/returning-loop.mp4 usr/bin/launcher/video/trg-startup.mp4 AppRun; do
   [ -e "$A/$f" ] || { echo "  MISSING $f"; fail=1; }
 done
 ls "$A/usr/bin/"libavcodec-kk.so.* >/dev/null 2>&1 || { echo "  MISSING the FFmpeg libraries"; fail=1; }
@@ -172,7 +175,10 @@ done
 if find "$A" \( -iname '*dlssg*' -o -iname '*_fg*' -o -iname '*.dll' -o -iname '*.exe' -o -iname 'librexgpu-xenos*' \) | grep .; then
   echo "  error: files above must not ship"; fail=1
 fi
-grep -q "KK_DEV_TOOLS:BOOL=OFF" "$WORKDIR/kk/out/build/kk-linux-release/CMakeCache.txt" ||
+CACHE="$WORKDIR/kk/out/build/kk-linux-release/CMakeCache.txt"
+grep -E "^(KK_VERSION|KK_RELEASE_CHANNEL|KK_COOP_DEFAULT_ON|KK_STEAMWORKS_SDK)[:=]" "$CACHE" | sed 's/^/  /'
+grep -q "King Kong $KK_VERSION," "$BASE/appimage-build.log" || { echo "  error: the game is not version $KK_VERSION"; fail=1; }
+grep -q "KK_DEV_TOOLS:BOOL=OFF" "$CACHE" ||
   echo "  note: developer test aids are ON in this build (not for release)"
 [ $fail -eq 0 ] || exit 1
 SIZE=$(stat -c %s "$OUT")

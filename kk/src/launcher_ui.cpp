@@ -9,6 +9,7 @@
 
 #include <SDL3/SDL.h>
 
+#include <rex/logging.h>
 #include <rex/ui/immediate_drawer.h>
 
 #include "art.h"
@@ -389,17 +390,26 @@ void Input::Update() {
   const double now = ImGui::GetTime();
   const ImGuiIO& io = ImGui::GetIO();
 
-  // The mouse: moving it or clicking switches the prompts to the keyboard's.
+  // The mouse: moving it or clicking switches the prompts to the keyboard's. Moving means on two frames in a
+  // row: a pointer put somewhere by the system jumps on one frame (gamescope at the start, 640,360 to 0,0 on
+  // the ROG Ally; a window resized under a still pointer), and with a controller in hand the prompts stayed
+  // the keyboard's.
   mouse_moved_ = false;
+  const bool resized = io.DisplaySize.x != last_display_.x || io.DisplaySize.y != last_display_.y;
+  last_display_ = io.DisplaySize;
   if (ImGui::IsMousePosValid(&io.MousePos)) {
-    if (last_mouse_.x >= 0 &&
+    if (last_mouse_.x >= 0 && !resized &&
         (std::abs(io.MousePos.x - last_mouse_.x) > 1.5f || std::abs(io.MousePos.y - last_mouse_.y) > 1.5f)) {
       mouse_moved_ = true;
-      device_ = Device::kKeyboard;
+      if (++mouse_move_frames_ >= 2) ToKeyboard("the mouse moved", last_mouse_, io.MousePos);
+    } else {
+      mouse_move_frames_ = 0;
     }
     last_mouse_ = io.MousePos;
+  } else {
+    mouse_move_frames_ = 0;
   }
-  if (ImGui::IsMouseClicked(0) || io.MouseWheel != 0) device_ = Device::kKeyboard;
+  if (ImGui::IsMouseClicked(0) || io.MouseWheel != 0) ToKeyboard("a mouse click or wheel", io.MousePos, io.MousePos);
 
   UpdateGamepads(now);  // first: a key typed for a held controller button is skipped
   // A key for an action a controller is holding (or just let go of) is that controller's press.
@@ -425,7 +435,7 @@ void Input::Update() {
       if (ctrl_or_alt || !ImGui::IsKeyPressed(k.key, k.repeat) || from_pad(k.action)) continue;
       pressed_[size_t(k.action)] = true;
       key_pressed_at_[size_t(k.action)] = now;
-      device_ = Device::kKeyboard;
+      ToKeyboard(ImGui::GetKeyName(k.key), io.MousePos, io.MousePos);
     }
     // Task 358: the keyboard's new presses for the Home code (key_presses): every keyboard key but the
     // modifiers (the gamepad and mouse entries come after the keyboard's in ImGuiKey). A key that stands for a
@@ -454,7 +464,7 @@ void Input::Update() {
     if (!ctrl_or_alt && ImGui::IsKeyPressed(ImGuiKey_Tab, true) && !from_pad(tab)) {
       pressed_[size_t(tab)] = true;
       key_pressed_at_[size_t(tab)] = now;
-      device_ = Device::kKeyboard;
+      ToKeyboard("Tab", io.MousePos, io.MousePos);
     }
     static constexpr std::pair<ImGuiKey, Action> kHeld[] = {{ImGuiKey_UpArrow, Action::kUp},
                                                             {ImGuiKey_DownArrow, Action::kDown},
@@ -471,6 +481,15 @@ void Input::Update() {
     pressed_ = {};
     pad_presses_ = key_presses_ = 0;
   }
+}
+
+void Input::ToKeyboard(const char* why, ImVec2 from, ImVec2 to) {
+  // Logged once per switch: prompts that change by themselves (a pointer warp, a key typed for a controller)
+  // show up in players' logs.
+  if (device_ != Device::kKeyboard)
+    REXLOG_INFO("KK launcher: prompts now the keyboard's ({}; pointer {:.0f},{:.0f} -> {:.0f},{:.0f})", why, from.x,
+                from.y, to.x, to.y);
+  device_ = Device::kKeyboard;
 }
 
 void Input::Settle(double seconds) {
