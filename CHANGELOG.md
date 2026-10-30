@@ -28,6 +28,7 @@ King Kong Remastered: everything from the 17 beta versions, now on the stable li
 ### Changed since Beta 17
 - **Online co-op (early access)** is new: no beta had it.
 - **More graphics pipelines are prepared before you play**: the list that comes with the game now has 16,842.
+- **Six more TRG projects in the Workshop**: AVP Evolution: PC Edition, Cartoon Network Racing, Muppet RaceMania, Trials: ReVolution Collection, Angry Birds: The Re-Hatched Collection and The Whopping Recompilation Collection.
 
 ## v2.0.0-beta.17 (23 October 2026)
 

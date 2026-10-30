@@ -50,6 +50,12 @@ inline constexpr Project kProjects[] = {
     {"Dig Dug Native", "TekRantGaming", "digdug-native"},
     {"South Park: Tenorman's Revenge Recompiled", "TekRantGaming", "south-park-tenormans-revenge-recompiled"},
     {"South Park: Let's Go Tower Defense Play! Recompiled", "TekRantGaming", "south-park-tower-defense-recompiled"},
+    {"AVP Evolution: PC Edition", "TekRantGaming", "avp-evolution-pc-edition"},
+    {"Cartoon Network Racing Recompiled", "TekRantGaming", "cartoon-network-racing-recompiled"},
+    {"Muppet RaceMania Recompiled", "TekRantGaming", "muppet-racemania-recompiled"},
+    {"Trials: ReVolution Collection", "TekRantGaming", "Trials-ReVolution-Collection"},
+    {"Angry Birds: The Re-Hatched Collection", "TekRantGaming", "angry-birds-re-hatched-collection"},
+    {"The Whopping Recompilation Collection", "TekRantGaming", "whopping-recompilation-collection"},
 };
 inline constexpr int kProjectCount = int(sizeof(kProjects) / sizeof(kProjects[0]));
 

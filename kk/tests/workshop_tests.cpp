@@ -40,7 +40,10 @@ namespace md = kk::workshop::md;
 const Project& Pb() { return kProjects[0]; }
 
 void Addresses() {
-  Check(kProjectCount == 8, "eight projects");
+  Check(kProjectCount == 14, "fourteen projects");
+  Check(std::string(kProjects[8].repo) == "avp-evolution-pc-edition" &&
+            std::string(kProjects[13].repo) == "whopping-recompilation-collection",
+        "the six projects of 30 Oct, in order");
   Check(std::string(kProjects[4].name) == "Super Mario Sunshine" && std::string(kProjects[4].owner) == "chasem-dev" &&
             std::string(kProjects[4].repo) == "sms-launcher",
         "sms-launcher shown as Super Mario Sunshine");
