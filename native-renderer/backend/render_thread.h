@@ -194,6 +194,12 @@ class ThreadedSink final : public DrawSink {
   std::atomic<uint64_t> queued_{0};
   std::atomic<uint64_t> device_copies_{0};
   uint64_t done_ = 0;
+  // What a waiting thread needs before Run wakes it (under mutex_). Run used to wake every waiter after
+  // every command: the ring skimmer (WaitDone) and the game's thread (no room) woke and slept again once
+  // per draw, 65,000 times a second in a busy scene.
+  uint64_t done_wake_at_ = UINT64_MAX;  // the lowest ticket a WaitDone waits for
+  bool room_wanted_ = false;            // Enqueue waits for a free command
+  bool present_room_wanted_ = false;    // Enqueue waits for a queued Present to finish
   bool stop_ = false;
   Stats stats_;
   Stats frame_start_stats_;  // at the last Present

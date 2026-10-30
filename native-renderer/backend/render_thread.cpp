@@ -222,9 +222,11 @@ void ThreadedSink::Enqueue(std::unique_ptr<Command> command, std::chrono::steady
     const bool present_full = present && queued_presents_ >= max_queued_presents;
     if (!full && !present_full) break;
     const auto wait = std::chrono::steady_clock::now();
-    room_cv_.wait(lock, [&] {
-      return stop_ || (full ? queue_.size() < kMaxQueuedCommands : queued_presents_ < max_queued_presents);
-    });
+    // Says again what it waits for after every wake: Run clears the flag when it wakes it.
+    while (!stop_ && (full ? queue_.size() >= kMaxQueuedCommands : queued_presents_ >= max_queued_presents)) {
+      (full ? room_wanted_ : present_room_wanted_) = true;
+      room_cv_.wait(lock);
+    }
     const uint64_t elapsed = Micros(wait);
     stats_.backpressure_us += elapsed;
     (full ? stats_.command_room_us : stats_.present_room_us) += elapsed;
@@ -271,7 +273,10 @@ void ThreadedSink::WaitDone(uint64_t ticket) {
   std::unique_lock lock(mutex_);
   if (done_ >= ticket) return;
   const auto start = std::chrono::steady_clock::now();
-  done_cv_.wait(lock, [&] { return done_ >= ticket || stop_; });
+  while (done_ < ticket && !stop_) {
+    done_wake_at_ = std::min(done_wake_at_, ticket);
+    done_cv_.wait(lock);
+  }
   ++stats_.fence_waits;
   stats_.fence_wait_us += Micros(start);
 }
@@ -304,8 +309,10 @@ void ThreadedSink::Run() {
     std::unique_ptr<Command> c = std::move(queue_.front());
     queue_.pop_front();
     queued_bytes_ -= c->StorageBytes();
+    const bool wake_room = room_wanted_ && queue_.size() < kMaxQueuedCommands;
+    if (wake_room) room_wanted_ = false;
     lock.unlock();
-    room_cv_.notify_all();
+    if (wake_room) room_cv_.notify_all();
     // The device as this call saw it: the copy brought up to date with the call's changes.
     if (c->device_address) {
       const std::vector<DeviceBlock>& blocks = DeviceBlocks();
@@ -340,8 +347,14 @@ void ThreadedSink::Run() {
     if (free_.size() < kMaxFreeCommands) free_.push_back(std::move(c));
     if (was_present) --queued_presents_;
     ++done_;
-    done_cv_.notify_all();
-    room_cv_.notify_all();
+    if (done_ >= done_wake_at_) {
+      done_wake_at_ = UINT64_MAX;
+      done_cv_.notify_all();
+    }
+    if (present_room_wanted_ && queued_presents_ < max_queued_presents) {
+      present_room_wanted_ = false;
+      room_cv_.notify_all();
+    }
   }
 }
 
