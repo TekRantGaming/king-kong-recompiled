@@ -9,6 +9,7 @@
 
 #include <SDL3/SDL.h>
 
+#include <rex/logging.h>
 #include <rex/ui/immediate_drawer.h>
 
 #include "art.h"
@@ -395,11 +396,11 @@ void Input::Update() {
     if (last_mouse_.x >= 0 &&
         (std::abs(io.MousePos.x - last_mouse_.x) > 1.5f || std::abs(io.MousePos.y - last_mouse_.y) > 1.5f)) {
       mouse_moved_ = true;
-      device_ = Device::kKeyboard;
+      ToKeyboard("the mouse moved", last_mouse_, io.MousePos);
     }
     last_mouse_ = io.MousePos;
   }
-  if (ImGui::IsMouseClicked(0) || io.MouseWheel != 0) device_ = Device::kKeyboard;
+  if (ImGui::IsMouseClicked(0) || io.MouseWheel != 0) ToKeyboard("a mouse click or wheel", io.MousePos, io.MousePos);
 
   UpdateGamepads(now);  // first: a key typed for a held controller button is skipped
   // A key for an action a controller is holding (or just let go of) is that controller's press.
@@ -425,7 +426,7 @@ void Input::Update() {
       if (ctrl_or_alt || !ImGui::IsKeyPressed(k.key, k.repeat) || from_pad(k.action)) continue;
       pressed_[size_t(k.action)] = true;
       key_pressed_at_[size_t(k.action)] = now;
-      device_ = Device::kKeyboard;
+      ToKeyboard(ImGui::GetKeyName(k.key), io.MousePos, io.MousePos);
     }
     // Task 358: the keyboard's new presses for the Home code (key_presses): every keyboard key but the
     // modifiers (the gamepad and mouse entries come after the keyboard's in ImGuiKey). A key that stands for a
@@ -454,7 +455,7 @@ void Input::Update() {
     if (!ctrl_or_alt && ImGui::IsKeyPressed(ImGuiKey_Tab, true) && !from_pad(tab)) {
       pressed_[size_t(tab)] = true;
       key_pressed_at_[size_t(tab)] = now;
-      device_ = Device::kKeyboard;
+      ToKeyboard("Tab", io.MousePos, io.MousePos);
     }
     static constexpr std::pair<ImGuiKey, Action> kHeld[] = {{ImGuiKey_UpArrow, Action::kUp},
                                                             {ImGuiKey_DownArrow, Action::kDown},
@@ -471,6 +472,15 @@ void Input::Update() {
     pressed_ = {};
     pad_presses_ = key_presses_ = 0;
   }
+}
+
+void Input::ToKeyboard(const char* why, ImVec2 from, ImVec2 to) {
+  // Logged once per switch: prompts that change by themselves (a pointer warp, a key typed for a controller)
+  // show up in players' logs.
+  if (device_ != Device::kKeyboard)
+    REXLOG_INFO("KK launcher: prompts now the keyboard's ({}; pointer {:.0f},{:.0f} -> {:.0f},{:.0f})", why, from.x,
+                from.y, to.x, to.y);
+  device_ = Device::kKeyboard;
 }
 
 void Input::Settle(double seconds) {

@@ -712,7 +712,9 @@ class SettingsPages {
       : cb_(std::move(callbacks)),
         input_(/*own_gamepads=*/!in_game),
         glyphs_(immediate, rex::filesystem::GetExecutableFolder() / "glyphs"),
-        in_game_(in_game), profile_user_dir_(std::move(user_dir)) {}
+        in_game_(in_game), profile_user_dir_(std::move(user_dir)) {
+    if (PadPromptsFirst()) input_.StartOnPad();
+  }
 
   // The button pictures the Button prompts setting picks, as in the game.
   std::string PadSet() const {

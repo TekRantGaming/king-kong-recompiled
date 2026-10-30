@@ -43,6 +43,9 @@ GpuInfo DetectGpu();
 bool IsSteamDeck();
 // Running inside gamescope (Steam's Game Mode on a Steam Deck, Bazzite and other handhelds). Linux only.
 bool InGamescope();
+// The menus' button prompts start as the controller's (owner, 30 Oct): in Game Mode, on a Steam Deck and on a
+// handheld PC (its maker's product name). Linux only; a key or the mouse still switches them to the keyboard's.
+bool PadPromptsFirst();
 
 struct MonitorInfo {
   std::string name;

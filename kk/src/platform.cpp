@@ -242,6 +242,24 @@ bool InGamescope() {
 #endif
 }
 
+bool PadPromptsFirst() {
+#if defined(_WIN32)
+  return false;
+#else
+  if (IsSteamDeck() || InGamescope()) return true;
+  std::string product;
+  for (const char* f : {"product_family", "product_name"}) {
+    std::ifstream in(std::string("/sys/devices/virtual/dmi/id/") + f);
+    std::string line;
+    std::getline(in, line);
+    product += line + '|';
+  }
+  for (const char* handheld : {"ROG Ally", "Legion Go", "Claw", "AYANEO", "AYA NEO", "ONEXPLAYER", "GPD WIN"})
+    if (product.find(handheld) != std::string::npos) return true;
+  return false;
+#endif
+}
+
 bool ScreenHdrOn() {
   if (const char* v = std::getenv("KK_DEV_SCREEN_HDR"); v && *v) return *v == '1';  // tests
 #if defined(_WIN32)
