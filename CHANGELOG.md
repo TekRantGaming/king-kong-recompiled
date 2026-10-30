@@ -3,6 +3,32 @@
 Every release of the King Kong PC port, newest first. The launcher shows this on its About page, and a
 version's notes the first time you start it.
 
+## v2.0.0 (30 October 2026)
+
+King Kong Remastered: everything from the 17 beta versions, now on the stable line. Updating from 1.9.13 keeps your saves, settings and game files.
+
+### What's new
+- **Online co-op (early access)**: play the story with a friend. Choose Play Online Co-op on the Home screen, pick a chapter or one of your saves, and invite a Steam friend or share a 6 character code. Both games load the chapter together. It is still rough in places, and your reports help shape it.
+- **Our own renderer**: the game is drawn with DirectX 12 (the default on Windows) or Vulkan, at your resolution, up to 8K.
+- **Modern graphics**: global illumination, ambient occlusion, sharper shadows, water reflections, light shafts and HDR. The Original Xbox 360 look is one setting away.
+- **DLSS, FSR 3.1, FSR 4 and XeSS**: only the upscalers your graphics card can run are listed.
+- **Any frame rate**: the boat, the water, the fish, motion blur and the camera are right at high frame rates.
+- **Ultrawide is built in**: 21:9 and 32:9 fill the whole width with nothing stretched, and the HUD and menus stay in the middle.
+- **The launcher is the main menu**, with the game's own start menu scene live behind it: continue, start a new game or pick any of the 42 chapters.
+- **A new first time setup** with Auto detect, which picks the recommended settings for your PC.
+- **Every setting explains itself**: what it does, what it costs and its default.
+- **A new pause menu** with settings, photo mode with a free camera, and brightness and gamma.
+- **The Workshop**: texture packs such as HD, Kong UHD Textures and Comic Book, Kong mods with the built in Cel shading mod, and importing your own.
+- **Restored PS2 cutscenes** between missions, the Weta Artbook and the user manual in Extras, and every bonus item unlocked.
+- **A built in benchmark** on the main menu.
+- **Ready before you play**: the shaders and 16,842 graphics pipelines are prepared before you start, from a list players helped build, so new places stutter far less.
+- **Updates install every file** of a new version, and everything is put back as it was if something goes wrong.
+- **Linux (experimental)**: a native AppImage, also for the Steam Deck.
+
+### Changed since Beta 17
+- **Online co-op (early access)** is new: no beta had it.
+- **More graphics pipelines are prepared before you play**: the list that comes with the game now has 16,842.
+
 ## v2.0.0-beta.17 (23 October 2026)
 
 ### What's new
