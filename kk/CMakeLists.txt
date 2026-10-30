@@ -191,6 +191,18 @@ endif()
 
 rexglue_setup_target(king_kong)
 
+# Linux: the SDK compiles every target with -mcmodel=large ("large executable support"), which makes each call
+# and global access an absolute 64 bit load. The program is about 80 MB, far under the 2 GB the default code
+# model allows, so the game's own code goes back to it (the flag given last wins). ROG Ally, 30 Oct: the game's
+# recompiled WMV decoder played the opening movie at about 13 FPS, Windows plays it at its own 30.
+if(UNIX AND NOT APPLE AND CMAKE_SYSTEM_PROCESSOR MATCHES "x86_64|AMD64")
+    foreach(_kk_target king_kong king_kong_recomp)
+        if(TARGET ${_kk_target})
+            target_compile_options(${_kk_target} PRIVATE -mcmodel=small)
+        endif()
+    endforeach()
+endif()
+
 # Optional Steamworks SDK, kept outside the checkout. No import library is linked.
 # The build PC's copy, as Windows sees it or as WSL sees it (the Linux AppImage is built in WSL).
 set(KK_STEAMWORKS_DEFAULT "")
