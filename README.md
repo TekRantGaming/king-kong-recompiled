@@ -2,20 +2,22 @@
 
 <img src="docs/images/banner.jpg" alt="Peter Jackson's King Kong PC Port" width="100%">
 
-## King Kong Remastered arrives Friday 30 October 2026, 18:00 UK time
+## King Kong Remastered is out now
 
-[<img src="https://img.shields.io/badge/Live%20countdown-kong.tekrantgaming.com-e8a33c?style=for-the-badge&labelColor=0d0b09" alt="Watch the live countdown" height="40">](https://kong.tekrantgaming.com/)
+[<img src="https://img.shields.io/badge/Visit%20the%20website-kong.tekrantgaming.com-e8a33c?style=for-the-badge&labelColor=0d0b09" alt="Visit the website" height="40">](https://kong.tekrantgaming.com/)
 &nbsp;
-[<img src="https://img.shields.io/badge/Try%20the%20latest%20beta-v2.0.0-5b7a8c?style=for-the-badge&labelColor=0d0b09" alt="Try the latest beta" height="40">](https://github.com/TekRantGaming/king-kong-recompiled-beta/releases/latest)
+[<img src="https://img.shields.io/badge/Try%20the%20latest%20beta-5b7a8c?style=for-the-badge" alt="Try the latest beta" height="40">](https://github.com/TekRantGaming/king-kong-recompiled-beta/releases/latest)
 
 </div>
 
-> I have been working extremely hard on this project, and the biggest update it has ever had is almost here.
-> I don't want to spoil too much, so jump into the [Discord](https://discord.gg/8eakYSvBZS) or try the
-> [latest beta](https://github.com/TekRantGaming/king-kong-recompiled-beta/releases/latest) to see where things are heading.
+> I have been working extremely hard on this project, and the biggest update it has ever had is finally here.
+> King Kong Remastered brings online co-op, our own renderer, a native Linux version and a launcher made for the couch.
+> Download it below, or update from inside the launcher.
 >
-> One thing you should know: not every feature of King Kong Remastered is in the betas. There may be a surprise or two
-> waiting for King Kong fans on launch day. I can't wait to share more as we get closer.
+> One thing you should know: online co-op is in early access, so please send your reports and logs to the
+> [Discord](https://discord.gg/8eakYSvBZS). And there may be a surprise or two waiting for King Kong fans, so have a good look around.
+>
+> Thank you to everyone who tested, reported problems and stuck with this project. I'll see you on Skull Island.
 >
 > **TekRantGaming**
 
