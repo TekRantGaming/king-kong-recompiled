@@ -1,0 +1,41 @@
+{
+  "$schema": "https://recomp.fyi/schema/v1.json",
+  "game": "Peter Jackson's King Kong: The Official Game of the Movie",
+  "system": "Xbox 360",
+  "type": "recomp",
+  "original": {
+    "region": "USA, Europe",
+    "serial": "555307D3",
+    "sha1": "075F43709E9C9A095E099AB5056CC04B768288D1"
+  },
+  "project": "King Kong Recompiled",
+  "status": "released",
+  "targets": [
+    "Windows",
+    "Linux",
+    "Steam Deck"
+  ],
+  "toolchain": "ReXGlue",
+  "approach": "Static recompilation with ReXGlue, with a native Vulkan and DirectX 12 renderer",
+  "maintainers": [
+    {
+      "name": "TekRantGaming",
+      "link": "https://github.com/TekRantGaming"
+    }
+  ],
+  "links": [
+    {
+      "label": "Website",
+      "url": "https://kong.tekrantgaming.com"
+    },
+    {
+      "label": "Discord",
+      "url": "https://discord.gg/8eakYSvBZS"
+    },
+    {
+      "label": "Beta builds",
+      "url": "https://github.com/TekRantGaming/king-kong-recompiled-beta"
+    }
+  ],
+  "notes": "Stable releases and a beta channel, both selectable in the launcher. Online co-op for two players in early access. Linux and Steam Deck are experimental. Bring your own disc. The serial field holds the Xbox 360 title ID."
+}
