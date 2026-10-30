@@ -192,10 +192,13 @@ endif()
 rexglue_setup_target(king_kong)
 
 # Optional Steamworks SDK, kept outside the checkout. No import library is linked.
+# The build PC's copy, as Windows sees it or as WSL sees it (the Linux AppImage is built in WSL).
 set(KK_STEAMWORKS_DEFAULT "")
-if(EXISTS "F:/kk-native-coop/sdk/steamworks_sdk_165/sdk/public/steam/steam_api_flat.h")
-    set(KK_STEAMWORKS_DEFAULT "F:/kk-native-coop/sdk/steamworks_sdk_165/sdk")
-endif()
+foreach(_kk_steam_dir "F:/kk-native-coop/sdk/steamworks_sdk_165/sdk" "/mnt/f/kk-native-coop/sdk/steamworks_sdk_165/sdk")
+    if(NOT KK_STEAMWORKS_DEFAULT AND EXISTS "${_kk_steam_dir}/public/steam/steam_api_flat.h")
+        set(KK_STEAMWORKS_DEFAULT "${_kk_steam_dir}")
+    endif()
+endforeach()
 set(KK_STEAMWORKS_SDK "${KK_STEAMWORKS_DEFAULT}" CACHE PATH "External Steamworks SDK sdk folder (empty disables Steam)")
 if(WIN32)
     set(KK_STEAM_REDIST "${KK_STEAMWORKS_SDK}/redistributable_bin/win64/steam_api64.dll")

@@ -84,8 +84,15 @@ fi
 echo "== Build"
 cd "$WORK/kk"
 # KK_DEV_TOOLS=ON builds the developer test aids in (for testing only, never a release).
+# What the Windows kk-stable preset sets: KK_VERSION (e.g. 2.0.0), KK_RELEASE_CHANNEL (stable or beta) and
+# KK_COOP_DEFAULT_ON; KK_STEAMWORKS_SDK (the Steamworks SDK's sdk folder, for co-op). Each only when set.
+STABLE_ARGS=()
+for v in KK_VERSION KK_RELEASE_CHANNEL KK_COOP_DEFAULT_ON KK_STEAMWORKS_SDK; do
+  [ -z "${!v:-}" ] || STABLE_ARGS+=("-D$v=${!v}")
+done
 cmake --preset kk-linux-release -DKK_DEV_TOOLS="${KK_DEV_TOOLS:-OFF}" -DNR_DXC_DIR="${KK_DXC_DIR:-}" \
-  -DKK_FFMPEG_DIR="$FFMPEG_DIR" -DKK_PDFIUM_DIR="${KK_PDFIUM_DIR:-$([ ! -d "$WORK/tools/pdfium/linux-x64" ] || echo "$WORK/tools/pdfium/linux-x64")}"
+  -DKK_FFMPEG_DIR="$FFMPEG_DIR" -DKK_PDFIUM_DIR="${KK_PDFIUM_DIR:-$([ ! -d "$WORK/tools/pdfium/linux-x64" ] || echo "$WORK/tools/pdfium/linux-x64")}" \
+  ${STABLE_ARGS[@]+"${STABLE_ARGS[@]}"}
 cmake --build --preset kk-linux-release -- -k 0
 BIN="$WORK/kk/out/build/kk-linux-release"
 
