@@ -450,6 +450,14 @@ View CurrentView() {
 class PartnerOverlay final : public rex::ui::ImGuiDialog {
  public:
   explicit PartnerOverlay(rex::ui::ImGuiDrawer* drawer) : ImGuiDialog(drawer) {}
+  // Painting nonstop only while a session runs (its waits, notices and the partner's tag change between the
+  // game's frames). ImGuiDialog's default is always: with co-op on (the 2.0.0 default) and no session, the
+  // launcher and the game repainted as fast as they could (ROG Ally: GPU 96% busy at the launcher instead of
+  // 36%, game and render threads about twice as slow in the benchmark, stutters at the V-Rex).
+  bool NeedsContinuousPaint() override {
+    if (!REXCVAR_GET(kk_coop_enabled)) return false;
+    return SessionFlowSnapshot().active || CurrentView().state != SessionState::Idle;
+  }
  protected:
   void OnDraw(ImGuiIO& io) override {
     SessionWaitAudit("ui");
