@@ -1,0 +1,41 @@
+Subject: [PATCH] Fullscreen mode: take the listed mode by its pixel size
+
+SetFullscreenDisplayMode divided the asked size by the desktop's pixel density and asked SDL for the closest
+mode. On KDE Wayland at 150% (ROG Ally) the desktop is in points (density 1.48) but the fullscreen modes are
+in pixels (density 1), so 1280x720 became 864x486. A mode the list offers (GetFullscreenDisplayModes, in
+pixels) is now taken by its own pixel size; the old search stays for sizes the list does not have.
+---
+--- a/src/ui/window_sdl.cpp	2026-10-30 09:27:43.003455700 +0000
++++ b/src/ui/window_sdl.cpp	2026-10-30 09:27:50.949193000 +0000
+@@ -688,8 +688,29 @@
+   const SDL_DisplayMode* desktop = SDL_GetDesktopDisplayMode(display);
+   const float density = desktop && desktop->pixel_density > 0.0f ? desktop->pixel_density : 1.0f;
+   SDL_DisplayMode mode{};
+-  if (!SDL_GetClosestFullscreenDisplayMode(display, int(std::lround(width / density)),
+-                                           int(std::lround(height / density)), refresh_rate, true, &mode)) {
++  // A mode the list offers (GetFullscreenDisplayModes, in pixels) is taken by its own pixel size. Dividing by
++  // the desktop's density is wrong where the modes do not share it: KDE Wayland at 150% lists its modes in
++  // pixels and the desktop in points, and 1280x720 became 864x486. The nearest rate wins (the highest with none).
++  bool listed = false;
++  int count = 0;
++  if (SDL_DisplayMode** modes = SDL_GetFullscreenDisplayModes(display, &count)) {
++    float best = 0.0f;
++    for (int i = 0; i < count; ++i) {
++      const DisplayMode m = ToPixels(*modes[i]);
++      if (m.width != width || m.height != height) {
++        continue;
++      }
++      const float off = refresh_rate > 0.0f ? std::fabs(m.refresh_rate - refresh_rate) : -m.refresh_rate;
++      if (!listed || off < best) {
++        mode = *modes[i];
++        best = off;
++        listed = true;
++      }
++    }
++    SDL_free(modes);
++  }
++  if (!listed && !SDL_GetClosestFullscreenDisplayMode(display, int(std::lround(width / density)),
++                                                      int(std::lround(height / density)), refresh_rate, true, &mode)) {
+     REXLOG_WARN("Fullscreen mode {}x{}: the display has no such mode ({})", width, height, SDL_GetError());
+     SDL_SetWindowFullscreenMode(sdl_window, nullptr);
+     return false;

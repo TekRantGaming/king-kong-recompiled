@@ -34,10 +34,11 @@ DXC_FROM="${KK_DXC_FROM:-$F/downloads/dxc-linux-v1.9.2609/x}"
 JOBS="${KK_JOBS:-$(( $(nproc) > 2 ? $(nproc) - 2 : 1 ))}"
 # The game build (a developer build, KK_DEV_TOOLS=ON, gets its own, so the two never rebuild each other).
 WORKDIR="${KK_BUILD_DIR:-$BASE/work$([ "${KK_DEV_TOOLS:-OFF}" != ON ] || echo -dev)}"
-PATCHES="0039 0040 0041 0043 0044 0045 0046 0047"
+PATCHES="0039 0040 0041 0043 0044 0045 0046 0047 0048"
 # Linux only fixes the Windows SDK source does not have (its files are left out of the step 2 comparison):
-# 0046 joins a finished thread once (threading_posix.cpp; the benchmark start hung).
-LINUX_ONLY="0046 0047"
+# 0046 joins a finished thread once (threading_posix.cpp; the benchmark start hung); 0048 takes a fullscreen
+# mode by its pixel size (window_sdl.cpp; KDE Wayland at 150% gave 864x486 for 1280x720).
+LINUX_ONLY="0046 0047 0048"
 mkdir -p "$BASE"
 T0=$(date +%s)
 step() { echo "== [$(( $(date +%s) - T0 )) s] $*"; }
