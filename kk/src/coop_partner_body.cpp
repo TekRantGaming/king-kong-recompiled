@@ -616,6 +616,7 @@ struct State {
   uint64_t selected_generation = 0;
   uint32_t action = 0, item = 0, last_block = 0, last_track = 0;
   unsigned env_fail_logs = 0;
+  std::string last_abort;  // the last Abort's reason (its log line is not repeated while nothing is held)
   double elapsed = 0;
   float dt = 0;
   Vec origin, initial_forward, desired, facing, early_pos, early_forward;
@@ -630,10 +631,15 @@ struct State {
         Same(current,selected) && current.layer == rate_layer) rate_base[rate_layer+2] = saved_rate;
     rate_base = nullptr; rate_layer = 0;
     driving = false; finish_pending = false; measure = false; terminal = true;
+    // The same release with nothing held is logged once per load: in a world without a hero (the launcher's menu
+    // scene) the automatic retry ends here on every AI pass, 60 log lines a second.
+    const bool repeat = !selected.actor && last_abort == reason;
+    last_abort = reason;
     if (Opt().partner) {
       coop::SetPartnerBodyDriven(false);
-      REXLOG_INFO("PUPPET partner released reason={} epoch={} actor={:08X} tier={} copy={} held={} passed={} updates={} AI-resumes-at-current-spot={}",
-                  reason, epoch, selected.actor, selected_tier, selected_copy, held, passed, updates, !selected_copy);
+      if (!repeat)
+        REXLOG_INFO("PUPPET partner released reason={} epoch={} actor={:08X} tier={} copy={} held={} passed={} updates={} AI-resumes-at-current-spot={}",
+                    reason, epoch, selected.actor, selected_tier, selected_copy, held, passed, updates, !selected_copy);
       if (Opt().spawn || selected_copy) {
         REXLOG_INFO("PUPPET spawn {} reason={} epoch={} actor={:08X} no-free script-quarantine={}",
                     selected.actor ? "released" : "refused", reason, epoch, selected.actor,
@@ -2089,6 +2095,7 @@ void PartnerBodyAfterLoad(const uint8_t* b, uint32_t game) {
   auto& s = Get();
   s.game = game; s.level = Range(game, 28) ? Load32(b, game + 8) : 0;
   s.loading = false; s.loaded = Clock::now();
+  s.last_abort.clear();
 }
 
 void PartnerBodyBeforeAi(PPCContext& ctx, uint8_t* b, uint32_t w) {
