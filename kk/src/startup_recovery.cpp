@@ -18,6 +18,7 @@
 #include <rex/logging.h>
 #include "hooks/kk_native_ui.h"
 #include "startup_clock.h"
+#include "handoff.h"
 #include "backend/startup_steps.h"
 #if defined(_WIN32)
 #ifndef WIN32_LEAN_AND_MEAN
@@ -308,6 +309,14 @@ void Configure(const std::filesystem::path& root) {
   user_root = root;
   state = std::make_unique<RecoveryState>(root);
   left = LauncherGuard(state->directory).Read();
+  // A handoff child starts while its parent is still running (the parent quits after this process's first
+  // frame), so the parent's marker is still there: that is a handover, not a crash. Without this, the restart
+  // after the first start's shader preparation showed "The game closed unexpectedly" to every new player.
+  if (left.count > 0 && kk::handoff::IsChild()) {
+    REXLOG_INFO("KK recovery: the previous launcher ({} {}) is handing over to this one; not a crash", left.api,
+                left.phase);
+    left = {};
+  }
   if (left.count > 0)
     REXLOG_WARN("KK recovery: the last launcher start ended unexpectedly ({} {}, {} in a row)", left.api, left.phase,
                 left.count);

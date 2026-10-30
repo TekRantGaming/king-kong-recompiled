@@ -145,6 +145,14 @@ void ArmChild() {
 #endif
 }
 
+bool IsChild() {
+#if defined(_WIN32)
+  return g_child_armed.load(std::memory_order_relaxed);
+#else
+  return false;
+#endif
+}
+
 void ContentDrawn() {
 #if defined(_WIN32)
   if (g_child_armed.load(std::memory_order_relaxed)) g_content.store(true, std::memory_order_release);
