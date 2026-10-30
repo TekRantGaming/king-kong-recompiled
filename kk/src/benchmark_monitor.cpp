@@ -17,6 +17,16 @@
 #include <tlhelp32.h>
 #include <pdh.h>
 #include <pdhmsg.h>
+#else
+#include <dlfcn.h>
+#include <pthread.h>
+#include <time.h>
+#include <unistd.h>
+#include <algorithm>
+#include <cstring>
+#include <filesystem>
+#include <fstream>
+#include <sstream>
 #endif
 
 namespace kk::benchmark {
@@ -237,6 +247,72 @@ struct Counters {
     }
   }
 };
+#else
+// Linux: /proc for the processors and memory, the amdgpu driver's sysfs files for the graphics card (its busy
+// share, clock, temperature and power). There is no per program GPU share, so the game's GPU use is the whole
+// card's and other programs' GPU use stays unavailable; readings a system lacks stay -1.
+uint64_t CpuUs(clockid_t clock) {
+  timespec t{};
+  return clock_gettime(clock, &t) ? 0 : uint64_t(t.tv_sec) * 1000000 + uint64_t(t.tv_nsec) / 1000;
+}
+double ReadNumber(const std::filesystem::path& path) {
+  std::ifstream in(path);
+  double v = -1;
+  return in >> v ? v : -1;
+}
+double MeminfoMiB(const std::string& text, const char* key) {
+  const auto at = text.find(key);
+  return at == std::string::npos ? -1 : std::atof(text.c_str() + at + std::strlen(key)) / 1024;
+}
+struct Counters {
+  std::filesystem::path card, hwmon;  // /sys/class/drm/cardN/device and its hwmon folder (amdgpu)
+  uint64_t sys_idle = 0, sys_total = 0;
+  Counters() {
+    std::error_code ec;
+    for (int i = 0; i < 8 && card.empty(); ++i) {
+      const std::filesystem::path d = "/sys/class/drm/card" + std::to_string(i) + "/device";
+      if (std::filesystem::exists(d / "gpu_busy_percent", ec)) card = d;
+    }
+    if (!card.empty())
+      for (const auto& e : std::filesystem::directory_iterator(card / "hwmon", ec)) { hwmon = e.path(); break; }
+  }
+  double Gpu() { return card.empty() ? -1 : ReadNumber(card / "gpu_busy_percent"); }
+  // Every logical processor's busy share since the last call (percent), from /proc/stat.
+  double SystemCpu() {
+    std::ifstream in("/proc/stat");
+    std::string cpu;
+    uint64_t user = 0, nice = 0, system = 0, idle = 0, iowait = 0, irq = 0, softirq = 0, steal = 0;
+    if (!(in >> cpu >> user >> nice >> system >> idle >> iowait >> irq >> softirq >> steal) || cpu != "cpu") return -1;
+    const uint64_t i = idle + iowait, total = user + nice + system + idle + iowait + irq + softirq + steal;
+    double out = -1;
+    if (sys_total && total > sys_total) {
+      const double all = double(total - sys_total), busy = all - double(i - sys_idle);
+      out = std::clamp(busy / all * 100, 0.0, 100.0);
+    }
+    sys_idle = i; sys_total = total;
+    return out;
+  }
+  // The game's resident memory and the system's memory in use (MiB); the system's total in `total`.
+  void Memory(double& game, double& used, double* total = nullptr) {
+    std::ifstream statm("/proc/self/statm");
+    uint64_t size = 0, resident = 0;
+    if (statm >> size >> resident) game = double(resident) * double(sysconf(_SC_PAGESIZE)) / 1048576;
+    std::ifstream meminfo("/proc/meminfo");
+    std::stringstream text;
+    text << meminfo.rdbuf();
+    const double all = MeminfoMiB(text.str(), "MemTotal:"), available = MeminfoMiB(text.str(), "MemAvailable:");
+    if (all > 0 && available >= 0) used = all - available;
+    if (total && all > 0) *total = all;
+  }
+  void Card(double& clock, double& temperature, double& power) {
+    if (hwmon.empty()) return;
+    if (const double hz = ReadNumber(hwmon / "freq1_input"); hz > 0) clock = hz / 1e6;
+    if (const double mc = ReadNumber(hwmon / "temp1_input"); mc > 0) temperature = mc / 1000;
+    double uw = ReadNumber(hwmon / "power1_average");
+    if (uw <= 0) uw = ReadNumber(hwmon / "power1_input");
+    if (uw > 0) power = uw / 1e6;
+  }
+};
 #endif
 }
 // ---------------------------------------------------------------- the overlay's sampler
@@ -246,6 +322,11 @@ struct SystemSampler::Impl {
   uint64_t process_cpu = 0;
   Clock::time_point last{};
   double cpus = std::max<DWORD>(1, GetActiveProcessorCount(ALL_PROCESSOR_GROUPS));
+#else
+  Counters counters;
+  uint64_t process_cpu = 0;
+  Clock::time_point last{};
+  double cpus = double(std::max<long>(1, sysconf(_SC_NPROCESSORS_ONLN)));
 #endif
 };
 SystemSampler::SystemSampler() : impl_(std::make_unique<Impl>()) {
@@ -253,6 +334,10 @@ SystemSampler::SystemSampler() : impl_(std::make_unique<Impl>()) {
   impl_->process_cpu = Cpu(GetCurrentProcess(), true);
   impl_->last = Clock::now();
   impl_->counters.SystemCpu();  // the first call only starts the window
+#else
+  impl_->process_cpu = CpuUs(CLOCK_PROCESS_CPUTIME_ID);
+  impl_->last = Clock::now();
+  impl_->counters.SystemCpu();
 #endif
 }
 SystemSampler::~SystemSampler() = default;
@@ -286,6 +371,17 @@ SystemSample SystemSampler::Sample(uint32_t vendor) {
   }
 #else
   (void)vendor;
+  Counters& c = impl_->counters;
+  out.gpu_own = out.gpu_load = c.Gpu();
+  out.cpu_load = c.SystemCpu();
+  const auto now = Clock::now();
+  const double seconds = std::chrono::duration<double>(now - impl_->last).count();
+  const uint64_t pc = CpuUs(CLOCK_PROCESS_CPUTIME_ID);
+  if (seconds > 0 && pc >= impl_->process_cpu) out.cpu_game = std::min(100.0, (pc - impl_->process_cpu) / (seconds * 10000.0 * impl_->cpus));
+  impl_->process_cpu = pc;
+  impl_->last = now;
+  c.Memory(out.ram_game, out.ram_used, &out.ram_total);
+  c.Card(out.gpu_clock, out.gpu_temperature, out.gpu_power);
 #endif
   return out;
 }
@@ -305,6 +401,14 @@ void Monitor::GameThread() {
     HANDLE h = nullptr;
     if (DuplicateHandle(GetCurrentProcess(), GetCurrentThread(), GetCurrentProcess(), &h, THREAD_QUERY_LIMITED_INFORMATION, FALSE, 0))
       game_thread_.store(h);
+  }
+#else
+  if (!game_clock_set_.load(std::memory_order_relaxed)) {
+    clockid_t clock{};
+    if (pthread_getcpuclockid(pthread_self(), &clock) == 0) {
+      game_clock_.store(clock);
+      game_clock_set_.store(true);
+    }
   }
 #endif
 }
@@ -333,6 +437,15 @@ void Monitor::Run() {
   const auto read_native = module ? reinterpret_cast<uint32_t(*)(NrBenchmarkStats*)>(GetProcAddress(module, "nr_benchmark_stats")) : nullptr;
   const auto enable_native = module ? reinterpret_cast<void(*)(uint32_t)>(GetProcAddress(module, "nr_benchmark_enable")) : nullptr;
   if (enable_native) enable_native(1);
+#else
+  Counters counters;
+  uint64_t process_cpu = CpuUs(CLOCK_PROCESS_CPUTIME_ID), game_cpu = 0;
+  const double cpus = double(std::max<long>(1, sysconf(_SC_NPROCESSORS_ONLN)));
+  void* module = dlopen("librexgpu-native.so", RTLD_NOW | RTLD_NOLOAD);
+  const auto read_native = module ? reinterpret_cast<uint32_t(*)(NrBenchmarkStats*)>(dlsym(module, "nr_benchmark_stats")) : nullptr;
+  const auto enable_native = module ? reinterpret_cast<void(*)(uint32_t)>(dlsym(module, "nr_benchmark_enable")) : nullptr;
+  if (enable_native) enable_native(1);
+  counters.SystemCpu();  // the first call only starts the window
 #endif
   for (;;) {
     const auto start = Clock::now();
@@ -379,6 +492,27 @@ void Monitor::Run() {
       }
     }
     game_cpu = gc;
+#else
+    v[kGpuUse] = counters.Gpu();
+    counters.Memory(v[kRam], v[kSystemRam]);
+    counters.Card(v[kClock], v[kTemperature], v[kPower]);
+    const auto pc = CpuUs(CLOCK_PROCESS_CPUTIME_ID);
+    if (seconds > 0 && pc >= process_cpu) v[kCpuUse] = (pc - process_cpu) / (seconds * 10000.0 * cpus);
+    process_cpu = pc;
+    if (const double system = counters.SystemCpu(); system >= 0 && v[kCpuUse] >= 0)
+      v[kOtherCpu] = std::max(0.0, system - v[kCpuUse]);
+    const auto gc = game_clock_set_.load() ? CpuUs(game_clock_.load()) : 0;
+    if (read_native && read_native(&native)) {
+      v[kGpuMs] = native.gpu_ms;
+      if (native.memory_valid) { v[kVram] = native.vram_used / 1048576.0; v[kBudget] = native.vram_budget / 1048576.0; }
+      if (native.frame > previous.frame && previous.frame && chapter == previous_chapter && chapter >= 0) {
+        const double n = double(native.frame - previous.frame);
+        if (native.render_cpu_us >= previous.render_cpu_us) v[kRenderMs] = (native.render_cpu_us - previous.render_cpu_us) / (1000.0 * n);
+        if (gc && game_cpu && gc >= game_cpu) v[kGameMs] = (gc - game_cpu) / (1000.0 * n);
+        if (native.pipeline_total_ms >= previous.pipeline_total_ms) v[kPipelineMs] = (native.pipeline_total_ms - previous.pipeline_total_ms) / n;
+      }
+    }
+    game_cpu = gc;
 #endif
     // Discard counter windows spanning chapter loads/transitions.
     if (chapter >= 0 && chapter < 4 && chapter == previous_chapter)
@@ -405,8 +539,6 @@ void Monitor::Run() {
     if (stop_) break;
     stop_cv_.wait_for(lock, std::chrono::milliseconds(250), [this] { return stop_; });
   }
-#if defined(_WIN32)
   if (enable_native) enable_native(0);
-#endif
 }
 }

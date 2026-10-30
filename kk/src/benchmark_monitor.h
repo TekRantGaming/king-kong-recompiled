@@ -63,7 +63,7 @@ struct SystemSample {
   double cpu_load = -1;  // every logical processor, every program
   double cpu_game = -1;  // the game's process, as a share of all processors
   double ram_game = -1, ram_used = -1, ram_total = -1;              // MiB
-  double gpu_clock = -1, gpu_temperature = -1, gpu_power = -1;      // NVIDIA cards only (the driver's NVML)
+  double gpu_clock = -1, gpu_temperature = -1, gpu_power = -1;      // NVIDIA cards (NVML); AMD on Linux (sysfs)
 };
 class SystemSampler {
  public:
@@ -93,6 +93,10 @@ class Monitor {
   std::atomic<uint64_t> dropped_{0};
   std::atomic<int> chapter_{-1}, pass_{0};
   std::atomic<void*> game_thread_{nullptr};
+#if !defined(_WIN32)
+  std::atomic<bool> game_clock_set_{false};
+  std::atomic<clockid_t> game_clock_{0};  // the game thread's CPU clock (pthread_getcpuclockid)
+#endif
   mutable std::mutex view_mutex_;
   MonitorView view_;
   std::mutex stop_mutex_;
