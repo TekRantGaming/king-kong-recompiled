@@ -2,6 +2,7 @@
 #include "steam_transport.h"
 #include "coop_pose.h"
 #include "steam_pad.h"
+#include "steam_env.h"
 #include "coop_resume.h"
 #if KK_HAS_STEAM
 #include <rex/logging.h>
@@ -281,11 +282,18 @@ struct SteamRuntime::Impl
 #ifdef _WIN32
     if (!SetEnvironmentVariableW(L"SteamAppId", L"480") || !SetEnvironmentVariableW(L"SteamGameId", L"480")) return false;
 #else
+    steam_env::RecordBefore();  // what Steam's start adds is left out of the game this launcher starts (steam_env.h)
     if (setenv("SteamAppId", "480", 1) || setenv("SteamGameId", "480", 1)) return false;
 #endif
     if (!api.Load(options.executable_folder)) return false;
     SteamErrMsg error{};
-    if (api.SteamAPI_InitFlat(&error) != k_ESteamAPIInitResult_OK) return false;
+    const auto result = api.SteamAPI_InitFlat(&error);
+#if !defined(_WIN32)
+    steam_env::RecordAfter();
+    REXLOG_INFO("KK co-op: Steam set {} environment variables (not passed on to programs this one starts)",
+                steam_env::SteamSetCount());
+#endif
+    if (result != k_ESteamAPIInitResult_OK) return false;
     initialized = true;
     api.SteamAPI_ManualDispatch_Init(); pipe = api.SteamAPI_GetHSteamPipe();
     user = api.SteamAPI_SteamUser_v023(); friends = api.SteamAPI_SteamFriends_v018();
@@ -677,7 +685,7 @@ struct SteamRuntime::Impl
     Status(SocialStatus::Lobby, "Joined lobby"); RefreshLobby();
   }
   void Invite(uint64_t lobby, uint64_t inviter) {
-    if (!CSteamID(lobby).IsLobby() || !CSteamID(lobby).IsValid() || (inviter && !Friend(inviter))) return;
+    if (!CSteamID(static_cast<uint64>(lobby)).IsLobby() || !CSteamID(static_cast<uint64>(lobby)).IsValid() || (inviter && !Friend(inviter))) return;
     if (std::none_of(model.pending_invites.begin(), model.pending_invites.end(), [&](auto i) { return i.lobby == lobby; })) {
       if (model.pending_invites.size() == kMaxInvites) model.pending_invites.erase(model.pending_invites.begin());
       model.pending_invites.push_back({lobby, inviter}); Publish();
@@ -728,7 +736,7 @@ struct SteamRuntime::Impl
       case SocialAction::Accept:
         if (model.lobby || (std::none_of(model.pending_invites.begin(), model.pending_invites.end(), [&](auto i) { return i.lobby == c.id; }) &&
                             std::none_of(model.friends.begin(), model.friends.end(), [&](const auto& f) { return f.lobby == c.id; }))) return;
-        if (!CSteamID(c.id).IsLobby() || !CSteamID(c.id).IsValid()) { Error("Invalid lobby invite"); return; }
+        if (!CSteamID(static_cast<uint64>(c.id)).IsLobby() || !CSteamID(static_cast<uint64>(c.id)).IsValid()) { Error("Invalid lobby invite"); return; }
         validating = c.id; operation_deadline = Now() + 20; model.last_error.clear();
         if (!api.SteamAPI_ISteamMatchmaking_RequestLobbyData(matchmaking, validating)) { validating = 0; Error("Could not inspect invited lobby"); }
         else Status(SocialStatus::Joining, "Checking invited lobby");

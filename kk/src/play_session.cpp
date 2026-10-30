@@ -25,6 +25,7 @@
 #include "play_session.h"
 #include "menu_scene.h"
 #include "handoff.h"
+#include "steam_env.h"
 
 #include <algorithm>
 #include <atomic>
@@ -750,11 +751,21 @@ bool RelaunchWith(const std::wstring& extra) {
   argv.push_back(const_cast<char*>(exe.c_str()));
   for (auto& a : narrow) argv.push_back(a.data());
   argv.push_back(nullptr);
+  // Without what Steam's start wrote into this process (co-op): the new one is not run by Steam (steam_env.h).
+  // A co-op session's game keeps it: it starts Steam again at once, and Steam's controller hints keep its SDL
+  // off the pad Steam Input hands it (steam_pad.h).
+  const bool coop_resume = extra.find(L"--kk_coop_resume") != std::wstring::npos;
+  std::vector<std::string> env_entries = kk::steam_env::ChildEnvironment();
+  std::vector<char*> envp;
+  for (auto& e : env_entries) envp.push_back(e.data());
+  envp.push_back(nullptr);
   pid_t pid = 0;
-  if (posix_spawn(&pid, exe.c_str(), nullptr, nullptr, argv.data(), environ) != 0) {
+  if (posix_spawn(&pid, exe.c_str(), nullptr, nullptr, argv.data(), coop_resume ? environ : envp.data()) != 0) {
     REXLOG_ERROR("KK play: relaunch failed");
     return false;
   }
+  if (const size_t steam_set = kk::steam_env::SteamSetCount(); steam_set && !coop_resume)
+    REXLOG_INFO("KK play: the new process starts without the {} variables Steam set here", steam_set);
 #endif
   REXLOG_INFO("KK play: started the program again with {}", std::string(extra.begin(), extra.end()));
   return true;
