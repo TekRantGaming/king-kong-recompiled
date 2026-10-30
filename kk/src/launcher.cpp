@@ -2824,7 +2824,7 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
     const bool testing = std::getenv("KK_AUTOPLAY") != nullptr;
     if (GetBool("kk_check_updates") && !testing) StartUpdateCheck(false);
     StartSteamCheck();
-    StartLaunchTime(!testing);  // task 373: the Home countdown's time from the website
+    // Task 373's Home countdown card is gone (owner, 30 Oct: the Remastered update is out); nothing fetched.
     // Menu sounds (the device opens in OnDraw while they're on).
     ui::SetSoundHandler([this](ui::Sound sound, float value) {
       if (!GetBool("kk_launcher_sounds")) return;
@@ -3989,7 +3989,6 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
           const int next = a == Action::kLeft ? side_focus_ - 1 : a == Action::kRight ? side_focus_ + 1 : -1;
           if (next >= n) continue;  // already the last
           side_focus_ = next;
-          if (a == Action::kUp && home) card_focus_ = 0;  // task 373: Up to the countdown's buttons above them
           ui::Cue(a == Action::kBack ? ui::Sound::kBack : ui::Sound::kMove);
         }
         if (side_focus_ >= 0 && input_.Pressed(Action::kAccept)) {
@@ -4999,7 +4998,6 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
     // up rather than run into the status row.
     const float room = o_.y + h_ - 150 * s - y;
     const float item_h = std::clamp(room / float(std::max<size_t>(entries.size(), 1)), 28 * s, 42 * s);
-    DrawCountdown(dl, a, entries, home_focus_);  // task 373: before the side panels (Right goes to it first)
     DrawSidePanels(dl, a, true, entries, home_focus_, o_.y + h_ - 120 * s);
     if (side_focus_ >= 0 || card_focus_ >= 0) status_focus_ = false;
     HomeStatusInput(int(entries.size()));
