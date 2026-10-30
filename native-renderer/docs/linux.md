@@ -17,7 +17,7 @@ KK_APPIMAGETOOL=/root/kk-beta4-081/work/appimagetool-x86_64.AppImage \
   bash tools/build_linux_beta.sh v2.0.0-beta.6
 ```
 
-Output: `dist/KingKong-<version>-linux-x86_64.AppImage` and `dist/SHA256SUMS-linux.txt` (git-ignored). The work
+Output: `dist/KingKong-linux-x86_64.AppImage` and `dist/SHA256SUMS-linux.txt` (git-ignored). The work
 folder is `~/kk-linux-beta` (`KK_LINUX_ROOT`): the SDK source and build, `sdk/` (the installed Linux SDK), `dxc/`,
 `ffmpeg/`, `work/` (the game build and the AppDir), logs (`sdk-build.log`, `ffmpeg-build.log`,
 `appimage-build.log`). Every step is skipped or incremental when its result is up to date: a first build takes
@@ -167,12 +167,12 @@ line). The script's header lists the options. The release smoke test:
 
 ```
 # 1. first start with the RELEASE AppImage up to the texture pack page (shader setup timing)
-FRESH=1 STOP_ON="KK: setup: texture pack" tools/linux_headless_run.sh first dist/KingKong-<v>-linux-x86_64.AppImage 900
+FRESH=1 STOP_ON="KK: setup: texture pack" tools/linux_headless_run.sh first dist/KingKong-linux-x86_64.AppImage 900
 # 2. the whole setup + Workshop + both downloads with the DEVELOPER AppImage (scripted input, local ZIP server)
 FRESH=1 SERVE=/mnt/f/KK-tex-pack-test/downloads STEPS=<steps file> STOP_ON="KK dev: shot home-done" \
-  tools/linux_headless_run.sh tour dist/KingKong-<v>-devtools-linux-x86_64.AppImage 1800
+  tools/linux_headless_run.sh tour dist/KingKong-linux-x86_64.AppImage 1800
 # 3. one chapter for about 2 minutes of play with the RELEASE AppImage (cache of run 1: shaders ready)
-CACHE_FROM=<run 1 folder> tools/linux_headless_run.sh chapter dist/KingKong-<v>-linux-x86_64.AppImage 420 \
+CACHE_FROM=<run 1 folder> tools/linux_headless_run.sh chapter dist/KingKong-linux-x86_64.AppImage 420 \
   --kk_launcher=false --kk_start=chapter:0:2
 ```
 
@@ -197,7 +197,7 @@ FUSE mounting. Those need the owner's ROG Ally (Bazzite) or another Linux PC.
    must end with "done", all four data files "has", "same as the Windows SDK source", no "developer test aids".
 4. Smoke test in WSL (launcher first start up to Home, one chapter for 2 minutes) with the release AppImage.
 5. Owner test on the ROG Ally (Desktop Mode and Steam Game Mode) before any public release.
-6. Release assets: `KingKong-v<version>-windows-x64.zip`, `KingKong-v<version>-linux-x86_64.AppImage`, one
+6. Release assets: `KingKong-v<version>-windows-x64.zip`, `KingKong-linux-x86_64.AppImage`, one
    `SHA256SUMS.txt` with both; release notes say: Linux = Vulkan only, FSR 1/NIS only (no DLSS/XeSS/FSR 3.1 yet),
    needs curl; FFmpeg source offer (LGPL).
 7. Delete test shader caches as for Windows; nothing game-derived in git.

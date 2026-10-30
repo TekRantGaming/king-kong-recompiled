@@ -5,16 +5,17 @@
 # Windows or `rexglue codegen` on Linux from your own disc). The code is the same
 # for every platform, so a Windows checkout can be built here through /mnt/c.
 #
-#   tools/build_appimage.sh [version]
+#   tools/build_appimage.sh
 #
-# Output: dist/KingKong-<version>-linux-x86_64.AppImage
+# Output: dist/KingKong-linux-x86_64.AppImage. The same name every release, as king_kong.exe is on Windows: a Steam
+# shortcut to it keeps working when a player downloads the next version over it. Every updater since Beta 4 finds the
+# release's file by "linux-x86_64.AppImage", so that part of the name stays.
 #
 # PS2 cutscene playback needs the small LGPL FFmpeg libraries (tools/build_ffmpeg_linux.sh):
 # KK_FFMPEG_DIR=<their install folder>, or KK_FFMPEG_SRC=<an FFmpeg 4.4 source tree, e.g. the ReXGlue SDK's
 # thirdparty/FFmpeg> to build them here. Without either, the AppImage has no PS2 cutscenes.
 set -euo pipefail
 
-VERSION="${1:-dev}"
 SDK_VERSION=0.10.0
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 # Build on the Linux filesystem: much faster than /mnt/c, and file names keep their case.
@@ -247,7 +248,7 @@ TOOL="${KK_APPIMAGETOOL:-$WORK/appimagetool-x86_64.AppImage}"  # KK_APPIMAGETOOL
 [ -x "$TOOL" ] || { wget -q -O "$TOOL" \
   https://github.com/AppImage/appimagetool/releases/download/continuous/appimagetool-x86_64.AppImage && chmod +x "$TOOL"; }
 mkdir -p "$ROOT/dist"
-OUT="$ROOT/dist/KingKong-$VERSION-linux-x86_64.AppImage"
+OUT="$ROOT/dist/KingKong-linux-x86_64.AppImage"
 # KK_APPIMAGE_RUNTIME: the AppImage type 2 runtime already on disk (otherwise appimagetool downloads it).
 RUNTIME_ARGS=()
 [ -z "${KK_APPIMAGE_RUNTIME:-}" ] || RUNTIME_ARGS=(--runtime-file "$KK_APPIMAGE_RUNTIME")

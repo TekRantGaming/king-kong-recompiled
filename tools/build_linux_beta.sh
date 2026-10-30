@@ -130,7 +130,7 @@ if ! ls "$BASE/ffmpeg/lib/"libavcodec-kk.so.* >/dev/null 2>&1; then
     { tail -20 "$BASE/ffmpeg-build.log"; exit 1; }
 fi
 
-step "6. game + AppImage (tools/build_appimage.sh $VERSION)"
+step "6. game + AppImage (tools/build_appimage.sh)"
 PKG="${KK_PACKAGE_DIR:-}"
 pick() { [ -n "$PKG" ] && [ -e "$PKG/$1" ] && echo "$PKG/$1" || true; }
 export KK_PIPELINE_LIST="${KK_PIPELINE_LIST:-$(pick kkpipelines.list)}"
@@ -154,12 +154,12 @@ if [ ! -s "$RT" ] && [ -x "${KK_APPIMAGETOOL:-}" ]; then
   off="$("$KK_APPIMAGETOOL" --appimage-offset)" && head -c "$off" "$KK_APPIMAGETOOL" > "$RT"
 fi
 [ ! -s "$RT" ] || export KK_APPIMAGE_RUNTIME="$RT"
-(cd "$REPO" && bash tools/build_appimage.sh "$VERSION") > "$BASE/appimage-build.log" 2>&1 ||
+(cd "$REPO" && bash tools/build_appimage.sh) > "$BASE/appimage-build.log" 2>&1 ||
   { grep -E "error|FAILED" "$BASE/appimage-build.log" | head -30; exit 1; }
 grep -E "^warning|native-renderer: upscalers" "$BASE/appimage-build.log" | sort -u || true
 
 step "7. package checks"
-OUT="$REPO/dist/KingKong-$VERSION-linux-x86_64.AppImage"
+OUT="$REPO/dist/KingKong-linux-x86_64.AppImage"
 A="$WORKDIR/AppDir"
 fail=0
 for f in usr/bin/king_kong usr/bin/librexgpu-native.so usr/bin/librexruntime.so usr/bin/libdxcompiler.so usr/bin/libpdfium.so \
