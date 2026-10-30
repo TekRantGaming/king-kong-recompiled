@@ -346,20 +346,30 @@ execute_process(COMMAND git describe --always --dirty --abbrev=12 WORKING_DIRECT
     OUTPUT_VARIABLE KK_BENCH_BUILD OUTPUT_STRIP_TRAILING_WHITESPACE)
 target_compile_definitions(king_kong PRIVATE KK_BENCH_BUILD="${KK_BENCH_BUILD}-task115")
 
-# Include dirty source contents, not just the commit id, in co-op compatibility.
-set(KK_COOP_SOURCE_ID "${KK_BENCH_BUILD};${KK_VERSION};${CMAKE_CXX_COMPILER_ID};${CMAKE_CXX_COMPILER_VERSION};${CMAKE_BUILD_TYPE};${CMAKE_CXX_FLAGS};${KK_DEV_TOOLS};${KK_HAS_STEAM}")
+# Co-op compatibility: the version, developer tools on or off, and the game's own source contents (dirty ones
+# too, not just the commit id). Owner, 30 Oct: Windows and Linux players of the same release play together,
+# so nothing of the platform goes in: not the compiler, its flags, the git commit (the Linux build compiles a
+# copy without git), Steam, the platform's PS2 cutscene decoder, or line endings.
+set(KK_COOP_SOURCE_ID "${KK_VERSION};${KK_DEV_TOOLS}")
+function(kk_coop_hash path)
+    set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${path}")
+    file(READ "${path}" text)
+    string(REPLACE "\r" "" text "${text}")
+    string(SHA256 source_hash "${text}")
+    set(KK_COOP_SOURCE_ID "${KK_COOP_SOURCE_ID};${source_hash}" PARENT_SCOPE)
+endfunction()
 foreach(source IN LISTS KINGKONG_SOURCES)
-    set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/${source}")
-    file(SHA256 "${CMAKE_CURRENT_SOURCE_DIR}/${source}" source_hash)
-    string(APPEND KK_COOP_SOURCE_ID ";${source_hash}")
+    if(NOT source MATCHES "ps2_movie_decoder_")
+        kk_coop_hash("${CMAKE_CURRENT_SOURCE_DIR}/${source}")
+    endif()
 endforeach()
 file(GLOB KK_COOP_HEADERS CONFIGURE_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/src/*.h")
+list(SORT KK_COOP_HEADERS)
 foreach(header IN LISTS KK_COOP_HEADERS)
-    set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${header}")
-    file(SHA256 "${header}" source_hash)
-    string(APPEND KK_COOP_SOURCE_ID ";${source_hash}")
+    kk_coop_hash("${header}")
 endforeach()
 string(SHA256 KK_COOP_BUILD "${KK_COOP_SOURCE_ID}")
+message(STATUS "King Kong co-op build ${KK_COOP_BUILD} (the same on Windows and Linux for the same sources)")
 target_compile_definitions(king_kong PRIVATE KK_COOP_BUILD="${KK_COOP_BUILD}")
 
 if(KK_DEV_TOOLS)
