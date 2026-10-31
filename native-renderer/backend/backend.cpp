@@ -336,6 +336,7 @@ class LogCallback final : public nvrhi::IMessageCallback {
         break;
       default:
         REXGPU_ERROR("NVRHI: {}", text);
+        CheckGpuLossOnError();
         break;
     }
   }

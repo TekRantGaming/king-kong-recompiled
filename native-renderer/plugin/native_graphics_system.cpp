@@ -48,6 +48,9 @@
 #include "plugin/launcher_prewarm.h"
 #include "plugin/plugin_settings.h"
 #include "plugin/native_startup.h"
+#if NR_HAS_D3D12
+#include "plugin/d3d12_crash_tracking.h"
+#endif
 #include "plugin/ring_skimmer.h"
 #include "backend/thread_scheduling.h"
 #include "plugin/upscaler_query.h"
@@ -59,6 +62,7 @@
 #include "backend/upscaler_vulkan.h"
 #endif
 
+REXCVAR_DECLARE(bool, native_d3d12_crash_tracking);
 REXCVAR_DECLARE(bool, native_draws);
 REXCVAR_DECLARE(bool, native_game);
 REXCVAR_DECLARE(std::string, native_shader_pack);
@@ -174,6 +178,7 @@ bool NativeGraphicsSystem::CreateProvider(bool with_presentation) {
       // D3D12 providers always support presentation (the swap chain is the
       // presenter's).
       PreferHighPerformanceGpu(GpuApi::kD3D12);  // the high-performance GPU, not adapter 0 (task 203)
+      if (REXCVAR_GET(native_d3d12_crash_tracking)) EnableD3d12CrashTracking();
       provider_ = rex::ui::d3d12::D3D12Provider::Create();
       break;
 #endif
@@ -448,6 +453,19 @@ void NativeGraphicsSystem::Shutdown() {
   provider_.reset();
 }
 
+// Without it the game just vanishes. Waits for OK; the renderer's threads stopped at their first error (gpu_loss.h).
+static void ShowGpuLossMessage() {
+#if defined(_WIN32)
+#if defined(KK_DEV_TOOLS)
+  if (std::getenv("KK_DEV_NO_GPU_LOSS_MESSAGE")) return;  // test runs: no window over the desktop
+#endif
+  MessageBoxW(nullptr,
+              L"Your graphics card stopped responding, so King Kong has to close.\n\n"
+              L"Updating your graphics driver may help. A crash report will be saved.",
+              L"King Kong", MB_OK | MB_ICONERROR | MB_TOPMOST | MB_SETFOREGROUND);
+#endif
+}
+
 void NativeGraphicsSystem::OnHostGpuLoss(bool is_responsible) {
   if (gpu_loss_reported_.test_and_set(std::memory_order_relaxed)) {
     return;
@@ -461,6 +479,7 @@ void NativeGraphicsSystem::OnHostGpuLoss(bool is_responsible) {
     if (ID3D12Device* device = d3d12->GetDevice()) {
       const HRESULT removed = device->GetDeviceRemovedReason();
       reason = fmt::format("; D3D12 removed reason 0x{:08X}", unsigned(removed));
+      LogD3d12CrashTracking(device, [](const std::string& line) { REXGPU_ERROR("rexgpu-native: {}", line); });
     }
   }
 #endif
@@ -470,7 +489,7 @@ void NativeGraphicsSystem::OnHostGpuLoss(bool is_responsible) {
   REXGPU_ERROR("rexgpu-native: the graphics device was lost ({}); the program ends now{}",
                is_responsible ? "the renderer's own work" : "the driver or another program", reason);
   rex::FlushLogging();
-  ReportStartupFailure("lost its graphics device during startup");
+  if (!ReportStartupFailure("lost its graphics device during startup")) ShowGpuLossMessage();
   rex::FatalError("Graphics device lost (native renderer)");
 }
 

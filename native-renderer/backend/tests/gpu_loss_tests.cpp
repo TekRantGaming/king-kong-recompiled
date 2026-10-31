@@ -48,6 +48,12 @@ int main() {
   // No handler: nothing reported, the caller rethrows.
   SetGpuLossHandler(nullptr);
   Check(!ReportGpuLoss("x"), "no handler: not reported");
+  CheckGpuLossOnError();  // no check installed: nothing happens
+  static int checks = 0;
+  SetGpuLossCheck([] { ++checks; });
+  CheckGpuLossOnError();
+  Check(checks == 1, "an NVRHI error runs the host's check");
+  SetGpuLossCheck(nullptr);
   Check(g_calls == 0, "no handler: nothing called");
 
   SetGpuLossHandler(&Record);

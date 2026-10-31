@@ -92,7 +92,11 @@ namespace nvrhi::d3d12
         }
 
         if (FAILED(hr))
+        {
+            // KK: said out loud: on a lost device this stops the thread (the game's gpu_loss.h).
+            m_Context.error("Couldn't create an upload chunk");
             return nullptr;
+        }
 
         if (!m_IsScratchBuffer)
         {
@@ -241,6 +245,8 @@ namespace nvrhi::d3d12
             else
             {
                 m_CurrentChunk = createChunk(sizeToAllocate);
+                if (!m_CurrentChunk)
+                    return false;  // KK: the callers report it
             }
         }
 

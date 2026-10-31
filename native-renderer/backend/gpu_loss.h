@@ -61,6 +61,21 @@ inline bool ReportGpuLoss(const char* what) {
   return false;
 }
 
+// D3D12: NVRHI reports a failed call through its message callback and carries on with an empty object. After a
+// removed device the render and present threads crashed on those, and the pipeline workers' errors pushed the
+// earlier log out of the crash report, so the reason was never seen (31 Oct, RTX 5070, RTX 2080 SUPER and GTX 1650
+// reports). The host installs a check of its own device and every NVRHI error runs it: with the device gone the
+// first thread reports the loss and the others stop there until the program ends. Returns when the device is fine.
+using GpuLossCheck = void (*)();
+
+inline std::atomic<GpuLossCheck> g_gpu_loss_check{nullptr};
+
+inline void SetGpuLossCheck(GpuLossCheck check) { g_gpu_loss_check.store(check); }
+
+inline void CheckGpuLossOnError() {
+  if (GpuLossCheck check = g_gpu_loss_check.load()) check();
+}
+
 // Runs `fn`. A Vulkan error thrown inside it goes to ReportGpuLoss as "<where>: <what>" (its locks are already
 // released by the unwinding); without reporting (no handler, or a device-owning thread) it is rethrown as before.
 // True when `fn` finished.

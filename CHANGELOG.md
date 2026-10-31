@@ -3,6 +3,11 @@
 Every release of the King Kong PC port, newest first. The launcher shows this on its About page, and a
 version's notes the first time you start it.
 
+## v2.0.2 (unreleased)
+
+### Fixed
+- **When a graphics card stops responding**: the game now closes with a message instead of crashing, and the crash report says what the card was doing, so these crashes can be tracked down.
+
 ## v2.0.1 (31 October 2026)
 
 ### Changed

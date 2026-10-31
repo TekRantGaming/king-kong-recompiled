@@ -61,6 +61,8 @@ REXCVAR_DEFINE_BOOL(native_validation, false, "Native renderer",
     .lifecycle(rex::cvar::Lifecycle::kInitOnly);
 
 // Task 300/304: D3D12 allocation cost. On by default (owner, 19 Oct). Vulkan ignores both.
+REXCVAR_DEFINE_BOOL(native_d3d12_crash_tracking, true, "Native renderer",
+                    "Direct3D 12: record what the GPU was doing, for the log when the device is lost");
 REXCVAR_DEFINE_BOOL(native_d3d12_placed_textures, true, "Native renderer",
                     "D3D12: place sampled-only textures in pooled 64 MiB heaps instead of one committed resource "
                     "each (task 300; about 10x less CPU per texture made or released; false = before task 300)")

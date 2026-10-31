@@ -100,8 +100,15 @@ namespace nvrhi::d3d12
             return nullptr;
         }
 
-        m_Context.device->CreateCommandAllocator(d3dCommandListType, IID_PPV_ARGS(&commandList->allocator));
-        m_Context.device->CreateCommandList(0, d3dCommandListType, commandList->allocator, nullptr, IID_PPV_ARGS(&commandList->commandList));
+        // KK: said out loud: on a lost device the error stops the thread (the game's gpu_loss.h); empty objects crashed below.
+        HRESULT hr = m_Context.device->CreateCommandAllocator(d3dCommandListType, IID_PPV_ARGS(&commandList->allocator));
+        if (SUCCEEDED(hr))
+            hr = m_Context.device->CreateCommandList(0, d3dCommandListType, commandList->allocator, nullptr, IID_PPV_ARGS(&commandList->commandList));
+        if (FAILED(hr))
+        {
+            m_Context.error("Couldn't create a command list");
+            return nullptr;
+        }
 
         commandList->commandList->QueryInterface(IID_PPV_ARGS(&commandList->commandList4));
         commandList->commandList->QueryInterface(IID_PPV_ARGS(&commandList->commandList6));

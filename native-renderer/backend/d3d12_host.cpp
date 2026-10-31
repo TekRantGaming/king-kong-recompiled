@@ -8,6 +8,7 @@
 #include <cstdio>
 #include <mutex>
 #include <string>
+#include <thread>
 #include <utility>
 #include <vector>
 
@@ -45,6 +46,7 @@ class D3D12Host final : public HostDevice {
   explicit D3D12Host(rex::ui::d3d12::D3D12Provider& provider) : provider_(provider) {}
 
   ~D3D12Host() override {
+    if (checked_device_.exchange(nullptr)) SetGpuLossCheck(nullptr);
     if (frame_fence_) frame_fence_->Release();
     if (budget_adapter_) budget_adapter_->Release();
     if (debug_queue_) {
@@ -90,6 +92,8 @@ class D3D12Host final : public HostDevice {
     if (REXCVAR_GET(native_debug) & 524288) desc.maxTimerQueries = 2048;
     desc.errorCB = GetMessageCallback();
     desc.pDevice = provider_.GetDevice();
+    checked_device_.store(provider_.GetDevice());
+    SetGpuLossCheck(&D3D12Host::CheckDeviceOnError);
     desc.pGraphicsCommandQueue = provider_.GetDirectQueue();
     // The game renderer's bindless tables (backend/game_renderer.cpp): about
     // 35,000 views and 1,024 samplers; a shader-visible sampler heap holds at
@@ -168,6 +172,18 @@ class D3D12Host final : public HostDevice {
   }
   // Task 268: reports a removed device with its reason (gpu_loss.h). A lost device's fence signal, idle
   // wait and frame wait all lead here; one GetDeviceRemovedReason call, never in a normal frame.
+  // An NVRHI error on any thread (gpu_loss.h). Never returns once the device is gone, unless this thread handles
+  // the errors of a device of its own.
+  static void CheckDeviceOnError() {
+    ID3D12Device* device = checked_device_.load();
+    if (!device) return;
+    const HRESULT reason = device->GetDeviceRemovedReason();
+    if (SUCCEEDED(reason)) return;
+    char what[128];
+    std::snprintf(what, sizeof(what), "NVRHI error: device removed (reason 0x%08X)", unsigned(reason));
+    if (!ReportGpuLoss(what)) return;
+    for (;;) std::this_thread::sleep_for(std::chrono::seconds(1));
+  }
   void ReportIfRemoved(const char* where) {
     const HRESULT reason = provider_.GetDevice()->GetDeviceRemovedReason();
     if (SUCCEEDED(reason)) return;
@@ -186,8 +202,15 @@ class D3D12Host final : public HostDevice {
     const auto t0 = clock::now();
 #if defined(KK_DEV_TOOLS)
     if (completion && DevGpuLossNow(dev_loss_frames_, "d3d12")) {  // KK_DEV_GPU_LOSS_AFTER
-      ReportGpuLoss("D3D12 submission: device removed (developer injection)");
-      return;
+      // KK_DEV_GPU_LOSS_REAL=1: Windows really removes the device, and everything after it runs as for a player.
+      ID3D12Device5* device5 = nullptr;
+      if (std::getenv("KK_DEV_GPU_LOSS_REAL") && SUCCEEDED(provider_.GetDevice()->QueryInterface(IID_PPV_ARGS(&device5)))) {
+        device5->RemoveDevice();
+        device5->Release();
+      } else {
+        ReportGpuLoss("D3D12 submission: device removed (developer injection)");
+        return;
+      }
     }
 #endif
     bool signal_failed = false;
@@ -337,6 +360,7 @@ class D3D12Host final : public HostDevice {
   }
 
   rex::ui::d3d12::D3D12Provider& provider_;
+  static inline std::atomic<ID3D12Device*> checked_device_{nullptr};  // the game's device, for CheckDeviceOnError
   mutable std::mutex execute_mutex_;
   SubmitTimes times_;
   ID3D12InfoQueue1* debug_queue_ = nullptr;
