@@ -93,6 +93,7 @@ notifications (optional; falls back to `notify-send`, then a pop-up), FUSE 2 to 
 | 0041 pacing / benchmark present observer | yes | yes (unused) | the game calls it on Windows only (benchmark host presents, handoff) |
 | 0043 scRGB HDR output | yes | yes (inactive) | HDR is offered only where Windows reports an HDR monitor |
 | 0044, 0045 HDR highlight expansion and curve | yes (-317) | yes (inactive) | added to the Linux recipe for Beta 17 |
+| 0050 RenderDoc only when already in the process | no | yes | Linux only: a plain load of an installed `librenderdoc.so` started RenderDoc and its overlay in the game |
 
 Before task 191 the Linux SDK (`/root/kk-beta4-081/sdk`, built 15 Oct) had everything up to 0040 but not
 0041/0043. No game feature depended on them on Linux, but the HDR settings then had no SDK option behind

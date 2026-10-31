@@ -3,6 +3,11 @@
 Every release of the King Kong PC port, newest first. The launcher shows this on its About page, and a
 version's notes the first time you start it.
 
+## v2.0.1 (unreleased)
+
+### Fixed
+- **Linux and SteamOS**: RenderDoc's "Capturing Vulkan" text no longer appears at the top of the screen on systems that have RenderDoc installed.
+
 ## v2.0.0 (30 October 2026)
 
 King Kong Remastered: everything from the 17 beta versions, now on the stable line. Updating from 1.9.13 keeps your saves, settings and game files.

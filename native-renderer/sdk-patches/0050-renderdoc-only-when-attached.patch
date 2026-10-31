@@ -1,0 +1,37 @@
+Subject: [PATCH] Linux: RenderDoc only when it is already in the process
+
+CreateIfConnected loaded librenderdoc.so with a plain dlopen. That finds a copy installed on the system, and
+loading it starts RenderDoc inside the game with nobody attached: players with RenderDoc installed saw its
+"Capturing Vulkan" overlay at the top of the screen. RenderDoc's own in application API docs ask for
+RTLD_NOLOAD on Linux, which returns the library only if it is already loaded.
+---
+--- a/src/ui/renderdoc_api.cpp	2026-10-31 00:52:56.912490249 +0000
++++ b/src/ui/renderdoc_api.cpp	2026-10-31 00:52:56.926965389 +0000
+@@ -12,6 +12,10 @@
+ #include <rex/logging.h>
+ #include <rex/ui/renderdoc_api.h>
+ 
++#if REX_PLATFORM_LINUX
++#include <dlfcn.h>
++#endif
++
+ namespace rex {
+ namespace ui {
+ 
+@@ -25,6 +29,16 @@
+ 
+   pRENDERDOC_GetAPI get_api = nullptr;
+ 
++#if REX_PLATFORM_LINUX
++  // dlopen finds an installed librenderdoc.so even when nobody attached RenderDoc, and loading it starts
++  // RenderDoc's capture layer and overlay inside the game. Only use a copy already in the process.
++  void* attached = dlopen(platform::lib_names::kRenderDoc, RTLD_NOW | RTLD_NOLOAD);
++  if (!attached) {
++    return nullptr;
++  }
++  dlclose(attached);
++#endif
++
+   // Try to load the RenderDoc library. If RenderDoc is attached, the library
+   // should already be loaded into the process and this will increment the
+   // reference count. If not attached, the load will fail and we return nullptr.
