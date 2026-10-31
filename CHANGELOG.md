@@ -6,6 +6,7 @@ version's notes the first time you start it.
 ## v2.0.2 (unreleased)
 
 ### Fixed
+- **AMD FSR 4 on Radeon RX 9000 cards**: v2.0.1 hid it on these cards too by mistake. It is back on RX 9000 cards.
 - **When a graphics card stops responding**: the game now closes with a message instead of crashing, and the crash report says what the card was doing, so these crashes can be tracked down.
 
 ## v2.0.1 (31 October 2026)

@@ -132,7 +132,7 @@ inline bool Fsr4Card(std::string_view gpu_name) {
     const auto digit = [&](size_t i) {
       return i < gpu_name.size() && std::isdigit(static_cast<unsigned char>(gpu_name[i])) != 0;
     };
-    if (digit(at + 4) && digit(at + 5) && !digit(at + 6)) return true;
+    if (digit(at + 4) && digit(at + 5) && digit(at + 6) && !digit(at + 7)) return true;  // RX 9nnn
   }
   return false;
 }
