@@ -78,7 +78,7 @@ class D3D12Host final : public HostDevice {
     }
     if (REXCVAR_GET(native_validation) &&
         SUCCEEDED(provider_.GetDevice()->QueryInterface(IID_PPV_ARGS(&debug_queue_)))) {
-      if (FAILED(debug_queue_->RegisterMessageCallback(DebugMessage, D3D12_MESSAGE_CALLBACK_FLAG_NONE,
+      if (FAILED(debug_queue_->RegisterMessageCallback(DebugMessage, D3D12_MESSAGE_CALLBACK_IGNORE_FILTERS,
                                                        nullptr, &debug_cookie_))) {
         REXGPU_WARN("rexgpu-native: D3D12 debug callback unavailable; NVRHI validation remains enabled");
         debug_queue_->Release();
