@@ -258,12 +258,9 @@ void Uploads(const fs::path& out) {
   Check(SendCrashReports(c, 1) == 1 && Header(sent.back(), "X-KK-Kind") == "hang", "then the hang report");
   Check(Header(sent.back(), "X-KK-Api") == "d3d12", "a report that names no API: the uploader's");
   Check(PendingReports(c).empty() && SendCrashReports(c, 5) == 0, "nothing left to send");
-  WriteFile(root / "user" / "crashes" / "crash-private-session.txt",
-      "Version: 2.0.0-beta.7\nPrivate session: local-only\n");
-  WriteFile(root / "user" / "crashes" / "crash-private-log.txt",
-      "Version: 2.0.0-beta.7\nKK co-op: connected\n");
-  Check(PendingReports(c).empty() && SendCrashReports(c, 5) == 0,
-      "private co-op reports stay local on later single-player starts");
+  WriteFile(root / "user" / "crashes" / "crash-co-op-log.txt", "Version: 2.0.0-beta.7\nKK co-op: connected\n");
+  Check(PendingReports(c).size() == 1, "a report from a co-op session is sent like any other");
+  fs::remove(root / "user" / "crashes" / "crash-co-op-log.txt");
 
   // The summary: kept until the server takes it.
   sent.clear();

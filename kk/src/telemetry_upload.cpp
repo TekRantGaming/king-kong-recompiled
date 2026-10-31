@@ -137,8 +137,6 @@ std::vector<fs::path> PendingReports(const Context& c) {
       // Only this version's reports: the version is in the report's text.
       std::string head;
       if (!ReadFile(p, head, 64 * 1024)) continue;
-      if (head.find("Private session: local-only") != std::string::npos || head.find("KK co-op:") != std::string::npos)
-        continue;
       const size_t at = head.find(version_line);
       if (at == std::string::npos) continue;
       const size_t after = at + version_line.size();
@@ -159,8 +157,6 @@ int SendCrashReports(const Context& c, int max) {
     if (sent >= max) break;
     std::string text;
     if (!ReadFile(p, text, 4 * kMaxCrashText)) continue;
-    if (text.find("Private session: local-only") != std::string::npos || text.find("KK co-op:") != std::string::npos)
-      continue;
     const std::string name = p.filename().string();
     const std::string api = ReportApi(text);  // the crashed session's API, not this one's
     const std::vector<uint8_t> gz = CrashGzip(RedactForUpload(std::move(text), c.personal));

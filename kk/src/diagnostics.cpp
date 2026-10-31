@@ -106,8 +106,6 @@ bool Remember(std::deque<std::string>& lines, const std::string& redacted) {
 void Snapshot() { // g_mutex held
   std::ostringstream out;
   out << "King Kong PC port diagnostics\nVersion: " KK_VERSION "\n" << g_hardware << g_settings;
-  // Retained in local crash/hang snapshots, even after co-op logs fall out of the ring.
-  if (rex::cvar::GetFlagByName("kk_coop_enabled") == "true") out << "Private session: local-only\n";
   out << "Renderer selections from the log (last 8):\n";
   if (g_selections.empty()) out << "  None recorded\n";
   for (const auto& line : g_selections) out << "  " << line << '\n';

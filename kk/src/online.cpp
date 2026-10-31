@@ -77,7 +77,6 @@ std::string Quoted(const std::string& s) {
 }
 
 void CheckIn() {
-  if (REXCVAR_GET(kk_coop_enabled)) return;
   const std::string id = InstallId();
   if (id.empty()) return;
   bool playing;

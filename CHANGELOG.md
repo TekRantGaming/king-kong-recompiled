@@ -3,9 +3,10 @@
 Every release of the King Kong PC port, newest first. The launcher shows this on its About page, and a
 version's notes the first time you start it.
 
-## v2.0.1 (unreleased)
+## v2.0.1 (31 October 2026)
 
 ### Fixed
+- **Reports and player count**: crash reports, performance summaries, pipeline lists and the online player count were switched off by mistake in v2.0.0 and work again. They follow the Online player count setting, as before.
 - **Linux and SteamOS**: RenderDoc's "Capturing Vulkan" text no longer appears at the top of the screen on systems that have RenderDoc installed.
 
 ## v2.0.0 (30 October 2026)
