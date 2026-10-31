@@ -92,6 +92,10 @@ class D3D12Host final : public HostDevice {
     if (REXCVAR_GET(native_debug) & 524288) desc.maxTimerQueries = 2048;
     desc.errorCB = GetMessageCallback();
     desc.pDevice = provider_.GetDevice();
+#if defined(KK_DEV_TOOLS)
+    // KK_DEV_NO_ENHANCED_BARRIERS=1: the plain resource barriers Windows 10 and early Windows 11 get.
+    if (std::getenv("KK_DEV_NO_ENHANCED_BARRIERS")) desc.enableEnhancedBarriers = false;
+#endif
     checked_device_.store(provider_.GetDevice());
     SetGpuLossCheck(&D3D12Host::CheckDeviceOnError);
     desc.pGraphicsCommandQueue = provider_.GetDirectQueue();

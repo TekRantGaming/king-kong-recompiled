@@ -327,7 +327,15 @@ namespace nvrhi::d3d12
         }
 #endif
 
-        m_ActiveCommandList->commandList->Close();
+        // KK: a list with an invalid call fails here and removes the device when it is executed.
+        const HRESULT closeResult = m_ActiveCommandList->commandList->Close();
+        if (FAILED(closeResult))
+        {
+            char text[96];
+            snprintf(text, sizeof(text), "Command list '%s' failed to close, error code = 0x%08x",
+                m_Desc.queueType == CommandQueue::Graphics ? "graphics" : "other", unsigned(closeResult));
+            m_Context.error(text);
+        }
 
         clearStateCache();
 
