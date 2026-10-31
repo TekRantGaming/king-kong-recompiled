@@ -264,7 +264,7 @@ std::vector<UpscalerChoice> OfferedUpscalers() {
   constexpr bool windows = false;
 #endif
   for (int i : panel::OfferedUpscalers(s.size ? s.api : 0, s.size ? s.vendor : 0,
-                                     {c.state == 2, c.dlss, c.fsr4, c.fsr3, c.xess}, windows))
+                                     {c.state == 2, c.dlss, c.fsr4 && Fsr4AllowedOnThisGpu(), c.fsr3, c.xess}, windows))
     out.push_back(kUpscalers[i]);
   return out;
 }

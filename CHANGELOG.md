@@ -5,6 +5,9 @@ version's notes the first time you start it.
 
 ## v2.0.1 (31 October 2026)
 
+### Changed
+- **AMD FSR 4 is offered on Radeon RX 9000 cards only.** Other AMD cards use FSR 3.1, and a saved FSR 4 on those cards moves to FSR 3.1.
+
 ### Fixed
 - **Reports and player count**: crash reports, performance summaries, pipeline lists and the online player count were switched off by mistake in v2.0.0 and work again. They follow the Online player count setting, as before.
 - **Linux and SteamOS**: RenderDoc's "Capturing Vulkan" text no longer appears at the top of the screen on systems that have RenderDoc installed.

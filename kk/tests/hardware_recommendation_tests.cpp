@@ -226,6 +226,9 @@ int main() {
       Check(std::string(RecommendedUpscaler(vendor, s, dx)) == expected, "SDK feature fallback");
     }
   }
+  Check(Fsr4Card("AMD Radeon RX 9070 XT") && Fsr4Card("AMD  Radeon RX 9060 XT") && Fsr4Card("Radeon RX 9070"), "FSR 4 cards");
+  Check(!Fsr4Card("AMD Radeon RX 7800 XT") && !Fsr4Card("AMD Radeon R9 390") && !Fsr4Card("AMD Radeon Graphics") &&
+            !Fsr4Card("NVIDIA GeForce RTX 9070") && !Fsr4Card(""), "not FSR 4 cards");
   Check(std::string(RecommendedUpscaler(GpuVendor::kNvidia, {}, false)) == "dlss", "NVIDIA pending");
   Check(std::string(RecommendedUpscaler(GpuVendor::kAmd, {}, false)) == "fsr3", "AMD pending");
   Check(std::string(RecommendedUpscaler(GpuVendor::kIntel, {}, false)) == "xess", "Intel pending");

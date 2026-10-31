@@ -425,7 +425,7 @@ OfferedUpscalers OfferedTemporalUpscalers() {
   o.known = o.known || c.state == 0 || c.state == 3;
 #endif
   o.fsr3 = c.fsr3;
-  o.fsr4 = c.fsr4 && Fsr4AllowedOnThisGpu();  // task 368: AMD cards only
+  o.fsr4 = c.fsr4 && Fsr4AllowedOnThisGpu();  // Radeon RX 9000 cards only
   o.dlss = c.dlss;
   o.xess = c.xess;
   return o;
@@ -445,7 +445,7 @@ OfferedUpscalers OfferedWhilePlaying() {
 #endif
   o.known = true;
   for (int i : panel::OfferedUpscalers(s.size ? s.api : 0, s.size ? s.vendor : 0,
-                                       {c.state == 2, c.dlss, c.fsr4, c.fsr3, c.xess}, windows)) {
+                                       {c.state == 2, c.dlss, c.fsr4 && Fsr4AllowedOnThisGpu(), c.fsr3, c.xess}, windows)) {
     const std::string_view v = panel::kUpscalers[i].value;
     o.dlss = o.dlss || v == "dlss", o.fsr4 = o.fsr4 || v == "fsr4", o.fsr3 = o.fsr3 || v == "fsr3";
     o.xess = o.xess || v == "xess";

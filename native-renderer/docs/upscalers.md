@@ -61,7 +61,7 @@ instead of 1280x720 (+1.1 ms GPU on an RTX 4070 Ti, task 175).
 |---|---|---|---|
 | NVIDIA RTX (20 series and later) | DLSS | FSR 3.1, XeSS | FSR 4 |
 | NVIDIA GTX | FSR 3.1 | XeSS (where the driver has the shader features) | DLSS (NGX says no), FSR 4 |
-| AMD Radeon RX 9000 / RX 7000 on D3D12 | FSR 4 | FSR 3.1, XeSS | DLSS |
+| AMD Radeon RX 9000 on D3D12 (the game offers FSR 4 on these only) | FSR 4 | FSR 3.1, XeSS | DLSS |
 | AMD on Vulkan, older AMD | FSR 3.1 | XeSS | FSR 4 (AMD's FSR SDK 2.3 has no Vulkan; FSR 4.1 needs RDNA 3 or 4), DLSS |
 | Intel Arc | XeSS | FSR 3.1 | DLSS, FSR 4 |
 | Anything else | FSR 3.1 | XeSS where it runs | |

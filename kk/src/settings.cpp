@@ -625,12 +625,7 @@ bool IntelIntegratedGraphics() {
 #endif
 }
 
-bool Fsr4AllowedOnThisGpu() {
-  const GpuInfo& gpu = Gpu();
-  // An unknown card (no DXGI answer) is left to the renderer, which checks the device's own vendor.
-  if (!gpu.vendor_id && gpu.vendor == GpuVendor::kUnknown) return true;
-  return gpu.vendor_id ? gpu.vendor_id == 0x1002 : gpu.vendor == GpuVendor::kAmd;
-}
+bool Fsr4AllowedOnThisGpu() { return Fsr4Card(Gpu().name); }
 
 bool MigrateGraphicsApi() {
 #if defined(_WIN32)
@@ -795,7 +790,7 @@ std::string BestTemporalUpscaler() {
 #endif
   }
   auto has = [&](const char* v) { return ("," + offered + ",").find("," + std::string(v) + ",") != std::string::npos; };
-  return RecommendedUpscaler(gpu.vendor, {true, has("dlss"), has("fsr3"), has("fsr4"), has("xess")},
+  return RecommendedUpscaler(gpu.vendor, {true, has("dlss"), has("fsr3"), has("fsr4") && Fsr4AllowedOnThisGpu(), has("xess")},
                             rex::cvar::GetFlagByName("native_backend") == "d3d12");
 }
 
@@ -961,12 +956,14 @@ void ApplyFixedSettings() {
                 BestTemporalUpscaler(), SpatialDefault(),
                 REXCVAR_GET(kk_upscalers_offered).empty() ? "not asked yet" : REXCVAR_GET(kk_upscalers_offered));
   }
-  // Task 368 (owner, 23 Oct): FSR 4 only on AMD cards. A saved FSR 4 on another card goes back to the default
-  // upscaler for this card and tier (ApplyUpscalerDefaults), and is saved that way.
-  if (Flag("native_upscaler") && rex::cvar::GetFlagByName("native_upscaler") == "fsr4" && !Fsr4AllowedOnThisGpu()) {
+  // Owner, 31 Oct: FSR 4 only on Radeon RX 9000 cards. A saved FSR 4 on another card goes back to the default
+  // upscaler for this card and tier (ApplyUpscalerDefaults), and is saved that way. "auto" means FSR 4 first on
+  // any AMD card in the renderer.
+  if (const std::string saved = Flag("native_upscaler") ? rex::cvar::GetFlagByName("native_upscaler") : "";
+      (saved == "fsr4" || (saved == "auto" && Gpu().vendor == GpuVendor::kAmd)) && !Fsr4AllowedOnThisGpu()) {
     rex::cvar::ResetToDefault("native_upscaler");
-    REXLOG_INFO("KK: FSR 4 was chosen but runs on AMD graphics cards only: upscaler back to the default ({})",
-                rex::cvar::GetFlagByName("native_upscaler"));
+    REXLOG_INFO("KK: FSR 4 runs on Radeon RX 9000 cards only ({} here): upscaler back to the default ({})",
+                Gpu().name, rex::cvar::GetFlagByName("native_upscaler"));
   }
   // FXAA Extreme is no longer offered: a settings file that chose it gets FXAA.
   if (rex::cvar::GetFlagByName("swap_post_effect") == "fxaa_extreme")

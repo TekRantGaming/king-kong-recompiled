@@ -125,6 +125,17 @@ inline const char* RecommendedRenderQuality(const HardwareTier& tier, int width,
   if (pixels > uint64_t(2560) * 1440 && std::string_view(tier.id) != "high") return "performance";
   return tier.render_quality;
 }
+// Owner, 31 Oct: FSR 4 on Radeon RX 9000 cards only. AMD's library also offers it on RX 7000, whatever the driver,
+// and it was those cards' default.
+inline bool Fsr4Card(std::string_view gpu_name) {
+  for (size_t at = gpu_name.find("RX 9"); at != std::string_view::npos; at = gpu_name.find("RX 9", at + 1)) {
+    const auto digit = [&](size_t i) {
+      return i < gpu_name.size() && std::isdigit(static_cast<unsigned char>(gpu_name[i])) != 0;
+    };
+    if (digit(at + 4) && digit(at + 5) && !digit(at + 6)) return true;
+  }
+  return false;
+}
 struct UpscalerSupport {
   bool known = false, dlss = false, fsr3 = false, fsr4 = false, xess = false;
 };
