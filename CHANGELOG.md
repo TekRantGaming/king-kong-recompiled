@@ -3,7 +3,7 @@
 Every release of the King Kong PC port, newest first. The launcher shows this on its About page, and a
 version's notes the first time you start it.
 
-## v2.0.3 (unreleased)
+## v2.0.3 (31 October 2026)
 
 ### Fixed
 - **Crash as a level loads on Windows 10 and early Windows 11 with DirectX 12**: the game sent the graphics card a command these versions of Windows refuse, and the graphics device was lost. Fixed.

@@ -334,7 +334,7 @@ endif()
 # The port's version: shown in the launcher and compared with GitHub releases by the updater.
 # (-DKK_VERSION=x.y.z overrides it, to test the updater with an "older" build.)
 if(NOT DEFINED KK_VERSION)
-    set(KK_VERSION "2.0.2")
+    set(KK_VERSION "2.0.3")
 endif()
 # The update channel the build follows (update_channel.h): "stable" (only the stable repo, never the
 # beta channel) or "beta". Empty: from KK_VERSION ("-beta" in it: beta). The kk-stable preset sets
