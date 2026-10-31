@@ -115,6 +115,7 @@ class D3D12Host final : public HostDevice {
                                           : std::string("NVRHI's default"));
     }
     device_ = nvrhi::d3d12::createDevice(desc);
+    REXLOG_INFO("rexgpu-native: D3D12 barriers: {}", device_->queryFeatureSupport(nvrhi::Feature::EnhancedBarriers) ? "enhanced" : "plain (no enhanced barriers on this Windows)");
     // Task 304: the game renderer zeroes the subresources a guest texture upload leaves out.
     g_texture_memory_not_zeroed.store(desc.placedTextureHeapSize != 0, std::memory_order_relaxed);
     // Task 309: the game renderer suballocates guest vertex and index buffers (buffer_pool.h).
