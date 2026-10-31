@@ -3,7 +3,7 @@
 Every release of the King Kong PC port, newest first. The launcher shows this on its About page, and a
 version's notes the first time you start it.
 
-## v2.0.2 (unreleased)
+## v2.0.2 (31 October 2026)
 
 ### Fixed
 - **AMD FSR 4 on Radeon RX 9000 cards**: v2.0.1 hid it on these cards too by mistake. It is back on RX 9000 cards.
