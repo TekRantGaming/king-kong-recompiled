@@ -20,8 +20,6 @@
 * DEALINGS IN THE SOFTWARE.
 */
 
-#include <cstdio>
-#include <cstdlib>
 #include "d3d12-backend.h"
 
 #include <nvrhi/common/misc.h>
@@ -289,49 +287,6 @@ namespace nvrhi::d3d12
                 d3dbarrier.Type = D3D12_RESOURCE_BARRIER_TYPE_UAV;
                 d3dbarrier.UAV.pResource = buffer->resource;
                 m_D3DBarriers.push_back(d3dbarrier);
-            }
-        }
-
-        // TEMPORARY barrier check, not for release.
-        static const bool kkCheck = getenv("KK_DEV_CHECK_BARRIERS") != nullptr;
-        static int kkShown = 0;
-        if (kkCheck)
-        {
-            const UINT writes = D3D12_RESOURCE_STATE_RENDER_TARGET | D3D12_RESOURCE_STATE_UNORDERED_ACCESS | D3D12_RESOURCE_STATE_DEPTH_WRITE |
-                D3D12_RESOURCE_STATE_COPY_DEST | D3D12_RESOURCE_STATE_RESOLVE_DEST | D3D12_RESOURCE_STATE_STREAM_OUT;
-            for (const auto& b : m_D3DBarriers)
-            {
-                if (b.Type != D3D12_RESOURCE_BARRIER_TYPE_TRANSITION) continue;
-                const D3D12_RESOURCE_DESC d = b.Transition.pResource->GetDesc();
-                D3D12_HEAP_PROPERTIES hp{};
-                D3D12_HEAP_FLAGS hf{};
-                const bool heapKnown = SUCCEEDED(b.Transition.pResource->GetHeapProperties(&hp, &hf));
-                const char* why = nullptr;
-                for (UINT st : {UINT(b.Transition.StateBefore), UINT(b.Transition.StateAfter)})
-                {
-                    const UINT w = st & writes;
-                    if (w & (w - 1)) why = "two write states";
-                    else if (w && (st & ~writes)) why = "write mixed with read";
-                    else if ((st & D3D12_RESOURCE_STATE_RENDER_TARGET) && !(d.Flags & D3D12_RESOURCE_FLAG_ALLOW_RENDER_TARGET)) why = "RT without flag";
-                    else if ((st & D3D12_RESOURCE_STATE_UNORDERED_ACCESS) && !(d.Flags & D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS)) why = "UAV without flag";
-                    else if ((st & (D3D12_RESOURCE_STATE_DEPTH_WRITE | D3D12_RESOURCE_STATE_DEPTH_READ)) && !(d.Flags & D3D12_RESOURCE_FLAG_ALLOW_DEPTH_STENCIL)) why = "depth without flag";
-                    else if ((st & (D3D12_RESOURCE_STATE_DEPTH_WRITE | D3D12_RESOURCE_STATE_DEPTH_READ)) && (st & ~(UINT(D3D12_RESOURCE_STATE_DEPTH_WRITE) | D3D12_RESOURCE_STATE_DEPTH_READ | D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE | D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE | D3D12_RESOURCE_STATE_COPY_SOURCE))) why = "depth mixed";
-                    else if ((st & D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE) && (d.Flags & D3D12_RESOURCE_FLAG_DENY_SHADER_RESOURCE)) why = "SRV denied";
-                    if (heapKnown && hp.Type == D3D12_HEAP_TYPE_UPLOAD) why = "barrier on upload heap";
-                    if (heapKnown && hp.Type == D3D12_HEAP_TYPE_READBACK) why = "barrier on readback heap";
-                }
-                const UINT subs = d.Dimension == D3D12_RESOURCE_DIMENSION_BUFFER ? 1 : UINT(d.MipLevels) * (d.Dimension == D3D12_RESOURCE_DIMENSION_TEXTURE3D ? 1 : d.DepthOrArraySize);
-                if (b.Transition.Subresource != D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES && b.Transition.Subresource >= subs) why = "subresource out of range";
-                if (b.Transition.StateBefore == b.Transition.StateAfter) why = "same state";
-                if (why && kkShown < 12)
-                {
-                    ++kkShown;
-                    char text[220];
-                    snprintf(text, sizeof(text), "BARRIER CHECK: %s: before 0x%x after 0x%x dim %d fmt %d %llux%u mips %u array %u flags 0x%x sub %u of %u heap %d",
-                        why, UINT(b.Transition.StateBefore), UINT(b.Transition.StateAfter), int(d.Dimension), int(d.Format),
-                        (unsigned long long)d.Width, d.Height, d.MipLevels, d.DepthOrArraySize, UINT(d.Flags), b.Transition.Subresource, subs, heapKnown ? int(hp.Type) : -1);
-                    m_Context.error(text);
-                }
             }
         }
 
