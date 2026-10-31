@@ -91,6 +91,9 @@ namespace nvrhi
             : m_MessageCallback(messageCallback)
         { }
 
+        // KK: D3D12 without enhanced barriers (state-tracking.cpp).
+        void setSeparateWriteBarriers(bool separate) { m_SeparateWriteBarriers = separate; }
+
         // ICommandList-like interface
 
         void setEnableUavBarriersForTexture(TextureStateExtension* texture, bool enableBarriers);
@@ -120,6 +123,7 @@ namespace nvrhi
 
     private:
         IMessageCallback* m_MessageCallback;
+        bool m_SeparateWriteBarriers = false;
 
         std::unordered_map<TextureStateExtension*, std::unique_ptr<TextureState>> m_TextureStates;
         std::unordered_map<BufferStateExtension*, std::unique_ptr<BufferState>> m_BufferStates;

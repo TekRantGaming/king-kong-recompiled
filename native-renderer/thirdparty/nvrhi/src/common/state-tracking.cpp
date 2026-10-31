@@ -305,6 +305,26 @@ namespace nvrhi
             // See if this buffer is already used for a different purpose in this batch.
             // If it is, combine the state bits.
             // Example: same buffer used as index and vertex buffer, or as SRV and indirect arguments.
+            if (m_SeparateWriteBarriers)
+            {
+                // KK: plain D3D12 barriers refuse a state that writes and reads at once (a pooled buffer read, then
+                // written again in the same batch): the command list then fails to close and the device is removed.
+                // A write gets a barrier of its own after the last one of this buffer; barriers run in order.
+                const ResourceStates writes = ResourceStates::UnorderedAccess | ResourceStates::RenderTarget |
+                    ResourceStates::DepthWrite | ResourceStates::StreamOut | ResourceStates::CopyDest |
+                    ResourceStates::ResolveDest | ResourceStates::AccelStructWrite;
+                for (auto barrier = m_BufferBarriers.rbegin(); barrier != m_BufferBarriers.rend(); ++barrier)
+                {
+                    if (barrier->buffer != buffer)
+                        continue;
+                    if (((barrier->stateAfter | state) & writes) != 0)
+                        break;
+                    barrier->stateAfter = ResourceStates(barrier->stateAfter | state);
+                    tracking->state = barrier->stateAfter;
+                    return;
+                }
+            }
+            else
             for (BufferBarrier& barrier : m_BufferBarriers)
             {
                 if (barrier.buffer == buffer)

@@ -39,6 +39,7 @@ namespace nvrhi::d3d12
         , m_StateTracker(context.messageCallback)
         , m_Desc(params)
     {
+        m_StateTracker.setSeparateWriteBarriers(!device->GetEnhancedBarriersSupported());
 #if NVRHI_WITH_AFTERMATH
         if (m_Device->isAftermathEnabled())
             m_Device->getAftermathCrashDumpHelper().registerAftermathMarkerTracker(&m_AftermathTracker);
