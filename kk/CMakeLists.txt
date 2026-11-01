@@ -339,6 +339,15 @@ endif()
 if(NOT DEFINED KK_VERSION)
     set(KK_VERSION "2.0.8")
 endif()
+if(WIN32)
+    # The name, publisher and version in the exe's file details (a beta's "-beta.n" stays in the text fields only).
+    string(REGEX MATCH "^([0-9]+)\\.([0-9]+)\\.([0-9]+)" KK_VERSION_NUMBERS "${KK_VERSION}")
+    set(KK_VERSION_MAJOR ${CMAKE_MATCH_1})
+    set(KK_VERSION_MINOR ${CMAKE_MATCH_2})
+    set(KK_VERSION_PATCH ${CMAKE_MATCH_3})
+    configure_file(src/king_kong_version.rc.in "${CMAKE_CURRENT_BINARY_DIR}/king_kong_version.rc" @ONLY)
+    target_sources(king_kong PRIVATE "${CMAKE_CURRENT_BINARY_DIR}/king_kong_version.rc")
+endif()
 # The update channel the build follows (update_channel.h): "stable" (only the stable repo, never the
 # beta channel) or "beta". Empty: from KK_VERSION ("-beta" in it: beta). The kk-stable preset sets
 # stable together with the stable version number; a stable build with a beta version is refused.

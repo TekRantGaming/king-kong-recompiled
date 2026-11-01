@@ -1,0 +1,30 @@
+// The details Windows shows in the file's Properties and Task Manager, and antivirus scanners read. Filled in by CMake
+// from KK_VERSION. Numbers instead of the winver.h names, so this file needs no include path.
+1 VERSIONINFO
+FILEVERSION @KK_VERSION_MAJOR@,@KK_VERSION_MINOR@,@KK_VERSION_PATCH@,0
+PRODUCTVERSION @KK_VERSION_MAJOR@,@KK_VERSION_MINOR@,@KK_VERSION_PATCH@,0
+FILEFLAGSMASK 0x3FL
+FILEFLAGS 0x0L
+FILEOS 0x40004L
+FILETYPE 0x1L
+FILESUBTYPE 0x0L
+BEGIN
+  BLOCK "StringFileInfo"
+  BEGIN
+    BLOCK "040904B0"
+    BEGIN
+      VALUE "CompanyName", "TekRantGaming"
+      VALUE "FileDescription", "King Kong Recompiled"
+      VALUE "FileVersion", "@KK_VERSION@"
+      VALUE "InternalName", "king_kong"
+      VALUE "LegalCopyright", "Copyright (c) 2026 TekRantGaming and contributors"
+      VALUE "OriginalFilename", "king_kong.exe"
+      VALUE "ProductName", "King Kong Recompiled"
+      VALUE "ProductVersion", "@KK_VERSION@"
+    END
+  END
+  BLOCK "VarFileInfo"
+  BEGIN
+    VALUE "Translation", 0x409, 1200
+  END
+END
