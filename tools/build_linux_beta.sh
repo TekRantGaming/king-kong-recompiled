@@ -29,12 +29,12 @@ REPO="$(cd "$(dirname "$0")/.." && pwd)"
 BASE="${KK_LINUX_ROOT:-$HOME/kk-linux-beta}"
 F=/mnt/f/KK-native-renderer
 SDK_FROM="${REXGLUE_SDK_SRC:-$BASE/sdk-base-038}"  # made by tools/make_linux_sdk_base.sh
-SDK_CHECK="${REXGLUE_SDK_CHECK:-$F/sdk-src-real-hdr-317}"
+SDK_CHECK="${REXGLUE_SDK_CHECK:-$F/sdk-src-mouse-047}"
 DXC_FROM="${KK_DXC_FROM:-$F/downloads/dxc-linux-v1.9.2609/x}"
 JOBS="${KK_JOBS:-$(( $(nproc) > 2 ? $(nproc) - 2 : 1 ))}"
 # The game build (a developer build, KK_DEV_TOOLS=ON, gets its own, so the two never rebuild each other).
 WORKDIR="${KK_BUILD_DIR:-$BASE/work$([ "${KK_DEV_TOOLS:-OFF}" != ON ] || echo -dev)}"
-PATCHES="0039 0040 0041 0043 0044 0045 0046 0047 0048 0049 0050"
+PATCHES="0039 0040 0041 0043 0044 0045 0046 0047 0048 0049 0050 0051"
 # Linux only fixes the Windows SDK source does not have (its files are left out of the step 2 comparison):
 # 0046 joins a finished thread once (threading_posix.cpp; the benchmark start hung); 0048 takes a fullscreen
 # mode by its pixel size (window_sdl.cpp; KDE Wayland at 150% gave 864x486 for 1280x720); 0049 checks a commit's
@@ -89,7 +89,7 @@ fi
 if [ -d "$SDK_CHECK/src" ]; then
   : > "$BASE/linux-only-files.txt"
   for n in $LINUX_ONLY; do
-    tr -d '\r' < "$(ls "$REPO/native-renderer/sdk-patches/$n"-*.patch)" | sed -n 's|^+++ b/||p' >> "$BASE/linux-only-files.txt"
+    tr -d '\r' < "$(ls "$REPO/native-renderer/sdk-patches/$n"-*.patch)" | sed -n 's|^+++ b/||p' | cut -f1 >> "$BASE/linux-only-files.txt"
   done
   # Every file of the Windows SDK's source (its include/ and src/) must be the same here (line ends aside).
   diffs=0

@@ -12,6 +12,12 @@
 // CM_Cam only makes those calls for an axis whose stick is past its deadzone,
 // so while the mouse moves, its stick read is nudged just past it; the small
 // turn the game works out from that is replaced by the mouse's.
+//
+// The movement comes from SDL as it is sent (on Windows on SDL's raw input
+// thread), not from the window's events. The window thread also paints, so it
+// passed the movement on in bursts: with an even frame rate, one frame in twenty
+// got none and the next got two frames' worth, while the camera has no smoothing
+// to hide that. A stick is read on the game thread and never showed it (issue 47).
 
 #include "mouse_look.h"
 #include "benchmark.h"
@@ -25,12 +31,26 @@
 #include <cstdlib>
 #include <cstring>
 #include <mutex>
+#include <thread>
 #include <utility>
 
+#if defined(KK_DEV_TOOLS) && defined(_WIN32)
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN
+#endif
+#include <windows.h>
+#endif
+
 #include <rex/cvar.h>
+#include <rex/logging.h>
 #include <rex/ui/ui_event.h>
 #include <rex/ui/window.h>
 #include <rex/ui/window_listener.h>
+#include <rex/ui/window_sdl.h>
+#include <rex/ui/windowed_app_context_sdl.h>
 
 #include "settings.h"
 
@@ -46,6 +66,7 @@ constexpr float kNudge = kCamDeadzone + 0.02f;
 constexpr double kRadiansPerCount = 0.066 * 3.14159265358979 / 180.0;
 
 rex::ui::Window* g_window = nullptr;
+rex::ui::WindowSDL* g_sdl_window = nullptr;
 std::atomic<bool> g_on{false};  // Keyboard & mouse with the mouse camera, as of the last frame
 
 std::mutex g_mutex;
@@ -60,18 +81,30 @@ bool g_nudged_x = false, g_nudged_y = false;
 int g_yaw_sign = 0, g_pitch_sign = 0;
 Clock::time_point g_last_read{};
 
-class Listener : public rex::ui::WindowInputListener {
+void OnMouseMotion(float dx, float dy) {
+  // The movement is only reported while the pointer is locked (mouse look).
+  if (!g_on.load(std::memory_order_relaxed) || (dx == 0.0f && dy == 0.0f)) return;
+#if defined(KK_DEV_TOOLS)
+  if (static std::atomic<bool> logged{false}; !logged.exchange(true)) REXLOG_INFO("KK mouse: the first movement came on this thread");
+#endif
+  std::lock_guard lock(g_mutex);
+  g_dx += dx;
+  g_dy += dy;
+  g_tutorial_dy += dy;
+}
+
+#if defined(KK_DEV_TOOLS)
+// The window's events, the old way in: the log compares them with OnMouseMotion's (DevCompare).
+double g_dev_window_dx = 0;
+class DevListener : public rex::ui::WindowInputListener {
  public:
   void OnMouseMove(rex::ui::MouseEvent& e) override {
-    // The movement is only reported while the pointer is locked (mouse look).
-    if (!g_on.load(std::memory_order_relaxed) || (e.dx() == 0.0f && e.dy() == 0.0f)) return;
     std::lock_guard lock(g_mutex);
-    g_dx += e.dx();
-    g_dy += e.dy();
-    g_tutorial_dy += e.dy();
+    g_dev_window_dx += e.dx();
   }
 };
-Listener g_listener;
+DevListener g_dev_listener;
+#endif
 
 bool MouseCamera() {
   if (kk::freecam::Active()) return false;
@@ -94,6 +127,8 @@ double Density() {
   return d > 0.25 ? d : 1.0;
 }
 
+double PixelDensity() { return g_sdl_window ? g_sdl_window->GetPixelDensity() : 1.0; }
+
 #if defined(KK_DEV_TOOLS)
 // Developer test aid: KK_DEV_MOUSE="<counts/s across>,<counts/s down>" moves
 // the mouse that fast whenever the mouse camera is on.
@@ -113,6 +148,46 @@ void AddDevMouse(double seconds) {
   g_dx += speed.first * seconds * Density();
   g_dy += speed.second * seconds * Density();
 }
+
+#if defined(_WIN32)
+// Developer test aid: KK_DEV_MOUSE_EVENTS=1 posts a mouse move to the window
+// about every millisecond while the mouse camera is on, so a background window
+// gets movement. It comes through the window thread, as the old way in did.
+void StartDevEvents() {
+  if (!std::getenv("KK_DEV_MOUSE_EVENTS")) return;
+  std::thread([] {
+    const HWND window = HWND(g_window->GetNativeWindowHandle());
+    for (int x = 0;; x = (x + 1) % 2) {
+      Sleep(1);
+      if (g_on.load(std::memory_order_relaxed)) PostMessageW(window, WM_MOUSEMOVE, 0, MAKELPARAM(100 + x, 100));
+    }
+  }).detach();
+}
+#endif
+
+// Every 600 frames with mouse movement the log says how many frames the window's
+// events gave none or over one and a half times what OnMouseMotion gave, and how
+// many OnMouseMotion gave none, for comparing the two with a real mouse, and how
+// many frames' turns CM_Cam never took (a cutscene, or the camera not reading them).
+void DevCompare(double motion_dx) {
+  double window_dx;
+  {
+    std::lock_guard lock(g_mutex);
+    window_dx = g_dev_window_dx;
+    g_dev_window_dx = 0;
+  }
+  static int frames = 0, window_none = 0, window_high = 0, motion_none = 0, not_taken = 0;
+  if (motion_dx == 0 && window_dx == 0) return;
+  if (g_yaw != 0) ++not_taken;
+  if (motion_dx == 0) ++motion_none;
+  if (window_dx == 0) ++window_none;
+  else if (std::fabs(window_dx) > std::fabs(motion_dx) * 1.5) ++window_high;
+  if (++frames == 600) {
+    REXLOG_INFO("KK mouse compare: 600 frames: window events none {} too many {}; direct none {}; turns not taken {}",
+                window_none, window_high, motion_none, not_taken);
+    frames = window_none = window_high = motion_none = not_taken = 0;
+  }
+}
 #endif
 
 }  // namespace
@@ -120,7 +195,14 @@ void AddDevMouse(double seconds) {
 void Install(rex::ui::Window* window) {
   if (!window || g_window) return;
   g_window = window;
-  window->AddInputListener(&g_listener, 1000);  // ahead of the runtime's, which still gets every event
+  g_sdl_window = dynamic_cast<rex::ui::WindowSDL*>(window);
+  rex::ui::SDLWindowedAppContext::SetMouseMotionWatch(OnMouseMotion);
+#if defined(KK_DEV_TOOLS)
+  window->AddInputListener(&g_dev_listener, 1000);
+#if defined(_WIN32)
+  StartDevEvents();
+#endif
+#endif
 }
 
 void OnCameraStick(float& x, float& y) {
@@ -139,13 +221,17 @@ void OnCameraStick(float& x, float& y) {
     dy = g_dy;
     g_dx = g_dy = 0;
   }
+#if defined(KK_DEV_TOOLS)
+  if (on) DevCompare(dx);
+#endif
   g_yaw = g_pitch = 0;
   g_nudged_x = g_nudged_y = false;
   // Movement that piled up while the camera wasn't reading (a cutscene, a
   // menu, Kong's chapters) is dropped rather than turned all at once.
   if (!on || since > 0.25) return;
 
-  const double scale = kRadiansPerCount * std::clamp(REXCVAR_GET(kk_mouse_sensitivity), 0.05, 10.0) / Density();
+  const double scale =
+      kRadiansPerCount * std::clamp(REXCVAR_GET(kk_mouse_sensitivity), 0.05, 10.0) * PixelDensity() / Density();
   g_yaw = dx * scale;
   g_pitch = -dy * scale * (REXCVAR_GET(kk_mouse_invert_y) ? -1.0 : 1.0);
   if (g_yaw != 0 && std::fabs(x) <= kCamDeadzone) {

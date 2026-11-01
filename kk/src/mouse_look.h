@@ -8,7 +8,7 @@ class Window;
 
 namespace kk::mouse_look {
 
-// Listens to the window's mouse movement (call once the window exists).
+// Listens to the mouse's movement (call once the window exists).
 void Install(rex::ui::Window* window);
 
 // CM_Cam's right-stick read, x and y in -1..1 (game thread): takes the mouse

@@ -1,0 +1,78 @@
+--- a/include/rex/ui/window_sdl.h
++++ b/include/rex/ui/window_sdl.h
+@@ -32,6 +32,10 @@
+   ~WindowSDL() override;
+ 
+   void* GetNativeWindowHandle() const override;
++  // Ratio between SDL window coordinates and the physical pixels listeners
++  // expect. Never zero.
++  float GetPixelDensity() const;
++
+   SDL_Window* sdl_window() const { return sdl_window_; }  // null while the window is closed
+   bool SetRelativeMouseMode(bool enable) override;
+   bool WarpMouseToCenter(int32_t& x_out, int32_t& y_out) override;
+@@ -76,10 +80,6 @@
+   void ApplyTextInputActiveNow();
+   void RearmCursorAutoHideTimer();
+ 
+-  // Ratio between SDL window coordinates and the physical pixels listeners
+-  // expect. Never zero.
+-  float GetPixelDensity() const;
+-
+   SDL_Window* sdl_window_ = nullptr;
+   SDL_WindowID sdl_window_id_ = 0;
+   std::atomic<bool> paint_pending_{false};
+--- a/include/rex/ui/windowed_app_context_sdl.h
++++ b/include/rex/ui/windowed_app_context_sdl.h
+@@ -40,6 +40,13 @@
+   // (user.windowID identifies the target).
+   uint32_t paint_event_type() const { return paint_event_type_; }
+ 
++  // Called with each mouse movement (SDL window coordinates) on the thread that
++  // sends it, ahead of the UI loop: on Windows that is SDL's raw input thread
++  // while the pointer is locked. A game reading the mouse every frame then does
++  // not depend on when the UI thread, which also paints, reads its events.
++  using MouseMotionWatch = void (*)(float dx, float dy);
++  static void SetMouseMotionWatch(MouseMotionWatch watch);
++
+   // Window registry for event routing. UI thread only.
+   void RegisterWindow(SDL_WindowID id, WindowSDL* window) { windows_.emplace(id, window); }
+   void UnregisterWindow(SDL_WindowID id) { windows_.erase(id); }
+--- a/src/ui/windowed_app_context_sdl.cpp
++++ b/src/ui/windowed_app_context_sdl.cpp
+@@ -11,6 +11,7 @@
+ 
+ #include <rex/ui/windowed_app_context_sdl.h>
+ 
++#include <atomic>
+ #include <cstdlib>
+ #include <string>
+ #include <vector>
+@@ -24,6 +25,14 @@
+ #include <rex/ui/window_sdl.h>
+ 
+ namespace rex::ui {
++
++namespace {
++std::atomic<SDLWindowedAppContext::MouseMotionWatch> g_mouse_motion_watch{nullptr};
++}  // namespace
++
++void SDLWindowedAppContext::SetMouseMotionWatch(MouseMotionWatch watch) {
++  g_mouse_motion_watch.store(watch, std::memory_order_release);
++}
+ 
+ SDLWindowedAppContext::~SDLWindowedAppContext() {
+   if (event_watch_registered_) {
+@@ -181,6 +190,12 @@
+ }
+ 
+ bool SDLCALL SDLWindowedAppContext::WatchEvent(void* userdata, SDL_Event* event) {
++  if (event->type == SDL_EVENT_MOUSE_MOTION) {
++    if (MouseMotionWatch watch = g_mouse_motion_watch.load(std::memory_order_acquire)) {
++      watch(event->motion.xrel, event->motion.yrel);
++    }
++    return true;
++  }
+   auto* context = static_cast<SDLWindowedAppContext*>(userdata);
+   if (event->type == SDL_EVENT_QUIT && SDL_IsMainThread() && context->IsInUIThread()) {
+     // Cocoa stops making Metal drawables available as part of its termination
