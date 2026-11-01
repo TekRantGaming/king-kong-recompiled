@@ -3,6 +3,14 @@
 Every release of the King Kong PC port, newest first. The launcher shows this on its About page, and a
 version's notes the first time you start it.
 
+## v2.0.6 (1 November 2026)
+
+### Added
+- **Damn it, I paid for the full CPU**: a new setting in Graphics > Advanced that removes the CPU limit while shaders are prepared. They finish faster, but your PC may slow down, and it may cause a crash.
+
+### Fixed
+- **Crashes while shaders are prepared**: preparing shaders now uses at most 16 CPU threads. If it ends unexpectedly, the next try uses fewer, so it can finish on a PC that struggles under the full load. All threads come back as soon as the shaders are done.
+
 ## v2.0.5 (1 November 2026)
 
 ### Fixed
