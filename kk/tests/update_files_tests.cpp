@@ -151,6 +151,13 @@ void InstallTests(const fs::path& dir) {
   Check(Get(dst / "player.txt") == "mine" && Get(dst / "game/default.xex") == "game", "install: others untouched");
   Check(!fs::exists(dst / "king_kong.exe.old") && !fs::exists(dst / "king_kong.exe.new"), "install: no leftovers");
 
+  // A file that cannot be written: the failure says which file and Windows' reason (issue 50, Boogie_90's update).
+  fs::create_directories(dst / "king_kong.exe.new" / "in_the_way");
+  r = InstallFiles(src, dst, {"king_kong.exe"});
+  Check(r.outcome == Outcome::kWrite && r.path == "king_kong.exe", "install: a write failure is reported");
+  Check(!r.error.empty(), "install: a write failure says why");
+  fs::remove_all(dst / "king_kong.exe.new");
+
   // A file the update lacks: nothing changes, no .new files, no new folders.
   Put(dst / "king_kong.exe", "old exe");
   r = InstallFiles(src, dst, {"king_kong.exe", "brandnew/x.txt", "missing.dll"});

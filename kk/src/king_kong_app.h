@@ -531,6 +531,10 @@ class KingKongApp : public rex::ReXApp {
     kk::ApplyRuntimeOverrides();
     kk::benchmark::InstallPresentObserver();
 #if defined(KK_DEV_TOOLS)
+    if (const char* c = std::getenv("KK_DEV_CRASH_START"); c && *c == '1') {  // the game's code dies before its first frame
+      volatile int* p = nullptr;
+      *p = 1;
+    }
     StartDevFocusCycle();  // task 372
 #endif
     UseOneControllerSlot();
