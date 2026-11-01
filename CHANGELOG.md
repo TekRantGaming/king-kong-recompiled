@@ -3,7 +3,10 @@
 Every release of the King Kong PC port, newest first. The launcher shows this on its About page, and a
 version's notes the first time you start it.
 
-## v2.0.4 (unreleased)
+## v2.0.4 (1 November 2026)
+
+### Changed
+- **More graphics pipelines prepared before you play**: 810 more from player uploads, 17,652 in all, so fewer stutters in new places.
 
 ### Fixed
 - **Crash while installing the game**: a disc image with unusual file names ended the program. These names now install normally.
