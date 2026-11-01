@@ -319,10 +319,12 @@ std::filesystem::path BrowseForDiscImage() {
 }
 #endif
 
-// The languages the game has (user_language, Xbox 360 language numbers), in
-// their own names. The launcher's text follows the same setting.
+// The languages the game has (user_language: Xbox 360 language numbers, or 100 + the game's own number for those
+// a console has no number for, language.cpp), in their own names. The launcher's text follows the same setting,
+// in English for the last five.
 constexpr std::pair<int, const char*> kLanguages[] = {
-    {1, "English"}, {3, "Deutsch"}, {5, "Espa\xC3\xB1ol"}, {4, "Fran\xC3\xA7" "ais"}, {6, "Italiano"}};
+    {1, "English"}, {3, "Deutsch"}, {5, "Espa\xC3\xB1ol"}, {4, "Fran\xC3\xA7" "ais"}, {6, "Italiano"},
+    {102, "Dansk"}, {103, "Nederlands"}, {120, "Norsk"}, {104, "Suomi"}, {109, "Svenska"}};
 
 // Settings that the presenter/window read before the launcher runs; changing
 // them needs a relaunch to take effect.
@@ -2235,7 +2237,12 @@ class SettingsPages {
                                 {"Deutsch", "3"},
                                 {"Español", "5"},
                                 {"Franç" "ais", "4"},
-                                {"Italiano", "6"}}));
+                                {"Italiano", "6"},
+                                {"Dansk", "102"},
+                                {"Nederlands", "103"},
+                                {"Norsk", "120"},
+                                {"Suomi", "104"},
+                                {"Svenska", "109"}}));
     items.push_back(Section("HUD"));
     {
       const auto profile = ShownProfileOptions();

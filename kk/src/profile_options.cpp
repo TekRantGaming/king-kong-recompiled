@@ -45,8 +45,9 @@ std::array<bool, save_file::kOptionCount> g_dirty{};
 ProfileOptions Decode(const uint8_t* bytes, const uint32_t* fields, bool percent) {
   ProfileOptions out;
   const auto language = rex::cvar::GetFlagByName("user_language");
-  // The game's language mapping: German, Spanish and Italian use subtitled speech.
-  out.subtitle_default = language == "3" || language == "5" || language == "6";
+  // The game's language mapping: German, Spanish and Italian use subtitled speech, as do the languages with English
+  // voices only (user_language 100 and up, language.cpp).
+  out.subtitle_default = language == "3" || language == "5" || language == "6" || language.size() >= 3;
   float* volumes[] = {&out.master, &out.voices, &out.music, &out.effects};
   for (int i = 0; i < 4; ++i) {
     const float v = std::bit_cast<float>(ReadWord(bytes + fields[i]));
