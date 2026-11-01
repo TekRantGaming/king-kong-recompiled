@@ -3,6 +3,11 @@
 Every release of the King Kong PC port, newest first. The launcher shows this on its About page, and a
 version's notes the first time you start it.
 
+## v2.0.5 (1 November 2026)
+
+### Fixed
+- **Choppy mouse camera**: turning the camera with the mouse could look like 30 FPS even at a high, steady frame rate, because some frames got no mouse movement and the next got double. Mouse movement now reaches the camera directly, every frame.
+
 ## v2.0.4 (1 November 2026)
 
 ### Changed
