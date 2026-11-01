@@ -24,6 +24,7 @@ REXCVAR_DECLARE(bool, kk_coop_auto_repair);
 REXCVAR_DECLARE(bool, kk_skip_launcher);
 REXCVAR_DECLARE(std::string, kk_start);
 REXCVAR_DECLARE(int32_t, kk_frame_rate);
+REXCVAR_DECLARE(bool, kk_shader_full_cpu);
 REXCVAR_DECLARE(int32_t, kk_cpu_priority);  // task 295
 REXCVAR_DECLARE(std::string, kk_render_quality);
 REXCVAR_DECLARE(std::string, kk_button_prompts);

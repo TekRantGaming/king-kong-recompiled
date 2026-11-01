@@ -4,6 +4,16 @@
 constexpr Entry kEntries[] = {
 #include "launcher_social_text_table.inc"
     // Task 332: the first-time setup (Skip all, the Workshop page, the button prompts line) and the startup movies.
+    {"Damn it, I paid for the full CPU",
+     "Verdammt, ich habe für die ganze CPU bezahlt",
+     "Maldita sea, he pagado por toda la CPU",
+     "Bon sang, j'ai payé pour tout le processeur",
+     "Accidenti, ho pagato per tutta la CPU"},
+    {"Removes the CPU limit while shaders are prepared. They finish faster, but your PC may slow down until they are done. The limit is there for a reason: turning this on may cause a crash.",
+     "Entfernt das CPU Limit, während die Shader vorbereitet werden. Sie sind schneller fertig, aber dein PC kann bis dahin langsamer werden. Das Limit gibt es aus gutem Grund: Wenn du dies einschaltest, kann es zu einem Absturz kommen.",
+     "Quita el límite de CPU mientras se preparan los shaders. Terminan antes, pero tu PC puede ir más lento hasta entonces. El límite existe por una razón: activar esto puede provocar un fallo.",
+     "Retire la limite du processeur pendant la préparation des shaders. Ils sont prêts plus vite, mais votre PC peut ralentir d'ici là. La limite a une raison d'être : activer cette option peut provoquer un plantage.",
+     "Rimuove il limite della CPU mentre gli shader vengono preparati. Finiscono prima, ma il PC può rallentare fino ad allora. Il limite esiste per un motivo: attivare questa opzione può causare un arresto anomalo."},
     {"Skip all",
      "Alles überspringen",
      "Saltar todo",

@@ -34,7 +34,8 @@ inline bool Resets(std::string_view name, std::string_view category) {
       // and paper white are not used once HDR brightness is back on Auto, and are then not saved.)
       // Graphics (the graphics API comes back to DirectX 12 on Windows, Vulkan on Linux)
       "kk_original_look", "kk_modern_settings", "kk_graphics_preset", "native_backend", "swap_post_effect",
-      "anisotropic_override", "present_effect", "kk_render_quality", "resolution_scale", "draw_resolution_scale_x",
+      "anisotropic_override", "kk_shader_full_cpu", "present_effect", "kk_render_quality", "resolution_scale",
+      "draw_resolution_scale_x",
       "draw_resolution_scale_y", "native_upscaler", "native_upscaler_quality", "kk_big_blur", "kk_fog", "ao_mode",
       "ao_strength", "native_ao_method", "native_ao_apply", "native_ao_quality", "native_ao_samples",
       "native_ao_normal_smoothing", "native_gi", "native_gi_distance", "native_shadow_quality",

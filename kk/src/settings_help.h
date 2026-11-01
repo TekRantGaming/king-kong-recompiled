@@ -230,6 +230,7 @@ inline constexpr Help kHelp[] = {
      {{"Original", "The game's own sizes. Blockier glows on big screens."},
       {"Output", "Matched to your resolution."}}},
     {"Rebuild shaders", C::kUnset, C::kUnset, A::kNone, nullptr, {}},
+    {"Damn it, I paid for the full CPU", C::kUnset, C::kUnset, A::kNone, nullptr, {}},
 
     // ------------------------------------------------------------------ Audio ---
     {"Master volume", C::kNone, C::kUnset, A::kAtOnce, nullptr, {}},

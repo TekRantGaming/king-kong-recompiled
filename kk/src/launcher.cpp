@@ -2627,6 +2627,7 @@ class SettingsPages {
                                "keeps shaders that are already prepared. It can help after a graphics driver update, "
                                "or if the game shows graphics problems.",
                                "", rebuild_shaders_));
+    items.push_back(CvarToggle("Damn it, I paid for the full CPU", "Removes the CPU limit while shaders are prepared. They finish faster, but your PC may slow down until they are done. The limit is there for a reason: turning this on may cause a crash.", "kk_shader_full_cpu"));
   }
 
   // A built page against settings_layout.h (`layout_page`: its settings_layout::Page).
@@ -6327,7 +6328,7 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
                 "kk_performance_metrics"};
       case kGraphics:
         return {"kk_original_look", "kk_modern_settings", "kk_graphics_preset", "native_backend", "kk_renderer",
-                "swap_post_effect", "anisotropic_override",
+                "swap_post_effect", "anisotropic_override", "kk_shader_full_cpu",
                 "native_texture_pack", "native_texture_pack_folder",
                 "present_effect", "kk_render_quality", "resolution_scale", "draw_resolution_scale_x",
                 "draw_resolution_scale_y", "native_upscaler", "native_upscaler_quality",

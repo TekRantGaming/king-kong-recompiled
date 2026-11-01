@@ -310,6 +310,7 @@ Everything is set up before the game starts, with a controller, the keyboard or 
 - **Ambient occlusion** at Light, Medium or Strong
 - **Global illumination**, **Shadows**, **Water reflections** and **Light shafts**
 - **Horizontal flip**, **Effect resolution** and **Rebuild shaders**
+- **Damn it, I paid for the full CPU**, which removes the CPU limit while shaders are prepared
 
 </td>
 </tr>

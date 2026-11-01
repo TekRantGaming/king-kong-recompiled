@@ -16,6 +16,11 @@
 
 namespace kk {
 
+// Gives the process all its CPUs back from a shader job's limit, its own or one it inherited (a restart in the
+// middle of a job). The game must never run limited, so besides the job's end every start and every start of the
+// game call this. Nothing happens when no limit is on.
+void LiftShaderCpuLimit();
+
 class NativeShaderPack {
  public:
   NativeShaderPack();

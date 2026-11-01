@@ -4,6 +4,8 @@
 #include <rex/filesystem.h>
 #include <rex/logging.h>
 
+#include <fmt/format.h>
+
 #if defined(_WIN32)
 #ifndef WIN32_LEAN_AND_MEAN
 #define WIN32_LEAN_AND_MEAN
@@ -18,9 +20,13 @@
 #include "../../native-renderer/plugin/native_shader_pack_api.h"
 
 #include "launcher_text.h"
+#include "settings.h"
 #include "shader_progress.h"
+#include "startup_recovery.h"
 
 #include <algorithm>
+#include <cstdlib>
+#include <string>
 #include <thread>
 
 namespace kk {
@@ -71,7 +77,41 @@ std::string Utf8(const std::filesystem::path& p) {
   return std::string(reinterpret_cast<const char*>(s.data()), s.size());
 }
 
+#if defined(_WIN32)
+// The process's own CPUs, while a limit is on. In the environment too, so a process this one starts during the job
+// (it inherits the limit) can lift it at its start.
+constexpr const char* kFullCpusVariable = "KK_SHADER_FULL_CPUS";
+
+// Process affinity holds every thread of the job to the limit, the driver's own included, and the renderer sizes
+// its pipeline workers by it. Windows only: elsewhere the limit reaches the shader builders alone.
+void LimitShaderCpus(unsigned limit, int crashes) {
+  DWORD_PTR allowed = 0, system = 0;
+  const char* full = std::getenv(kFullCpusVariable);
+  if ((full && *full) || !GetProcessAffinityMask(GetCurrentProcess(), &allowed, &system) || !allowed) return;
+  const auto limited = DWORD_PTR(LimitedAffinity(allowed, limit));
+  if (limited == allowed) return;
+  _putenv_s(kFullCpusVariable, fmt::format("{:x}", uint64_t(allowed)).c_str());
+  if (!SetProcessAffinityMask(GetCurrentProcess(), limited)) {
+    _putenv_s(kFullCpusVariable, "");
+    return;
+  }
+  REXLOG_INFO("KK: shader preparation limited to {} CPU threads ({} ended unexpectedly in a row)", limit, crashes);
+}
+#endif
+
 }  // namespace
+
+void LiftShaderCpuLimit() {
+#if defined(_WIN32)
+  const char* full = std::getenv(kFullCpusVariable);
+  if (!full || !*full) return;
+  if (const uint64_t mask = std::strtoull(full, nullptr, 16)) {
+    const bool ok = SetProcessAffinityMask(GetCurrentProcess(), DWORD_PTR(mask)) != 0;
+    REXLOG_INFO("KK: shader preparation's CPU limit lifted, all CPU threads back ({})", ok ? "ok" : "failed");
+  }
+  _putenv_s(kFullCpusVariable, "");
+#endif
+}
 
 struct NativeShaderPack::Impl {
   const NrShaderPackApi* api = nullptr;
@@ -102,6 +142,7 @@ struct NativeShaderPack::Impl {
     }
     if (last.finished && !logged) {
       logged = true;
+      LiftShaderCpuLimit();
       if (last.ok)
         REXLOG_INFO("KK: native renderer shaders {} ({} pack, {:.1f} s): {}", last.up_to_date ? "ready" : "prepared",
                     last.backend, last.seconds, last.message);
@@ -118,6 +159,7 @@ NativeShaderPack::~NativeShaderPack() {
     impl_->api->cancel(impl_->job);
     impl_->api->release(impl_->job);
   }
+  LiftShaderCpuLimit();
 }
 
 bool NativeShaderPack::Wanted() { return rex::cvar::GetFlagByName("gpu_plugin") == "native" && PluginApi() != nullptr; }
@@ -133,8 +175,18 @@ void NativeShaderPack::Start(const std::filesystem::path& cache_dir, const std::
   impl_->worked = false;
   impl_->bar.Reset();
   impl_->started = true;
+  int crashes = startup::ShaderCrashes();
+#if defined(KK_DEV_TOOLS)
+  // KK_DEV_SHADER_CRASHES=<n>: as if the job had ended unexpectedly n times in a row.
+  if (const char* v = std::getenv("KK_DEV_SHADER_CRASHES")) crashes = std::atoi(v);
+#endif
   // The plugin caps this request to process affinity, leaving one CPU for the UI/music.
-  const uint32_t threads = 0;
+  const bool limited = !REXCVAR_GET(kk_shader_full_cpu);
+  const uint32_t threads = limited ? ShaderThreadLimit(crashes) : 0;
+#if defined(_WIN32)
+  if (limited) LimitShaderCpus(threads, crashes);
+#endif
+  if (!limited) REXLOG_INFO("KK: shader preparation: the player removed the CPU limit (kk_shader_full_cpu)");
   impl_->job = impl_->api->start(Utf8(cache_dir).c_str(), Utf8(game_dir).c_str(), threads, 1, force ? 1 : 0);
 }
 

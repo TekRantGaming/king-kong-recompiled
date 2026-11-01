@@ -9,6 +9,7 @@
 // prepared started no job, so Home said "Not prepared" on every start after the setup.
 #pragma once
 
+#include <bit>
 #include <cstdint>
 #include <string>
 #include <string_view>
@@ -78,6 +79,21 @@ struct ShaderJobEnd {
 // would not start) do not count against it: the game makes those as it meets them, and the log says which.
 inline bool JobIsThePreparation(const ShaderJobEnd& e) {
   return e.finished && !e.cancelled && e.packs_needed != 0 && (e.packs_ready & e.packs_needed) == e.packs_needed;
+}
+
+// How many CPU threads a shader job may use. Preparing shaders loads every thread it is given for minutes, and a
+// PC with an unstable CPU or power supply can go down under that (a 28 thread PC in Nov 2026 never got through it).
+// So no PC uses more than 16, and each time the job ended unexpectedly the next one uses fewer: slower, but it ends.
+inline unsigned ShaderThreadLimit(int crashes_in_a_row) {
+  if (crashes_in_a_row <= 0) return 16;
+  return crashes_in_a_row == 1 ? 8 : 4;
+}
+
+// The CPUs a job limited to `limit` threads runs on: the first ones allowed, which on a hybrid Intel CPU are the
+// performance cores. Fewer allowed than the limit: all of them.
+inline uint64_t LimitedAffinity(uint64_t allowed, unsigned limit) {
+  while (unsigned(std::popcount(allowed)) > limit) allowed &= ~(uint64_t(1) << (63 - std::countl_zero(allowed)));
+  return allowed;
 }
 
 // The launcher opening: after an update everything is built again in full (once); otherwise a job starts only

@@ -72,6 +72,7 @@ inline constexpr Row kGraphicsRows[] = {
     {"Texture pack", "Texture pack folder"},
     {"Advanced", "Effect resolution"},
     {"Advanced", "Rebuild shaders"},
+    {"Advanced", "Damn it, I paid for the full CPU"},
 };
 
 inline constexpr Row kAudioRows[] = {

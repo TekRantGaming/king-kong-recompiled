@@ -5,6 +5,7 @@
 #include "amd_shader_cache.h"
 #include "launcher.h"
 #include "launcher_text.h"
+#include "native_shaders.h"
 #include "settings.h"
 #include <rex/system.h>
 #include <cstdlib>
@@ -305,6 +306,7 @@ void MonitorStartup() {
 }
 
 void Configure(const std::filesystem::path& root) {
+  kk::LiftShaderCpuLimit();
   std::lock_guard lock(mutex);
   user_root = root;
   state = std::make_unique<RecoveryState>(root);
@@ -337,6 +339,7 @@ std::string ApplyChoice(const std::string& plugin) {
 }
 
 void Begin(const std::string& plugin, bool game) {
+  if (game) kk::LiftShaderCpuLimit();
   {
     std::lock_guard lock(mutex);
     if (!state || plugin != "native" || armed) return;
@@ -462,6 +465,10 @@ std::string CrashNotice() {
 void CrashNoticeShown() {
   std::lock_guard lock(mutex);
   crash_notice_shown = true;
+}
+int ShaderCrashes() {
+  std::lock_guard lock(mutex);
+  return left.phase == "shaders" ? left.count : 0;
 }
 bool AmdCacheOffer() { return REXCVAR_GET(kk_amd_shader_cache_offer) && amd_cache::Present(LocalAppData()); }
 bool RequestAmdCacheClear() {

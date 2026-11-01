@@ -29,6 +29,8 @@ void LauncherShown(bool preparing_shaders);
 // prepared shaders); empty otherwise or once CrashNoticeShown was called.
 std::string CrashNotice();
 void CrashNoticeShown();
+// How many launcher starts in a row ended unexpectedly while preparing shaders.
+int ShaderCrashes();
 // kk_amd_shader_cache_offer is on (on by default, owner 18 Oct) and this PC has AMD
 // driver shader cache folders.
 bool AmdCacheOffer();

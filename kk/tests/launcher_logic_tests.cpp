@@ -346,6 +346,15 @@ void ShaderPreparedChecks() {
   Check(AtPlay(false, false, false) == ShaderPlayStep::kPrepareFirst, "never prepared (setup closed half way): once");
   Check(AtPlay(false, false, true) == ShaderPlayStep::kPlay, "a job that failed here is not repeated at Play");
 
+  // The CPU threads a shader job may use.
+  Check(ShaderThreadLimit(0) == 16, "no PC uses more than 16 threads");
+  Check(ShaderThreadLimit(1) == 8, "one job ended unexpectedly: half");
+  Check(ShaderThreadLimit(2) == 4 && ShaderThreadLimit(6) == 4, "more than one: a quarter");
+  Check(LimitedAffinity(0xFFFFFFF, 16) == 0xFFFF, "a 28 thread PC keeps its first 16, the performance cores");
+  Check(LimitedAffinity(0xFFFF, 16) == 0xFFFF && LimitedAffinity(0xFF, 16) == 0xFF, "16 or fewer: unchanged");
+  Check(LimitedAffinity(0xF0F0, 4) == 0xF0, "a limit already set by the player is kept inside");
+  Check(LimitedAffinity(~uint64_t(0), 4) == 0xF, "64 threads");
+
   // Home's status reads the same definition, not the launcher's own job.
   Check(HomeStatus(false, false, true, false, false) == ShaderHomeStatus::kReady,
         "a launcher start with prepared shaders and no job shows Ready (the Beta 9 bug showed Not prepared)");
