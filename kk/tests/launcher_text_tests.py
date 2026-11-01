@@ -823,6 +823,10 @@ for _s in sorted(_new365):
     for _tr in entries.get(_s, []):
         if '\u2014' in _tr or '\u2013' in _tr or re.search(r'\w-\w', _tr) or ' - ' in _tr:
             fail(f'365: dash in a translation of {_s!r}: {_tr!r}')
+for _code in ('de', 'es', 'fr', 'it', 'da', 'nl', 'no', 'fi', 'sv'):  # the loops' text is in the picture
+    for _name in ('save-notice-loop', 'returning-loop'):
+        if not (root / 'launcher-video' / f'{_name}-{_code}.mp4').is_file():
+            fail(f'launcher-video/{_name}-{_code}.mp4 is missing')
 _vid332 = root / 'launcher-video' / 'trg-startup.mp4'
 if not _vid332.is_file():
     fail('332: launcher-video/trg-startup.mp4 is missing')

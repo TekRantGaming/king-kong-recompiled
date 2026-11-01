@@ -7,6 +7,7 @@
 #include <condition_variable>
 #include <deque>
 #include <exception>
+#include <filesystem>
 #include <mutex>
 #include <string>
 #include <vector>
@@ -15,6 +16,7 @@
 #include <rex/logging.h>
 #include <rex/ui/immediate_drawer.h>
 
+#include "launcher_text.h"
 #include "ps2_movie_decoder.h"
 #include "toast.h"
 
@@ -186,8 +188,15 @@ rex::ui::ImmediateTexture* LoadingLoop::Frame(float dt, double clock) {
 }
 
 std::filesystem::path LoadingLoopFile(loading_loop::Kind kind) {
-  const char* name = kind == loading_loop::Kind::kReturning ? "returning-loop.mp4" : "save-notice-loop.mp4";
-  return rex::filesystem::GetExecutableFolder() / "launcher" / "video" / name;
+  const std::string name = kind == loading_loop::Kind::kReturning ? "returning-loop" : "save-notice-loop";
+  const auto folder = rex::filesystem::GetExecutableFolder() / "launcher" / "video";
+  // Their text is in the picture: <name>-<language>.mp4 beside the English one (the launcher's language).
+  if (text::Current() != text::Lang::kEnglish) {
+    std::error_code ec;
+    auto own = folder / (name + "-" + text::kLangCodes[int(text::Current())] + ".mp4");
+    if (std::filesystem::exists(own, ec)) return own;
+  }
+  return folder / (name + ".mp4");
 }
 
 }  // namespace kk

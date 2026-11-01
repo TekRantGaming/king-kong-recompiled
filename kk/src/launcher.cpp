@@ -5785,8 +5785,7 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
 
   // ----------------------------------------------------- settings pages ---
   std::string MenuText(uint32_t id) {
-    static constexpr const char* codes[] = {"en", "de", "es", "fr", "it", "da", "nl", "no", "fi", "sv"};  // text::Lang's order
-    const std::string lang = codes[int(text::Current())];
+    const std::string lang = text::kLangCodes[int(text::Current())];
     if (extras_lang_ != lang) {
       extras_texts_ = art::ReadMenuTexts(paths_.game_dir, lang.c_str());
       extras_lang_ = lang;

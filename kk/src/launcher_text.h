@@ -14,6 +14,8 @@ namespace kk::text {
 
 enum class Lang { kEnglish, kGerman, kSpanish, kFrench, kItalian, kDanish, kDutch, kNorwegian, kFinnish, kSwedish };
 Lang Current();
+// Lang's short names, for the files that exist per language.
+inline constexpr const char* kLangCodes[] = {"en", "de", "es", "fr", "it", "da", "nl", "no", "fi", "sv"};
 
 const char* T(const char* english);
 std::string T(const std::string& english);
