@@ -589,6 +589,7 @@ class KingKongApp : public rex::ReXApp {
                                            kk::kGameCodeEnd - kk::kGameCodeStart);
 #if defined(KK_DEV_TOOLS)
     const bool differs = code != kk::kGameCodeHash || std::getenv("KK_DEV_GAME_CODE_DIFFERS");
+    if (differs && std::getenv("KK_DEV_GAME_CODE_DIFFERS")) kk::g_game_code_differs.store(true), std::abort();  // the message test
 #else
     const bool differs = code != kk::kGameCodeHash;
 #endif
