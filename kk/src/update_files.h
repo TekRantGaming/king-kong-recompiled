@@ -92,6 +92,7 @@ enum class Outcome {
 struct InstallResult {
   Outcome outcome = Outcome::kOk;
   std::string path;  // the file that failed
+  std::string error;  // why, in Windows' own words (kWrite)
 };
 
 // Copies `paths` (relative, safe) from src_root over dst_root. 1. Every file is staged as <name>.new beside its

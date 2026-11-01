@@ -14,12 +14,12 @@ BEGIN
     BLOCK "040904B0"
     BEGIN
       VALUE "CompanyName", "TekRantGaming"
-      VALUE "FileDescription", "King Kong Recompiled"
+      VALUE "FileDescription", "King Kong Remastered"
       VALUE "FileVersion", "@KK_VERSION@"
       VALUE "InternalName", "king_kong"
       VALUE "LegalCopyright", "Copyright (c) 2026 TekRantGaming and contributors"
       VALUE "OriginalFilename", "king_kong.exe"
-      VALUE "ProductName", "King Kong Recompiled"
+      VALUE "ProductName", "King Kong Remastered"
       VALUE "ProductVersion", "@KK_VERSION@"
     END
   END

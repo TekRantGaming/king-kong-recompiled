@@ -164,6 +164,15 @@ void WriteOverlayModules(FILE* f) {
 // crash-<time>.dmp and .txt. `thread`: the thread that crashed (this one, or the one the writer thread
 // works for). `reason`: why the program ends when no exception was raised (abort(), std::terminate).
 void WriteCrashFiles(EXCEPTION_POINTERS* info, DWORD thread, const char* reason) {
+  {  // Where it crashed, for the next start's recovery: the game's code, or a driver (startup_recovery.cpp).
+    wchar_t where[MAX_PATH + 64], last[MAX_PATH + 32];
+    DescribeAddress(info->ExceptionRecord->ExceptionAddress, where, std::size(where));
+    swprintf(last, MAX_PATH + 32, L"%ls\\last-crash.txt", g_crash_dir);
+    if (FILE* f = _wfopen(last, L"wb")) {
+      std::fprintf(f, "%ls\n", where);
+      std::fclose(f);
+    }
+  }
   wchar_t base[MAX_PATH + 64];
   ReportBase(L"crash", base);
   WriteMiniDump(base, info, thread);

@@ -46,7 +46,9 @@ constexpr const char* kDamaged = "The download did not pass its check, so nothin
 constexpr const char* kUnpackFailed = "Could not unpack the update.";
 constexpr const char* kNoProgram = "The update did not contain the game's program.";
 constexpr const char* kListDamaged = "The update's file list is damaged, so nothing was changed.";
-constexpr const char* kWriteFailed = "Could not write the update into the game folder. Is it read only?";
+constexpr const char* kWriteFailed =
+    "Could not write {0} into the game folder, so nothing was changed. If your antivirus blocked it, allow the King "
+    "Kong folder and try again.";
 constexpr const char* kInUse =
     "{0} is in use by another program, so the update was undone and nothing was changed. Close that program and "
     "try again.";
@@ -311,7 +313,9 @@ std::string InstallMessage(const uf::InstallResult& r, std::string& detail) {
   switch (r.outcome) {
     case uf::Outcome::kOk: return {};
     case uf::Outcome::kNoSource: return kDamaged;
-    case uf::Outcome::kWrite: return kWriteFailed;
+    case uf::Outcome::kWrite:
+      detail = r.error.empty() ? r.path : r.path + " (" + r.error + ")";
+      return kWriteFailed;
     case uf::Outcome::kInUse:
       detail = r.path;
       return kInUse;

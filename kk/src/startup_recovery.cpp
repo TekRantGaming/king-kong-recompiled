@@ -11,6 +11,7 @@
 #include <cstdlib>
 #include <memory>
 #include <chrono>
+#include <fstream>
 #include <mutex>
 #include <string_view>
 #include <thread>
@@ -121,6 +122,20 @@ void Signal(char value) {
 
 bool IsDeviceLoss(const char* why) { return why && std::string_view(why).find("lost") != std::string_view::npos; }
 
+#if !defined(__linux__)
+// The start just before this one died in the game's own code, not in a graphics driver (crash_dump.cpp writes the
+// file), so changing the graphics API or driver cannot help: a player's damaged game files did this (1 Nov).
+bool LastCrashInGameCode() {
+  std::error_code ec;
+  const auto file = user_root / "crashes" / "last-crash.txt";
+  const auto written = std::filesystem::last_write_time(file, ec);
+  if (ec || std::filesystem::file_time_type::clock::now() - written > std::chrono::minutes(5)) return false;
+  std::string line;
+  std::getline(std::ifstream(file), line);
+  return line.rfind("king_kong.exe", 0) == 0;
+}
+#endif
+
 // End the recovery chain after both native APIs fail. No monitor retry is signalled.
 [[noreturn]] void Exhausted() {
 #if defined(__linux__)
@@ -129,9 +144,15 @@ bool IsDeviceLoss(const char* why) { return why && std::string_view(why).find("l
       kk::text::T("Vulkan could not start. Update your graphics driver and check that your GPU meets the requirements in README.md. For help, use the support links in README.md and include the logs folder."));
 #else
   REXLOG_ERROR("KK recovery: both native graphics APIs failed; see logs for details");
+  if (LastCrashInGameCode()) {
+    REXLOG_ERROR("KK recovery: the last crash was in the game's code, not a graphics driver");
+    rex::ShowSimpleMessageBox(rex::SimpleMessageBoxType::Error,
+        kk::text::T("The game stopped with an error while loading, on both DirectX 12 and Vulkan, so your graphics driver is probably not the cause. Damaged game files or a different disc image can do this. Compare your disc image with the SHA-1 in README.md, then install the game files again. For help, use the support links in README.md and include the logs folder."));
+  } else {
   rex::ShowSimpleMessageBox(rex::SimpleMessageBoxType::Error,
       std::string(kk::text::T("Neither Vulkan nor DirectX 12 could start. Update your graphics driver and check that your GPU meets the requirements in README.md. For help, use the support links in README.md and include the logs folder.")) +
           "\n\n" + kk::text::T(kAmdHint));
+  }
 #endif
   if (state) state->Clear();
   Signal('C');

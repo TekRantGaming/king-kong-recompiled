@@ -1283,6 +1283,15 @@ int main() {
   Check(!cursor.mouse, "fresh button hides pointer");
   cursor.Mouse();
   Check(cursor.mouse, "mouse restores pointer");
+  kk::CursorActivity::Pad drift_a, drift_b;  // issue 50: a stick or trigger jittering past its deadzone
+  drift_a.axes[1] = 5; drift_a.axes[4] = 2; drift_b.axes[1] = 6; drift_b.axes[4] = 1;
+  for (int i = 0; i < 100; ++i) {
+    cursor.Controller(i % 2 ? drift_b : drift_a, i % 2 ? drift_a : drift_b);
+    Check(cursor.mouse, "a jittering pad does not hide the pointer");
+  }
+  cursor.Controller(drift_a, stick);
+  Check(!cursor.mouse, "a real stick push still hides the pointer");
+  cursor.Mouse();
   GraphicsPresetChecks();
   LauncherGuardChecks();
   AmdShaderCacheChecks();

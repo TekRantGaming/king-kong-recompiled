@@ -1110,7 +1110,7 @@ _updater_strings = [
     'The download failed. Check your internet connection and try again.',
     'Could not unpack the update.',
     "The update did not contain the game's program.",
-    'Could not write the update into the game folder. Is it read only?',
+    'Could not write {0} into the game folder, so nothing was changed. If your antivirus blocked it, allow the King Kong folder and try again.',
     'Checking the download.', 'Connecting', 'Continue in the background', 'Update failed',
 ]
 strings |= set(_updater_strings)

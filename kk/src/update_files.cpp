@@ -221,7 +221,7 @@ InstallResult InstallFiles(const fs::path& src_root, const fs::path& dst_root, c
     if (!fs::copy_file(src, tmp, fs::copy_options::overwrite_existing, ec)) {
       Note(log, "install: could not write " + rel + ".new: " + ec.message());
       unstage();
-      return {Outcome::kWrite, rel};
+      return {Outcome::kWrite, rel, ec.message()};
     }
     staged.push_back(tmp);
   }
