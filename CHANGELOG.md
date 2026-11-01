@@ -3,6 +3,14 @@
 Every release of the King Kong PC port, newest first. The launcher shows this on its About page, and a
 version's notes the first time you start it.
 
+## v2.0.8 (1 November 2026)
+
+### Changed
+- **Damn it, I paid for the full CPU, right where you need it**: the checkbox is now on the screen where shaders are prepared, for mouse, keyboard or controller, so you no longer need to reach Settings. Ticking it removes the CPU limit straight away. If preparation is under halfway and was held to fewer CPU threads than your PC has, it starts again with all of them. The limit is there for a reason: turning this on may cause a crash.
+
+### Fixed
+- **Texture packs and PS2 cutscenes after moving the King Kong folder**: packs remembered their full folder path, so moving the folder could show them as not installed. They now follow the folder every time it starts, including a USB drive with a new drive letter.
+
 ## v2.0.7 (1 November 2026)
 
 ### Changed
