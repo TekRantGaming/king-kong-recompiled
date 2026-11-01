@@ -20,8 +20,8 @@
 # FREECAM.txt from; or each one by KK_PIPELINE_LIST / KK_RESOURCE_LIST / KK_EXTRA_FILES.
 #
 # Other settings: KK_LINUX_ROOT (work folder, default ~/kk-linux-beta), KK_DXC_FROM (an extracted DXC Linux
-# release), KK_APPIMAGETOOL (appimagetool already on disk; otherwise build_appimage.sh downloads the official
-# one), KK_JOBS (parallel compile jobs).
+# release), KK_APPIMAGETOOL and KK_APPIMAGE_RUNTIME (copies already on disk, which must match the versions pinned in
+# build_appimage.sh; otherwise it downloads them), KK_JOBS (parallel compile jobs).
 set -euo pipefail
 
 VERSION="${1:?usage: build_linux_beta.sh <version, e.g. v2.0.0-beta.6>}"
@@ -148,13 +148,7 @@ export KK_VERSION="${KK_VERSION:-${VERSION#v}}"
 export KK_SKIP_PACKAGES=ON KK_WORK="$WORKDIR" REXGLUE_SDK_DIR="$BASE/sdk" KK_DXC_DIR="$BASE/dxc" \
        KK_FFMPEG_DIR="$BASE/ffmpeg" CMAKE_BUILD_PARALLEL_LEVEL="$JOBS" KK_DEV_TOOLS="${KK_DEV_TOOLS:-OFF}"
 [ -z "${KK_APPIMAGETOOL:-}" ] || export KK_APPIMAGETOOL
-# The AppImage runtime (the small program at the front of the file): KK_APPIMAGE_RUNTIME, or the one at the
-# front of the appimagetool on disk, so appimagetool does not download it on every build.
-RT="${KK_APPIMAGE_RUNTIME:-$BASE/runtime-x86_64}"
-if [ ! -s "$RT" ] && [ -x "${KK_APPIMAGETOOL:-}" ]; then
-  off="$("$KK_APPIMAGETOOL" --appimage-offset)" && head -c "$off" "$KK_APPIMAGETOOL" > "$RT"
-fi
-[ ! -s "$RT" ] || export KK_APPIMAGE_RUNTIME="$RT"
+[ -z "${KK_APPIMAGE_RUNTIME:-}" ] || export KK_APPIMAGE_RUNTIME
 (cd "$REPO" && bash tools/build_appimage.sh) > "$BASE/appimage-build.log" 2>&1 ||
   { grep -E "error|FAILED" "$BASE/appimage-build.log" | head -30; exit 1; }
 grep -E "^warning|native-renderer: upscalers" "$BASE/appimage-build.log" | sort -u || true

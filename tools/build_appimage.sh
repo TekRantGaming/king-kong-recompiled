@@ -244,13 +244,25 @@ if [ -n "$FFMPEG_DIR" ]; then
 fi
 
 echo "== AppImage"
-TOOL="${KK_APPIMAGETOOL:-$WORK/appimagetool-x86_64.AppImage}"  # KK_APPIMAGETOOL: a copy already on disk
-[ -x "$TOOL" ] || { wget -q -O "$TOOL" \
-  https://github.com/AppImage/appimagetool/releases/download/continuous/appimagetool-x86_64.AppImage && chmod +x "$TOOL"; }
+# appimagetool and the runtime it puts at the front of the file, pinned by version and hash: a download, or a copy
+# already on disk (KK_APPIMAGETOOL, KK_APPIMAGE_RUNTIME), that does not match stops the build.
+APPIMAGETOOL_VERSION=1.9.1
+APPIMAGETOOL_SHA256=ed4ce84f0d9caff66f50bcca6ff6f35aae54ce8135408b3fa33abfc3cb384eb0
+RUNTIME_VERSION=20251108
+RUNTIME_SHA256=2fca8b443c92510f1483a883f60061ad09b46b978b2631c807cd873a47ec260d
+fetch_pinned() {  # file, url, sha256
+  [ -s "$1" ] || wget -q -O "$1" "$2"
+  echo "$3  $1" | sha256sum -c --quiet - || { echo "error: $1 is not the pinned version" >&2; exit 1; }
+}
+TOOL="${KK_APPIMAGETOOL:-$WORK/appimagetool-$APPIMAGETOOL_VERSION-x86_64.AppImage}"
+fetch_pinned "$TOOL" \
+  "https://github.com/AppImage/appimagetool/releases/download/$APPIMAGETOOL_VERSION/appimagetool-x86_64.AppImage" \
+  "$APPIMAGETOOL_SHA256"
+chmod +x "$TOOL"
+RUNTIME="${KK_APPIMAGE_RUNTIME:-$WORK/runtime-$RUNTIME_VERSION-x86_64}"
+fetch_pinned "$RUNTIME" \
+  "https://github.com/AppImage/type2-runtime/releases/download/$RUNTIME_VERSION/runtime-x86_64" "$RUNTIME_SHA256"
 mkdir -p "$ROOT/dist"
 OUT="$ROOT/dist/KingKong-linux-x86_64.AppImage"
-# KK_APPIMAGE_RUNTIME: the AppImage type 2 runtime already on disk (otherwise appimagetool downloads it).
-RUNTIME_ARGS=()
-[ -z "${KK_APPIMAGE_RUNTIME:-}" ] || RUNTIME_ARGS=(--runtime-file "$KK_APPIMAGE_RUNTIME")
-ARCH=x86_64 "$TOOL" --appimage-extract-and-run "${RUNTIME_ARGS[@]}" "$APPDIR" "$OUT"
+ARCH=x86_64 "$TOOL" --appimage-extract-and-run --runtime-file "$RUNTIME" "$APPDIR" "$OUT"
 ls -la "$OUT"

@@ -1922,8 +1922,11 @@ DEALINGS IN THE SOFTWARE.
 
 ------------------------------------------------------------------------------
 AMD FidelityFX SDK 1.1.4: FSR 3.1 (temporal upscaler, the native renderer)
-amd_fidelityfx_vk.dll and amd_fidelityfx_dx12.dll beside the game (AMD-signed
-binaries, unmodified), and the FidelityFX API headers inside rexgpu-native
+amd_fidelityfx_dx12.dll beside the game (AMD-signed binary, unmodified);
+amd_fidelityfx_vk.dll beside the game (built by this project from the
+FidelityFX SDK 1.1.4 source with AMD's rgba8-to-rgba16f shader patch applied,
+so it is modified and not signed by AMD); and the FidelityFX API headers
+inside rexgpu-native
 https://github.com/GPUOpen-LibrariesAndSDKs/FidelityFX-SDK
 ------------------------------------------------------------------------------
 
