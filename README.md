@@ -73,7 +73,7 @@
 | 🐧 **Linux and Steam Deck** with a native AppImage (experimental) | 👀 **See who's playing**, anonymously | 💬 **[Join the Discord](https://discord.gg/8eakYSvBZS)** for news and early builds |
 | 🏠 **The launcher is the main menu**, with all 42 chapters open | 🧭 **Auto detect** sets the game up for your PC | ⏸️ **A new pause menu**, with settings and photo mode |
 | 🧰 **The Workshop**: texture packs and mods | 🎬 **Restored PS2 cutscenes**, the Weta Artbook and the manual | 📐 **Ultrawide built in**, 21:9 and 32:9 with nothing stretched |
-| 📊 **Benchmark** on the main menu | 🚀 **16,842 graphics pipelines** prepared before you play | 🌅 **HDR (experimental)** in the F8 graphics panel |
+| 📊 **Benchmark** on the main menu | 🚀 **17,652 graphics pipelines** prepared before you play | 🌅 **HDR (experimental)** in the F8 graphics panel |
 
 Full notes for every version are in the [changelog](CHANGELOG.md) and on the [releases page](https://github.com/TekRantGaming/king-kong-recompiled/releases). The [website](https://kong.tekrantgaming.com) has a page for every feature.
 
@@ -508,7 +508,7 @@ Pick **AMD FSR 1** or **NVIDIA NIS** under **Upscaler**. Both work on any graphi
 ## Performance
 
 - **Any frame rate**: 30 like the console, 60, 120, 144, 240 or unlimited. Animations, physics, particles, water, the camera and timing run at the right speed, from the rowing crew to Kong's grabs.
-- **Ready before you play**: the graphics are prepared once on the first start. The port ships with a list of 16,842 graphics pipelines, built with the help of players who chose to share theirs, so new places stutter far less.
+- **Ready before you play**: the graphics are prepared once on the first start. The port ships with a list of 17,652 graphics pipelines, built with the help of players who chose to share theirs, so new places stutter far less.
 - **Benchmark** on the main menu: a recorded route through four chapters with your graphics settings. A standard run takes about 10 minutes, and the results stay on your PC.
 - **Performance metrics** with <kbd>F2</kbd>: FPS only, or Full, with a frame time graph, the graphics card's load, temperature, clock and memory, the processor and memory use, the graphics API and the upscaler.
 
@@ -595,7 +595,7 @@ The texture packs are separate downloads, and none is needed to play.
 
 The game needs its effects (shaders) prepared before they can appear, which used to cause short pauses. Now the launcher prepares them on the first start and after an update, with one progress bar, and the game doesn't start until they are ready. This takes a few minutes the first time. The **Shaders** status on the Home screen shows how they stand: select it to prepare them again, or use **Rebuild shaders** at the bottom of **Settings > Graphics**.
 
-The port also comes with a list of 16,842 graphics pipelines, collected by playing through the game and from players who share theirs with **Online players** on. They are prepared with the shaders, so new places stutter far less. The launcher still fetches the older pack from the [shader-packs release](https://github.com/TekRantGaming/king-kong-recompiled/releases/tag/shader-packs) by itself when a newer one is out. You don't need to do anything.
+The port also comes with a list of 17,652 graphics pipelines, collected by playing through the game and from players who share theirs with **Online players** on. They are prepared with the shaders, so new places stutter far less. The launcher still fetches the older pack from the [shader-packs release](https://github.com/TekRantGaming/king-kong-recompiled/releases/tag/shader-packs) by itself when a newer one is out. You don't need to do anything.
 
 ### Updates
 
