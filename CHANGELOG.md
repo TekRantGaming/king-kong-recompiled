@@ -3,6 +3,14 @@
 Every release of the King Kong PC port, newest first. The launcher shows this on its About page, and a
 version's notes the first time you start it.
 
+## v2.0.7 (1 November 2026)
+
+### Changed
+- **The King Kong folder is now fully portable**: your saves, downloads, mods, cache and crash reports are kept in a `userdata` folder inside the King Kong folder, so you can copy the whole folder to another drive or PC. Nothing goes in Documents any more, so OneDrive no longer backs up gigabytes of game data. The first start of this version moves everything out of `Documents\king_kong` for you, with a progress window if it takes a while, and nothing is removed from Documents until the copy is checked. Linux keeps its data where it was.
+
+### Fixed
+- **Stuck at steps and ledges above 30 FPS**: some steps could only be climbed at 30 FPS, which could soft lock the game until you dropped the frame rate, such as the bank out of the water in The Wall. Jack now gets up them at any frame rate. The fix is in the game's collision, not at single spots, so it applies everywhere.
+
 ## v2.0.6 (1 November 2026)
 
 ### Added
