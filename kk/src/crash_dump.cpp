@@ -596,7 +596,14 @@ void WriteCrashReportNow(const char* reason) {
         "needs the original Xbox 360 disc, game version 0.0.0.1. Compare your disc image with the SHA-1 in the README.");
     std::wstring wide(size_t(MultiByteToWideChar(CP_UTF8, 0, text.c_str(), -1, nullptr, 0)), L'\0');
     MultiByteToWideChar(CP_UTF8, 0, text.c_str(), -1, wide.data(), int(wide.size()));
-    MessageBoxW(nullptr, wide.c_str(), L"King Kong", MB_OK | MB_ICONERROR | MB_TOPMOST | MB_SETFOREGROUND);
+    // On a thread of its own: this one may have a quit message waiting, which closes a message box at once.
+    std::thread([&wide] {
+      const int answer = MessageBoxW(nullptr, wide.c_str(), L"King Kong", MB_OK | MB_ICONERROR | MB_TOPMOST | MB_SETFOREGROUND);
+      nr::steps::Note("different game copy: the message closed (%d, error %lu)", answer, GetLastError());
+    }).join();
+    // Not a crash the startup monitor should retry: the other graphics API would die the same way.
+    rex::FlushLogging();
+    TerminateProcess(GetCurrentProcess(), 0);
   }
 }
 
