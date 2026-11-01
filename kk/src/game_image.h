@@ -13,7 +13,7 @@
 namespace kk {
 
 inline constexpr uint32_t kGameCodeStart = 0x820D0000, kGameCodeEnd = 0x828981A0;
-inline constexpr uint64_t kGameCodeHash = 0;
+inline constexpr uint64_t kGameCodeHash = 0x7EE96AC754809526ull;
 
 inline std::atomic<bool> g_game_code_differs{false};
 
