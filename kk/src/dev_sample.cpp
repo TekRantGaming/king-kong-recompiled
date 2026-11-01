@@ -335,10 +335,12 @@ Sampler& Get() {
 // For other dev aids that sample inside the AI pass.
 void DevClockAi();  // dev_clock_trace.cpp
 void DevTeleportTick(PPCContext* ctx, uint8_t* base, uint32_t world);  // dev_teleport.cpp
+void DevLedgeTick(PPCContext* ctx, uint8_t* base);                      // dev_ledge.cpp
 
 void DevSampleTick(PPCContext* ctx, uint8_t* base, uint32_t world) {
   DevClockAi();
   DevTeleportTick(ctx, base, world);
+  DevLedgeTick(ctx, base);
   static const bool on = Get().on();
   if (on) Get().Tick(ctx, base, world);
 }

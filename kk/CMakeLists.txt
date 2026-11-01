@@ -79,6 +79,7 @@ set(KINGKONG_SOURCES
     src/hfr_rowing.cpp
     src/hfr_kong_lift.cpp
     src/hfr_splash.cpp
+    src/hfr_step_up.cpp
     src/hfr_fish.cpp
     src/hfr_sway.cpp
     src/hfr_cam_ground.cpp
@@ -126,6 +127,8 @@ set(KINGKONG_SOURCES
     src/update.cpp
     src/countdown.cpp
     src/update_files.cpp
+    src/user_folder.cpp
+    src/user_folder_start.cpp
     src/play_session.cpp
     src/ps2_movies.cpp
     src/profile_options.cpp
@@ -179,7 +182,7 @@ if(KK_DEV_TOOLS)
     list(APPEND KINGKONG_SOURCES src/coop_transport_udp.cpp)
     list(APPEND KINGKONG_SOURCES src/dev_puppet_mesh.cpp)
     list(APPEND KINGKONG_SOURCES src/dev_puppet_variant.cpp)
-    list(APPEND KINGKONG_SOURCES src/dev_tools.cpp src/dev_watch.cpp src/dev_ae.cpp src/dev_sound_trace.cpp src/dev_load_trace.cpp src/dev_frame_log.cpp src/dev_sample.cpp src/dev_venture.cpp src/dev_chapter_jump.cpp src/dev_pause.cpp src/dev_fish.cpp src/dev_clock_trace.cpp src/dev_camera_start.cpp src/dev_game_watch.cpp src/dev_teleport.cpp src/dev_trig_trace.cpp src/dev_bug_trace.cpp)
+    list(APPEND KINGKONG_SOURCES src/dev_tools.cpp src/dev_ledge.cpp src/dev_watch.cpp src/dev_ae.cpp src/dev_sound_trace.cpp src/dev_load_trace.cpp src/dev_frame_log.cpp src/dev_sample.cpp src/dev_venture.cpp src/dev_chapter_jump.cpp src/dev_pause.cpp src/dev_fish.cpp src/dev_clock_trace.cpp src/dev_camera_start.cpp src/dev_game_watch.cpp src/dev_teleport.cpp src/dev_trig_trace.cpp src/dev_bug_trace.cpp)
     list(APPEND KINGKONG_SOURCES src/dev_kong_lift.cpp)
 endif()
 
@@ -547,6 +550,11 @@ if(KK_DEV_TOOLS)
     target_include_directories(kk-update-tests PRIVATE src)
     rexglue_apply_target_settings(kk-update-tests)
     add_test(NAME update-files COMMAND kk-update-tests "${CMAKE_CURRENT_BINARY_DIR}/update-test")
+    # The move of the player's data from Documents to the program folder, on real files in a temp folder.
+    add_executable(kk-user-folder-tests tests/user_folder_tests.cpp src/user_folder.cpp)
+    target_include_directories(kk-user-folder-tests PRIVATE src)
+    rexglue_apply_target_settings(kk-user-folder-tests)
+    add_test(NAME user-folder COMMAND kk-user-folder-tests "${CMAKE_CURRENT_BINARY_DIR}/user-folder-test")
     add_executable(kk-menu-sound-tests tests/launcher_sounds_tests.cpp src/launcher_sounds.cpp)
     target_include_directories(kk-menu-sound-tests PRIVATE src)
     target_link_libraries(kk-menu-sound-tests PRIVATE rex::runtime)

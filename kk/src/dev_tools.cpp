@@ -81,6 +81,7 @@ void DevAaTick(double seconds);
 extern bool (*g_dev_pad_input)(uint32_t user, uint8_t* state);
 void DevWatchTick(double seconds_since_menu);
 double DevGameSecondsSinceMenu();  // dev_frame_log.cpp
+bool DevLedgeStick(float& x, float& y);  // dev_ledge.cpp
 #if defined(KK_DEV_PROFILE)
 void DevProfTick(double seconds_since_menu);
 #else
@@ -629,6 +630,10 @@ bool AutoskipPad(uint32_t user, uint8_t* state) {
   const DevSticks sticks = DevScriptSticks(held);
   StoreBE<int16_t>(state + 8, sticks.lx);
   StoreBE<int16_t>(state + 10, sticks.ly);
+  if (float x, y; DevLedgeStick(x, y)) {
+    StoreBE<int16_t>(state + 8, int16_t(x * 32767));
+    StoreBE<int16_t>(state + 10, int16_t(y * 32767));
+  }
   StoreBE<int16_t>(state + 12, sticks.rx);
   StoreBE<int16_t>(state + 14, sticks.ry);
   return true;

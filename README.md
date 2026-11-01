@@ -154,7 +154,7 @@ Full notes for every version are in the [changelog](CHANGELOG.md) and on the [re
 4. The graphics are prepared once, with one progress bar. Then setup offers **Auto detect**, the HD texture pack and the PS2 cutscenes, and walks you through the graphics options and button prompts.
 5. Press **PLAY**.
 
-The download contains only this port. **No game files are included**: they come from your own disc. Your saves and settings are kept in `Documents\king_kong`. The port is also listed on [Quiver Launcher](https://quiverlauncher.com/apps/peter-jackson-s-king-kong-the-official-game-of-the-movie-king-kong-pc-port), where you can see how it runs for other players.
+The download contains only this port. **No game files are included**: they come from your own disc. Your saves, settings and downloads are all kept inside the King Kong folder, in `userdata`, so you can copy the whole folder to another drive or PC. If you played an earlier version, your data is moved out of `Documents\king_kong` the first time you start this one. The port is also listed on [Quiver Launcher](https://quiverlauncher.com/apps/peter-jackson-s-king-kong-the-official-game-of-the-movie-king-kong-pc-port), where you can see how it runs for other players.
 
 ### Which version you need
 

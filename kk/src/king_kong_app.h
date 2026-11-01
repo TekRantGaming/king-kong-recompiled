@@ -75,6 +75,7 @@ void InstallFpeGuard();  // fpe_guard.cpp
 #include "startup_recovery.h"
 #include "telemetry.h"
 #include "steam_pad_driver.h"
+#include "user_folder_start.h"
 #include "hooks/kk_native_ui.h"  // the native renderer's launcher prewarm
 #include "backend/startup_steps.h"  // task 353
 
@@ -153,6 +154,13 @@ class KingKongApp : public rex::ReXApp {
       }
     }
     if (paths.game_data_root.empty()) paths.game_data_root = base / "game";
+#if defined(_WIN32)
+    // Everything the player makes stays in the King Kong folder, so the folder is portable (user_folder.h).
+    if (rex::cvar::GetFlagByName("user_data_root").empty()) {
+      paths.user_data_root = kk::user_folder::Start(base, paths.user_data_root, paths.config_path);
+      if (rex::cvar::GetFlagByName("cache_root").empty()) paths.cache_root = paths.user_data_root / "cache";
+    }
+#endif
     // The SDK makes the dialogs (OnCreateDialogs: the pause menu and its in-game Settings, which
     // keep this path) in SetupPresentation, before OnFinalizePaths: without this they had an empty
     // path and every in-game change failed to save ("cannot write settings to "), on Windows and
@@ -464,6 +472,7 @@ class KingKongApp : public rex::ReXApp {
   void OnPreSetup(rex::RuntimeConfig& config) override {
     // SetupPresentation precedes OnFinalizePaths in the SDK. Arm before either provider or game GPU setup.
     user_data_root_ = user_data_root();
+    kk::user_folder::LogMoved();
     {
       // Task 353: crash reports and the start-up step log before the upscaler check, the graphics device, the
       // swapchain and the window (SetupPresentation), not only from OnFinalizePaths on.

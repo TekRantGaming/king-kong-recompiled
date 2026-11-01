@@ -159,7 +159,7 @@ bool UnpackZip(const std::filesystem::path& zip, const std::filesystem::path& in
 // decoder; without one the JPEG header is checked).
 void SetPictureCheck(std::function<bool(const std::filesystem::path&)> check);
 
-// Where each kind is installed: <user data>\content\<folder> (Windows: Documents\king_kong\content; Linux:
+// Where each kind is installed: <user data>\content\<folder> (Windows: <program folder>\userdata\content; Linux:
 // ~/.local/share/king_kong/content, or $XDG_DATA_HOME/king_kong/content: the SDK chooses the user folder).
 std::filesystem::path ContentRoot(const std::filesystem::path& user_dir);
 std::filesystem::path InstallDir(const std::filesystem::path& user_dir, Kind kind);
