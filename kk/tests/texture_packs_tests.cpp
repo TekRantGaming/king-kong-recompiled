@@ -166,11 +166,11 @@ static void ContentFacts() {
   CHECK(!FactsFor("builtin:ultrawide"));
   // The UHD and HD descriptions no longer repeat the size (it is the facts table's Size row).
   for (const auto& page : kDownloadPages) CHECK(std::string(page.description).find("GB") == std::string::npos);
-  const char* langs[] = {"1", "3", "5", "4", "6"};
+  const char* langs[] = {"1", "3", "5", "4", "6", "102", "103", "120", "104", "109"};
   const char* cel = "A comic book look: ink outlines and flat bands of light and shade. Water, smoke, sky and the HUD "
                     "stay as they are. Fine controls (outline, darkness, bands, strength) are in the F8 panel under Cel "
                     "shading. The Original look switches it off.";
-  for (int l = 0; l < 5; ++l) {
+  for (int l = 0; l < int(std::size(langs)); ++l) {
     CHECK(rex::cvar::SetFlagByName("user_language", langs[l]));
     auto translated = [&](const char* t) {
       if (!t) return;

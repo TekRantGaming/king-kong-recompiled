@@ -3,6 +3,16 @@
 // French and Italian.
 constexpr Entry kEntries[] = {
 #include "launcher_social_text_table.inc"
+    {"Your PC may run slower until this finishes.",
+     "Dein PC kann langsamer laufen, bis dies abgeschlossen ist.",
+     "Tu PC puede ir más lento hasta que esto termine.",
+     "Votre PC peut ralentir jusqu'à la fin de cette opération.",
+     "Il PC può rallentare finché non è finito."},
+    {"Upscaler credits",
+     "Credits der Upscaler",
+     "Créditos de los escaladores",
+     "Crédits des upscalers",
+     "Crediti degli upscaler"},
     // Task 332: the first-time setup (Skip all, the Workshop page, the button prompts line) and the startup movies.
     {"Damn it, I paid for the full CPU",
      "Verdammt, ich habe für die ganze CPU bezahlt",

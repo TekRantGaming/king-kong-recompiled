@@ -365,11 +365,11 @@ const std::vector<ChapterInfo>& Chapters() {
   if (!lists.empty() && lang == loaded_lang && (have_names || now - checked < std::chrono::seconds(2)))
     return *lists.back();
   checked = now;
-  static constexpr const char* kCodes[] = {"en", "de", "es", "fr", "it"};  // text::Lang's order
+  static constexpr const char* kCodes[] = {"en", "de", "es", "fr", "it", "da", "nl", "no", "fi", "sv"};  // text::Lang's order
   const auto dir = art::LauncherArtDir(g_user_dir);
   std::vector<std::string> names;
   if (!g_user_dir.empty() && art::HasLauncherArt(dir)) {
-    std::ifstream f(art::ChapterNamesPath(dir, kCodes[lang >= 0 && lang < 5 ? lang : 0]), std::ios::binary);
+    std::ifstream f(art::ChapterNamesPath(dir, kCodes[lang >= 0 && lang < int(std::size(kCodes)) ? lang : 0]), std::ios::binary);
     for (std::string line; std::getline(f, line);) names.push_back(line);
     if (names.size() != art::kChapterNames) names.clear();
   }

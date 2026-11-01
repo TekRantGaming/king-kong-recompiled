@@ -23,10 +23,24 @@ struct Entry {
 
 #include "launcher_text_table.inc"
 
-const Entry* Find(std::string_view english) {
-  static const auto* map = [] {
-    auto* m = new std::unordered_map<std::string_view, const Entry*>();
-    for (const Entry& e : kEntries) m->emplace(e.en, &e);
+// The five languages a console has no number for, in a table of their own: one entry per English text of the
+// tables above (launcher_text_tests.py checks that).
+struct MoreEntry {
+  const char* en;
+  const char* da;
+  const char* nl;
+  const char* no;
+  const char* fi;
+  const char* sv;
+};
+
+#include "launcher_more_text_table.inc"
+
+template <typename Row, size_t N>
+const Row* Find(const Row (&entries)[N], std::string_view english) {
+  static const auto* map = [&entries] {
+    auto* m = new std::unordered_map<std::string_view, const Row*>();
+    for (const Row& e : entries) m->emplace(e.en, &e);
     return m;
   }();
   const auto it = map->find(english);
@@ -47,7 +61,21 @@ void NoteMiss(std::string_view english) {
 }
 #endif
 
-const char* Pick(const Entry* e, Lang lang) {
+// The text in `lang`, nullptr when the tables don't have this English.
+const char* Pick(std::string_view english, Lang lang) {
+  if (lang >= Lang::kDanish) {
+    const MoreEntry* e = Find(kMoreEntries, english);
+    if (!e) return nullptr;
+    switch (lang) {
+      case Lang::kDanish: return e->da;
+      case Lang::kDutch: return e->nl;
+      case Lang::kNorwegian: return e->no;
+      case Lang::kFinnish: return e->fi;
+      default: return e->sv;
+    }
+  }
+  const Entry* e = Find(kEntries, english);
+  if (!e) return nullptr;
   switch (lang) {
     case Lang::kGerman: return e->de;
     case Lang::kSpanish: return e->es;
@@ -60,12 +88,17 @@ const char* Pick(const Entry* e, Lang lang) {
 }  // namespace
 
 Lang Current() {
-  // The Xbox 360 language numbers the game's Language setting uses.
+  // The Xbox 360 language numbers the game's Language setting uses, or 100 + the game's own number (language.cpp).
   switch (std::atoi(rex::cvar::GetFlagByName("user_language").c_str())) {
     case 3: return Lang::kGerman;
     case 4: return Lang::kFrench;
     case 5: return Lang::kSpanish;
     case 6: return Lang::kItalian;
+    case 102: return Lang::kDanish;
+    case 103: return Lang::kDutch;
+    case 104: return Lang::kFinnish;
+    case 109: return Lang::kSwedish;
+    case 120: return Lang::kNorwegian;
     default: return Lang::kEnglish;
   }
 }
@@ -73,10 +106,7 @@ Lang Current() {
 const char* T(const char* english) {
   const Lang lang = Current();
   if (lang == Lang::kEnglish || !english) return english;
-  if (const Entry* e = Find(english)) {
-    const char* t = Pick(e, lang);
-    return t && *t ? t : english;
-  }
+  if (const char* t = Pick(english, lang)) return *t ? t : english;
 #if defined(KK_DEV_TOOLS)
   NoteMiss(english);
 #endif

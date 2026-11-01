@@ -257,11 +257,11 @@ int main() {
           "Choose Ready when you are set","Choose a chapter or save","Waiting for {0} to choose Ready",
           "Waiting for {0} to choose a chapter","Waiting for {0} to join","{0} is ready","Chapters {0} to {1}","UDP port",
           "Type on your keyboard, or select keys with the controller.","Confirm","Delete","Saves"};
-      for (int language : {1,3,4,5,6}) {
+      for (int language : {1,3,4,5,6,102,103,104,109,120}) {
         rex::cvar::SetFlagByName("user_language",std::to_string(language)); frame();
         for (const char* label : kNew) {
           const std::string shown=text::T(std::string(label));
-          if (language!=1 && shown==label && std::string_view(label)!="Port" && std::string_view(label)!="Host" &&
+          if (language!=1 && language<100 && shown==label && std::string_view(label)!="Port" && std::string_view(label)!="Host" &&
               std::string_view(label)!="Lobby" && std::string_view(label)!="Version" && std::string_view(label)!="{0} with {1}" &&
               std::string_view(label)!="Alpha" && std::string_view(label)!="Partner" && std::string_view(label)!="Direct IP" && std::string_view(label)!="Steam invite")
             throw std::runtime_error("no translation (language "+std::to_string(language)+"): "+label);

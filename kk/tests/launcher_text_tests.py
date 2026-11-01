@@ -41,6 +41,26 @@ for m in re.finditer(r'\{\s*' + r'\s*,\s*'.join([STRING] * 5) + r'\s*\}', table_
     en, *rest = (bytes(g, 'utf-8').decode('unicode_escape').encode('latin-1').decode('utf-8') for g in m.groups())
     entries.setdefault(en, rest)
 
+# The five languages with a table of their own: every text of the other tables, placeholders kept, no dashes.
+all_tables = table_text + (src / 'launcher_social_text_table.inc').read_text(encoding='utf-8')
+more = {}
+for m in re.finditer(r'\{\s*' + r'\s*,\s*'.join([STRING] * 6) + r'\s*\}',
+                     (src / 'launcher_more_text_table.inc').read_text(encoding='utf-8')):
+    en, *rest = (bytes(g, 'utf-8').decode('unicode_escape').encode('latin-1').decode('utf-8') for g in m.groups())
+    more[en] = rest
+for m in re.finditer(r'\{\s*' + r'\s*,\s*'.join([STRING] * 5) + r'\s*\}', all_tables):
+    en = bytes(m.group(1), 'utf-8').decode('unicode_escape').encode('latin-1').decode('utf-8')
+    if en not in more:
+        fail(f'not in launcher_more_text_table.inc: {en}')
+for en, rest in more.items():
+    for text in rest:
+        if not text.strip():
+            fail(f'an empty translation of: {en}')
+        if sorted(re.findall(r'\{\d+\}', text)) != sorted(re.findall(r'\{\d+\}', en)):
+            fail(f'placeholders differ: {en} / {text}')
+        if '\u2014' in text or '\u2013' in text:
+            fail(f'a dash in: {text}')
+
 layout = (src / 'settings_layout.h').read_text(encoding='utf-8')
 needed = set(re.findall(r'\{"([^"]+)", "([^"*][^"]*)"\}', layout))
 strings = {s for pair in needed for s in pair}

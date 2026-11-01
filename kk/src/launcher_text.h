@@ -1,5 +1,6 @@
 // The launcher's text in the game's languages: it follows the Language
-// setting (user_language): English, German, Spanish, French or Italian.
+// setting (user_language): English, German, Spanish, French, Italian, Danish,
+// Dutch, Norwegian, Finnish or Swedish.
 // Text is looked up by its English wording (the launcher's code and the UI
 // toolkit pass English and translate as they draw); anything without a
 // translation stays in English.
@@ -11,7 +12,7 @@
 
 namespace kk::text {
 
-enum class Lang { kEnglish, kGerman, kSpanish, kFrench, kItalian };
+enum class Lang { kEnglish, kGerman, kSpanish, kFrench, kItalian, kDanish, kDutch, kNorwegian, kFinnish, kSwedish };
 Lang Current();
 
 const char* T(const char* english);

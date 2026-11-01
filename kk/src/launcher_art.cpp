@@ -48,8 +48,8 @@ namespace {
 
 // Bumped when what's extracted changes, so it's extracted again (3: colour
 // bars taken from Proton's videos dropped; 4: the chapter select's names and
-// pictures).
-constexpr const char* kArtVersion = "4";
+// pictures; 5: their names in five more languages).
+constexpr const char* kArtVersion = "5";
 
 // ------------------------------------------------------------------- LZO ---
 // LZO1X decompression with bounds checks (as lzo1x_decompress_safe). Returns
@@ -555,7 +555,8 @@ struct TextLanguage {
   const char* code;  // as ChapterNamesPath takes it
   uint32_t jade;     // the game's language number
 };
-constexpr TextLanguage kTextLanguages[] = {{"en", 2}, {"de", 6}, {"es", 8}, {"fr", 1}, {"it", 7}};
+constexpr TextLanguage kTextLanguages[] = {{"en", 2}, {"de", 6}, {"es", 8}, {"fr", 1}, {"it", 7},
+                                           {"da", 3}, {"nl", 4}, {"no", 21}, {"fi", 5}, {"sv", 10}};
 
 std::string Cp1252ToUtf8(const std::string& in) {
   static constexpr uint16_t k80[32] = {0x20AC, 0,      0x201A, 0x0192, 0x201E, 0x2026, 0x2020, 0x2021,

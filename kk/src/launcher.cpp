@@ -320,8 +320,7 @@ std::filesystem::path BrowseForDiscImage() {
 #endif
 
 // The languages the game has (user_language: Xbox 360 language numbers, or 100 + the game's own number for those
-// a console has no number for, language.cpp), in their own names. The launcher's text follows the same setting,
-// in English for the last five.
+// a console has no number for, language.cpp), in their own names. The launcher's text follows the same setting.
 constexpr std::pair<int, const char*> kLanguages[] = {
     {1, "English"}, {3, "Deutsch"}, {5, "Espa\xC3\xB1ol"}, {4, "Fran\xC3\xA7" "ais"}, {6, "Italiano"},
     {102, "Dansk"}, {103, "Nederlands"}, {120, "Norsk"}, {104, "Suomi"}, {109, "Svenska"}};
@@ -5786,7 +5785,7 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
 
   // ----------------------------------------------------- settings pages ---
   std::string MenuText(uint32_t id) {
-    static constexpr const char* codes[] = {"en", "de", "es", "fr", "it"};
+    static constexpr const char* codes[] = {"en", "de", "es", "fr", "it", "da", "nl", "no", "fi", "sv"};  // text::Lang's order
     const std::string lang = codes[int(text::Current())];
     if (extras_lang_ != lang) {
       extras_texts_ = art::ReadMenuTexts(paths_.game_dir, lang.c_str());
@@ -6062,7 +6061,7 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
     const float top = o_.y + 104 * s, bottom = o_.y + h_ - 96 * s;
     const float x0 = o_.x + Margin(), list_w = std::round((w_ - Margin() * 2) * 0.56f);
     const ImVec2 p0(x0 + list_w + 76 * s, top + 18 * s), p1(o_.x + w_ - Margin(), bottom);
-    for (const char* lang : {"1", "3", "5", "4", "6"}) {
+    for (const char* lang : {"1", "3", "5", "4", "6", "102", "103", "120", "104", "109"}) {
       Set("user_language", lang);
       int rows = 0, counts[5] = {};
       for (int p = kFirstSettingsPage; p <= kAbout; ++p) {
