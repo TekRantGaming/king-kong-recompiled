@@ -10,17 +10,6 @@
 
 </div>
 
-> I have been working extremely hard on this project, and the biggest update it has ever had is finally here.
-> King Kong Remastered brings online co-op, our own renderer, a native Linux version and a launcher made for the couch.
-> Download it below, or update from inside the launcher.
->
-> One thing you should know: online co-op is in early access, so please send your reports and logs to the
-> [Discord](https://discord.gg/8eakYSvBZS). And there may be a surprise or two waiting for King Kong fans, so have a good look around.
->
-> Thank you to everyone who tested, reported problems and stuck with this project. I'll see you on Skull Island.
->
-> **TekRantGaming**
-
 <div align="center">
 
 
@@ -654,6 +643,19 @@ The finished game is in `kk\out\build\kk-release`. `Build King Kong.bat` does al
 For testing, `kk\build.bat kk-dev` builds a version with developer aids that release builds leave out. Set `KK_DEV_AUTOSKIP=1` and it presses through the intros, menus and story videos into gameplay on its own, logging `KK dev: gameplay reached`. Add `KK_DEV_WANDER=1` to keep walking and looking around after that. The shader pack is built by running every chapter this way with its own `--cache_root`, then `python tools/make_shader_pack.py <version> <out> <cache folders...>`.
 
 </details>
+
+## A note from TekRantGaming
+
+> I have been working extremely hard on this project, and the biggest update it has ever had is finally here.
+> King Kong Remastered brings online co-op, our own renderer, a native Linux version and a launcher made for the couch.
+> Download it above, or update from inside the launcher.
+>
+> One thing you should know: online co-op is in early access, so please send your reports and logs to the
+> [Discord](https://discord.gg/8eakYSvBZS). And there may be a surprise or two waiting for King Kong fans, so have a good look around.
+>
+> Thank you to everyone who tested, reported problems and stuck with this project. I'll see you on Skull Island.
+>
+> **TekRantGaming**
 
 ## Credits
 
