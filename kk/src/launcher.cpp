@@ -2243,6 +2243,11 @@ class SettingsPages {
                                 {"Norsk", "120"},
                                 {"Suomi", "104"},
                                 {"Svenska", "109"}}));
+    items.back().on_choice = [this, set = items.back().on_choice](int i) {
+      set(i);
+      // English voices only (language.cpp): the subtitles are where these languages show.
+      if (Get("user_language").size() >= 3) ChangeProfileOption(play::ProfileOption::kSubtitles, 1);
+    };
     items.push_back(Section("HUD"));
     {
       const auto profile = ShownProfileOptions();
