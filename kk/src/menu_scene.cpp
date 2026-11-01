@@ -17,6 +17,7 @@
 
 #include <rex/cvar.h>
 #include <rex/hook.h>
+#include <rex/input/mnk/mnk_input_driver.h>
 #include <rex/logging.h>
 
 #include "ui_paint.h"
@@ -187,6 +188,9 @@ void Begin(const std::filesystem::path& user_dir) {
   g_begun = std::chrono::steady_clock::now();
 #endif
   g_active = true;
+  // The game's controller reads would otherwise take the mouse for mouse look with Keyboard & mouse on, hiding the
+  // launcher's pointer, and keep it after a change to Controller (the driver is not read then). Play is a new process.
+  rex::input::mnk::SetMouseLookActive(false);
   REXLOG_INFO("KK menu scene: starting the game behind the launcher ({} attempt)", SecondAttempt() ? "second" : "first");
   bool light = true;
 #if defined(KK_DEV_TOOLS)
