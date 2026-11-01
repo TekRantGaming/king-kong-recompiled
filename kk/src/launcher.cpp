@@ -3647,7 +3647,7 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
       if (modal_.cancel >= 0) p.push_back({Action::kBack, "Back"});
       return p;
     }
-    if (ShaderScreen()) return {};  // task 365: nothing to press while the shaders are prepared
+    if (ShaderScreen()) return {{Action::kAccept, "Select"}};  // the full CPU checkbox, task 365: nothing else
     if (InSetup()) {
       switch (SetupStage()) {
         case 0:
@@ -5095,7 +5095,8 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
   }
 
   // Home's look (the stills, blurred; the game's logo; the music), with a centred panel: what is
-  // happening and why, the PC being slower meanwhile, and the progress. Task 365 (owner, 23 Oct): no Continue in
+  // happening and why, the PC being slower meanwhile, the progress, and the full CPU checkbox (the same setting as
+  // Graphics > Advanced, which cannot be reached from here). Task 365 (owner, 23 Oct): no Continue in
   // the background and no Skip all any more (first setup, after an update, Rebuild shaders): the screen stays until
   // the shaders are ready, then the setup (or Home, or the Graphics page) comes up by itself (TickNativeShaders).
   void DrawShaderScreen(ImDrawList* dl) {
@@ -5135,8 +5136,14 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
     const std::string slow = T(KK_SLOW_PC);
     const float pw = std::min(760 * s, w_ - Margin() * 2), pad = 34 * s, r = 12 * s, wrap = pw - pad * 2;
     const float why_h = ui::TextSize(f.text, 16 * s, why, wrap).y, slow_h = ui::TextSize(f.text, 14.5f * s, slow, wrap).y;
+    const std::string full_cpu = T(std::string("Damn it, I paid for the full CPU"));
+    const std::string full_cpu_why = T(std::string(
+        "Removes the CPU limit while shaders are prepared. They finish faster, but your PC may slow down until they "
+        "are done. The limit is there for a reason: turning this on may cause a crash."));
+    const float box = 20 * s, check_x = box + 12 * s;
+    const float full_why_h = ui::TextSize(f.text, 13.5f * s, full_cpu_why, wrap - check_x).y;
     const float ph = pad + 16 * s + 14 * s + 36 * s + 18 * s + why_h + 10 * s + slow_h + 30 * s + 3 * s + 14 * s +
-                     20 * s + pad;
+                     20 * s + 22 * s + 22 * s + full_why_h + pad;
     float lw = 0, lh = 0;
     if (logo_) {
       lh = std::clamp(h_ - ph - 150 * s, 0.0f, 150 * s);
@@ -5181,7 +5188,38 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
     dl->AddText(f.text, 15 * s, ImVec2(tx, ty), color::kTextDim, left.c_str());
     dl->AddText(f.text, 15 * s, ImVec2(tx + wrap - ui::TextSize(f.text, 15 * s, right).x, ty), color::kTextDim,
                 right.c_str());
-    // Task 365: no button on the panel and nothing at the top right (the screen moves on by itself).
+    // The checkbox, for mouse, keyboard and pad; the job takes it at once (NativeShaderPack::SetFullCpu). Task 365:
+    // no button on the panel and nothing at the top right (the screen moves on by itself).
+    ty += 20 * s + 22 * s;
+    const ImVec2 c0(tx, ty), c1(tx + box, ty + box);
+    const bool on = GetBool("kk_shader_full_cpu");
+    const bool hovered = !modal_.open && ImGui::IsMouseHoveringRect(c0, ImVec2(tx + wrap, ty + 22 * s + full_why_h), false);
+    dl->AddRectFilled(c0, c1, on ? color::kAccent : ui::WithAlpha(color::kText, 0.06f), 3 * s);
+    dl->AddRect(c0, c1, hovered ? color::kAccent : ui::WithAlpha(color::kText, 0.35f), 3 * s, 0, 1.0f * s);
+    if (on) {
+      const ImU32 tick = IM_COL32(14, 16, 20, 255);
+      dl->AddLine(ImVec2(tx + 4.5f * s, ty + 10.5f * s), ImVec2(tx + 8.5f * s, ty + 14.5f * s), tick, 2.2f * s);
+      dl->AddLine(ImVec2(tx + 8.5f * s, ty + 14.5f * s), ImVec2(tx + 15.5f * s, ty + 5.5f * s), tick, 2.2f * s);
+    }
+    dl->AddText(f.text, 15 * s, ImVec2(tx + check_x, ty + 1 * s), hovered ? color::kText : color::kTextDim,
+                full_cpu.c_str());
+    dl->AddText(f.text, 13.5f * s, ImVec2(tx + check_x, ty + 22 * s), color::kTextFaint, full_cpu_why.c_str(), nullptr,
+                wrap - check_x);
+    bool toggle = hovered && ImGui::IsMouseClicked(0);
+    if (!modal_.open && input_.Pressed(Action::kAccept)) {
+      input_.Consume(Action::kAccept);
+      toggle = true;
+    }
+#if defined(KK_DEV_TOOLS)
+    if (const char* at = std::getenv("KK_DEV_SHADER_TICK")) {  // at this percent of the bar, as the checkbox's click
+      static bool ticked = false;
+      if (!ticked && fraction >= float(std::atof(at)) / 100.0f) ticked = toggle = true;
+    }
+#endif
+    if (toggle) {
+      SetBool("kk_shader_full_cpu", !on);
+      native_pack_.SetFullCpu(!on);
+    }
   }
 
   // Task 332: 15 the Workshop page, 16 to 18 the Settings pages Display, Graphics, Controls (launcher_setup_pages.inc);

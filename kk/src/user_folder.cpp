@@ -1,6 +1,8 @@
 // See user_folder.h.
 #include "user_folder.h"
 
+#include <algorithm>
+#include <cctype>
 #include <chrono>
 #include <fstream>
 #include <iterator>
@@ -316,6 +318,38 @@ class Mover {
 };
 
 }  // namespace
+
+std::string StoredRoot(const std::string& path) {
+  std::string plain = path;
+  for (char& c : plain) c = c == '\\' ? '/' : char(std::tolower(static_cast<unsigned char>(c)));
+  const std::string mark = std::string("/") + kFolderName + "/";  // content\..., or mods\... for a Workshop pack
+  const size_t at = plain.rfind(mark);
+  return at == std::string::npos ? std::string() : path.substr(0, at + 1 + std::string_view(kFolderName).size());
+}
+
+void Repoint(const Options& o) {
+  Mover mover(o);
+  const std::string now = U8(o.new_root);
+  std::error_code ec;
+  std::vector<std::string> roots;
+  for (fs::directory_iterator it(o.new_root / "content", ec), end; !ec && it != end; it.increment(ec)) {
+    std::string text;
+    if (!ReadFile(it->path() / "installed.txt", &text)) continue;
+    const size_t at = text.find("folder=");
+    if (at == std::string::npos) continue;
+    const size_t stop = text.find_first_of("\r\n", at);
+    const std::string root = StoredRoot(text.substr(at + 7, stop == std::string::npos ? stop : stop - at - 7));
+    if (!root.empty() && root != now && std::find(roots.begin(), roots.end(), root) == roots.end())
+      roots.push_back(root);
+  }
+  Options paths = o;
+  paths.new_root = o.new_root;
+  for (const std::string& root : roots) {
+    paths.old_root = fs::path(std::u8string(reinterpret_cast<const char8_t*>(root.data()), root.size()));
+    Mover(paths).RewritePaths();
+    mover.Log("the King Kong folder moved: pack paths changed from " + root + " to " + now);
+  }
+}
 
 std::string ReplaceRoot(const std::string& text, const std::string& old_root, const std::string& new_root) {
   std::string out = text;

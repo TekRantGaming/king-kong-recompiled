@@ -13,6 +13,10 @@
 //  5. The marker becomes documents-done.txt. From then on Documents is never read, so a portable copy on another
 //     PC leaves that PC's Documents alone. A new install with nothing to move writes the same marker.
 //
+// Installed packs keep full paths (the settings, content\*\installed.txt). A King Kong folder moved or copied after
+// that, or a USB stick with a new drive letter, would lose them, so every start Repoint finds where those paths say
+// the user data was and rewrites them to where it is.
+//
 // A program folder that cannot be written (Program Files) keeps the old folder. Only std::filesystem, so it is
 // tested on real files in a temp folder (tests/user_folder_tests.cpp).
 #pragma once
@@ -50,6 +54,14 @@ bool Done(const fs::path& new_root);
 // Does the steps above and returns the folder this run uses: new_root, or old_root when the program folder cannot
 // be written or the move failed (it is tried again at the next start).
 fs::path Resolve(const Options& options);
+
+// After the move is done, at every start: points the paths installed.txt and the settings hold at new_root, when
+// they name a userdata folder somewhere else. Uses new_root, config and log of `options`.
+void Repoint(const Options& options);
+
+// The user data folder a stored path is under ("D:\\a\\userdata\\mods\\x" gives "D:\\a\\userdata"), "" when it is under
+// none.
+std::string StoredRoot(const std::string& path);
 
 // `text` with every spelling of old_root (a\b, a\\b as in TOML, a/b) replaced by new_root spelled the same way.
 std::string ReplaceRoot(const std::string& text, const std::string& old_root, const std::string& new_root);

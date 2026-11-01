@@ -778,8 +778,8 @@ _shader365 = _l365[_l365.index('  void DrawShaderScreen(ImDrawList* dl) {'):_l36
 for banned in ('Continue in the background', 'DrawSkipAll', 'DrawSetupTop', 'ContinueShadersInBackground'):
     if banned in _shader365:
         fail(f'365: the shader screen still has {banned}')
-if 'if (ShaderScreen()) return {};' not in _l365:
-    fail('365: the shader screen still shows a button prompt')
+if 'if (ShaderScreen()) return {{Action::kAccept, "Select"}};' not in _l365:  # owner, 1 Nov: only the full CPU checkbox
+    fail('365: the shader screen shows a button prompt other than the full CPU checkbox')
 for needle, why in (
         ('prompts.push_back({Action::kNextTab, "Next page"});', 'Next page at the top right'),
         ('if (setup_progress::AutoDetectOffered(stage)) prompts.push_back({Action::kPlay, "Auto detect"});',

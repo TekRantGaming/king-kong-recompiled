@@ -238,6 +238,32 @@ void TestNotWritable(const fs::path& scratch) {
   Check(fs::exists(c.documents / "B13EBABEBABEBABE" / "save.bin"), "program folder not writable: nothing moved");
 }
 
+// The folder moved after the packs were installed: a USB stick's new drive letter, a copy to another PC.
+void TestMovedFolder(const fs::path& scratch) {
+  Case c(scratch, "moved");
+  c.Player();
+  Check(Resolve(c.Make(true)) == c.user, "moved: first the normal move");
+  Case d(scratch, "moved2");
+  fs::rename(c.program, d.program / "KingKong Copy");
+  const fs::path program = d.program / "KingKong Copy", user = program / kFolderName, toml = program / "king_kong.toml";
+  Options o;
+  o.new_root = user;
+  o.config = toml;
+  Repoint(o);
+  const std::string installed = Get(user / "content" / "hd-textures" / "installed.txt");
+  Check(installed == "name=HD\nfolder=" + Slashes(user, "\\") + "\\content\\hd-textures\\pack\n", "moved: installed.txt");
+  const std::string settings = Get(toml);
+  Check(settings.find(Slashes(user, "\\\\") + "\\\\content") != std::string::npos, "moved: settings, TOML spelling");
+  Check(settings.find(Slashes(user, "/") + "/x") != std::string::npos, "moved: settings, / spelling");
+  Check(settings.find(Slashes(c.user, "/")) == std::string::npos, "moved: no old path left");
+  Check(settings.find("kept = 1") != std::string::npos, "moved: other settings kept");
+  Repoint(o);
+  Check(Get(toml) == settings, "moved: a second start changes nothing");
+  Check(StoredRoot("D:\\a b\\UserData\\content\\x") == "D:\\a b\\UserData", "StoredRoot keeps the spelling");
+  Check(StoredRoot("E:/k/userdata/mods/uhd") == "E:/k/userdata", "StoredRoot: a Workshop pack under mods");
+  Check(StoredRoot("hd-textures\\pack").empty(), "StoredRoot: a relative path of the player's own is left alone");
+}
+
 #if defined(_WIN32)
 // A file another program holds: the copy fails, renames are put back, the old folder still has everything; the
 // next start finishes. Then a file held while the old folder is cleaned stays until a later start.
@@ -291,6 +317,7 @@ int main(int argc, char** argv) {
   TestOwnData(scratch);
   TestInsideOld(scratch);
   TestNotWritable(scratch);
+  TestMovedFolder(scratch);
 #if defined(_WIN32)
   TestLocked(scratch);
   TestLockedClean(scratch);

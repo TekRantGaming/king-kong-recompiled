@@ -121,6 +121,9 @@ struct NativeShaderPack::Impl {
   bool logged = false;
   bool taken = false;   // TakeFinished() reported this job
   bool worked = false;  // this job has built something (not only checked)
+  std::filesystem::path cache_dir, game_dir;  // this job's, for SetFullCpu
+  bool force = false;
+  uint32_t threads = 0;  // the workers this job asked for, 0 for all
   ShaderProgressBar bar;
 
   void Poll() {
@@ -187,7 +190,37 @@ void NativeShaderPack::Start(const std::filesystem::path& cache_dir, const std::
   if (limited) LimitShaderCpus(threads, crashes);
 #endif
   if (!limited) REXLOG_INFO("KK: shader preparation: the player removed the CPU limit (kk_shader_full_cpu)");
+  impl_->cache_dir = cache_dir;
+  impl_->game_dir = game_dir;
+  impl_->force = force;
+  impl_->threads = threads;
   impl_->job = impl_->api->start(Utf8(cache_dir).c_str(), Utf8(game_dir).c_str(), threads, 1, force ? 1 : 0);
+}
+
+void NativeShaderPack::SetFullCpu(bool full) {
+  if (!Busy()) return;
+  if (!full) {
+#if defined(_WIN32)
+    const int crashes = startup::ShaderCrashes();
+    LimitShaderCpus(ShaderThreadLimit(crashes), crashes);
+#endif
+    return;
+  }
+  LiftShaderCpuLimit();
+  const uint32_t all = std::thread::hardware_concurrency();
+  const float done = Fraction();
+  if (impl_->threads == 0 || all <= impl_->threads || done >= 0.5f) {
+    REXLOG_INFO("KK: shader preparation: the player removed the CPU limit, the job goes on with {} workers ({:.0f}%)",
+                impl_->threads, std::max(done, 0.0f) * 100);
+    return;
+  }
+  REXLOG_INFO("KK: shader preparation: the player removed the CPU limit at {:.0f}%, starting again with all {} CPU "
+              "threads instead of {}", std::max(done, 0.0f) * 100, all, impl_->threads);
+  impl_->api->cancel(impl_->job);
+  impl_->api->release(impl_->job);
+  impl_->job = nullptr;
+  const auto cache_dir = impl_->cache_dir, game_dir = impl_->game_dir;
+  Start(cache_dir, game_dir, impl_->force);
 }
 
 void NativeShaderPack::Cancel() {

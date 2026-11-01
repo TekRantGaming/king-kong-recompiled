@@ -38,6 +38,10 @@ class NativeShaderPack {
   // force: build it even when it is current (Home's "recompile shaders").
   void Start(const std::filesystem::path& cache_dir, const std::filesystem::path& game_dir, bool force = false);
   void Cancel();
+  // The checkbox on the shader screen (kk_shader_full_cpu, already set): full takes the limit off at once. A job
+  // that was started with fewer workers than the PC has CPU threads starts again with all of them while it is under
+  // halfway (nothing it built so far is kept, so past that it would not finish sooner). Not full puts the limit back.
+  void SetFullCpu(bool full);
   bool Busy();          // started and not finished
   bool Finished();      // the last one finished (Busy() is false)
   bool Ok();            // ... and the pack is current

@@ -131,8 +131,11 @@ std::filesystem::path Start(const std::filesystem::path& program_folder, const s
   if (const char* from = std::getenv("KK_MOVE_FROM"); from && *from) o.old_root = from;  // NOLINT
   o.new_root = program_folder / kFolderName;
   o.config = config;
-  if (Done(o.new_root)) return o.new_root;
   o.log = [](const std::string& line) { g_lines.push_back(line); };
+  if (Done(o.new_root)) {
+    Repoint(o);
+    return o.new_root;
+  }
 #if defined(_WIN32)
   // A second window opened during the move waits for it.
   HANDLE lock = CreateMutexW(nullptr, FALSE, L"Local\\KingKongUserFolderMove");
