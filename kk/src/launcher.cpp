@@ -6876,7 +6876,12 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
     installing_ = true;
     install_done_ = false;
     install_thread_ = std::thread([this, pkg] {
-      install_result_ = iso::Extract(pkg, paths_.game_dir, &progress_);
+      try {
+        install_result_ = iso::Extract(pkg, paths_.game_dir, &progress_);
+      } catch (const std::exception& e) {
+        install_result_ = std::string("The install stopped: ") + e.what();
+        REXLOG_ERROR("KK: install stopped: {}", e.what());
+      }
       install_done_ = true;
     });
   }

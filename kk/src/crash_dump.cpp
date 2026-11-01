@@ -10,6 +10,8 @@
 #include "crash_dump.h"
 #include "diagnostics.h"
 #include "exit_evidence.h"
+#include "game_image.h"
+#include "launcher_text.h"
 #include "overlay_modules.h"
 #include "startup_clock.h"
 #include "hooks/kk_native_ui.h"
@@ -588,6 +590,14 @@ void WriteCrashReportNow(const char* reason) {
   record.ExceptionAddress = reinterpret_cast<void*>(context.Rip);
   EXCEPTION_POINTERS info{&record, &context};
   WriteCrashFiles(&info, GetCurrentThreadId(), reason);
+  if (g_game_code_differs.load()) {
+    const std::string text = kk::text::T(
+        "This copy of King Kong is not the disc release the port was made for, so the game can't start.\n\nThe port "
+        "needs the original Xbox 360 disc, game version 0.0.0.1. Compare your disc image with the SHA-1 in the README.");
+    std::wstring wide(size_t(MultiByteToWideChar(CP_UTF8, 0, text.c_str(), -1, nullptr, 0)), L'\0');
+    MultiByteToWideChar(CP_UTF8, 0, text.c_str(), -1, wide.data(), int(wide.size()));
+    MessageBoxW(nullptr, wide.c_str(), L"King Kong", MB_OK | MB_ICONERROR | MB_TOPMOST | MB_SETFOREGROUND);
+  }
 }
 
 namespace {

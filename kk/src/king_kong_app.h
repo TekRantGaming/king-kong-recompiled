@@ -60,6 +60,7 @@ void InstallFpeGuard();  // fpe_guard.cpp
 #include "menu_scene.h"
 #include "mods.h"
 #include "coop_runtime.h"
+#include "game_image.h"
 #include "coop_resume.h"
 #include "overlay.h"
 #include "ui_paint.h"
@@ -584,6 +585,16 @@ class KingKongApp : public rex::ReXApp {
 
   void OnPostLaunchModule(rex::system::XThread* thread) override {
     rex::ReXApp::OnPostLaunchModule(thread);
+    const uint64_t code = kk::HashGameCode(runtime()->virtual_membase() + kk::kGameCodeStart,
+                                           kk::kGameCodeEnd - kk::kGameCodeStart);
+#if defined(KK_DEV_TOOLS)
+    const bool differs = code != kk::kGameCodeHash || std::getenv("KK_DEV_GAME_CODE_DIFFERS");
+#else
+    const bool differs = code != kk::kGameCodeHash;
+#endif
+    kk::g_game_code_differs.store(differs);
+    if (differs) REXLOG_WARN("KK: this copy of the game differs from the disc the port was made for (code {:016X})", code);
+    else REXLOG_INFO("KK: game code is the disc the port was made for ({:016X})", code);
     // Again once the game runs, in case the SDK titles the window when it starts the module.
     app_context().CallInUIThreadDeferred([this] {
       if (window()) window()->SetTitle(kWindowTitle);

@@ -148,6 +148,13 @@ void Capture(std::string line, bool error) {
 class DiagnosticSink final : public spdlog::sinks::base_sink<std::mutex> {
   void sink_it_(const spdlog::details::log_msg& msg) override {
     try {
+      // The SDK says this for every guest thread on a CPU of 4 threads: 181 of them in one crash report, and the
+      // lines that matter fell out of its log tail. Once is enough.
+      static bool few_cores_seen = false;
+      if (std::string_view(msg.payload.data(), msg.payload.size()).find("Too few processor cores") != std::string_view::npos) {
+        if (few_cores_seen) return;
+        few_cores_seen = true;
+      }
       // The whole line as the log file has it (time, level, text) for the crash report's log tail.
       spdlog::memory_buf_t formatted;
       formatter_->format(msg, formatted);

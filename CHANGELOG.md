@@ -3,6 +3,12 @@
 Every release of the King Kong PC port, newest first. The launcher shows this on its About page, and a
 version's notes the first time you start it.
 
+## v2.0.4 (unreleased)
+
+### Fixed
+- **Crash while installing the game**: a disc image with unusual file names ended the program. These names now install normally.
+- **Copies of the game the port can't run**: the game explains why it can't start, instead of closing without a word.
+
 ## v2.0.3 (31 October 2026)
 
 ### Fixed

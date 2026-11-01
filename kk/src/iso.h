@@ -20,6 +20,10 @@ struct Progress {
 // file is not an Xbox disc image or has no readable default.xex.
 uint32_t ReadTitleId(const std::filesystem::path& image);
 
+// A disc's names are plain bytes and not always valid text on the PC (repacked images): a path made the usual way
+// throws (crash reports 75 and 77, 31 Oct). Each byte becomes one character here.
+std::filesystem::path NamePath(const std::string& name);
+
 // Extracts every file on the disc into `out_dir`. Returns an empty string on
 // success, otherwise an error message.
 std::string Extract(const std::filesystem::path& image, const std::filesystem::path& out_dir,

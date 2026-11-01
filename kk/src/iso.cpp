@@ -109,6 +109,23 @@ uint32_t ReadTitleId(const std::filesystem::path& image) {
   return 0;
 }
 
+// For messages: the screen only takes valid text.
+static std::string Printable(std::string name) {
+  for (char& c : name)
+    if (static_cast<unsigned char>(c) < 0x20 || static_cast<unsigned char>(c) >= 0x7F) c = '?';
+  return name;
+}
+
+std::filesystem::path NamePath(const std::string& name) {
+#if defined(_WIN32)
+  std::wstring wide;
+  for (const unsigned char c : name) wide.push_back(wchar_t(c));
+  return wide;
+#else
+  return name;
+#endif
+}
+
 std::string Extract(const std::filesystem::path& image, const std::filesystem::path& out_dir, Progress* progress) {
   Disc d;
   if (!d.Open(image)) return "Not an Xbox disc image: " + image.filename().string();
@@ -133,21 +150,21 @@ std::string Extract(const std::filesystem::path& image, const std::filesystem::p
             error = "Cancelled";
             return;
           }
-          const auto path = dir / e.name;
+          const auto path = dir / NamePath(e.name);
           if (e.dir) {
             walk(e.sector, e.size, path);
             continue;
           }
           std::ofstream out(path, std::ios::binary | std::ios::trunc);
           if (!out) {
-            error = "Cannot write " + path.string();
+            error = "Cannot write " + Printable(e.name);
             return;
           }
           uint64_t left = e.size, offset = d.base() + e.sector * kSector;
           while (left) {
             const size_t chunk = size_t(std::min<uint64_t>(left, buf.size()));
             if (!d.Read(offset, buf.data(), chunk)) {
-              error = "Disc image ended early reading " + e.name;
+              error = "Disc image ended early reading " + Printable(e.name);
               return;
             }
             out.write(buf.data(), std::streamsize(chunk));
