@@ -1,2 +1,4 @@
 // The program icon, the same mark as the website's favicon. SDL also takes the window icon from here.
+// Uncompressed on purpose, 16 to 128 pixels: compressed images look like a hidden payload in the exe's resources, and
+// with them Trapmine flagged every exe on VirusTotal (2 Nov 2026). Do not save it back as PNGs.
 1 ICON "king_kong.ico"
