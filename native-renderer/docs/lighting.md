@@ -306,6 +306,54 @@ with a blend of destination minus source. So:
   is a quarter stronger;
 - frames without a screen-space shadow before the fog (no shadow map) are left alone.
 
+## Muzzle flash light
+
+`native_muzzle_light` (Graphics > Effects, on in Remastered, off in the Original look). The game draws a shot's flash as a
+sprite, which lights nothing. Every gun flame goes through `H_exec_GFX_Flamme`; `kk/src/muzzle_light.cpp` turns the flame's
+position into view space and hands it to `nr_muzzle_flash`. A flash is a small warm point light for 0.1 s.
+
+- `backend/muzzle_light.{h,cpp}`, `backend/game_muzzle.cpp`, `shaders/muzzle.hlsl`: one full screen pass at the end of the
+  opaque pass, only in frames that begin with a live flash. A frame with no flash costs one look at the list.
+- Position from the scene's depth, normal from the Gtao working normals (the AO's when it ran). The picture holds surface
+  colour times light, so the surface is estimated from it, with the grain brought back from how a pixel stands against
+  the pixels around it, because the depth's normals only know the polygons.
+- The hands and gun have their colour drawn after that moment, so in a frame with a flash their colour draws are made again
+  with `shaders/muzzle_hands.hlsl`: depth EQUAL, destination times one plus source.
+- `KK_DEV_MUZZLE_HOLD=<seconds>` holds a flash, `KK_DEV_MUZZLE_TEST="x,y,z"` keeps a light at a view position.
+- Measured: about 0.11 ms at 3200x1800 on the RTX, only while firing. It casts no shadows.
+
+## Hands depth of field
+
+`native_hands_dof` (Graphics > Effects, off by default and in the Original look). Jack's hands and gun go soft, the world
+stays sharp, as in Killzone Shadow Fall.
+
+- `backend/hands_dof.{h,cpp}`, `backend/game_hands_dof.cpp`, `shaders/hands_dof.hlsl`, `shaders/hands_dof_mask.hlsl`.
+- Their colour draws are made again into an R8 mask: 0 away from them, else how soft the pixel is from its distance
+  (`SV_Position.w`; Vulkan needs `-fvk-use-dx-position-w`). Sharp from 0.65 m, softest from 0.25 m.
+- At the first draw after that run a gather over a disc runs from a copy of the picture. A hands pixel reaches as far as
+  its softness and covers what is behind it, so edges spread over the world. What is behind the hands was never drawn
+  (their depth comes first), so world pixels nearby stand in for it. Smoke, flames and the HUD come later and stay sharp.
+- Off in photo mode. Measured: about 0.37 ms at 3200x1800 on the RTX, every frame the hands are drawn.
+
+The arms and what Jack holds are up to 21 draws (the machine gun): `kHandsKeys` was 16 and dropped the arms themselves.
+
+## Skin shading
+
+`native_skin_band` (Graphics > Effects, on in Remastered, off in the Original look). A slight red band where the lit side
+of human skin turns into the shadow side, which is what light scattered under the skin looks like there. Nothing is
+translucent and nothing blurs. It adds no game shader variants, so players do not prepare shaders again.
+
+- `backend/skin_band.{h,cpp}`, `backend/game_skin.cpp`, `shaders/skin_band.hlsl`, `shaders/skin_band_mask.hlsl`.
+- Skin is known by the base texture's canonical hash (`SkinTexture`, from documentary/sss, REPORT-089): Ann, Jack's arms and
+  three men. Natives and any other cast are not listed yet. Each such opaque colour draw is made again into the skin image
+  with the game's own vertex shader: every skin pixel shader reads slot 0 at TEXCOORD0.
+- The mask shader sorts skin from the hair, leather and cloth in those atlases by colour.
+- The picture over the skin's colour is how much light a pixel got, from every light and shadow together. The darkest and
+  brightest skin around a pixel say where it lies between them; the band peaks a little on the shadow side of half way.
+- It runs at the fog pass for the world and again after the hands. A skin image for another target (a reflection) is dropped.
+- `KK_DEV_SKIN_VIEW`: 1 the band in red, 2 how much is skin, 3 the skin image. Chapter select entry 1 opens on Ann's face.
+- Measured: 0.07 ms in a wide shot, 0.26 ms with her face filling the frame, at 3200x1800 on the RTX.
+
 ## Launcher
 
 `LightingItems` in `kk/src/launcher.cpp`: three rows after Ambient occlusion on the Graphics page, only while the
