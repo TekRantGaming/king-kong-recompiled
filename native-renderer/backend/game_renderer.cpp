@@ -522,6 +522,7 @@ bool GameRenderer::Initialize() {
   CelInitialize();  // Cel hook (game_cel.cpp): the cel shading
   MuzzleInitialize();  // Muzzle hook (game_muzzle.cpp)
   HandsDofInitialize();  // Hands depth of field hook (game_hands_dof.cpp)
+  SkinInitialize();  // Skin hook (game_skin.cpp)
   // Upscalers: their passes. Without them the renderer runs as without an upscaler (logged).
   if (upscale_ && !UpscaleInitialize()) {
     Logf(LogLevel::kWarning, "rexgpu-native: upscaler: the passes could not be made; no upscaler");
@@ -911,6 +912,8 @@ void GameRenderer::TrimClearTargets() {
     if (scene_muzzle_) scene_muzzle_->ForgetTargets();
     if (hands_dof_) hands_dof_->ForgetTargets();
     hands_dof_color_ = nullptr;
+    if (skin_band_) skin_band_->ForgetTargets();
+    skin_color_ = nullptr;
     if (scene_photo_) scene_photo_->ForgetTargets();
   }
   if (upscale_ || scene_ao_ || scene_gi_ || gi_parked_ || scene_lighting_ || lighting_parked_ || scene_cel_ || cel_parked_ ||
@@ -2356,6 +2359,8 @@ void GameRenderer::Draw(nvrhi::ICommandList* cl, const DrawCall& call) {
   if (scene_cel_) CelDrawHook(cl, call, d, colors, depth, record, *vs, ps.get());
   // Muzzle hook (game_muzzle.cpp): in a frame with a flash, its light at the end of the opaque pass.
   if (scene_muzzle_) MuzzleDrawHook(cl, call, d, colors, depth, record, *vs, ps.get());
+  // Skin hook (game_skin.cpp): the band at the fog pass, and after the first-person hands.
+  if (skin_band_) SkinDrawHook(cl, call, record, ps.get());
   // Hands depth of field hook (game_hands_dof.cpp): the gather after their last colour draw.
   if (hands_dof_) HandsDofDrawHook(cl, call, record);
   // Photo hook (game_photo.cpp): the depth of field's depth at the end of the opaque pass.
@@ -2818,6 +2823,8 @@ void GameRenderer::Draw(nvrhi::ICommandList* cl, const DrawCall& call) {
   if (scene_ao_ && !ao_hands_.empty()) AoRedrawHands(cl, call, record, *vs, gs, args, indexed_draw, *size_from);
   // Muzzle hook (game_muzzle.cpp): in a frame with a flash, their colour drawn again, brighter.
   if (scene_muzzle_ && !muzzle_hands_.empty()) MuzzleRedrawHands(cl, call, record, *vs, gs, args, indexed_draw, *size_from);
+  // Skin hook (game_skin.cpp): a skin material's colour draw again, into the skin image.
+  if (skin_band_) SkinRedraw(cl, call, record, *vs, gs, args, indexed_draw, d);
   // Hands depth of field hook (game_hands_dof.cpp): their colour draw again, into the mask.
   if (hands_dof_ && !hands_dof_keys_.empty()) HandsDofRedraw(cl, call, record, *vs, gs, args, indexed_draw);
   if (tessellated) {

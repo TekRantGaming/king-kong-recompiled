@@ -31,6 +31,7 @@
 #include "backend/lighting_config.h"
 #include "backend/hands_dof_config.h"
 #include "backend/muzzle_config.h"
+#include "backend/skin_band_config.h"
 #include "backend/render_thread.h"
 #include "backend/renderer.h"
 #include "backend/upscale_config.h"
@@ -128,6 +129,8 @@ struct GameSettings {
   MuzzleConfig muzzle;
   // Depth of field on the first-person hands (hands_dof.h). Off by default.
   HandsDofConfig hands_dof;
+  // The red band on human skin (skin_band.h). Off by default.
+  SkinBandConfig skin;
   std::function<EffectSettings()> effect_settings;
 };
 

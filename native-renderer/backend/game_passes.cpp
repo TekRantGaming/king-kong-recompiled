@@ -375,6 +375,7 @@ bool GameRenderer::ResolveCopy(nvrhi::ICommandList* cl, HostTarget* source, bool
 }
 
 void GameRenderer::Resolve(nvrhi::ICommandList* cl, const ResolveCall& call) {
+  if (skin_band_) SkinFinish(cl);  // Skin hook (game_skin.cpp): before the picture leaves its target
   if (hands_dof_) HandsDofFinish(cl);  // Hands depth of field hook (game_hands_dof.cpp): before the picture leaves its target
   UpdateEffects();
   if (options_.debug & 2048) return;  // debugging: no resolves
@@ -512,6 +513,7 @@ void GameRenderer::Resolve(nvrhi::ICommandList* cl, const ResolveCall& call) {
 // ---------------------------------------------------------------- present
 
 bool GameRenderer::Present(nvrhi::ICommandList* cl, uint32_t device, nvrhi::ITexture* target) {
+  if (skin_band_) SkinPresentHook(cl);  // Skin hook (game_skin.cpp)
   if (hands_dof_) HandsDofPresentHook(cl);  // Hands depth of field hook (game_hands_dof.cpp)
   PollResourcePreload(cl);
   UpdateEffects();

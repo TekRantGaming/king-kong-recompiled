@@ -74,8 +74,10 @@ if(NR_GAME_RENDERER)
         scene_cel.cpp
         game_muzzle.cpp
         game_hands_dof.cpp
+        game_skin.cpp
         muzzle_light.cpp
         hands_dof.cpp
+        skin_band.cpp
         game_photo.cpp
         scene_photo.cpp
         shader_library.cpp

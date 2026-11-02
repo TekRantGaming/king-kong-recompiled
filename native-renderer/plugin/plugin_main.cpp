@@ -382,6 +382,11 @@ REXCVAR_DEFINE_DOUBLE(native_tessellation_smoothness, 0.75, "Native renderer", "
 REXCVAR_DEFINE_INT32(native_tessellation_detail, 4, "Native renderer", "Ann tessellation detail, 1 to 16")
     .lifecycle(rex::cvar::Lifecycle::kHotReload);
 
+// The red band on human skin (backend/skin_band.h). Off here; the game sets its own default.
+REXCVAR_DEFINE_BOOL(native_skin_band, false, "Native renderer", "A slight red band between the lit and shadow sides of human skin")
+    .lifecycle(rex::cvar::Lifecycle::kHotReload);
+REXCVAR_DEFINE_BOOL(native_skin_band_gpu_time, false, "Native renderer", "Log the skin band's GPU time")
+    .lifecycle(rex::cvar::Lifecycle::kHotReload);
 // Depth of field on the first-person hands (backend/hands_dof.h). Off.
 REXCVAR_DEFINE_BOOL(native_hands_dof, false, "Native renderer", "Depth of field on the first-person hands and gun")
     .lifecycle(rex::cvar::Lifecycle::kHotReload);

@@ -36,6 +36,18 @@ if ($Only -eq "" -or $Only -eq "muzzle") {
     if ($Only -eq "muzzle") { Write-Host "Shaders written to $out"; exit 0 }
 }
 
+# The red band on human skin (skin_band.hlsl, its mask as ao_hands.hlsl below). -Only skin compiles just these.
+if ($Only -eq "" -or $Only -eq "skin") {
+    Compile-Entries (Join-Path $here "skin_band.hlsl") @("skin_band_vs:vs:vs_main", "skin_band_ps:ps:ps_main")
+    $hands = Join-Path $here "skin_band_mask.hlsl"
+    & $Dxc -nologo -T ps_6_0 -E main -HV 2021 -O3 -Gis -Qstrip_debug -Fh (Join-Path $out "skin_band_mask_ps_dxil.h") -Vn "k_skin_band_mask_ps_dxil" $hands
+    if ($LASTEXITCODE -ne 0) { throw "dxc (DXIL) failed on $hands" }
+    & $Dxc -nologo -T ps_6_0 -E main -HV 2021 -O3 -Gis -Qstrip_debug -spirv "-fspv-target-env=vulkan1.2" `
+        -fvk-use-dx-layout -Fh (Join-Path $out "skin_band_mask_ps_spirv.h") -Vn "k_skin_band_mask_ps_spirv" $hands
+    if ($LASTEXITCODE -ne 0) { throw "dxc (SPIR-V) failed on $hands" }
+    if ($Only -eq "skin") { Write-Host "Shaders written to $out"; exit 0 }
+}
+
 # The depth of field on the first-person hands (hands_dof.hlsl, its mask as ao_hands.hlsl below). -Only handsdof compiles just these.
 if ($Only -eq "" -or $Only -eq "handsdof") {
     Compile-Entries (Join-Path $here "hands_dof.hlsl") @("hands_dof_vs:vs:vs_main", "hands_dof_ps:ps:ps_main")

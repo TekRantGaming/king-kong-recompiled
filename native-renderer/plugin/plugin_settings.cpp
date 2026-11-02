@@ -267,6 +267,13 @@ CelConfig ReadCelConfig() {
   return c;
 }
 
+SkinBandConfig ReadSkinBandConfig() {
+  SkinBandConfig c;
+  c.enabled = rex::cvar::GetFlagByName("native_skin_band") == "true";
+  c.gpu_time = rex::cvar::GetFlagByName("native_skin_band_gpu_time") == "true";
+  return c;
+}
+
 HandsDofConfig ReadHandsDofConfig() {
   HandsDofConfig c;
   c.enabled = rex::cvar::GetFlagByName("native_hands_dof") == "true";
@@ -390,6 +397,7 @@ GameSettings ReadGameSettings(bool vulkan) {
   game.cel = ReadCelConfig();
   game.muzzle = ReadMuzzleConfig();
   game.hands_dof = ReadHandsDofConfig();
+  game.skin = ReadSkinBandConfig();
   // The settings the graphics panel (F8) and the in-game pages change while the game runs: read once a
   // frame by the game renderer (effect_settings.h). The init-only parts (tuning, debugging, rule
   // files) stay as read above.
@@ -431,6 +439,7 @@ GameSettings ReadGameSettings(bool vulkan) {
     s.cel = ReadCelConfig();
     s.muzzle = ReadMuzzleConfig();
     s.hands_dof = ReadHandsDofConfig();
+    s.skin = ReadSkinBandConfig();
     s.shadow_scale = shadow_override > 0 && !(lighting.shadows_on() && shadow_override == 1)
                          ? shadow_override : ShadowScaleForQuality(lighting.shadows);
     ParseUpscalerKind(get("native_upscaler"), upscale.kind);

@@ -46,6 +46,7 @@
 #include "backend/scene_ao.h"
 #include "backend/hands_dof.h"
 #include "backend/muzzle_light.h"
+#include "backend/skin_band.h"
 #include "backend/scene_cel.h"
 #include "backend/scene_photo.h"
 #include "backend/photo_grade.h"
@@ -231,6 +232,8 @@ class GameRenderer {
     MuzzleConfig muzzle;
     // Depth of field on the first-person hands (hands_dof.h). Off by default: nothing of it is created.
     HandsDofConfig hands_dof;
+    // The red band on human skin (skin_band.h). Off by default: nothing of it is created.
+    SkinBandConfig skin;
     std::function<EffectSettings()> effect_settings;
     // The pipelines a run with live settings (effect_settings) makes, without the settings themselves:
     // its scale constants (b3) and lighting constants (b5) in the layout. For the pipeline preparation
@@ -1189,6 +1192,21 @@ class GameRenderer {
                          const nvrhi::GraphicsState& gs, const nvrhi::DrawArguments& args, bool indexed,
                          const HostTarget& target);
   void UpdateMuzzle(const MuzzleConfig& want);
+  // ---- the red band on human skin (game_skin.cpp, skin_band.h); skin_band_ is null until it is on.
+  void SkinInitialize();
+  void UpdateSkin(const SkinBandConfig& want);
+  void SkinDrawHook(nvrhi::ICommandList* cl, const DrawCall& call, const PipelineRecord& record, const GameShader* ps);
+  void SkinRedraw(nvrhi::ICommandList* cl, const DrawCall& call, const PipelineRecord& record, const GameShader& vs,
+                  const nvrhi::GraphicsState& gs, const nvrhi::DrawArguments& args, bool indexed, const dev::DeviceView& d);
+  void SkinFinish(nvrhi::ICommandList* cl);
+  void SkinPresentHook(nvrhi::ICommandList* cl);
+  std::unique_ptr<SkinBand> skin_band_;
+  std::unique_ptr<AoGpuTimer> skin_timer_;  // --native_skin_band_gpu_time
+  bool skin_failed_ = false, skin_user_gpu_time_ = false, skin_fog_ = false;
+  uint64_t skin_frame_ = UINT64_MAX;
+  nvrhi::ITexture* skin_color_ = nullptr;  // skin was drawn, the band is still to come
+  nvrhi::ShaderHandle skin_mask_ps_;
+
   // ---- depth of field on the first-person hands (game_hands_dof.cpp, hands_dof.h); hands_dof_ is null until it is on.
   void HandsDofInitialize();
   void UpdateHandsDof(const HandsDofConfig& want);
