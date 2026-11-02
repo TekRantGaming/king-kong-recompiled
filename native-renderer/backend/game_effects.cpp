@@ -102,6 +102,7 @@ void GameRenderer::UpdateEffects() {
   options_.texture_pack = s.texture_pack;
   options_.texture_pack_folder = s.texture_pack_folder;
   tessellation_=s.tessellation && options_.tessellation_supported;
+  parallax_ = s.parallax;
   tessellation_smoothness_=std::isfinite(s.tessellation_smoothness)?std::clamp(s.tessellation_smoothness,0.0f,1.0f):0.75f;
   tessellation_detail_=std::clamp(s.tessellation_detail,1u,16u);
   if ((tessellation_ || TessellationBenchRequested()) && !tessellation_timer_) {

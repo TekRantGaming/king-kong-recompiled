@@ -222,6 +222,7 @@ inline constexpr Help kHelp[] = {
     {"Muzzle flash light", C::kLow, C::kNone, A::kAuto, nullptr, {}},
     {"Hands depth of field", C::kLow, C::kNone, A::kAuto, nullptr, {}},
     {"Skin shading", C::kLow, C::kNone, A::kAuto, nullptr, {}},
+    {"Parallax occlusion", C::kMedium, C::kNone, A::kAuto, nullptr, {}},
     {"Horizontal flip", C::kNone, C::kUnset, A::kAuto, "Mirrors the whole picture from left to right.", {}},
     {"Texture pack", C::kLow, C::kHigh, A::kAuto,
      "Sharper textures on Kong, the characters and Skull Island. HD packs need more video memory.", {}},

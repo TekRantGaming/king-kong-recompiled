@@ -2411,6 +2411,23 @@ void GameRenderer::Draw(nvrhi::ICommandList* cl, const DrawCall& call) {
       } else {
         ++(water ? live_draws_.water_waiting : live_draws_.shadows_waiting);
       }
+    } else if (parallax_ && parallax_view_.valid && ParallaxDraw(d, record, *vs, *ps)) {
+      // Parallax hook (game_parallax.cpp): the same way, its variant once that and its pipeline are ready.
+      if (auto variant = shaders_->ParallaxVariant(*ps)) {
+        auto variant_record = record;
+        variant_record.ps_input = variant->input_hash;
+        const uint64_t variant_key = PipelineKey(variant_record);
+        nvrhi::GraphicsPipelineDesc pd;
+        nvrhi::FramebufferInfo info;
+        BuildPipelineDesc(variant_record, vs->handle, variant->handle, pd, info);
+        if (auto* prepared = GetPipeline(pd, info, variant_key, PipelineDemand::kOptional)) {
+          pipeline = prepared;
+          ps = std::move(variant);
+          ++live_draws_.parallax;
+        } else {
+          ++live_draws_.parallax_waiting;
+        }
+      }
     }
   }
 

@@ -291,6 +291,13 @@ void GameRenderer::LightingWriteConstants(nvrhi::ICommandList* cl) {
     k.ssrScreen[2] = ssr->mapping.add[0];
     k.ssrScreen[3] = ssr->mapping.add[1];
   }
+  if (!(ssr && ssr->valid) && parallax_ && parallax_view_.valid) {
+    // Parallax hook (game_parallax.cpp): the same view mapping, from the AO's working depth.
+    k.ssrDepth[0] = parallax_view_.depth[0];
+    k.ssrDepth[1] = parallax_view_.depth[1];
+    std::memcpy(k.ssrScreen, parallax_view_.screen, sizeof(k.ssrScreen));
+    std::memcpy(k.ssrRect, parallax_view_.rect, sizeof(k.ssrRect));
+  }
   k.ssrSampler[2] = lighting_.wrap_sampler_slot;
   k.ssrParams[0] = std::min(l.ssr_strength, 1.0f);
   k.ssrParams[1] = 3.0f;    // the longest ray: three times the water's view depth

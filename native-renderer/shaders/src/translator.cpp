@@ -5,6 +5,7 @@
 #include <xxh3.h>
 
 #include "kkshaders/abi.h"
+#include "kkshaders/parallax.h"
 
 // The vendored XenosRecomp core.
 #include "pch.h"
@@ -117,6 +118,7 @@ uint64_t translationInputHash(const ShaderInfo& info) {
     // The water reflection hook with its text: a change of the hook rebuilds the hooked shaders.
     if (info.waterReflection.enabled() && info.kind == ShaderKind::Pixel)
         w.str("water-reflection/1 " + formatWaterReflectionHook(info.waterReflection) + "\n" + lightingText());
+    if (info.parallax && info.kind == ShaderKind::Pixel) w.str("parallax/1\n" + lightingText() + parallaxText());
     return XXH3_64bits(w.bytes.data(), w.bytes.size());
 }
 
@@ -216,6 +218,10 @@ TranslateResult translate(const ShaderInfo& info, const TranslateOptions& option
         return result;
     }
     result.hlsl = header + recompiler.out;
+    if (info.parallax && info.kind == ShaderKind::Pixel && !applyParallax(result.hlsl, result.error)) {
+        result.hlsl.clear();
+        return result;
+    }
 
     ShaderBindings& b = result.bindings;
     b.kind = info.kind;

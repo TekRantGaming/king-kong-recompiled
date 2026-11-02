@@ -104,6 +104,7 @@ if(NR_GAME_RENDERER)
         ${NR_ROOT}/shaders/src/motion.cpp
         ${NR_ROOT}/shaders/src/tessellation.cpp
         ${NR_ROOT}/shaders/src/lighting.cpp
+        ${NR_ROOT}/shaders/src/parallax.cpp
         "${CMAKE_CURRENT_BINARY_DIR}/kkshaders_prelude.cpp"
         "${CMAKE_CURRENT_BINARY_DIR}/kkshaders_lighting.cpp")
     target_include_directories(kkshaders PUBLIC ${NR_ROOT}/shaders/include PRIVATE "${_nr_dxc_include}")

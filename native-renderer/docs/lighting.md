@@ -355,6 +355,25 @@ translucent and nothing blurs. It adds no game shader variants, so players do no
 - `KK_DEV_SKIN_VIEW`: 1 the band in red, 2 how much is skin, 3 the skin image. Chapter select entry 1 opens on Ann's face.
 - Measured: 0.07 to 0.15 ms in play, 0.26 ms with her face filling the frame, at 3200x1800 on the RTX.
 
+## Parallax occlusion
+
+`native_parallax` (Graphics > Effects, off by default and in the Original look). Rock, stone and wood show depth when you
+look across them.
+
+- `shaders/include/kkshaders/parallax.h`, `shaders/src/parallax.cpp`, `backend/game_parallax.cpp`. The hook is put into the
+  translated text of a pixel shader (`ShaderInfo::parallax`, part of its input hash): at the top of main it moves the base
+  texture's coordinates (fetch 0 at TEXCOORD0.xy) by a march of at most 16 steps, and the normal map's (fetch 1 at
+  TEXCOORD1.xy) by the same move on screen. A shader of another form is left as it is (logged once).
+- The tangent frame comes from screen derivatives, the view from the KKLighting buffer's mapping, filled from the AO's
+  working depth when the water reflections do not fill it. With AO off there is no parallax.
+- The height is the base texture's brightness (no height maps on the disc): dark texels lie deep, 0.05 of the texture at
+  most, fading out from 12 m to 24 m.
+- Which draws: opaque colour passes with a base texture and a normal map, not skinned (no characters), not alpha tested
+  (no leaves), none of the lighting families.
+- The hooked shaders are made on a worker the first time each one is drawn (about 50 in a chapter), like the live lighting
+  variants: until then the original draws. No pack entry and no shader rebuild for players.
+- Not measured on its own: it runs inside the game's own draws.
+
 ## Launcher
 
 `LightingItems` in `kk/src/launcher.cpp`: three rows after Ambient occlusion on the Graphics page, only while the

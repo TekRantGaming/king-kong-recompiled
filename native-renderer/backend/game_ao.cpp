@@ -155,6 +155,9 @@ void GameRenderer::AoDrawHook(nvrhi::ICommandList* cl, const DrawCall& call, con
   SceneAo::Draw a = AoDescribeDraw(call, d, colors, depth, record, vs, ps);
   const AoDrawState& st = a.state;
   const bool reads = scene_ao_->OnDraw(cl, a, s);
+  if (parallax_) {
+    if (const Gtao* g = scene_ao_->prepared(call.frame)) ParallaxNoteView(*g);  // Parallax hook (game_parallax.cpp)
+  }
   if (ao_constants_) AoWriteAmbientConstants(cl, reads);
   const bool dump = Dump(call.frame) || (options_.ao.dump_every && call.frame % options_.ao.dump_every == 0);
   if (dump && s.mode > 0) {

@@ -69,6 +69,7 @@ inline constexpr Row kGraphicsRows[] = {
     {"Effects", "Muzzle flash light"},
     {"Effects", "Hands depth of field"},
     {"Effects", "Skin shading"},
+    {"Effects", "Parallax occlusion"},
     {"Extras", "Horizontal flip"},
     {"Texture pack", "Texture pack"},
     {"Texture pack", "Texture packs in the Workshop"},  // task 209: downloads, imports, removing are there

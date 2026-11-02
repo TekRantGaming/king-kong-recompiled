@@ -93,6 +93,9 @@ class ShaderLibrary {
   void SetWaterReflections(bool on) { water_reflections_ = on; }
   // Live lighting variants. Returns null while a worker prepares the shader; the original stays usable.
   std::shared_ptr<const GameShader> LightingVariant(const GameShader& base, Replacement replacement, bool water);
+  // Parallax occlusion mapping (kkshaders/parallax.h): the shader translated with the hook, made on a worker like the
+  // live lighting variants. Null while it is made, and for good when the shader cannot take the hook.
+  std::shared_ptr<const GameShader> ParallaxVariant(const GameShader& base);
   // Live lighting variants still being made (the graphics panel's "Preparing").
   bool lighting_variants_pending();
 

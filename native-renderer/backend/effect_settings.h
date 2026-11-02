@@ -22,6 +22,7 @@ struct EffectSettings {
   bool texture_pack = false;
   std::string texture_pack_folder;
   bool tessellation = false;
+  bool parallax = false;  // parallax occlusion mapping on the world's surfaces (kkshaders/parallax.h)
   float tessellation_smoothness = 0.75f;
   uint32_t tessellation_detail = 4;
   AoQuality ao_quality = AoQuality::kAuto;

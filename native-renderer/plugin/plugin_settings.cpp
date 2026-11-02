@@ -415,6 +415,7 @@ GameSettings ReadGameSettings(bool vulkan) {
     ParseAoQuality(get("native_ao_quality"), quality);
     s.ao_quality = quality;
     s.tessellation = get("native_tessellation")=="true";
+    s.parallax = get("native_parallax") == "true";
     s.texture_pack = get("native_texture_pack")=="true";
     s.texture_pack_folder = get("native_texture_pack_folder");
     s.tessellation_smoothness = float(std::clamp(number("native_tessellation_smoothness",0.75),0.0,1.0));

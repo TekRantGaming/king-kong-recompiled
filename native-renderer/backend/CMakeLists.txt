@@ -75,6 +75,7 @@ if(NR_GAME_RENDERER)
         game_muzzle.cpp
         game_hands_dof.cpp
         game_skin.cpp
+        game_parallax.cpp
         muzzle_light.cpp
         hands_dof.cpp
         skin_band.cpp

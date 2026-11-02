@@ -1911,6 +1911,12 @@ class SettingsPages {
                            "native_skin_band");
       items.push_back(std::move(Disable(it, original, kSetByOriginal)));
     }
+    {
+      Item it = CvarToggle("Parallax occlusion",
+                           "Rock, stone and wood show depth when you look across them.",
+                           "native_parallax");
+      items.push_back(std::move(Disable(it, original, kSetByOriginal)));
+    }
 
     OriginalVideoItems(items);
     TexturePackItems(items);
@@ -6398,7 +6404,7 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
                 "native_texture_pack", "native_texture_pack_folder",
                 "present_effect", "kk_render_quality", "resolution_scale", "draw_resolution_scale_x",
                 "draw_resolution_scale_y", "native_upscaler", "native_upscaler_quality",
-                "kk_motion_blur", "kk_big_blur", "kk_fog", "native_muzzle_light", "native_hands_dof", "native_skin_band", "ao_mode", "ao_strength", "native_ao_method",
+                "kk_motion_blur", "kk_big_blur", "kk_fog", "native_muzzle_light", "native_hands_dof", "native_skin_band", "native_parallax", "ao_mode", "ao_strength", "native_ao_method",
                 "native_ao_apply", "native_ao_quality", "native_ao_samples", "native_ao_normal_smoothing", "native_gi", "native_gi_distance", "native_shadow_quality", "native_water_reflections", "native_volumetrics", "native_effect_buffers", "native_sharpness",
                 "native_cel_shading", "native_cel_outline", "native_cel_darkness", "native_cel_bands", "native_cel_strength"};
       case kGameplay:

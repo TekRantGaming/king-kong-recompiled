@@ -1202,6 +1202,16 @@ class GameRenderer {
   void SkinResolveHook(nvrhi::ICommandList* cl);
   void SkinPresentHook(nvrhi::ICommandList* cl);
   std::unique_ptr<SkinBand> skin_band_;
+
+  // ---- parallax occlusion mapping (game_parallax.cpp, kkshaders/parallax.h): the world's opaque normal-mapped draws get
+  // a variant of their pixel shader. The view mapping comes from the AO's working depth (last frame's).
+  bool ParallaxDraw(const dev::DeviceView& d, const PipelineRecord& record, const GameShader& vs, const GameShader& ps) const;
+  void ParallaxNoteView(const Gtao& gtao);
+  bool parallax_ = false;
+  struct ParallaxView {
+    bool valid = false;
+    float depth[2] = {}, screen[4] = {}, rect[4] = {};
+  } parallax_view_;
   std::unique_ptr<AoGpuTimer> skin_timer_;  // --native_skin_band_gpu_time
   bool skin_failed_ = false, skin_user_gpu_time_ = false, skin_fog_ = false;
   uint64_t skin_frame_ = UINT64_MAX;
@@ -1321,7 +1331,7 @@ class GameRenderer {
   uint64_t live_changes_ = 0;
   // This frame's draws with the lighting options' shader variants (the panel shows they are applied).
   struct LiveDraws {
-    uint32_t shadows = 0, water = 0, shadows_waiting = 0, water_waiting = 0;
+    uint32_t shadows = 0, water = 0, shadows_waiting = 0, water_waiting = 0, parallax = 0, parallax_waiting = 0;
   } live_draws_;
   double live_last_change_ms_ = 0;
 
