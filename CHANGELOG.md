@@ -3,6 +3,21 @@
 Every release of the King Kong PC port, newest first. The launcher shows this on its About page, and a
 version's notes the first time you start it.
 
+## v2.0.9 (2 November 2026)
+
+### Added
+- **Five more languages**: Dansk, Nederlands, Norsk, Suomi and Svenska are in the Language list. The launcher, the pause menu, subtitles, chapter names and loading screens all follow it. These five have English voices, as on the disc, so choosing one turns subtitles on.
+- **Loading screens in every language**: the save notice and "Returning to the main menu" now show in your language instead of always in English.
+
+### Fixed
+- **Mouse pointer missing on the main menu**: with Keyboard & mouse set, the pointer was hidden on the main menu, and stayed hidden after changing to Controller until the next start. It now stays visible.
+- **Pointer hidden by a jittery controller**: a stick or trigger that wobbles slightly no longer hides the pointer while you use the mouse.
+- **Clearer update errors**: when an update cannot write a file, it now names the file and gives the reason, and says what to do if an antivirus blocked it.
+- **Clearer crash message**: if the game stops with an error while loading on both DirectX 12 and Vulkan, the message no longer blames your graphics driver.
+
+### Changed
+- **Windows file details**: King Kong's exe now shows its name, publisher and version in Windows.
+
 ## v2.0.8 (1 November 2026)
 
 ### Changed

@@ -337,7 +337,7 @@ endif()
 # The port's version: shown in the launcher and compared with GitHub releases by the updater.
 # (-DKK_VERSION=x.y.z overrides it, to test the updater with an "older" build.)
 if(NOT DEFINED KK_VERSION)
-    set(KK_VERSION "2.0.8")
+    set(KK_VERSION "2.0.9")
 endif()
 if(WIN32)
     # The name, publisher and version in the exe's file details (a beta's "-beta.n" stays in the text fields only).
