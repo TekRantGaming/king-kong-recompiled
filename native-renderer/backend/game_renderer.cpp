@@ -2811,6 +2811,8 @@ void GameRenderer::Draw(nvrhi::ICommandList* cl, const DrawCall& call) {
   ++stats_.draws;
   // AO on the first-person hands (game_ao.cpp): their colour drawn again, times the occlusion.
   if (scene_ao_ && !ao_hands_.empty()) AoRedrawHands(cl, call, record, *vs, gs, args, indexed_draw, *size_from);
+  // Muzzle hook (game_muzzle.cpp): in a frame with a flash, their colour drawn again, brighter.
+  if (scene_muzzle_ && !muzzle_hands_.empty()) MuzzleRedrawHands(cl, call, record, *vs, gs, args, indexed_draw, *size_from);
   if (tessellated) {
     tessellation_drawn_this_frame_=true;
     ++tessellation_draws_this_frame_;

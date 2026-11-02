@@ -5,6 +5,7 @@
 #include <algorithm>
 #include <array>
 #include <cmath>
+#include <cstdio>
 #include <cstdlib>
 #include <cstring>
 #include <mutex>
@@ -53,15 +54,21 @@ float MuzzleFade(float age) {
 uint32_t LiveMuzzleLights(MuzzleLightNow* out, Clock::time_point now) {
   std::array<MuzzleLightNow, kFlashes> live;
   uint32_t n = 0;
-#if defined(KK_DEV_TOOLS)
   // KK_DEV_MUZZLE_HOLD=<seconds>: a flash stays at full strength this long (pictures of what it lights).
   static const float hold = [] {
     const char* v = std::getenv("KK_DEV_MUZZLE_HOLD");
     return v ? float(std::atof(v)) : 0.0f;
   }();
-#else
-  constexpr float hold = 0.0f;
-#endif
+  // KK_DEV_MUZZLE_TEST="x,y,z": a light stays at this view position, for pictures with no gun to hand.
+  static const std::array<float, 3>* test = []() -> const std::array<float, 3>* {
+    const char* v = std::getenv("KK_DEV_MUZZLE_TEST");
+    static std::array<float, 3> at;
+    return v && std::sscanf(v, "%f,%f,%f", &at[0], &at[1], &at[2]) == 3 ? &at : nullptr;
+  }();
+  if (test) {
+    if (out) *out = {(*test)[0], (*test)[1], (*test)[2], MuzzleTuning::kStrength};
+    return 1;
+  }
   {
     std::lock_guard lock(g_mutex);
     for (const Flash& f : g_flashes) {
@@ -256,6 +263,25 @@ bool SceneMuzzle::Shade(nvrhi::ICommandList* cl, const Gtao& gtao, nvrhi::ITextu
   nvrhi::DrawArguments args;
   args.vertexCount = 3;
   cl->draw(args);
+  XeGTAO::GTAOConstants view;
+  std::memcpy(&view, k.gtao, sizeof(view));
+  uint32_t working[4];
+  std::memcpy(working, k.gtao + 96 + 16, sizeof(working));
+  hands_ = {};
+  hands_.depth_unpack[0] = view.DepthUnpackConsts.x;
+  hands_.depth_unpack[1] = view.DepthUnpackConsts.y;
+  hands_.ndc_mul[0] = view.NDCToViewMul.x;
+  hands_.ndc_mul[1] = view.NDCToViewMul.y;
+  hands_.ndc_add[0] = view.NDCToViewAdd.x;
+  hands_.ndc_add[1] = view.NDCToViewAdd.y;
+  hands_.origin[0] = float(source[0]);
+  hands_.origin[1] = float(source[1]);
+  hands_.size[0] = k.params[0] * float(working[2]);
+  hands_.size[1] = k.params[0] * float(working[3]);
+  hands_.host_scale[0] = host_scale_[0];
+  hands_.host_scale[1] = host_scale_[1];
+  hands_.count = count;
+  std::memcpy(hands_.light, k.light, sizeof(hands_.light));
   return true;
 }
 
@@ -327,6 +353,8 @@ void SceneMuzzle::OnDraw(nvrhi::ICommandList* cl, const SceneAo::Draw& d, const 
   const bool depth_before_draw = tracker_.frame() == d.frame && tracker_.depth_valid();
   const AoFrameTracker::Events e = tracker_.OnDraw(td);
   if (e.in_scene) {
+    host_scale_[0] = d.screen.host_scale_x;
+    host_scale_[1] = d.screen.host_scale_y;
     if (d.color.key && d.color.key == tracker_.scene_color()) scene_color_ = d.color;
     if (d.depth.key && d.depth.key == tracker_.scene_depth()) scene_depth_ = d.depth;
   }

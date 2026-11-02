@@ -36,6 +36,17 @@ if ($Only -eq "" -or $Only -eq "muzzle") {
     if ($Only -eq "muzzle") { Write-Host "Shaders written to $out"; exit 0 }
 }
 
+# The muzzle light on the first-person hands (muzzle_hands.hlsl): as ao_hands.hlsl below. -Only muzzlehands compiles just this.
+if ($Only -eq "" -or $Only -eq "muzzlehands") {
+    $hands = Join-Path $here "muzzle_hands.hlsl"
+    & $Dxc -nologo -T ps_6_0 -E main -HV 2021 -O3 -Gis -Qstrip_debug -Fh (Join-Path $out "muzzle_hands_ps_dxil.h") -Vn "k_muzzle_hands_ps_dxil" $hands
+    if ($LASTEXITCODE -ne 0) { throw "dxc (DXIL) failed on $hands" }
+    & $Dxc -nologo -T ps_6_0 -E main -HV 2021 -O3 -Gis -Qstrip_debug -spirv "-fspv-target-env=vulkan1.2" `
+        -fvk-use-dx-layout -Fh (Join-Path $out "muzzle_hands_ps_spirv.h") -Vn "k_muzzle_hands_ps_spirv" $hands
+    if ($LASTEXITCODE -ne 0) { throw "dxc (SPIR-V) failed on $hands" }
+    if ($Only -eq "muzzlehands") { Write-Host "Shaders written to $out"; exit 0 }
+}
+
 # AO on the first-person hands (ao_hands.hlsl, docs/ao.md): drawn with the game's vertex shaders, so built
 # like the translated shaders (the game's layout, no binding shifts). -Only aohands compiles just this.
 if ($Only -eq "" -or $Only -eq "aohands") {

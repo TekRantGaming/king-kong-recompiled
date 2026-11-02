@@ -4,8 +4,10 @@
 //
 //  - The game's thread tells where a flame was made (nr_muzzle_flash, in view space, from kk/src/muzzle_light.cpp).
 //  - At the end of the scene's opaque pass, as the GI (scene_gi.h), a full-screen pass (shaders/muzzle.hlsl) adds the
-//    light from the scene's depth and normals. Water, fur, smoke, fire, the first-person hands and the HUD are drawn
-//    after it and are not lit. It casts no shadows.
+//    light from the scene's depth and normals. Water, fur, smoke, fire and the HUD are drawn after it and are not lit.
+//    It casts no shadows.
+//  - The first-person hands and gun have their colour drawn after that moment, so in a frame with a flash their colour
+//    draws are made a second time with shaders/muzzle_hands.hlsl (depth EQUAL, the colour brightened).
 //  - A frame with no flash costs one look at the list: nothing is classified, copied or drawn.
 //
 // The game renderer calls it from small hooks (game_muzzle.cpp). NVRHI only; the render thread.
@@ -34,11 +36,13 @@ struct MuzzleTuning {
   static constexpr float kRadius = 9.0f;           // view units, metres in King Kong
   static constexpr float kFalloff = 0.25f;         // 1 / (1 + this * distance^2)
   static constexpr float kSeconds = 0.10f;         // how long a flash lasts
-  static constexpr float kStrength = 2.2f;         // at its start
-  static constexpr float kColour[3] = {1.0f, 0.72f, 0.42f};
-  static constexpr float kDarkSurface = 0.30f, kBrightSurface = 0.85f;  // reflectance assumed (muzzle.hlsl)
-  static constexpr float kWrap = 0.25f;            // how far the light wraps around a surface
-  static constexpr float kHueFloor = 0.015f;
+  static constexpr float kStrength = 1.5f;         // at its start
+  static constexpr float kColour[3] = {1.0f, 0.76f, 0.50f};
+  static constexpr float kDarkSurface = 0.24f, kBrightSurface = 0.85f;  // reflectance assumed (muzzle.hlsl)
+  static constexpr float kHandsGain = 1.6f, kHandsFalloff = 6.0f;  // muzzle_hands.hlsl: how far the colour is raised
+  static constexpr float kHandsWrap = 0.6f;
+  static constexpr float kWrap = 0.50f;            // how far the light wraps around a surface
+  static constexpr float kHueFloor = 0.05f;
 };
 
 // The game's thread: a flame was made at this view position (x right, y up, z forward).
@@ -69,6 +73,17 @@ class SceneMuzzle {
   // A clear of a depth target (Clear with Z, or a resolve's depth clear).
   void OnDepthClear(uint64_t frame, uint64_t depth_key);
 
+  // What the hands' second draw needs of the light this frame (shaders/muzzle_hands.hlsl).
+  struct HandsLight {
+    float depth_unpack[2] = {}, ndc_mul[2] = {}, ndc_add[2] = {};
+    float origin[2] = {}, size[2] = {};  // the picture's origin in the scene target, the size its view rays are made for
+    float host_scale[2] = {1, 1};        // scene target pixels per guest pixel
+    uint32_t count = 0;
+    float light[MuzzleTuning::kMaxLights][4] = {};
+  };
+  // Null unless the light went into the scene this frame.
+  const HandsLight* hands(uint64_t frame) const { return applied_ && frame == frame_ ? &hands_ : nullptr; }
+
   struct Stats {
     uint64_t frames = 0;   // frames with a flash
     uint64_t applied = 0;  // of them, lit at the end of the opaque pass
@@ -93,6 +108,8 @@ class SceneMuzzle {
   uint64_t frame_ = UINT64_MAX;
   bool wanted_ = false, applied_ = false, warned_camera_ = false;
   SceneAo::Target scene_color_, scene_depth_;
+  float host_scale_[2] = {1, 1};
+  HandsLight hands_;
 
   nvrhi::ShaderHandle vs_, ps_;
   nvrhi::BindingLayoutHandle layout_;

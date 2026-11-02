@@ -70,17 +70,17 @@ Vec Unit(Vec v) {
 void Flame(const uint8_t* base, uint32_t position) {
   static const FlashFn flash = FindFlash();
   if (!flash || !GuestPointer(position)) return;
-  // The camera: the world's +112, its +160. Its matrix: rows 0 right, 1 back, 2 up, then its position.
+  // The camera: the world's +112, its +160. Its matrix: rows 0 left, 1 back, 2 up, then its position.
   const uint32_t world = kk::hfr::Load32(base, kWorld);
   const uint32_t view = GuestPointer(world) ? kk::hfr::Load32(base, world + 112) : 0;
   const uint32_t camera = GuestPointer(view) ? kk::hfr::Load32(base, view + 160) : 0;
   const uint32_t matrix = GuestPointer(camera) ? kk::hfr::Load32(base, camera + 12) : 0;
   if (!GuestPointer(matrix)) return;
-  const Vec right = Unit(ReadVec(base, matrix)), back = Unit(ReadVec(base, matrix + 16)), up = Unit(ReadVec(base, matrix + 32));
+  const Vec left = Unit(ReadVec(base, matrix)), back = Unit(ReadVec(base, matrix + 16)), up = Unit(ReadVec(base, matrix + 32));
   const Vec eye = ReadVec(base, matrix + 48), p = ReadVec(base, position);
   const Vec d{p.x - eye.x, p.y - eye.y, p.z - eye.z};
   if (!std::isfinite(Dot(d, d)) || Dot(d, d) > kReach * kReach) return;
-  const float x = Dot(d, right), y = Dot(d, up), z = -Dot(d, back);
+  const float x = -Dot(d, left), y = Dot(d, up), z = -Dot(d, back);
 #if defined(KK_DEV_TOOLS)
   static int lines = 0;
   if (lines < 8) {

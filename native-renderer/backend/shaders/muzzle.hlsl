@@ -5,7 +5,9 @@
 // Each pixel's view position comes from the scene's stored depth, its normal from the working normals of a
 // Gtao::Prepare (the AO's when it ran this frame). The picture holds surface colour times light, so the surface's
 // colour is estimated from it: its hue, and a reflectance that does not fall to nothing in the dark, where a flash
-// shows most. Sky (stored depth at the far plane) is left as it is.
+// shows most. The texture comes back from how a pixel stands against the pixels around it, whatever the light on them,
+// and the depth's normals only know the polygons, so a surface keeps its grain. Sky (stored depth at the far plane) is
+// left as it is.
 //
 // Bindings (NVRHI's Vulkan offsets: t at 0, b at 256): b0 the constants, t0 the scene colour copy, t1 the scene depth,
 // t2 the normals.
@@ -34,6 +36,27 @@ cbuffer MuzzleConstants : register(b0)
 Texture2D<float4> g_srcSceneCopy : register(t0);
 Texture2D<float> g_srcSceneDepth : register(t1);
 Texture2D<uint> g_srcNormals : register(t2);
+
+// How far a pixel may stray from its surroundings: the grain of the surface, not its specks.
+static const float kGrainMin = 0.6;
+static const float kGrainMax = 1.5;
+static const int2 kRing[8] = { int2(1, 0), int2(-1, 0), int2(0, 1), int2(0, -1), int2(1, 1), int2(-1, 1), int2(1, -1), int2(-1, -1) };
+
+float Brightest(float3 c)
+{
+    return max(max(c.r, c.g), c.b);
+}
+
+float Grain(int2 p, float mine)
+{
+    int2 low = max(kk_Source.xy, int2(0, 0));
+    int2 high = kk_Source.xy + kk_Source.zw - 1;
+    int reach = max(kk_Source.w / 90, 2);
+    float around = 0.0;
+    for (int i = 0; i < 8; ++i)
+        around += Brightest(g_srcSceneCopy.Load(int3(clamp(p + kRing[i] * reach, low, high), 0)).rgb);
+    return clamp((mine + 0.03) / (around / 8.0 + 0.03), kGrainMin, kGrainMax);
+}
 
 float4 vs_main(uint id : SV_VertexID) : SV_Position
 {
@@ -83,7 +106,7 @@ float4 ps_muzzle(float4 pos : SV_Position) : SV_Target0
     float3 lit = colour.rgb * colour.rgb;
     float top = max(max(lit.r, lit.g), lit.b);
     float3 hue = (lit + kk_Surface.w) / (top + kk_Surface.w);
-    float3 surface = hue * lerp(kk_Surface.x, kk_Surface.y, sqrt(saturate(top)));
+    float3 surface = hue * lerp(kk_Surface.x, kk_Surface.y, sqrt(saturate(top))) * Grain(p, sqrt(top));
     colour.rgb = sqrt(lit + surface * kk_Colour.rgb * reach);
     return colour;
 }

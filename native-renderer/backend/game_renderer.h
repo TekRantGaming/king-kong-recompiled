@@ -1065,6 +1065,8 @@ class GameRenderer {
   // with depth func ALWAYS (Jack's arms, what he holds) is noted; when its opaque colour draw comes after the
   // occlusion went into the scene, that draw is made a second time with ao_hands.hlsl (depth EQUAL, colour
   // times the occlusion). Nothing runs with AO off.
+  static bool AoHandsDepthDraw(const PipelineRecord& record, bool writes_color);
+  static bool AoHandsColourDraw(const PipelineRecord& record);
   void AoNoteHandsDepth(const DrawCall& call, const PipelineRecord& record, bool writes_color);
   void AoRedrawHands(nvrhi::ICommandList* cl, const DrawCall& call, const PipelineRecord& record, const GameShader& vs,
                      const nvrhi::GraphicsState& gs, const nvrhi::DrawArguments& args, bool indexed,
@@ -1178,10 +1180,17 @@ class GameRenderer {
   void MuzzleClearHook(const ClearCall& call, const HostTarget* depth);
   void MuzzleResolveHook(const ResolveCall& call);
   void MuzzlePresentHook();
+  // The hands and gun: their colour drawn again in a frame with a flash (muzzle_light.h).
+  void MuzzleRedrawHands(nvrhi::ICommandList* cl, const DrawCall& call, const PipelineRecord& record, const GameShader& vs,
+                         const nvrhi::GraphicsState& gs, const nvrhi::DrawArguments& args, bool indexed,
+                         const HostTarget& target);
   void UpdateMuzzle(const MuzzleConfig& want);
   std::unique_ptr<SceneMuzzle> scene_muzzle_;
   std::unique_ptr<AoGpuTimer> muzzle_timer_;  // --native_muzzle_gpu_time
   bool muzzle_failed_ = false, muzzle_user_gpu_time_ = false;
+  std::vector<AoHandsKey> muzzle_hands_;
+  uint64_t muzzle_hands_frame_ = UINT64_MAX;
+  nvrhi::ShaderHandle muzzle_hands_ps_;
   // ---- photo mode (game_photo.cpp, docs/photo-mode.md; task 208): the game's settings each frame
   // (plugin/native_photo.h). While it is off nothing here runs and nothing is made.
  public:
