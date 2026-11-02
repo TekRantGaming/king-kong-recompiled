@@ -63,6 +63,13 @@ for spec in cel_exposure_cs:cs:cs_exposure cel_vs:vs:vs_main cel_ps:ps:ps_cel; d
   "$DXC" -nologo -T "${stage}_6_0" -E "$entry" -O3 -Fh "$out/${base}_dxil.h" -Vn "k_${base}_dxil" "$src"
   "$DXC" -nologo -T "${stage}_6_0" -E "$entry" -O3 -spirv -fspv-target-env=vulkan1.2     -fvk-t-shift 0 0 -fvk-s-shift 128 0 -fvk-b-shift 256 0 -fvk-u-shift 384 0     -Fh "$out/${base}_spirv.h" -Vn "k_${base}_spirv" "$src"
 done
+# Muzzle flashes that cast light (muzzle.hlsl).
+src="$here/muzzle.hlsl"
+for spec in muzzle_vs:vs:vs_main muzzle_ps:ps:ps_muzzle; do
+  base=${spec%%:*}; rest=${spec#*:}; stage=${rest%%:*}; entry=${rest#*:}
+  "$DXC" -nologo -T "${stage}_6_0" -E "$entry" -O3 -Fh "$out/${base}_dxil.h" -Vn "k_${base}_dxil" "$src"
+  "$DXC" -nologo -T "${stage}_6_0" -E "$entry" -O3 -spirv -fspv-target-env=vulkan1.2     -fvk-t-shift 0 0 -fvk-s-shift 128 0 -fvk-b-shift 256 0 -fvk-u-shift 384 0 -Fh "$out/${base}_spirv.h" -Vn "k_${base}_spirv" "$src"
+done
 # AO on the first-person hands (ao_hands.hlsl, docs/ao.md): drawn with the game's vertex shaders, so built
 # like the translated shaders (the game's layout, no binding shifts), as compile_shaders.ps1 does.
 src="$here/ao_hands.hlsl"

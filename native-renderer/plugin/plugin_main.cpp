@@ -382,6 +382,12 @@ REXCVAR_DEFINE_DOUBLE(native_tessellation_smoothness, 0.75, "Native renderer", "
 REXCVAR_DEFINE_INT32(native_tessellation_detail, 4, "Native renderer", "Ann tessellation detail, 1 to 16")
     .lifecycle(rex::cvar::Lifecycle::kHotReload);
 
+// Muzzle flashes that cast light (backend/muzzle_light.h). Off here; the game sets its own default.
+REXCVAR_DEFINE_BOOL(native_muzzle_light, false, "Native renderer", "Gun flashes light what is near them for a moment")
+    .lifecycle(rex::cvar::Lifecycle::kHotReload);
+REXCVAR_DEFINE_BOOL(native_muzzle_gpu_time, false, "Native renderer", "Log the muzzle light's GPU time")
+    .lifecycle(rex::cvar::Lifecycle::kHotReload);
+
 // Cel shading (docs/cel.md): ink outlines and flat colour bands on the 3D scene. Off by default; the
 // Original look keeps it off. All live (the F8 panel's "Cel shading").
 REXCVAR_DEFINE_BOOL(native_cel_shading, false, "Native renderer",

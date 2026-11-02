@@ -520,6 +520,7 @@ bool GameRenderer::Initialize() {
   AoInitialize();  // AO hook (game_ao.cpp): the GTAO method
   GiInitialize();  // GI hook (game_gi.cpp): the screen-space GI
   CelInitialize();  // Cel hook (game_cel.cpp): the cel shading
+  MuzzleInitialize();  // Muzzle hook (game_muzzle.cpp)
   // Upscalers: their passes. Without them the renderer runs as without an upscaler (logged).
   if (upscale_ && !UpscaleInitialize()) {
     Logf(LogLevel::kWarning, "rexgpu-native: upscaler: the passes could not be made; no upscaler");
@@ -906,10 +907,11 @@ void GameRenderer::TrimClearTargets() {
     if (lighting_parked_) lighting_parked_->ForgetTargets();
     if (scene_cel_) scene_cel_->ForgetTargets();
     if (cel_parked_) cel_parked_->ForgetTargets();
+    if (scene_muzzle_) scene_muzzle_->ForgetTargets();
     if (scene_photo_) scene_photo_->ForgetTargets();
   }
   if (upscale_ || scene_ao_ || scene_gi_ || gi_parked_ || scene_lighting_ || lighting_parked_ || scene_cel_ || cel_parked_ ||
-      scene_photo_) return;
+      scene_photo_ || scene_muzzle_) return;
   for (auto& [key, t] : targets_) {
     if (!t || !t->texture || !CanEvictClearTarget(t->clear_only, bool(upscale_ || scene_ao_),
                                                 t->used_frame, frame_)) continue;
@@ -1004,7 +1006,7 @@ void GameRenderer::CheckMemoryBudget() {
 void GameRenderer::EndFrame() {
   // These Beta 5 passes bypass GetFramebuffer. Their writes invalidate saved
   // clears even if the player disables the effect before pressure next occurs.
-  if (scene_gi_ || scene_lighting_ || scene_cel_)
+  if (scene_gi_ || scene_lighting_ || scene_cel_ || scene_muzzle_)
     for (auto& [key, target] : targets_) if (target) target->clear_only = false;
   ProfileResources();
   EndStartUploadFrame();
@@ -2349,6 +2351,8 @@ void GameRenderer::Draw(nvrhi::ICommandList* cl, const DrawCall& call) {
   if (scene_gi_) GiDrawHook(cl, call, d, colors, depth, record, *vs, ps.get());
   // Cel hook (game_cel.cpp): at the end of the opaque pass the lines and bands go in (after AO and GI).
   if (scene_cel_) CelDrawHook(cl, call, d, colors, depth, record, *vs, ps.get());
+  // Muzzle hook (game_muzzle.cpp): in a frame with a flash, its light at the end of the opaque pass.
+  if (scene_muzzle_) MuzzleDrawHook(cl, call, d, colors, depth, record, *vs, ps.get());
   // Photo hook (game_photo.cpp): the depth of field's depth at the end of the opaque pass.
   if (scene_photo_) PhotoDrawHook(cl, call, d, colors, depth, record, *vs, ps.get());
   // Lighting hook (game_lighting.cpp): the lighting options' moments and the census.

@@ -267,6 +267,13 @@ CelConfig ReadCelConfig() {
   return c;
 }
 
+MuzzleConfig ReadMuzzleConfig() {
+  MuzzleConfig c;
+  c.enabled = rex::cvar::GetFlagByName("native_muzzle_light") == "true";
+  c.gpu_time = rex::cvar::GetFlagByName("native_muzzle_gpu_time") == "true";
+  return c;
+}
+
 void ReadLightingConfig(LightingConfig& l) {
   if (!ParseShadowQuality(REXCVAR_GET(native_shadow_quality), l.shadows))
     REXGPU_WARN("rexgpu-native: native_shadow_quality '{}' is not original, high or ultra", REXCVAR_GET(native_shadow_quality));
@@ -374,6 +381,7 @@ GameSettings ReadGameSettings(bool vulkan) {
   ReadUpscaleConfig(game.upscale);
   ReadLightingConfig(game.lighting);
   game.cel = ReadCelConfig();
+  game.muzzle = ReadMuzzleConfig();
   // The settings the graphics panel (F8) and the in-game pages change while the game runs: read once a
   // frame by the game renderer (effect_settings.h). The init-only parts (tuning, debugging, rule
   // files) stay as read above.
@@ -413,6 +421,7 @@ GameSettings ReadGameSettings(bool vulkan) {
     s.gi = gi;
     s.lighting = lighting;
     s.cel = ReadCelConfig();
+    s.muzzle = ReadMuzzleConfig();
     s.shadow_scale = shadow_override > 0 && !(lighting.shadows_on() && shadow_override == 1)
                          ? shadow_override : ShadowScaleForQuality(lighting.shadows);
     ParseUpscalerKind(get("native_upscaler"), upscale.kind);

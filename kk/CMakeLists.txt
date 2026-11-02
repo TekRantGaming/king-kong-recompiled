@@ -92,6 +92,7 @@ set(KINGKONG_SOURCES
     src/mouse_look.cpp
     src/cursor_activity.cpp
     src/language.cpp
+    src/muzzle_light.cpp
     src/intros.cpp
     src/fov.cpp
     src/ultrawide.cpp

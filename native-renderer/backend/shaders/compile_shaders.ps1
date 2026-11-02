@@ -30,6 +30,12 @@ if ($Only -eq "" -or $Only -eq "cel") {
     if ($Only -eq "cel") { Write-Host "Shaders written to $out"; exit 0 }
 }
 
+# Muzzle flashes that cast light (muzzle.hlsl). -Only muzzle compiles just these.
+if ($Only -eq "" -or $Only -eq "muzzle") {
+    Compile-Entries (Join-Path $here "muzzle.hlsl") @("muzzle_vs:vs:vs_main", "muzzle_ps:ps:ps_muzzle")
+    if ($Only -eq "muzzle") { Write-Host "Shaders written to $out"; exit 0 }
+}
+
 # AO on the first-person hands (ao_hands.hlsl, docs/ao.md): drawn with the game's vertex shaders, so built
 # like the translated shaders (the game's layout, no binding shifts). -Only aohands compiles just this.
 if ($Only -eq "" -or $Only -eq "aohands") {

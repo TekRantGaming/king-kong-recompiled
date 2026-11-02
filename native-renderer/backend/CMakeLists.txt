@@ -72,6 +72,8 @@ if(NR_GAME_RENDERER)
         scene_gi.cpp
         game_cel.cpp
         scene_cel.cpp
+        game_muzzle.cpp
+        muzzle_light.cpp
         game_photo.cpp
         scene_photo.cpp
         shader_library.cpp

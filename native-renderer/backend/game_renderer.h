@@ -44,6 +44,7 @@
 #include "backend/background_file_writer.h"
 #include "backend/picture_adjust.h"
 #include "backend/scene_ao.h"
+#include "backend/muzzle_light.h"
 #include "backend/scene_cel.h"
 #include "backend/scene_photo.h"
 #include "backend/photo_grade.h"
@@ -225,6 +226,8 @@ class GameRenderer {
     // Cel shading (cel_config.h, docs/cel.md). Off by default: nothing of it is created. Initial value
     // before Initialize; effect_settings changes it live.
     CelConfig cel;
+    // Muzzle flashes that cast light (muzzle_light.h). Off by default: nothing of it is created.
+    MuzzleConfig muzzle;
     std::function<EffectSettings()> effect_settings;
     // The pipelines a run with live settings (effect_settings) makes, without the settings themselves:
     // its scale constants (b3) and lighting constants (b5) in the layout. For the pipeline preparation
@@ -1167,6 +1170,18 @@ class GameRenderer {
   uint64_t cel_parked_frame_ = 0;
   std::deque<std::pair<uint64_t, std::unique_ptr<SceneCel>>> retired_cel_;
   bool cel_build_failed_ = false, cel_user_gpu_time_ = false;
+  // ---- muzzle flashes that cast light (game_muzzle.cpp, muzzle_light.h); scene_muzzle_ is null until it is on.
+  void MuzzleInitialize();
+  void MuzzleDrawHook(nvrhi::ICommandList* cl, const DrawCall& call, const dev::DeviceView& d,
+                      const std::array<HostTarget*, 4>& colors, HostTarget* depth, const PipelineRecord& record,
+                      const GameShader& vs, const GameShader* ps);
+  void MuzzleClearHook(const ClearCall& call, const HostTarget* depth);
+  void MuzzleResolveHook(const ResolveCall& call);
+  void MuzzlePresentHook();
+  void UpdateMuzzle(const MuzzleConfig& want);
+  std::unique_ptr<SceneMuzzle> scene_muzzle_;
+  std::unique_ptr<AoGpuTimer> muzzle_timer_;  // --native_muzzle_gpu_time
+  bool muzzle_failed_ = false, muzzle_user_gpu_time_ = false;
   // ---- photo mode (game_photo.cpp, docs/photo-mode.md; task 208): the game's settings each frame
   // (plugin/native_photo.h). While it is off nothing here runs and nothing is made.
  public:

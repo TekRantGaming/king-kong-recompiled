@@ -268,6 +268,7 @@ void GameRenderer::Clear(nvrhi::ICommandList* cl, const ClearCall& call) {
   if (scene_ao_) AoClearHook(call, depth);  // AO hook (game_ao.cpp): the scene's depth is cleared
   if (scene_gi_) GiClearHook(call, depth);  // GI hook (game_gi.cpp)
   if (scene_cel_) CelClearHook(call, depth);  // Cel hook (game_cel.cpp)
+  if (scene_muzzle_) MuzzleClearHook(call, depth);  // Muzzle hook (game_muzzle.cpp)
   if (scene_photo_) PhotoClearHook(call, depth);  // Photo hook (game_photo.cpp)
   if (scene_lighting_ && call.depth && depth) scene_lighting_->OnDepthClear(call.frame, depth->key);
   // The rectangles, or the viewport (the device's, after its clamp).
@@ -457,6 +458,7 @@ void GameRenderer::Resolve(nvrhi::ICommandList* cl, const ResolveCall& call) {
 
   if (scene_gi_) GiResolveHook(call, source, from_depth);  // GI hook (game_gi.cpp): scene copies, depth clears
   if (scene_cel_) CelResolveHook(call);  // Cel hook (game_cel.cpp): depth clears
+  if (scene_muzzle_) MuzzleResolveHook(call);  // Muzzle hook (game_muzzle.cpp): depth clears
   if (scene_photo_) PhotoResolveHook(call);  // Photo hook (game_photo.cpp): depth clears
   const uint8_t* dest_object = call.dest_texture ? memory_.Virtual(call.dest_texture) : nullptr;
   bool copied = false;
@@ -519,6 +521,7 @@ bool GameRenderer::Present(nvrhi::ICommandList* cl, uint32_t device, nvrhi::ITex
   if (scene_ao_ || ao_timer_) AoPresentHook(cl);  // AO hook (game_ao.cpp): a scene the moments above missed
   if (scene_gi_) GiPresentHook(cl);  // GI hook (game_gi.cpp): the same for the bounce light
   if (scene_cel_) CelPresentHook();  // Cel hook (game_cel.cpp): its timer (no shading at Present)
+  if (scene_muzzle_) MuzzlePresentHook();  // Muzzle hook (game_muzzle.cpp): its timer
   if (scene_lighting_) LightingPresentHook(cl);  // Lighting hook (game_lighting.cpp)
   current_cl_ = cl;
   // Upscalers (game_upscale.cpp): a scene that did not reach its upscale point is upscaled now; a frame
