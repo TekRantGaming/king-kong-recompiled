@@ -1088,6 +1088,7 @@ void ApplyPortDefaults() {
   SetCvarDefault("native_ao_method", "gtao");
   SetCvarDefault("native_ao_apply", "opaque");
   SetCvarDefault("native_muzzle_light", "true");
+  SetCvarDefault("native_skin_band", "true");
 }
 
 const std::vector<std::pair<const char*, const char*>>& OriginalLookSettings() {
@@ -1103,6 +1104,7 @@ const std::vector<std::pair<const char*, const char*>>& OriginalLookSettings() {
       {"native_gi", "off"}, {"native_ao_normal_smoothing", "0"},
       {"native_cel_shading", "false"},  // a screen effect the console never had (docs/cel.md)
       {"native_muzzle_light", "false"},  // nor had the console's muzzle flashes any light
+      {"native_hands_dof", "false"}, {"native_skin_band", "false"},  // nor these
       {"native_effect_buffers", "false"},
       {"native_sharpness", "off"},
       {"native_upscaler", "off"},  // the native renderer's temporal upscalers (Display > Upscaling)
