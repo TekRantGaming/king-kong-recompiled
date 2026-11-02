@@ -333,7 +333,8 @@ stays sharp, as in Killzone Shadow Fall.
 - At the first draw after that run a gather over a disc runs from a copy of the picture. A hands pixel reaches as far as
   its softness and covers what is behind it, so edges spread over the world. What is behind the hands was never drawn
   (their depth comes first), so world pixels nearby stand in for it. Smoke, flames and the HUD come later and stay sharp.
-- Off in photo mode. Measured: about 0.37 ms at 3200x1800 on the RTX, every frame the hands are drawn.
+- Off in photo mode. The scope's view has no hands, so it stays sharp. A ring of eight mask reads skips most of the
+  picture before the full disc. Measured: 0.09 to 0.16 ms at 3200x1800 on the RTX, every frame the hands are drawn.
 
 The arms and what Jack holds are up to 21 draws (the machine gun): `kHandsKeys` was 16 and dropped the arms themselves.
 
@@ -352,7 +353,7 @@ translucent and nothing blurs. It adds no game shader variants, so players do no
   brightest skin around a pixel say where it lies between them; the band peaks a little on the shadow side of half way.
 - It runs at the fog pass for the world and again after the hands. A skin image for another target (a reflection) is dropped.
 - `KK_DEV_SKIN_VIEW`: 1 the band in red, 2 how much is skin, 3 the skin image. Chapter select entry 1 opens on Ann's face.
-- Measured: 0.07 ms in a wide shot, 0.26 ms with her face filling the frame, at 3200x1800 on the RTX.
+- Measured: 0.07 to 0.15 ms in play, 0.26 ms with her face filling the frame, at 3200x1800 on the RTX.
 
 ## Launcher
 

@@ -16,6 +16,9 @@ cbuffer HandsDofConstants : register(b0)
 Texture2D<float4> g_srcColour : register(t0);
 Texture2D<float> g_srcMask : register(t1);
 
+static const float2 kRing[8] = { float2(1.0, 0.0), float2(-1.0, 0.0), float2(0.0, 1.0), float2(0.0, -1.0),
+                                 float2(0.7, 0.7), float2(-0.7, 0.7), float2(0.7, -0.7), float2(-0.7, -0.7) };
+
 float4 vs_main(uint id : SV_VertexID) : SV_Position
 {
     float2 t = float2((id << 1) & 2, id & 2);
@@ -29,6 +32,18 @@ float4 ps_main(float4 pos : SV_Position) : SV_Target0
     const float largest = kk_Size.z;
     float4 colour = g_srcColour.Load(int3(p, 0));
     const float mine = g_srcMask.Load(int3(p, 0));
+    if (mine <= 0.0)
+    {
+        // Most of the picture is far from the hands: a ring of eight says so before the full disc.
+        float near = 0.0;
+        for (int i = 0; i < 8; ++i)
+        {
+            const float2 ring = float2(kRing[i]) * largest * 0.6;
+            near += g_srcMask.Load(int3(clamp(p + int2(ring), int2(0, 0), last), 0));
+        }
+        if (near <= 0.0)
+            return colour;
+    }
     float3 front = float3(0.0, 0.0, 0.0), back = float3(0.0, 0.0, 0.0);
     float fronts = 0.0, backs = 0.0, reach = 0.0;
     if (mine > 0.0)
