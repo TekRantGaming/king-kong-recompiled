@@ -1199,6 +1199,7 @@ class GameRenderer {
   void SkinRedraw(nvrhi::ICommandList* cl, const DrawCall& call, const PipelineRecord& record, const GameShader& vs,
                   const nvrhi::GraphicsState& gs, const nvrhi::DrawArguments& args, bool indexed, const dev::DeviceView& d);
   void SkinFinish(nvrhi::ICommandList* cl);
+  void SkinResolveHook(nvrhi::ICommandList* cl);
   void SkinPresentHook(nvrhi::ICommandList* cl);
   std::unique_ptr<SkinBand> skin_band_;
   std::unique_ptr<AoGpuTimer> skin_timer_;  // --native_skin_band_gpu_time

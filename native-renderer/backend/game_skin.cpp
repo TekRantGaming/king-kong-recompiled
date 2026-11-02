@@ -69,16 +69,22 @@ void GameRenderer::SkinRedraw(nvrhi::ICommandList* cl, const DrawCall& call, con
                               const nvrhi::GraphicsState& gs, const nvrhi::DrawArguments& args, bool indexed,
                               const dev::DeviceView& d) {
   if (skin_frame_ != call.frame || !options_.skin.enabled) return;
-  PipelineRecord plain = record;
-  plain.flags &= ~kRecordTessellation;  // Ann's tessellated draws are drawn again tessellated
-  if (!AoHandsColourDraw(plain)) return;
+  // Its opaque colour pass: render target 0 written without blending, depth tested. Most characters' depth comes from the
+  // pre-pass, so unlike the hands' this pass need not write it. Ann's tessellated draws are drawn again tessellated.
+  const uint32_t dc = record.depth_control, bc = record.color_control[0];
+  const bool opaque = (bc & 0x1F) == 1 && ((bc >> 5) & 7) == 0 && ((bc >> 8) & 0x1F) == 0;
+  if (!record.color_count || record.color_index[0] != 0 || !(record.color_mask[0] & 7) || !opaque || !record.depth_format ||
+      !(dc & 2) || ((dc >> 4) & 7) == 7)
+    return;
   uint32_t words[6];
   d.fetch_constant(0, words);
   const auto fetch = kknr::TextureFetch::FromWords(words);
   if (fetch.Type() != 2) return;
   auto* entry = textures_.Find(fetch);
   if (!entry || !entry->host || !SkinTexture(static_cast<HostTexture*>(entry->host)->pack_hash)) return;
-  nvrhi::IFramebuffer* mask = skin_band_->MaskFramebuffer(cl, gs.framebuffer->getDesc(), !skin_color_);
+  // Another target (a reflection's) starts over: the band only goes into the one the fog pass comes to.
+  nvrhi::ITexture* color = gs.framebuffer->getDesc().colorAttachments[0].texture;
+  nvrhi::IFramebuffer* mask = skin_band_->MaskFramebuffer(cl, gs.framebuffer->getDesc(), skin_color_ != color);
   if (!mask) return;
   // As AoRedrawHands: the draw's vertex shader and state, depth EQUAL without writes, into the skin image.
   PipelineRecord r = record;
@@ -112,7 +118,12 @@ void GameRenderer::SkinRedraw(nvrhi::ICommandList* cl, const DrawCall& call, con
   } else {
     cl->draw(args);
   }
-  skin_color_ = gs.framebuffer->getDesc().colorAttachments[0].texture;
+  skin_color_ = color;
+}
+
+void GameRenderer::SkinResolveHook(nvrhi::ICommandList* cl) {
+  if (skin_fog_) SkinFinish(cl);
+  else skin_color_ = nullptr;  // a reflection or the like, before the scene
 }
 
 void GameRenderer::SkinPresentHook(nvrhi::ICommandList* cl) {

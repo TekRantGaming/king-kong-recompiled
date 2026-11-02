@@ -3,6 +3,7 @@
 #include "backend/skin_band.h"
 
 #include <algorithm>
+#include <cstdlib>
 #include <cstring>
 
 #include "backend/log.h"
@@ -16,7 +17,7 @@ namespace nr {
 namespace {
 struct Constants {
   float size[4] = {};   // the picture's width and height, how far to look (pixels), unused
-  float tune[4] = {};   // the band's strength, the contrast for the full band, unused, unused
+  float tune[4] = {};   // the band's strength, the contrast for the full band, a developer view, unused
 };
 }  // namespace
 
@@ -192,6 +193,11 @@ bool SkinBand::Apply(nvrhi::ICommandList* cl, nvrhi::ITexture* color) {
   k.size[2] = float(cd.height) * SkinBandTuning::kReach;
   k.tune[0] = SkinBandTuning::kStrength;
   k.tune[1] = SkinBandTuning::kContrast;
+  static const float view = [] {
+    const char* v = std::getenv("KK_DEV_SKIN_VIEW");
+    return v ? float(std::atof(v)) : 0.0f;
+  }();
+  k.tune[2] = view;
   cl->writeBuffer(constants_, &k, sizeof(k));
   nvrhi::GraphicsState gs;
   gs.pipeline = pipeline;

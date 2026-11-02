@@ -11,7 +11,8 @@
 cbuffer SkinBandConstants : register(b0)
 {
     float4 kk_Size;  // xy: the picture's size (pixels), z: how far to look (pixels)
-    float4 kk_Tune;  // x: the band's strength, y: the difference of light and shadow that gives the full band
+    float4 kk_Tune;  // x: the band's strength, y: the difference of light and shadow that gives the full band,
+                     // z: a developer view (KK_DEV_SKIN_VIEW): 1 the band in red, 2 how much is skin, 3 the skin image
 };
 
 Texture2D<float4> g_srcColour : register(t0);
@@ -41,7 +42,11 @@ float4 ps_main(float4 pos : SV_Position) : SV_Target0
     const int2 p = int2(pos.xy);
     float4 colour = g_srcColour.Load(int3(p, 0));
     const float4 mine = g_srcSkin.Load(int3(p, 0));
-    if (mine.a <= 0.01)
+    if (kk_Tune.z > 2.5 && any(mine.rgb > 0.0))
+        return float4(mine.rgb, colour.a);
+    if (kk_Tune.z > 1.5 && kk_Tune.z < 2.5 && mine.a > 0.01)
+        return float4(mine.a, 0.0, 1.0 - mine.a, colour.a);
+    if (mine.a <= 0.01 || kk_Tune.z > 1.5)
         return colour;
     const float here = Lit(colour.rgb, mine.rgb);
     float darkest = here, brightest = here;
@@ -65,6 +70,8 @@ float4 ps_main(float4 pos : SV_Position) : SV_Target0
         return colour;
     const float t = saturate((here - darkest) / apart);
     const float band = 4.0 * t * (1.0 - t) * saturate(apart / kk_Tune.y) * mine.a * kk_Tune.x;
+    if (kk_Tune.z > 0.5)
+        return float4(band, colour.g * 0.5, colour.g * 0.5, colour.a);
     colour.rgb = saturate(colour.rgb * (1.0 + kRed * band));
     return colour;
 }
