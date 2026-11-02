@@ -321,13 +321,16 @@ class WinHttpFetcher : public Fetcher {
   static bool Open(const std::string& url, const std::string& range, Request& r, DWORD& status, std::string& detail) {
     URL_COMPONENTSW parts{};
     parts.dwStructSize = sizeof(parts);
-    wchar_t host[256], path[2048];
+    wchar_t host[256], path[2048], extra[1024];
     parts.lpszHostName = host;
     parts.dwHostNameLength = 256;
     parts.lpszUrlPath = path;
     parts.dwUrlPathLength = 2048;
+    parts.lpszExtraInfo = extra;  // the "?..." part of the link
+    parts.dwExtraInfoLength = 1024;
     const std::wstring wurl(url.begin(), url.end());
     if (!WinHttpCrackUrl(wurl.c_str(), 0, 0, &parts)) return detail = "bad address", false;
+    const std::wstring target = std::wstring(path) + extra;
     r.session = WinHttpOpen(L"KingKongRecomp/" KK_VERSION_W, WINHTTP_ACCESS_TYPE_AUTOMATIC_PROXY,
                             WINHTTP_NO_PROXY_NAME, WINHTTP_NO_PROXY_BYPASS, 0);
     if (!r.session) return detail = "WinHttpOpen failed", false;
@@ -336,7 +339,7 @@ class WinHttpFetcher : public Fetcher {
     r.conn = WinHttpConnect(r.session, host, parts.nPort, 0);
     if (!r.conn) return detail = "cannot connect (" + std::to_string(GetLastError()) + ")", false;
     const DWORD secure = parts.nScheme == INTERNET_SCHEME_HTTPS ? WINHTTP_FLAG_SECURE : 0;
-    r.req = WinHttpOpenRequest(r.conn, L"GET", path, nullptr, WINHTTP_NO_REFERER, WINHTTP_DEFAULT_ACCEPT_TYPES, secure);
+    r.req = WinHttpOpenRequest(r.conn, L"GET", target.c_str(), nullptr, WINHTTP_NO_REFERER, WINHTTP_DEFAULT_ACCEPT_TYPES, secure);
     if (!r.req) return detail = "cannot open the request", false;
     const std::wstring header = L"Range: " + std::wstring(range.begin(), range.end());
     DWORD len = sizeof(status);
@@ -485,10 +488,10 @@ bool UnpackZip(const fs::path& zip, const fs::path& into, const std::function<bo
 // ------------------------------------------------------------------ data ---
 const Info& InfoFor(Kind kind) {
   static const Info kInfo[kKindCount] = {
-      {"hd-textures", "hd-textures", "https://bobandersonv115.cypher.usbx.me/filebrowser/api/public/dl/buJAl_ZK",
+      {"hd-textures", "hd-textures", "https://bobandersonv115.cypher.usbx.me/filebrowser/public/api/resources/download?hash=fXlSpDpeTGyaTArr2Bdy7w",
        "kk-4x-usv2.zip", 2561065736ull, 5322454913ull,
        "a3e240f37f05f28a095bf464cbe634b39ceec11404734ee35577ef3a5dc23bdf"},
-      {"ps2-cutscenes", "ps2-cutscenes", "https://bobandersonv115.cypher.usbx.me/filebrowser/api/public/dl/seTbs14N",
+      {"ps2-cutscenes", "ps2-cutscenes", "https://bobandersonv115.cypher.usbx.me/filebrowser/public/api/resources/download?hash=wURabdfdb7x1UilRyfOMQw",
        "KK_Cuts_AI.zip", 1871168114ull, 1878520474ull,
        "197eb43b76b0ef6057d07e7db06b9566994ee849b17a935d00f6e55b52bd2df8"},
       // Beta 7 Extras: the PS2 USA bonus disc (archive.org), only its six Weta paintings and readme kept.
@@ -496,23 +499,23 @@ const Info& InfoFor(Kind kind) {
        artbook::kDiscSha256},
       // Task 209 (owner, 18 Oct): the Kong UHD Textures pack, a texture pack mod ZIP (mod.toml, picture.png, README,
       // CREDITS, textures/pack.txt). It installs into the mods folder; content/uhd-textures keeps its record.
-      {"uhd-textures", "uhd-textures", "https://bobandersonv115.cypher.usbx.me/filebrowser/api/public/dl/QBGh8N8b",
+      {"uhd-textures", "uhd-textures", "https://bobandersonv115.cypher.usbx.me/filebrowser/public/api/resources/download?hash=5wjr3qhBlk1GNBqCmAkEtw",
        "Kong-UHD-Textures-1.0.zip", 2423136757ull, 5323516778ull,
        "72419cbea7d6a6c19b9da6a5e55ea46d3bc1270da937be435c92cbe37d910502"},
       // The Workshop's imports: no download, only the status of the import (or mod removal) running now.
       {"import", "import", "", "", 0, 0, ""},
       // Task 212 (owner, 18 Oct): the Kong Comic Book pack, a texture pack mod ZIP laid out like the UHD one.
-      {"comic-textures", "comic-textures", "https://bobandersonv115.cypher.usbx.me/filebrowser/api/public/dl/A_vaZ0kx",
+      {"comic-textures", "comic-textures", "https://bobandersonv115.cypher.usbx.me/filebrowser/public/api/resources/download?hash=1dBH4rKqSXH-vacWXRJ2ag",
        "Kong-Comic-Book-1.0.zip", 1404861922ull, 5323466668ull,
        "840fa08f3c4e10664037a2cf9f459a4067d1469f8bb25a5be9a3c4c99faef68f"},
       // Task 255 (owner, 19 Oct): Kong's Tropical Holiday and Kong Cartoon, texture pack mod ZIPs laid out like the
       // Comic one (one top folder with mod.toml, picture.png, README.txt, CREDITS.txt, textures/pack.txt). Sizes from
       // the links (ranged requests) and the ZIP directory; SHA-256 of the owner's local copies, whose size, first
       // 64 KB and whole directory (every file's CRC) match the links.
-      {"tropical-textures", "tropical-textures", "https://bobandersonv115.cypher.usbx.me/filebrowser/api/public/dl/F55nz6Hg",
+      {"tropical-textures", "tropical-textures", "https://bobandersonv115.cypher.usbx.me/filebrowser/public/api/resources/download?hash=If9i61_ofnCIrNfVNP_4zA",
        "Kong-Tropical-Holiday-1.0.zip", 2516526163ull, 5323855453ull,
        "13d63d7d932c7029a276a62a81cc01878dcce12492620a1951f1d337ba7f0217"},
-      {"cartoon-textures", "cartoon-textures", "https://bobandersonv115.cypher.usbx.me/filebrowser/api/public/dl/zMfx2F-j",
+      {"cartoon-textures", "cartoon-textures", "https://bobandersonv115.cypher.usbx.me/filebrowser/public/api/resources/download?hash=CKr4iABPj_EmYwdt7hgUYQ",
        "Kong-Cartoon-1.0.zip", 1473282349ull, 5323409958ull,
        "ef86ae0a0df017124d7013fa5ab968a5274bedbdc2b77451648aa40d99b4961c"},
       // Task 333 (owner, 20 Oct): the game's Xbox 360 user manual from the owner's link, a PDF kept as it is. Its

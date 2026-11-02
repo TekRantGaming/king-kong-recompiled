@@ -860,25 +860,25 @@ static void ModPackTests(const fs::path& work) {
   CHECK(IsModPack(Kind::kTropical) && IsModPack(Kind::kCartoon) && !Quiet(Kind::kTropical) && !Quiet(Kind::kCartoon));
   const Info& tropical = InfoFor(Kind::kTropical);
   CHECK(std::string(tropical.id) == "tropical-textures" && std::string(tropical.folder) == "tropical-textures");
-  CHECK(std::string(tropical.url) == "https://bobandersonv115.cypher.usbx.me/filebrowser/api/public/dl/F55nz6Hg");
+  CHECK(std::string(tropical.url) == "https://bobandersonv115.cypher.usbx.me/filebrowser/public/api/resources/download?hash=If9i61_ofnCIrNfVNP_4zA");
   CHECK(std::string(tropical.zip_name) == "Kong-Tropical-Holiday-1.0.zip" && tropical.zip_size == 2516526163ull &&
         tropical.unpacked == 5323855453ull);
   CHECK(std::string(tropical.sha256) == "13d63d7d932c7029a276a62a81cc01878dcce12492620a1951f1d337ba7f0217");
   const Info& cartoon = InfoFor(Kind::kCartoon);
   CHECK(std::string(cartoon.id) == "cartoon-textures" && std::string(cartoon.folder) == "cartoon-textures");
-  CHECK(std::string(cartoon.url) == "https://bobandersonv115.cypher.usbx.me/filebrowser/api/public/dl/zMfx2F-j");
+  CHECK(std::string(cartoon.url) == "https://bobandersonv115.cypher.usbx.me/filebrowser/public/api/resources/download?hash=CKr4iABPj_EmYwdt7hgUYQ");
   CHECK(std::string(cartoon.zip_name) == "Kong-Cartoon-1.0.zip" && cartoon.zip_size == 1473282349ull &&
         cartoon.unpacked == 5323409958ull);
   CHECK(std::string(cartoon.sha256) == "ef86ae0a0df017124d7013fa5ab968a5274bedbdc2b77451648aa40d99b4961c");
   const Info& comic = InfoFor(Kind::kComic);
   CHECK(std::string(comic.id) == "comic-textures" && std::string(comic.folder) == "comic-textures");
-  CHECK(std::string(comic.url) == "https://bobandersonv115.cypher.usbx.me/filebrowser/api/public/dl/A_vaZ0kx");
+  CHECK(std::string(comic.url) == "https://bobandersonv115.cypher.usbx.me/filebrowser/public/api/resources/download?hash=1dBH4rKqSXH-vacWXRJ2ag");
   CHECK(std::string(comic.zip_name) == "Kong-Comic-Book-1.0.zip" && comic.zip_size == 1404861922ull &&
         comic.unpacked == 5323466668ull);
   CHECK(std::string(comic.sha256) == "840fa08f3c4e10664037a2cf9f459a4067d1469f8bb25a5be9a3c4c99faef68f");
   const Info& uhd = InfoFor(Kind::kUhd);  // unchanged
   CHECK(std::string(uhd.id) == "uhd-textures" && uhd.zip_size == 2423136757ull &&
-        std::string(uhd.url).find("QBGh8N8b") != std::string::npos);
+        std::string(uhd.url).find("5wjr3qhBlk1GNBqCmAkEtw") != std::string::npos);
   std::set<std::string> ids, folders;
   for (int i = 0; i < kKindCount; ++i) ids.insert(InfoFor(Kind(i)).id), folders.insert(InfoFor(Kind(i)).folder);
   CHECK(int(ids.size()) == kKindCount && int(folders.size()) == kKindCount);  // each has its own files
