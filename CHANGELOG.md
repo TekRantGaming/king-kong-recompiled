@@ -3,6 +3,11 @@
 Every release of the King Kong PC port, newest first. The launcher shows this on its About page, and a
 version's notes the first time you start it.
 
+## v2.0.11 (2 November 2026)
+
+### Fixed
+- **VirusTotal flag on `king_kong.exe`**: one scanner flagged the exe of every release since v2.0.0 as a low confidence guess. The cause was how the program icon was stored: compressed images in the exe look like a hidden payload to automated scanners. The icon is now stored uncompressed and the same exe shows no flags on VirusTotal. The largest icon size is gone, so the icon may look slightly softer in Windows' biggest views.
+
 ## v2.0.10 (2 November 2026)
 
 ### Fixed
