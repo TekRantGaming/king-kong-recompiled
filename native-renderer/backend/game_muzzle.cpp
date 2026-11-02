@@ -49,7 +49,7 @@ void GameRenderer::MuzzleDrawHook(nvrhi::ICommandList* cl, const DrawCall& call,
   }
   bool writes_color = false;
   for (uint32_t i = 0; i < record.color_count; ++i) writes_color = writes_color || record.color_mask[i];
-  if (call.indexed && AoHandsDepthDraw(record, writes_color) && muzzle_hands_.size() < 16) {
+  if (call.indexed && AoHandsDepthDraw(record, writes_color) && muzzle_hands_.size() < kHandsKeys) {
     const AoHandsKey key{call.index_info.physical, call.start, call.count, call.base_vertex};
     if (std::find(muzzle_hands_.begin(), muzzle_hands_.end(), key) == muzzle_hands_.end()) muzzle_hands_.push_back(key);
   }

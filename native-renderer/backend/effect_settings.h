@@ -8,6 +8,7 @@
 
 #include "backend/ao_config.h"
 #include "backend/cel_config.h"
+#include "backend/hands_dof_config.h"
 #include "backend/muzzle_config.h"
 #include "backend/gi_config.h"
 #include "backend/lighting_config.h"
@@ -27,6 +28,7 @@ struct EffectSettings {
   LightingConfig lighting;
   CelConfig cel;  // cel shading (cel_config.h): made on a worker when turned on, parked when off
   MuzzleConfig muzzle;  // muzzle flashes that cast light (muzzle_light.h)
+  HandsDofConfig hands_dof;  // depth of field on the first-person hands (hands_dof.h)
   float shadow_scale = 0;
   // The temporal upscaler as asked for (kind, mode, DLSS preset, sharpness, mip bias, reactive mask).
   // A change of kind, mode or preset makes the upscaler again at a frame boundary; the others apply

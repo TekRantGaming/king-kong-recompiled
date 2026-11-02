@@ -314,7 +314,7 @@ void GameRenderer::AoNoteHandsDepth(const DrawCall& call, const PipelineRecord& 
   }
   if (!AoHandsDepthDraw(record, writes_color)) return;
   const AoHandsKey key{call.index_info.physical, call.start, call.count, call.base_vertex};
-  if (ao_hands_.size() >= 16 || std::find(ao_hands_.begin(), ao_hands_.end(), key) != ao_hands_.end()) return;
+  if (ao_hands_.size() >= kHandsKeys || std::find(ao_hands_.begin(), ao_hands_.end(), key) != ao_hands_.end()) return;
   ao_hands_.push_back(key);
   if (options_.ao.dump_every && call.frame % options_.ao.dump_every == 0)
     Logf(LogLevel::kInfo, "rexgpu-native:   AO hands: draw %u noted (count %u ib %08X start %u)", call.index_in_frame, call.count,

@@ -568,6 +568,7 @@ bool Backend::Initialize(uint32_t width, uint32_t height, const GameSettings& ga
     renderer->options().gi = game.gi;  // before Initialize (GiInitialize)
     renderer->options().cel = game.cel;  // before Initialize (CelInitialize)
     renderer->options().muzzle = game.muzzle;  // before Initialize (MuzzleInitialize)
+    renderer->options().hands_dof = game.hands_dof;  // before Initialize (HandsDofInitialize)
     if (upscale_enabled && (game.ao.method == AoMethod::kLegacy || game.ao.apply == AoApply::kResolve)) {
       // The legacy AO (and GTAO at the resolve moment) darkens the scene copy the post effects read, after
       // the upscaler took its input: with an upscaler the occlusion goes into the scene at the end of its

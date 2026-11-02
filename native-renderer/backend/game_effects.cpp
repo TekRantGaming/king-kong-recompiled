@@ -130,6 +130,7 @@ void GameRenderer::UpdateEffects() {
   UpdateLighting(s.lighting, s.shadow_scale);
   UpdateCel(s.cel);  // game_cel.cpp
   UpdateMuzzle(s.muzzle);  // game_muzzle.cpp
+  UpdateHandsDof(s.hands_dof);  // game_hands_dof.cpp
   while (!retired_gi_.empty() && retired_gi_.front().first + kRetireFrames < frame_) retired_gi_.pop_front();
   while (!retired_cel_.empty() && retired_cel_.front().first + kRetireFrames < frame_) retired_cel_.pop_front();
   while (!retired_lighting_.empty() && retired_lighting_.front().first + kRetireFrames < frame_) retired_lighting_.pop_front();

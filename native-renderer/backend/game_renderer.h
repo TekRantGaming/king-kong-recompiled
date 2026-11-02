@@ -44,6 +44,7 @@
 #include "backend/background_file_writer.h"
 #include "backend/picture_adjust.h"
 #include "backend/scene_ao.h"
+#include "backend/hands_dof.h"
 #include "backend/muzzle_light.h"
 #include "backend/scene_cel.h"
 #include "backend/scene_photo.h"
@@ -228,6 +229,8 @@ class GameRenderer {
     CelConfig cel;
     // Muzzle flashes that cast light (muzzle_light.h). Off by default: nothing of it is created.
     MuzzleConfig muzzle;
+    // Depth of field on the first-person hands (hands_dof.h). Off by default: nothing of it is created.
+    HandsDofConfig hands_dof;
     std::function<EffectSettings()> effect_settings;
     // The pipelines a run with live settings (effect_settings) makes, without the settings themselves:
     // its scale constants (b3) and lighting constants (b5) in the layout. For the pipeline preparation
@@ -1065,6 +1068,7 @@ class GameRenderer {
   // with depth func ALWAYS (Jack's arms, what he holds) is noted; when its opaque colour draw comes after the
   // occlusion went into the scene, that draw is made a second time with ao_hands.hlsl (depth EQUAL, colour
   // times the occlusion). Nothing runs with AO off.
+  static constexpr size_t kHandsKeys = 32;  // parts of the arms and what Jack holds (the machine gun alone has 19)
   static bool AoHandsDepthDraw(const PipelineRecord& record, bool writes_color);
   static bool AoHandsColourDraw(const PipelineRecord& record);
   void AoNoteHandsDepth(const DrawCall& call, const PipelineRecord& record, bool writes_color);
@@ -1185,6 +1189,22 @@ class GameRenderer {
                          const nvrhi::GraphicsState& gs, const nvrhi::DrawArguments& args, bool indexed,
                          const HostTarget& target);
   void UpdateMuzzle(const MuzzleConfig& want);
+  // ---- depth of field on the first-person hands (game_hands_dof.cpp, hands_dof.h); hands_dof_ is null until it is on.
+  void HandsDofInitialize();
+  void UpdateHandsDof(const HandsDofConfig& want);
+  void HandsDofDrawHook(nvrhi::ICommandList* cl, const DrawCall& call, const PipelineRecord& record);
+  void HandsDofRedraw(nvrhi::ICommandList* cl, const DrawCall& call, const PipelineRecord& record, const GameShader& vs,
+                      const nvrhi::GraphicsState& gs, const nvrhi::DrawArguments& args, bool indexed);
+  void HandsDofFinish(nvrhi::ICommandList* cl);
+  void HandsDofPresentHook(nvrhi::ICommandList* cl);
+  std::unique_ptr<HandsDof> hands_dof_;
+  std::unique_ptr<AoGpuTimer> hands_dof_timer_;  // --native_hands_dof_gpu_time
+  bool hands_dof_failed_ = false, hands_dof_user_gpu_time_ = false, hands_dof_masked_ = false;
+  std::vector<AoHandsKey> hands_dof_keys_;
+  uint64_t hands_dof_frame_ = UINT64_MAX;
+  nvrhi::ITexture* hands_dof_color_ = nullptr;  // their colour draws ran, the gather is still to come
+  nvrhi::ShaderHandle hands_dof_mask_ps_;
+
   std::unique_ptr<SceneMuzzle> scene_muzzle_;
   std::unique_ptr<AoGpuTimer> muzzle_timer_;  // --native_muzzle_gpu_time
   bool muzzle_failed_ = false, muzzle_user_gpu_time_ = false;
