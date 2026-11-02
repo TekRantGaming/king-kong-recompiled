@@ -25,7 +25,7 @@ namespace nr {
 // Tuning (docs/lighting.md); not settings.
 struct SkinBandTuning {
   static constexpr float kStrength = 1.0f;       // the band at its fullest, as shaders/skin_band.hlsl's red
-  static constexpr float kReach = 0.03f;         // how far around a pixel it looks, as a share of the picture's height
+  static constexpr float kReach = 0.05f;         // how far around a pixel it looks, as a share of the picture's height
   static constexpr float kContrast = 0.25f;      // light and shadow this far apart give the full band
 };
 

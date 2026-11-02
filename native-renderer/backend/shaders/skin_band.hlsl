@@ -51,7 +51,7 @@ float4 ps_main(float4 pos : SV_Position) : SV_Target0
     const float here = Lit(colour.rgb, mine.rgb);
     float darkest = here, brightest = here;
     const int2 last = int2(kk_Size.xy) - 1;
-    const int kTaps = 12;
+    const int kTaps = 16;
     [loop] for (int i = 1; i <= kTaps; ++i)
     {
         const float r = sqrt(float(i) / float(kTaps)) * kk_Size.z;
@@ -68,8 +68,10 @@ float4 ps_main(float4 pos : SV_Position) : SV_Target0
     const float apart = brightest - darkest;
     if (apart <= 0.02)
         return colour;
-    const float t = saturate((here - darkest) / apart);
-    const float band = 4.0 * t * (1.0 - t) * saturate(apart / kk_Tune.y) * mine.a * kk_Tune.x;
+    // Fullest a little on the shadow side of half way, where light that went in on the lit side comes back out.
+    const float t = pow(saturate((here - darkest) / apart), 0.75);
+    const float ridge = 4.0 * t * (1.0 - t);
+    const float band = ridge * ridge * saturate(apart / kk_Tune.y) * mine.a * kk_Tune.x;
     if (kk_Tune.z > 0.5)
         return float4(band, colour.g * 0.5, colour.g * 0.5, colour.a);
     colour.rgb = saturate(colour.rgb * (1.0 + kRed * band));
