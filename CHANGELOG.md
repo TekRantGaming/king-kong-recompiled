@@ -3,6 +3,11 @@
 Every release of the King Kong PC port, newest first. The launcher shows this on its About page, and a
 version's notes the first time you start it.
 
+## v2.0.10 (2 November 2026)
+
+### Fixed
+- **Texture pack and PS2 cutscene downloads**: the links behind all six downloads stopped working. The HD, UHD, Comic Book, Tropical Holiday and Cartoon texture packs and the PS2 cutscenes all download again.
+
 ## v2.0.9 (2 November 2026)
 
 ### Added
