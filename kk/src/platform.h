@@ -83,6 +83,10 @@ void OpenUrl(const std::string& url);
 // Opens a folder (created if missing) or file in the system file browser.
 void OpenInExplorer(const std::filesystem::path& path);
 
+// Windows: opens Settings > Display > Advanced display, where the screen's refresh rate is chosen (the Display page
+// when that page is missing). Returns false where there is none (Linux).
+bool OpenDisplaySettings();
+
 // Adds system UI fonts to the ImGui atlas; the regular face becomes the default.
 void LoadUiFont(ImFontAtlas* atlas);
 

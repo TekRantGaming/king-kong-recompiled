@@ -51,6 +51,14 @@ void FinishDisplayModePrefetch();
 // The display's mode on the desktop (width 0 when unknown); `monitor` as above. UI thread.
 DisplayMode DesktopDisplayMode(int monitor, const rex::ui::Window* window);
 
+// The highest refresh rate in `modes` at width x height (0 when the list has no mode of that size).
+float HighestRefreshAt(const std::vector<DisplayMode>& modes, int width, int height);
+
+// Owner, 4 Nov: many players leave Windows at 60 Hz on a faster screen, and Windowed and Borderless run at the
+// desktop's rate. True when the desktop's rate is clearly below the display's highest at the desktop's size (59.94
+// against 60 is not).
+bool DesktopBelowHighest(const DisplayMode& desktop, float highest);
+
 // Every display, in the order the monitor setting counts them (the SDK's; monitor = index + 1), so the Monitor
 // row names the display the game opens on and whose modes Resolution lists. UI thread.
 std::vector<MonitorInfo> ListDisplays();
@@ -60,7 +68,9 @@ std::optional<std::pair<int, int>> FullscreenModeSize();
 
 // Sets the game window's fullscreen mode from kk_fullscreen_mode (UI thread, before the game
 // starts). Logs what it chose; a mode the display doesn't have falls back to the closest one, or to
-// desktop.
+// desktop. Fullscreen always runs at the display's highest refresh rate at that size (owner, 4 Nov: no Refresh
+// rate choice; a rate saved by an older version is not used). Also logs the desktop's refresh rate and the
+// display's highest, so a player's log shows a screen Windows keeps at 60 Hz.
 void ApplyFullscreenMode(rex::ui::Window* window);
 
 }  // namespace kk

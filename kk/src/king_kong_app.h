@@ -390,6 +390,14 @@ class KingKongApp : public rex::ReXApp {
     cb.output_size = [this] { return OutputSize(); };
     cb.display_modes = [this](int monitor) { return kk::ListDisplayModes(monitor, window()); };
     cb.desktop_mode = [this](int monitor) { return kk::DesktopDisplayMode(monitor, window()); };
+    // Achievements > Reset (owner, 4 Nov): the launcher has moved the unlock file aside; a runtime running here (the
+    // menu scene) forgets the unlocks it read, so it never writes them back.
+    cb.reset_achievements = [this] {
+      if (auto* ks = runtime() ? runtime()->kernel_state() : nullptr) {
+        ks->achievements().SetUnlockSavePath(kk::art::AchievementUnlockPath(user_data_root_));
+        ks->achievements().LoadUnlockState();
+      }
+    };
     // Task 330: the game's start menu scene behind the launcher (menu_scene.h): the game starts in this process
     // as Play does, with the launcher staying up; Play then always starts the game as a new process.
     // The runtime's start takes about 1.5 s on the UI thread. Back from the game (a handoff: the game's black

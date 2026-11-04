@@ -87,5 +87,8 @@ const std::vector<PortAchievement>& PortAchievements();
 bool IsPortAchievementUnlocked(const std::filesystem::path& user_dir, const char* id);
 // Marks it unlocked; returns true if it was newly unlocked.
 bool UnlockPortAchievement(const std::filesystem::path& user_dir, const char* id);
+// Locks every achievement again, the game's and the port's (owner, 4 Nov: players replaying the game asked for
+// it): both unlock files are moved aside with the date. Saves are not touched. False when a file could not move.
+bool ResetAchievements(const std::filesystem::path& user_dir);
 
 }  // namespace kk

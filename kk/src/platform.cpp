@@ -488,6 +488,26 @@ void OpenUrl(const std::string& url) {
 #endif
 }
 
+bool OpenDisplaySettings() {
+#if defined(KK_DEV_TOOLS)
+  if (const char* v = std::getenv("KK_DEV_NO_BROWSER"); v && *v) {
+    REXLOG_INFO("KK dev: open display settings");
+    return true;
+  }
+#endif
+#if defined(_WIN32)
+  bool ok = reinterpret_cast<INT_PTR>(ShellExecuteW(nullptr, L"open", L"ms-settings:display-advanced", nullptr, nullptr,
+                                                    SW_SHOWNORMAL)) > 32;
+  if (!ok)
+    ok = reinterpret_cast<INT_PTR>(ShellExecuteW(nullptr, L"open", L"ms-settings:display", nullptr, nullptr,
+                                                 SW_SHOWNORMAL)) > 32;
+  REXLOG_INFO("KK: Windows display settings {}", ok ? "opened" : "failed to open");
+  return ok;
+#else
+  return false;
+#endif
+}
+
 void OpenInExplorer(const std::filesystem::path& path) {
   std::error_code ec;
   if (!std::filesystem::exists(path, ec) && !path.has_extension()) std::filesystem::create_directories(path, ec);

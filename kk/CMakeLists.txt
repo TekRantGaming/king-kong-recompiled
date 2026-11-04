@@ -83,6 +83,7 @@ set(KINGKONG_SOURCES
     src/hfr_fish.cpp
     src/hfr_sway.cpp
     src/hfr_cam_ground.cpp
+    src/hfr_land.cpp
     src/fix_raptor_path.cpp
     src/prompt_anim.cpp
     src/online.cpp

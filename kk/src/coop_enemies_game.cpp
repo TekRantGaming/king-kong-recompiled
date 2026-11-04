@@ -55,6 +55,7 @@ REX_EXTERN(__imp__sub_82711278);
 REX_EXTERN(__imp__sub_8270FCE0);
 REX_EXTERN(__imp__sub_82401AA8);
 REX_EXTERN(__imp__sub_82850100);
+namespace kk::hfr { void LandBeforeGround(PPCContext& ctx, uint8_t* base); }  // hfr_land.cpp
 REX_EXTERN(__imp__sub_826FA3B0);
 REX_EXTERN(__imp__sub_82696A28);
 REX_EXTERN(__imp__sub_8243A3C0);
@@ -3103,6 +3104,7 @@ void ObserveHumanReflex(PPCContext& ctx,uint8_t* b) {
 }
 void VoidBeforeGround(PPCContext& ctx,uint8_t* b);
 void ObserveHumanGround(PPCContext& ctx,uint8_t* b) {
+  kk::hfr::LandBeforeGround(ctx,b);  // hfr_land.cpp: a scripted fall lands as at 30 FPS (The Log)
   const bool observe=REXCVAR_GET(kk_coop_enabled) && Connected() && Load32(b,0x82CCBF6C)==Load32(b,0x82CCBF7C);
   const auto before=observe ? ReadHumanStatus(b):std::nullopt;
   const auto void_before=before ? Load32(b,before->vars+15440):0;

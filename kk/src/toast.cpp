@@ -7,10 +7,12 @@
 #include <cctype>
 #include <cmath>
 #include <cstring>
+#include <ctime>
 #include <fstream>
+
+#include <rex/logging.h>
 #if defined(KK_DEV_TOOLS)
 #include <cstdlib>
-#include <rex/logging.h>
 namespace kk { double DevSecondsSinceMenu(); }
 #endif
 
@@ -452,6 +454,26 @@ bool UnlockPortAchievement(const std::filesystem::path& user_dir, const char* id
   std::filesystem::create_directories(art::CacheDir(user_dir), ec);
   std::ofstream(PortAchievementFile(user_dir), std::ios::app) << id << "\n";
   return true;
+}
+
+bool ResetAchievements(const std::filesystem::path& user_dir) {
+  if (user_dir.empty()) return false;
+  // Kept beside it as <name>.<date>.bak rather than deleted: a reset by mistake can be undone by hand.
+  char stamp[32];
+  const std::time_t now = std::time(nullptr);
+  std::strftime(stamp, sizeof(stamp), ".%Y%m%d-%H%M%S.bak", std::localtime(&now));
+  bool ok = true;
+  for (const std::filesystem::path& file : {art::AchievementUnlockPath(user_dir), PortAchievementFile(user_dir)}) {
+    std::error_code ec;
+    if (!std::filesystem::exists(file, ec)) continue;
+    std::filesystem::rename(file, std::filesystem::path(file) += stamp, ec);
+    if (ec) {
+      REXLOG_WARN("KK: achievements reset: could not move {} aside: {}", file.string(), ec.message());
+      ok = false;
+    }
+  }
+  REXLOG_INFO("KK: achievements reset by the player{}", ok ? "" : " (not every file could be moved)");
+  return ok;
 }
 
 }  // namespace kk

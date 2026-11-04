@@ -250,12 +250,12 @@ int ImGuiKeyToVk(ImGuiKey k) {
     case ImGuiKey_Backspace: return 0x08;
     case ImGuiKey_Space: return 0x20;
     case ImGuiKey_Enter: case ImGuiKey_KeypadEnter: return 0x0D;
-    case ImGuiKey_LeftShift: return 0xA0;
-    case ImGuiKey_RightShift: return 0xA1;
-    case ImGuiKey_LeftCtrl: return 0xA2;
-    case ImGuiKey_RightCtrl: return 0xA3;
-    case ImGuiKey_LeftAlt: return 0xA4;
-    case ImGuiKey_RightAlt: return 0xA5;
+    // The modifiers as the SDK's window reports them (sdl_virtual_key.cpp: either Shift is VK_SHIFT, either Ctrl
+    // VK_CONTROL, either Alt VK_MENU) and as its key names have them ("Shift", "Control", "Alt"). The left and right
+    // codes (0xA0 to 0xA5) have no name, so a bind to Left Control was never saved (4 Nov).
+    case ImGuiKey_LeftShift: case ImGuiKey_RightShift: return 0x10;
+    case ImGuiKey_LeftCtrl: case ImGuiKey_RightCtrl: return 0x11;
+    case ImGuiKey_LeftAlt: case ImGuiKey_RightAlt: return 0x12;
     case ImGuiKey_Semicolon: return 0xBA;
     case ImGuiKey_Equal: return 0xBB;
     case ImGuiKey_Comma: return 0xBC;
@@ -1340,10 +1340,10 @@ class SettingsPages {
     if (!GetBool("fullscreen")) items.push_back(WindowSizeItem());
     if (ExclusiveFullscreen()) {
       items.push_back(ResolutionItem());
-      items.push_back(RefreshRateItem());
     } else if (GetBool("fullscreen")) {
       items.push_back(BorderlessResolutionItem());  // task 363
     }
+    items.push_back(RefreshRateItem());
     {
       // A screen or window wider than 16:9 (task 311, built in since task 360): the picture is already wider (its
       // shape, up to 32:9), so the row says so instead of "Letterbox 16:9"; the setting still decides what a
@@ -1596,7 +1596,32 @@ class SettingsPages {
       if (m.width == desktop.width && m.height == desktop.height && std::fabs(m.refresh - desktop.refresh) < 0.1f)
         desktop.refresh = m.refresh;
     if (desktop.width <= 0 && !display_modes_.empty()) desktop = display_modes_.front();
+#if defined(KK_DEV_TOOLS)
+    // Developer aid: KK_DEV_DESKTOP_HZ=60 shows the launcher as on a screen Windows keeps at that rate.
+    if (const char* v = std::getenv("KK_DEV_DESKTOP_HZ"); v && *v && desktop.width > 0) desktop.refresh = float(std::atof(v));
+#endif
     return desktop.width > 0 ? desktop.Value() : "desktop";
+  }
+
+  // Fullscreen's mode at the desktop's size: the display's highest refresh rate there (owner, 4 Nov: Fullscreen
+  // always runs at the highest, and there is no Refresh rate choice).
+  std::string FullscreenDefaultValue() {
+    auto desktop = ParseDisplayMode(DesktopModeValue());
+    if (!desktop) return "desktop";
+    if (const float highest = HighestRefreshAt(display_modes_, desktop->width, desktop->height); highest > 0)
+      desktop->refresh = highest;
+    return desktop->Value();
+  }
+
+  // The refresh rate the game will run at: Fullscreen's highest at its size, else the desktop's.
+  DisplayMode ScreenRefreshMode() {
+    LoadDisplayModes();
+    if (ExclusiveFullscreen()) {
+      DisplayMode m = *ParseDisplayMode(Get("kk_fullscreen_mode"));
+      if (const float highest = HighestRefreshAt(display_modes_, m.width, m.height); highest > 0) m.refresh = highest;
+      return m;
+    }
+    return ParseDisplayMode(DesktopModeValue()).value_or(DisplayMode{});
   }
 
   Item WindowModeItem() {
@@ -1611,7 +1636,7 @@ class SettingsPages {
     it.default_text = mode_flag && mode_flag->default_value == "true" ? "Borderless" : "Windowed";
     it.on_choice = [this](int i) {
       if (i == 1) Set("kk_fullscreen_mode", "desktop");
-      if (i == 2 && !ParseDisplayMode(Get("kk_fullscreen_mode"))) Set("kk_fullscreen_mode", DesktopModeValue());
+      if (i == 2 && !ParseDisplayMode(Get("kk_fullscreen_mode"))) Set("kk_fullscreen_mode", FullscreenDefaultValue());
       // Task 363: an ultrawide picture size stays chosen; Windowed gets a window of its shape that fits.
       if (const auto picture = ChosenPictureSize(); i == 0 && picture) {
         const double scale = cb_.dpi_scale ? cb_.dpi_scale() : 1.0;
@@ -1703,48 +1728,49 @@ class SettingsPages {
       if (wide[size_t(i)]) {
         const auto [w, h] = sizes[size_t(i)];
         Set("kk_picture_size", std::to_string(w) + "x" + std::to_string(h));
-        Set("kk_fullscreen_mode", DesktopModeValue());
+        Set("kk_fullscreen_mode", FullscreenDefaultValue());
         return;
       }
       Reset("kk_picture_size");
       const auto [w, h] = sizes[size_t(i)];
       const std::vector<float> rates = RatesAt(w, h);
-      // The rate chosen before when this size has it, else this size's highest.
-      float rate = rates.empty() ? (cur ? cur->refresh : 0.0f) : rates.front();
-      for (const float r : rates)
-        if (cur && std::fabs(r - cur->refresh) < 0.01f) rate = r;
+      // This size's highest rate (owner, 4 Nov).
+      const float rate = rates.empty() ? (cur ? cur->refresh : 0.0f) : rates.front();
       Set("kk_fullscreen_mode", DisplayMode{w, h, rate}.Value());
     };
     it.on_default = [this] {
       Reset("kk_picture_size");
-      Set("kk_fullscreen_mode", DesktopModeValue());
+      Set("kk_fullscreen_mode", FullscreenDefaultValue());
     };
     return it;
   }
 
-  // Fullscreen only: the display's rates at the Resolution's size.
+  // The screen's refresh rate, not a choice (owner, 4 Nov: only the Frame rate is): Fullscreen runs at the display's
+  // highest, Windowed and Borderless at the desktop's. When Windows keeps the screen below its highest (a 165 Hz
+  // screen left at 60 Hz), the row says so and opens the Windows display settings where it is changed.
   Item RefreshRateItem() {
-    const auto cur = ParseDisplayMode(Get("kk_fullscreen_mode"));
+    const DisplayMode mode = ScreenRefreshMode();
     Item it;
-    it.type = ItemType::kChoice;
+    it.type = ItemType::kInfo;
     it.label = "Refresh rate";
-    it.description = "How many times a second your screen refreshes while the game runs.";
-    std::vector<float> rates = RatesAt(cur->width, cur->height);
-    if (rates.empty()) rates.push_back(cur->refresh);
-    it.index = -1;
-    for (size_t i = 0; i < rates.size(); ++i) {
-      const DisplayMode m{cur->width, cur->height, rates[i]};
-      it.options.push_back(m.RateLabel());
-      if (std::fabs(rates[i] - cur->refresh) < 0.01f) it.index = int(i);
+    it.value_text = mode.refresh > 0 ? mode.RateLabel() : std::string();
+    if (ExclusiveFullscreen()) {
+      it.description = "Fullscreen switches your screen to its highest refresh rate.";
+      return it;
     }
-    it.value_text = cur->RateLabel();
-    it.default_text = DisplayMode{cur->width, cur->height, rates.front()}.RateLabel();
-    it.on_choice = [w = cur->width, h = cur->height, rates](int i) {
-      Set("kk_fullscreen_mode", DisplayMode{w, h, rates[size_t(i)]}.Value());
-    };
-    it.on_default = [w = cur->width, h = cur->height, top = rates.front()] {
-      Set("kk_fullscreen_mode", DisplayMode{w, h, top}.Value());
-    };
+    it.description = "The game uses the refresh rate Windows has set for your screen.";
+    const float highest = HighestRefreshAt(display_modes_, mode.width, mode.height);
+    if (!DesktopBelowHighest(mode, highest)) return it;
+    const std::string now = DisplayMode{0, 0, mode.refresh}.RateLabel(), best = DisplayMode{0, 0, highest}.RateLabel();
+    it.description = F("Windows runs your screen at {0}, but it can run at {1}.", {now, best});
+    it.facts.push_back(F("Your screen shows at most {0} pictures a second until then.",
+                         {std::to_string(int(std::lround(mode.refresh)))}));
+    it.value_color = color::kWarn;
+#if defined(_WIN32)
+    it.type = ItemType::kAction;
+    it.facts.push_back(F("Select to open the Windows display settings, then choose {0} under Advanced display.", {best}));
+    it.on_activate = [] { OpenDisplaySettings(); };
+#endif
     return it;
   }
 
@@ -6136,6 +6162,33 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
       const uint32_t icon = achievements_.empty() ? 0 : achievements_[test_index_++ % achievements_.size()].id;
       toast_->Show("Test achievement", 10, icon);
     }));
+    // Owner, 4 Nov (players replaying the game): every achievement locked again, after a question. Not in the game's
+    // pause menu: the running game holds its unlocks.
+    if (!in_game_) {
+      bool any = false;
+      for (const auto& a : achievements_) any = any || a.unlocked;
+      for (const auto& pa : PortAchievements())
+        any = any || Cached(port_achievement_cache_.try_emplace(pa.id, -1e9, false).first->second, 2.0,
+                            [&] { return IsPortAchievementUnlocked(paths_.user_dir, pa.id); });
+      Item reset = ActionItem("Reset achievements",
+                              "Locks every achievement again, so you can earn them all again in a new playthrough. "
+                              "Your saves stay as they are.",
+                              "", [this] {
+                                OpenModal("Reset achievements",
+                                          "Lock every achievement again? You earn each one again by playing. Your "
+                                          "saves stay as they are.",
+                                          {"Reset", "Cancel"}, 1, [this](int i) {
+                                            if (i != 0) return;
+                                            const bool ok = ResetAchievements(paths_.user_dir);
+                                            if (cb_.reset_achievements) cb_.reset_achievements();
+                                            port_achievement_cache_.clear();
+                                            LoadAchievements();
+                                            Status(ok ? "Every achievement is locked again."
+                                                      : "Some achievements could not be reset (see the log).");
+                                          });
+                              });
+      items.push_back(Disable(reset, !any, "No achievement is unlocked yet."));
+    }
 
     items.push_back(Section("PC port"));
     for (const auto& pa : PortAchievements()) {

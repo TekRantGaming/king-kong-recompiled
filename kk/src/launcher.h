@@ -30,6 +30,7 @@ struct LauncherCallbacks {
   std::function<void(bool before_first_frame)> start_scene;
   // Starts the launcher again as a new process with these arguments, then this one closes.
   std::function<void(const std::wstring&)> restart_launcher;
+  std::function<void()> reset_achievements;  // after the unlock file went: the running runtime forgets its unlocks
   std::function<void(bool)> set_fullscreen;  // apply window mode live
   std::function<double()> dpi_scale;         // window DPI / 96
   std::function<std::pair<int, int>()> screen_size;  // monitor size in physical pixels

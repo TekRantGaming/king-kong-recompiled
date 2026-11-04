@@ -93,10 +93,7 @@
 
   // Frame rate cap: 30, 60, 120, 144, 165, Match my screen, Unlimited (kk_frame_rate, as Display's Frame rate).
   Item SetupFrameRateItem() {
-    int screen_hz = 0;
-    const auto mode = ExclusiveFullscreen() ? ParseDisplayMode(Get("kk_fullscreen_mode"))
-                                            : ParseDisplayMode(DesktopModeValue());
-    if (mode) screen_hz = int(std::lround(mode->refresh));
+    const int screen_hz = int(std::lround(ScreenRefreshMode().refresh));
     std::vector<Option> opts;
     bool matched = false;
     for (int fps : {30, 60, 120, 144, 165}) {
@@ -135,24 +132,18 @@
       if (ExclusiveFullscreen()) {
         if (TakeRow(display, "Resolution", "The size your screen switches to while the game runs.", rows))
           rows.back().facts.insert(rows.back().facts.begin(), "The game is drawn at up to this size.");
-        TakeRow(display, "Refresh rate", "How many times a second your screen refreshes while the game runs.", rows);
       } else if (GetBool("fullscreen")) {  // Borderless: the desktop's own mode
         // Task 363: the desktop's size or an ultrawide picture size (BorderlessResolutionItem).
-        const auto desktop = ParseDisplayMode(DesktopModeValue());
         if (TakeRow(display, "Resolution",
                     "The size of the game's picture: your desktop's, or a wider one shown with black bars above and "
                     "below.",
                     rows))
           rows.back().facts.insert(rows.back().facts.begin(), "The game is drawn at up to this size.");
-        Item hz;
-        hz.type = ItemType::kInfo;
-        hz.label = "Refresh rate";
-        hz.description = "Borderless uses your desktop's refresh rate.";
-        hz.value_text = desktop ? desktop->RateLabel() : std::string();
-        rows.push_back(std::move(hz));
       } else if (TakeRow(display, "Window size", "The size of the game's window.", rows)) {
         rows.back().facts.insert(rows.back().facts.begin(), "The game is drawn at up to this size.");
       }
+      // Owner, 4 Nov: the screen's rate is shown, not chosen, and says so when Windows keeps it below its highest.
+      rows.push_back(RefreshRateItem());
       rows.push_back(SetupFrameRateItem());
     } else if (page == 1) {
       std::vector<Item> graphics = GraphicsItems();

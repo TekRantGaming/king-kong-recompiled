@@ -1,0 +1,45 @@
+--- a/src/input/mnk/mnk_input_driver.cpp
++++ b/src/input/mnk/mnk_input_driver.cpp
+@@ -68,9 +68,8 @@ constexpr rex::input::DeviceId kMnkDevice = static_cast<rex::input::DeviceId>(0x
+ // Bind values are a comma-separated list of alternatives, each optionally
+ // carrying modifier prefixes: "Q,I" or "Shift+W". Modifier matching is exact,
+ // so "Up" stays silent while Shift is held and "Shift+Up" stays silent without
+-// it. That is what lets the D-pad share the arrow keys. A consequence is
+-// that binding a bare modifier name ("Shift") can never fire, since holding it
+-// makes the live mask non-zero while the bind wants zero.
++// it. That is what lets the D-pad share the arrow keys. A bare modifier name
++// ("Shift", "Control", "Alt") is a key of its own: its own bit is not matched.
+ constexpr uint8_t kModShift = 1u << 0;
+ constexpr uint8_t kModCtrl = 1u << 1;
+ constexpr uint8_t kModAlt = 1u << 2;
+@@ -122,15 +121,27 @@ std::string_view TrimSpaces(std::string_view s) {
+   return s;
+ }
+ 
++// The modifier a bare key name is ("Control" is Ctrl), or 0.
++uint8_t ModifierOf(rex::ui::VirtualKey vk) {
++  switch (vk) {
++    case rex::ui::VirtualKey::kShift: return kModShift;
++    case rex::ui::VirtualKey::kControl: return kModCtrl;
++    case rex::ui::VirtualKey::kMenu: return kModAlt;
++    default: return 0;
++  }
++}
++
+ bool TokenPressed(const bool (&key_down)[256], std::string_view token, uint8_t live_mods) {
+   uint8_t want = TakeModifiers(token);
+-  if (want != live_mods) {
+-    return false;
+-  }
+   rex::ui::VirtualKey vk = rex::ui::ParseVirtualKey(token);
+   if (vk == rex::ui::VirtualKey::kNone) {
+     return false;
+   }
++  // A bind to a modifier itself ("Control", "Shift", "Alt") holds that modifier while it is pressed, so its own
++  // bit is left out of the match: before, such a bind could never fire (King Kong, 4 Nov: Left Control).
++  if (want != (live_mods & ~ModifierOf(vk))) {
++    return false;
++  }
+   uint16_t idx = static_cast<uint16_t>(vk);
+   return idx < 256 && key_down[idx];
+ }

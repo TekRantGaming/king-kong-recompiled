@@ -3,6 +3,18 @@
 Every release of the King Kong PC port, newest first. The launcher shows this on its About page, and a
 version's notes the first time you start it.
 
+## Next update (not released)
+
+### Added
+- **Reset achievements**: the Achievements page has a Reset achievements button that locks every achievement again, so a new playthrough can earn them all again. It asks first, and your saves stay as they are.
+
+### Fixed
+- **The Log soft lock above 60 FPS**: after Kong throws the log, Jack could die out of sight at the bottom of the ravine and the chapter started again from the log, over and over. He now lands as he does at 30 FPS, at any frame rate.
+- **Left Control could not be bound**: Left and Right Control, Shift and Alt can now be bound to any action, on their own.
+
+### Changed
+- **Refresh rate**: Fullscreen now always runs at your screen's highest refresh rate at the chosen resolution, so the Refresh rate setting is gone; only the Frame rate is yours to choose. If Windows keeps your screen at a lower rate than it can run (for example 60 Hz on a 165 Hz screen), the Display page and the setup say so and open the Windows display settings where you change it. The log now records your screen's refresh rate.
+
 ## v2.0.11 (2 November 2026)
 
 ### Fixed

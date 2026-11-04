@@ -2,6 +2,7 @@
 
 #include "platform.h"
 
+#include <algorithm>
 #include <chrono>
 #include <cmath>
 #include <cstdio>
@@ -93,6 +94,17 @@ DisplayMode DesktopDisplayMode(int monitor, const rex::ui::Window* window) {
   return FromSdk(rex::ui::GetDesktopDisplayMode(monitor, window));
 }
 
+float HighestRefreshAt(const std::vector<DisplayMode>& modes, int width, int height) {
+  float best = 0;
+  for (const DisplayMode& m : modes)
+    if (m.width == width && m.height == height) best = std::max(best, m.refresh);
+  return best;
+}
+
+bool DesktopBelowHighest(const DisplayMode& desktop, float highest) {
+  return desktop.width > 0 && desktop.refresh > 0 && highest > 0 && highest - desktop.refresh >= 1.0f;
+}
+
 std::vector<MonitorInfo> ListDisplays() {
   std::vector<MonitorInfo> out;
   for (const rex::ui::DisplayInfo& d : rex::ui::GetDisplays())
@@ -115,7 +127,23 @@ void ApplyFullscreenMode(rex::ui::Window* window) {
     return;
   }
   const std::string value = rex::cvar::GetFlagByName("kk_fullscreen_mode");
-  const auto want = ParseDisplayMode(value);
+  auto want = ParseDisplayMode(value);
+  std::vector<DisplayMode> modes;
+  for (const rex::ui::DisplayMode& m : rex::ui::GetFullscreenDisplayModes(Monitor(), window)) modes.push_back(FromSdk(m));
+  {
+    const DisplayMode desktop = DesktopDisplayMode(Monitor(), window);
+    const float highest = HighestRefreshAt(modes, desktop.width, desktop.height);
+    REXLOG_INFO("KK: screen refresh: desktop {} Hz at {}x{}, the display's highest at that size {} Hz{}",
+                Hz(desktop.refresh), desktop.width, desktop.height, highest > 0 ? Hz(highest) : "unknown",
+                DesktopBelowHighest(desktop, highest) ? " (Windows keeps the screen below its highest)" : "");
+  }
+  if (want) {
+    const float highest = HighestRefreshAt(modes, want->width, want->height);
+    if (highest > 0 && std::fabs(highest - want->refresh) >= 0.01f) {
+      REXLOG_INFO("KK: fullscreen mode {}: the display's highest rate at that size instead, {} Hz", value, Hz(highest));
+      want->refresh = highest;
+    }
+  }
   if (!want) {
     rex::ui::SetFullscreenDisplayMode(window, 0, 0, 0, 0.0f);  // borderless at the desktop's resolution
     const DisplayMode desktop = DesktopDisplayMode(Monitor(), window);
