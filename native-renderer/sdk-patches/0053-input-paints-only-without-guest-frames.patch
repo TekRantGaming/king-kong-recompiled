@@ -1,0 +1,126 @@
+--- a/src/ui/presenter.cpp
++++ b/src/ui/presenter.cpp
+@@ -12,6 +12,7 @@
+ #include <algorithm>
+ #include <atomic>
+ #include <cctype>
++#include <chrono>
+ #include <utility>
+ 
+ #include <rex/assert.h>
+@@ -607,6 +608,24 @@ void Presenter::PaintFromUIThread(bool force_paint) {
+   }
+ }
+ 
++namespace {
++// When the guest last sent a frame (steady clock, ms); see GuestOutputRefreshedRecently.
++std::atomic<int64_t> g_last_guest_refresh_ms{-1000000};
++int64_t SteadyMs() {
++  return std::chrono::duration_cast<std::chrono::milliseconds>(
++             std::chrono::steady_clock::now().time_since_epoch())
++      .count();
++}
++}  // namespace
++
++// Window input asks for a UI paint so a dialog answers at once even while nothing else paints. While the guest
++// sends frames, every frame paints the UI anyway, and those extra paints only present the last frame again: a
++// moving mouse (hundreds of events a second) then pushes presents far past the game's frame rate cap and breaks
++// the frame pacing (King Kong, issue 58). Window input skips its paint while this says the guest is sending frames.
++bool GuestOutputRefreshedRecently() {
++  return SteadyMs() - g_last_guest_refresh_ms.load(std::memory_order_relaxed) < 250;
++}
++
+ bool Presenter::RefreshGuestOutput(
+     uint32_t frontbuffer_width, uint32_t frontbuffer_height, uint32_t display_aspect_ratio_x,
+     uint32_t display_aspect_ratio_y,
+@@ -628,6 +647,7 @@ bool Presenter::RefreshGuestOutput(
+       return false;
+     }
+     guest_output_active_last_refresh_ = true;
++    g_last_guest_refresh_ms.store(SteadyMs(), std::memory_order_relaxed);
+   } else {
+     // Request presenting a blank image if there was a true image previously,
+     // but not now.
+--- a/src/ui/window.cpp
++++ b/src/ui/window.cpp
+@@ -68,6 +68,8 @@ REXCVAR_DEFINE_DOUBLE(video_mode_refresh_rate, 60.0, "Display",
+ namespace rex {
+ namespace ui {
+ 
++bool GuestOutputRefreshedRecently();  // presenter.cpp: input skips its UI paint while the guest sends frames
++
+ Window::Window(WindowedAppContext& app_context, const std::string_view title,
+                uint32_t desired_logical_width, uint32_t desired_logical_height)
+     : app_context_(app_context),
+@@ -645,7 +647,7 @@ void Window::OnKeyDown(KeyEvent& e, WindowDestructionReceiver& destruction_recei
+   if (destruction_receiver.IsWindowDestroyed()) {
+     return;
+   }
+-  RequestPresenterUIPaintFromUIThread();
++  if (!GuestOutputRefreshedRecently()) RequestPresenterUIPaintFromUIThread();
+ }
+ 
+ void Window::OnKeyUp(KeyEvent& e, WindowDestructionReceiver& destruction_receiver) {
+@@ -658,7 +660,7 @@ void Window::OnKeyUp(KeyEvent& e, WindowDestructionReceiver& destruction_receive
+   if (destruction_receiver.IsWindowDestroyed()) {
+     return;
+   }
+-  RequestPresenterUIPaintFromUIThread();
++  if (!GuestOutputRefreshedRecently()) RequestPresenterUIPaintFromUIThread();
+ }
+ 
+ void Window::OnKeyChar(KeyEvent& e, WindowDestructionReceiver& destruction_receiver) {
+@@ -671,7 +673,7 @@ void Window::OnKeyChar(KeyEvent& e, WindowDestructionReceiver& destruction_recei
+   if (destruction_receiver.IsWindowDestroyed()) {
+     return;
+   }
+-  RequestPresenterUIPaintFromUIThread();
++  if (!GuestOutputRefreshedRecently()) RequestPresenterUIPaintFromUIThread();
+ }
+ 
+ void Window::OnMouseDown(MouseEvent& e, WindowDestructionReceiver& destruction_receiver) {
+@@ -684,7 +686,7 @@ void Window::OnMouseDown(MouseEvent& e, WindowDestructionReceiver& destruction_r
+   if (destruction_receiver.IsWindowDestroyed()) {
+     return;
+   }
+-  RequestPresenterUIPaintFromUIThread();
++  if (!GuestOutputRefreshedRecently()) RequestPresenterUIPaintFromUIThread();
+ }
+ 
+ void Window::OnMouseMove(MouseEvent& e, WindowDestructionReceiver& destruction_receiver) {
+@@ -697,7 +699,7 @@ void Window::OnMouseMove(MouseEvent& e, WindowDestructionReceiver& destruction_r
+   if (destruction_receiver.IsWindowDestroyed()) {
+     return;
+   }
+-  RequestPresenterUIPaintFromUIThread();
++  if (!GuestOutputRefreshedRecently()) RequestPresenterUIPaintFromUIThread();
+ }
+ 
+ void Window::OnMouseUp(MouseEvent& e, WindowDestructionReceiver& destruction_receiver) {
+@@ -710,7 +712,7 @@ void Window::OnMouseUp(MouseEvent& e, WindowDestructionReceiver& destruction_rec
+   if (destruction_receiver.IsWindowDestroyed()) {
+     return;
+   }
+-  RequestPresenterUIPaintFromUIThread();
++  if (!GuestOutputRefreshedRecently()) RequestPresenterUIPaintFromUIThread();
+ }
+ 
+ void Window::OnMouseWheel(MouseEvent& e, WindowDestructionReceiver& destruction_receiver) {
+@@ -723,7 +725,7 @@ void Window::OnMouseWheel(MouseEvent& e, WindowDestructionReceiver& destruction_
+   if (destruction_receiver.IsWindowDestroyed()) {
+     return;
+   }
+-  RequestPresenterUIPaintFromUIThread();
++  if (!GuestOutputRefreshedRecently()) RequestPresenterUIPaintFromUIThread();
+ }
+ 
+ void Window::OnTouchEvent(TouchEvent& e, WindowDestructionReceiver& destruction_receiver) {
+@@ -736,7 +738,7 @@ void Window::OnTouchEvent(TouchEvent& e, WindowDestructionReceiver& destruction_
+   if (destruction_receiver.IsWindowDestroyed()) {
+     return;
+   }
+-  RequestPresenterUIPaintFromUIThread();
++  if (!GuestOutputRefreshedRecently()) RequestPresenterUIPaintFromUIThread();
+ }
+ 
+ void Window::SendEventToListeners(std::function<void(WindowListener*)> fn,
