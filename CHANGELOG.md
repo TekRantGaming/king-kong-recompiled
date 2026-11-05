@@ -3,7 +3,7 @@
 Every release of the King Kong PC port, newest first. The launcher shows this on its About page, and a
 version's notes the first time you start it.
 
-## v2.1.0 (not released)
+## v2.1.0 (5 November 2026)
 
 ### Added
 - **Muzzle flash light**: every shot lights what is around it for a moment: walls, the ground, enemies, your hands and gun. On in Remastered (Graphics > Effects).
