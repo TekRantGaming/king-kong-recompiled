@@ -901,21 +901,7 @@ void GameRenderer::TrimClearTargets() {
   // retain their targets rather than incorrectly restore an old clear.
   // Drop GTAO's old target views once on entering pressure. No image or
   // pipeline is rebuilt here, and the next frame classifies its targets anew.
-  if (memory_pressure_samples_ == 0) {
-    if (scene_ao_) scene_ao_->ForgetTargets();
-    if (scene_gi_) scene_gi_->ForgetTargets();
-    if (gi_parked_) gi_parked_->ForgetTargets();
-    if (scene_lighting_) scene_lighting_->ForgetTargets();
-    if (lighting_parked_) lighting_parked_->ForgetTargets();
-    if (scene_cel_) scene_cel_->ForgetTargets();
-    if (cel_parked_) cel_parked_->ForgetTargets();
-    if (scene_muzzle_) scene_muzzle_->ForgetTargets();
-    if (hands_dof_) hands_dof_->ForgetTargets();
-    hands_dof_color_ = nullptr;
-    if (skin_band_) skin_band_->ForgetTargets();
-    skin_color_ = nullptr;
-    if (scene_photo_) scene_photo_->ForgetTargets();
-  }
+  if (memory_pressure_samples_ == 0) ForgetEffectTargets(false);
   if (upscale_ || scene_ao_ || scene_gi_ || gi_parked_ || scene_lighting_ || lighting_parked_ || scene_cel_ || cel_parked_ ||
       scene_photo_ || scene_muzzle_) return;
   for (auto& [key, t] : targets_) {
@@ -1075,6 +1061,12 @@ void GameRenderer::EndFrame() {
   frame_skips_ = 0;
   if (upscale_) UpscaleEndFrame();
   ++frame_;
+  // A target got a new texture during the frame (GetTarget): the effects forget the old one now, between frames,
+  // long before it is released (8 frames), and not halfway through a frame they may already have shaded.
+  if (forget_effect_targets_) {
+    forget_effect_targets_ = false;
+    ForgetEffectTargets(true);
+  }
   current_cl_ = nullptr;
   index_ring_used_ = 0;
   for (DescriptorTable& t : tables_) {

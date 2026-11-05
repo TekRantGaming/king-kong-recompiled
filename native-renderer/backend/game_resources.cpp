@@ -187,6 +187,9 @@ GameRenderer::HostTarget* GameRenderer::GetTarget(bool depth, uint32_t edram_bas
       upscale_->framebuffers.clear();
       upscale_->pass_sets.clear();
     }
+    // The effects may hold the old texture by pointer (a new render size, e.g. DLSS switched off): they forget
+    // it at the end of this frame (ForgetEffectTargets), while it is still alive.
+    forget_effect_targets_ = true;
   }
   if (!slot) ++stats_.edram_targets;
   if (PostSplitOn())  // dev aid (KK_DEV_POST_SPLIT)

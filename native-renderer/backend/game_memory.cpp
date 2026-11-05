@@ -238,17 +238,9 @@ void GameRenderer::ApplyMemoryScale(nvrhi::ICommandList* cl) {
   }
   memory_staged_.clear();
   if (options_.shadow_scale > 0.0f) memory_shadow_limit_ = options_.shadow_scale;
-  if (scene_gi_) scene_gi_->ForgetTargets();
-  if (gi_parked_) gi_parked_->ForgetTargets();
-  if (scene_lighting_) scene_lighting_->ForgetTargets();
-  if (lighting_parked_) lighting_parked_->ForgetTargets();
-  if (scene_ao_) {
-    scene_ao_->ForgetTargets();
-    // Keep old bindless descriptors valid for pending frames, but force a new
-    // slot on the next AO image instead of comparing potentially reused pointers.
-    RetireSlot(kTex2D, ao_slot_); ao_slot_ = 0; ao_slot_texture_ = nullptr;
-    ao_constants_valid_ = false;
-  }
+  // Every effect, not only GI, lighting and AO: the cel shading, muzzle light, hands depth of field, skin and photo
+  // mode also remember targets by pointer.
+  ForgetEffectTargets(true);
   ++memory_scale_steps_;
   Logf(LogLevel::kWarning, "rexgpu-native: GPU budget pressure: render scale %.3f x %.3f -> %.3f x %.3f; contents migrated at frame %llu (%.3f ms CPU), staged from frame %llu",
        old[0], old[1], options_.render_scale_x, options_.render_scale_y, static_cast<unsigned long long>(frame_),

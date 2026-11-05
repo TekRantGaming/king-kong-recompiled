@@ -262,6 +262,29 @@ void GameRenderer::PurgeOutputGeneration() {
   }
   framebuffers_.clear();
   framebuffer_used_.clear();
+  ForgetEffectTargets(true);
+}
+
+void GameRenderer::ForgetEffectTargets(bool new_ao_slot) {
+  if (scene_ao_) scene_ao_->ForgetTargets();
+  if (scene_gi_) scene_gi_->ForgetTargets();
+  if (gi_parked_) gi_parked_->ForgetTargets();
+  if (scene_lighting_) scene_lighting_->ForgetTargets();
+  if (lighting_parked_) lighting_parked_->ForgetTargets();
+  if (scene_cel_) scene_cel_->ForgetTargets();
+  if (cel_parked_) cel_parked_->ForgetTargets();
+  if (scene_muzzle_) scene_muzzle_->ForgetTargets();
+  if (hands_dof_) hands_dof_->ForgetTargets();
+  hands_dof_color_ = nullptr;
+  if (skin_band_) skin_band_->ForgetTargets();
+  skin_color_ = nullptr;
+  if (scene_photo_) scene_photo_->ForgetTargets();
+  if (new_ao_slot && scene_ao_) {
+    // Keep old bindless descriptors valid for pending frames, but force a new
+    // slot on the next AO image instead of comparing potentially reused pointers.
+    RetireSlot(kTex2D, ao_slot_); ao_slot_ = 0; ao_slot_texture_ = nullptr;
+    ao_constants_valid_ = false;
+  }
 }
 
 void GameRenderer::FlushSamplers() {

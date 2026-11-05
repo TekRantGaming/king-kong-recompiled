@@ -1304,6 +1304,13 @@ class GameRenderer {
   void UpdateGi(const GiConfig& want);
   void UpdateLighting(const LightingConfig& want, float shadow_scale);
   void PurgeOutputGeneration();
+  // Every scene effect drops the targets (and views of them) it remembers by plain pointer. Called wherever
+  // targets are retired: those textures are released a few frames later, and an effect that still held one
+  // made views of a freed texture (2.1.0 crash reports: DLSS switched off in the launcher, then the AO's
+  // first scene copy failed the D3D12 command list or crashed in Vulkan's createBindingSet).
+  // `new_ao_slot`: the AO image also takes a new bindless slot (pointers may be reused).
+  void ForgetEffectTargets(bool new_ao_slot);
+  bool forget_effect_targets_ = false;  // a target got a new texture this frame: ForgetEffectTargets at its end
   void FlushSamplers();
   void PublishEffectTimes();
   uint64_t effects_frame_ = UINT64_MAX;
