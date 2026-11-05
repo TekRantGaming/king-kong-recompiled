@@ -11,6 +11,7 @@ version's notes the first time you start it.
 ### Fixed
 - **The Log soft lock above 60 FPS**: after Kong throws the log, Jack could die out of sight at the bottom of the ravine and the chapter started again from the log, over and over. He now lands as he does at 30 FPS, at any frame rate.
 - **Left Control could not be bound**: Left and Right Control, Shift and Alt can now be bound to any action, on their own.
+- **Mouse and keyboard input went past the frame rate cap** (issue 58): every mouse movement and key press showed the last frame again, so overlays counted frames above your cap and motion could look uneven. Input now waits for the game's next frame while the game is drawing.
 
 ### Changed
 - **Refresh rate**: Fullscreen now always runs at your screen's highest refresh rate at the chosen resolution, so the Refresh rate setting is gone; only the Frame rate is yours to choose. If Windows keeps your screen at a lower rate than it can run (for example 60 Hz on a 165 Hz screen), the Display page and the setup say so and open the Windows display settings where you change it. The log now records your screen's refresh rate.
