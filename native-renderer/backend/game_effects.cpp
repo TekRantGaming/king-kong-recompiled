@@ -102,6 +102,7 @@ void GameRenderer::UpdateEffects() {
   options_.texture_pack = s.texture_pack;
   options_.texture_pack_folder = s.texture_pack_folder;
   tessellation_=s.tessellation && options_.tessellation_supported;
+  parallax_ = s.parallax;
   tessellation_smoothness_=std::isfinite(s.tessellation_smoothness)?std::clamp(s.tessellation_smoothness,0.0f,1.0f):0.75f;
   tessellation_detail_=std::clamp(s.tessellation_detail,1u,16u);
   if ((tessellation_ || TessellationBenchRequested()) && !tessellation_timer_) {
@@ -129,6 +130,9 @@ void GameRenderer::UpdateEffects() {
   UpdateGi(s.gi);
   UpdateLighting(s.lighting, s.shadow_scale);
   UpdateCel(s.cel);  // game_cel.cpp
+  UpdateMuzzle(s.muzzle);  // game_muzzle.cpp
+  UpdateHandsDof(s.hands_dof);  // game_hands_dof.cpp
+  UpdateSkin(s.skin);  // game_skin.cpp
   while (!retired_gi_.empty() && retired_gi_.front().first + kRetireFrames < frame_) retired_gi_.pop_front();
   while (!retired_cel_.empty() && retired_cel_.front().first + kRetireFrames < frame_) retired_cel_.pop_front();
   while (!retired_lighting_.empty() && retired_lighting_.front().first + kRetireFrames < frame_) retired_lighting_.pop_front();

@@ -569,4 +569,50 @@ std::shared_ptr<const GameShader> ShaderLibrary::LightingVariant(const GameShade
   return entry.shader;
 }
 
+std::shared_ptr<const GameShader> ShaderLibrary::ParallaxVariant(const GameShader& base) {
+  if (!base.source || base.kind != kkshaders::ShaderKind::Pixel) return nullptr;
+  constexpr uint64_t kTag = 0x5041524158310001ull;  // "PARAX1"
+  const uint64_t key = HashKey(base.kind, base.ucode_hash, base.input_hash ^ kTag);
+  std::lock_guard lock(lighting_mutex_);
+  auto it = lighting_variants_.find(key);
+  if (it == lighting_variants_.end()) {
+    auto& entry = lighting_variants_[key];
+    entry.build = std::async(std::launch::async, [device = device_, base] {
+      auto info = *base.source;
+      info.parallax = true;
+      kkshaders::Compiler compiler;
+      const bool spirv = device->getGraphicsAPI() == nvrhi::GraphicsAPI::VULKAN;
+      auto built = kkshaders::buildShader(info, compiler, false, spirv ? kkshaders::kBuildSpirv : kkshaders::kBuildDxil);
+      if (!built.ok) {  // most often a shader the hook does not fit
+        Logf(LogLevel::kInfo, "rexgpu-native: parallax: %016llX stays as it is: %s",
+             static_cast<unsigned long long>(base.ucode_hash), built.error.substr(0, 160).c_str());
+        return std::shared_ptr<GameShader>{};
+      }
+      auto shader = std::make_shared<GameShader>(base);
+      shader->input_hash ^= kTag;
+      shader->source = std::make_shared<const kkshaders::ShaderInfo>(info);
+      shader->bindings = std::move(built.shader.bindings);
+      const auto& blob = spirv ? built.shader.spirv : built.shader.dxil;
+      nvrhi::ShaderDesc desc;
+      desc.shaderType = nvrhi::ShaderType::Pixel;
+      desc.entryName = "main";
+      desc.debugName = "Parallax pixel shader";
+      shader->handle = device->createShader(desc, blob.data(), blob.size());
+      if (shader->handle)
+        Logf(LogLevel::kInfo, "rexgpu-native: parallax shader ready %016llX", static_cast<unsigned long long>(base.ucode_hash));
+      return shader->handle ? shader : std::shared_ptr<GameShader>{};
+    });
+    return nullptr;
+  }
+  auto& entry = it->second;
+  if (entry.build.valid() && entry.build.wait_for(std::chrono::seconds(0)) == std::future_status::ready) {
+    entry.shader = entry.build.get();
+    if (entry.shader) {
+      std::lock_guard library_lock(mutex_);
+      entry.shader->id = next_id_++;
+    }
+  }
+  return entry.shader;
+}
+
 }  // namespace nr

@@ -63,6 +63,44 @@ for spec in cel_exposure_cs:cs:cs_exposure cel_vs:vs:vs_main cel_ps:ps:ps_cel; d
   "$DXC" -nologo -T "${stage}_6_0" -E "$entry" -O3 -Fh "$out/${base}_dxil.h" -Vn "k_${base}_dxil" "$src"
   "$DXC" -nologo -T "${stage}_6_0" -E "$entry" -O3 -spirv -fspv-target-env=vulkan1.2     -fvk-t-shift 0 0 -fvk-s-shift 128 0 -fvk-b-shift 256 0 -fvk-u-shift 384 0     -Fh "$out/${base}_spirv.h" -Vn "k_${base}_spirv" "$src"
 done
+# The red band on human skin (skin_band.hlsl).
+src="$here/skin_band.hlsl"
+for spec in skin_band_vs:vs:vs_main skin_band_ps:ps:ps_main; do
+  IFS=: read -r base stage entry <<< "$spec"
+  "$DXC" -nologo -T "${stage}_6_0" -E "$entry" -O3 -Fh "$out/${base}_dxil.h" -Vn "k_${base}_dxil" "$src"
+  "$DXC" -nologo -T "${stage}_6_0" -E "$entry" -O3 -spirv -fspv-target-env=vulkan1.2 \
+    -fvk-t-shift 0 0 -fvk-s-shift 128 0 -fvk-b-shift 256 0 -fvk-u-shift 384 0 -Fh "$out/${base}_spirv.h" -Vn "k_${base}_spirv" "$src"
+done
+# Its mask: as ao_hands.hlsl below.
+src="$here/skin_band_mask.hlsl"
+"$DXC" -nologo -T ps_6_0 -E main -HV 2021 -O3 -Gis -Qstrip_debug -Fh "$out/skin_band_mask_ps_dxil.h" -Vn "k_skin_band_mask_ps_dxil" "$src"
+"$DXC" -nologo -T ps_6_0 -E main -HV 2021 -O3 -Gis -Qstrip_debug -spirv -fspv-target-env=vulkan1.2 \
+  -fvk-use-dx-layout -Fh "$out/skin_band_mask_ps_spirv.h" -Vn "k_skin_band_mask_ps_spirv" "$src"
+# The depth of field on the first-person hands (hands_dof.hlsl).
+src="$here/hands_dof.hlsl"
+for spec in hands_dof_vs:vs:vs_main hands_dof_ps:ps:ps_main; do
+  IFS=: read -r base stage entry <<< "$spec"
+  "$DXC" -nologo -T "${stage}_6_0" -E "$entry" -O3 -Fh "$out/${base}_dxil.h" -Vn "k_${base}_dxil" "$src"
+  "$DXC" -nologo -T "${stage}_6_0" -E "$entry" -O3 -spirv -fspv-target-env=vulkan1.2 \
+    -fvk-t-shift 0 0 -fvk-s-shift 128 0 -fvk-b-shift 256 0 -fvk-u-shift 384 0 -Fh "$out/${base}_spirv.h" -Vn "k_${base}_spirv" "$src"
+done
+# Its mask: as ao_hands.hlsl below.
+src="$here/hands_dof_mask.hlsl"
+"$DXC" -nologo -T ps_6_0 -E main -HV 2021 -O3 -Gis -Qstrip_debug -Fh "$out/hands_dof_mask_ps_dxil.h" -Vn "k_hands_dof_mask_ps_dxil" "$src"
+"$DXC" -nologo -T ps_6_0 -E main -HV 2021 -O3 -Gis -Qstrip_debug -spirv -fspv-target-env=vulkan1.2 \
+  -fvk-use-dx-layout -fvk-use-dx-position-w -Fh "$out/hands_dof_mask_ps_spirv.h" -Vn "k_hands_dof_mask_ps_spirv" "$src"
+# Muzzle flashes that cast light (muzzle.hlsl).
+src="$here/muzzle.hlsl"
+for spec in muzzle_vs:vs:vs_main muzzle_ps:ps:ps_muzzle; do
+  base=${spec%%:*}; rest=${spec#*:}; stage=${rest%%:*}; entry=${rest#*:}
+  "$DXC" -nologo -T "${stage}_6_0" -E "$entry" -O3 -Fh "$out/${base}_dxil.h" -Vn "k_${base}_dxil" "$src"
+  "$DXC" -nologo -T "${stage}_6_0" -E "$entry" -O3 -spirv -fspv-target-env=vulkan1.2     -fvk-t-shift 0 0 -fvk-s-shift 128 0 -fvk-b-shift 256 0 -fvk-u-shift 384 0 -Fh "$out/${base}_spirv.h" -Vn "k_${base}_spirv" "$src"
+done
+# The muzzle light on the first-person hands (muzzle_hands.hlsl): as ao_hands.hlsl below.
+src="$here/muzzle_hands.hlsl"
+"$DXC" -nologo -T ps_6_0 -E main -HV 2021 -O3 -Gis -Qstrip_debug -Fh "$out/muzzle_hands_ps_dxil.h" -Vn "k_muzzle_hands_ps_dxil" "$src"
+"$DXC" -nologo -T ps_6_0 -E main -HV 2021 -O3 -Gis -Qstrip_debug -spirv -fspv-target-env=vulkan1.2 \
+  -fvk-use-dx-layout -Fh "$out/muzzle_hands_ps_spirv.h" -Vn "k_muzzle_hands_ps_spirv" "$src"
 # AO on the first-person hands (ao_hands.hlsl, docs/ao.md): drawn with the game's vertex shaders, so built
 # like the translated shaders (the game's layout, no binding shifts), as compile_shaders.ps1 does.
 src="$here/ao_hands.hlsl"

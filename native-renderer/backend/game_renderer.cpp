@@ -520,6 +520,9 @@ bool GameRenderer::Initialize() {
   AoInitialize();  // AO hook (game_ao.cpp): the GTAO method
   GiInitialize();  // GI hook (game_gi.cpp): the screen-space GI
   CelInitialize();  // Cel hook (game_cel.cpp): the cel shading
+  MuzzleInitialize();  // Muzzle hook (game_muzzle.cpp)
+  HandsDofInitialize();  // Hands depth of field hook (game_hands_dof.cpp)
+  SkinInitialize();  // Skin hook (game_skin.cpp)
   // Upscalers: their passes. Without them the renderer runs as without an upscaler (logged).
   if (upscale_ && !UpscaleInitialize()) {
     Logf(LogLevel::kWarning, "rexgpu-native: upscaler: the passes could not be made; no upscaler");
@@ -906,10 +909,15 @@ void GameRenderer::TrimClearTargets() {
     if (lighting_parked_) lighting_parked_->ForgetTargets();
     if (scene_cel_) scene_cel_->ForgetTargets();
     if (cel_parked_) cel_parked_->ForgetTargets();
+    if (scene_muzzle_) scene_muzzle_->ForgetTargets();
+    if (hands_dof_) hands_dof_->ForgetTargets();
+    hands_dof_color_ = nullptr;
+    if (skin_band_) skin_band_->ForgetTargets();
+    skin_color_ = nullptr;
     if (scene_photo_) scene_photo_->ForgetTargets();
   }
   if (upscale_ || scene_ao_ || scene_gi_ || gi_parked_ || scene_lighting_ || lighting_parked_ || scene_cel_ || cel_parked_ ||
-      scene_photo_) return;
+      scene_photo_ || scene_muzzle_) return;
   for (auto& [key, t] : targets_) {
     if (!t || !t->texture || !CanEvictClearTarget(t->clear_only, bool(upscale_ || scene_ao_),
                                                 t->used_frame, frame_)) continue;
@@ -1004,7 +1012,7 @@ void GameRenderer::CheckMemoryBudget() {
 void GameRenderer::EndFrame() {
   // These Beta 5 passes bypass GetFramebuffer. Their writes invalidate saved
   // clears even if the player disables the effect before pressure next occurs.
-  if (scene_gi_ || scene_lighting_ || scene_cel_)
+  if (scene_gi_ || scene_lighting_ || scene_cel_ || scene_muzzle_)
     for (auto& [key, target] : targets_) if (target) target->clear_only = false;
   ProfileResources();
   EndStartUploadFrame();
@@ -2349,6 +2357,12 @@ void GameRenderer::Draw(nvrhi::ICommandList* cl, const DrawCall& call) {
   if (scene_gi_) GiDrawHook(cl, call, d, colors, depth, record, *vs, ps.get());
   // Cel hook (game_cel.cpp): at the end of the opaque pass the lines and bands go in (after AO and GI).
   if (scene_cel_) CelDrawHook(cl, call, d, colors, depth, record, *vs, ps.get());
+  // Muzzle hook (game_muzzle.cpp): in a frame with a flash, its light at the end of the opaque pass.
+  if (scene_muzzle_) MuzzleDrawHook(cl, call, d, colors, depth, record, *vs, ps.get());
+  // Skin hook (game_skin.cpp): the band at the fog pass, and after the first-person hands.
+  if (skin_band_) SkinDrawHook(cl, call, record, ps.get());
+  // Hands depth of field hook (game_hands_dof.cpp): the gather after their last colour draw.
+  if (hands_dof_) HandsDofDrawHook(cl, call, record);
   // Photo hook (game_photo.cpp): the depth of field's depth at the end of the opaque pass.
   if (scene_photo_) PhotoDrawHook(cl, call, d, colors, depth, record, *vs, ps.get());
   // Lighting hook (game_lighting.cpp): the lighting options' moments and the census.
@@ -2396,6 +2410,23 @@ void GameRenderer::Draw(nvrhi::ICommandList* cl, const DrawCall& call) {
         ++(water ? live_draws_.water : live_draws_.shadows);
       } else {
         ++(water ? live_draws_.water_waiting : live_draws_.shadows_waiting);
+      }
+    } else if (parallax_ && parallax_view_.valid && ParallaxDraw(d, record, *vs, *ps)) {
+      // Parallax hook (game_parallax.cpp): the same way, its variant once that and its pipeline are ready.
+      if (auto variant = shaders_->ParallaxVariant(*ps)) {
+        auto variant_record = record;
+        variant_record.ps_input = variant->input_hash;
+        const uint64_t variant_key = PipelineKey(variant_record);
+        nvrhi::GraphicsPipelineDesc pd;
+        nvrhi::FramebufferInfo info;
+        BuildPipelineDesc(variant_record, vs->handle, variant->handle, pd, info);
+        if (auto* prepared = GetPipeline(pd, info, variant_key, PipelineDemand::kOptional)) {
+          pipeline = prepared;
+          ps = std::move(variant);
+          ++live_draws_.parallax;
+        } else {
+          ++live_draws_.parallax_waiting;
+        }
       }
     }
   }
@@ -2807,6 +2838,12 @@ void GameRenderer::Draw(nvrhi::ICommandList* cl, const DrawCall& call) {
   ++stats_.draws;
   // AO on the first-person hands (game_ao.cpp): their colour drawn again, times the occlusion.
   if (scene_ao_ && !ao_hands_.empty()) AoRedrawHands(cl, call, record, *vs, gs, args, indexed_draw, *size_from);
+  // Muzzle hook (game_muzzle.cpp): in a frame with a flash, their colour drawn again, brighter.
+  if (scene_muzzle_ && !muzzle_hands_.empty()) MuzzleRedrawHands(cl, call, record, *vs, gs, args, indexed_draw, *size_from);
+  // Skin hook (game_skin.cpp): a skin material's colour draw again, into the skin image.
+  if (skin_band_) SkinRedraw(cl, call, record, *vs, gs, args, indexed_draw, d);
+  // Hands depth of field hook (game_hands_dof.cpp): their colour draw again, into the mask.
+  if (hands_dof_ && !hands_dof_keys_.empty()) HandsDofRedraw(cl, call, record, *vs, gs, args, indexed_draw);
   if (tessellated) {
     tessellation_drawn_this_frame_=true;
     ++tessellation_draws_this_frame_;

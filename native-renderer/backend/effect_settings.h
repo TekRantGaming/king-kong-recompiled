@@ -8,6 +8,9 @@
 
 #include "backend/ao_config.h"
 #include "backend/cel_config.h"
+#include "backend/hands_dof_config.h"
+#include "backend/muzzle_config.h"
+#include "backend/skin_band_config.h"
 #include "backend/gi_config.h"
 #include "backend/lighting_config.h"
 #include "backend/picture_adjust.h"
@@ -19,12 +22,16 @@ struct EffectSettings {
   bool texture_pack = false;
   std::string texture_pack_folder;
   bool tessellation = false;
+  bool parallax = false;  // parallax occlusion mapping on the world's surfaces (kkshaders/parallax.h)
   float tessellation_smoothness = 0.75f;
   uint32_t tessellation_detail = 4;
   AoQuality ao_quality = AoQuality::kAuto;
   GiConfig gi;
   LightingConfig lighting;
   CelConfig cel;  // cel shading (cel_config.h): made on a worker when turned on, parked when off
+  MuzzleConfig muzzle;  // muzzle flashes that cast light (muzzle_light.h)
+  HandsDofConfig hands_dof;  // depth of field on the first-person hands (hands_dof.h)
+  SkinBandConfig skin;  // the red band on human skin (skin_band.h)
   float shadow_scale = 0;
   // The temporal upscaler as asked for (kind, mode, DLSS preset, sharpness, mip bias, reactive mask).
   // A change of kind, mode or preset makes the upscaler again at a frame boundary; the others apply

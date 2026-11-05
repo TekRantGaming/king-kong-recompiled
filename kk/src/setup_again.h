@@ -40,7 +40,7 @@ inline bool Resets(std::string_view name, std::string_view category) {
       "ao_strength", "native_ao_method", "native_ao_apply", "native_ao_quality", "native_ao_samples",
       "native_ao_normal_smoothing", "native_gi", "native_gi_distance", "native_shadow_quality",
       "native_water_reflections", "native_volumetrics", "native_volumetric_strength", "native_effect_buffers",
-      "native_sharpness", "native_cel_shading", "native_cel_outline", "native_cel_darkness", "native_cel_bands",
+      "native_sharpness", "native_muzzle_light", "native_hands_dof", "native_skin_band", "native_parallax", "native_cel_shading", "native_cel_outline", "native_cel_darkness", "native_cel_bands",
       "native_cel_strength",
       // Controls and the button prompts
       "mnk_mode", "kk_button_prompts", "kk_pad_prompts", "kk_camera_sensitivity", "kk_camera_modern",

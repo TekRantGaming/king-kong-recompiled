@@ -155,6 +155,9 @@ void GameRenderer::AoDrawHook(nvrhi::ICommandList* cl, const DrawCall& call, con
   SceneAo::Draw a = AoDescribeDraw(call, d, colors, depth, record, vs, ps);
   const AoDrawState& st = a.state;
   const bool reads = scene_ao_->OnDraw(cl, a, s);
+  if (parallax_) {
+    if (const Gtao* g = scene_ao_->prepared(call.frame)) ParallaxNoteView(*g);  // Parallax hook (game_parallax.cpp)
+  }
   if (ao_constants_) AoWriteAmbientConstants(cl, reads);
   const bool dump = Dump(call.frame) || (options_.ao.dump_every && call.frame % options_.ao.dump_every == 0);
   if (dump && s.mode > 0) {
@@ -289,6 +292,21 @@ uint32_t GameRenderer::AoOcclusionSlot(nvrhi::ITexture* texture) {
   return ao_slot_;
 }
 
+bool GameRenderer::AoHandsDepthDraw(const PipelineRecord& record, bool writes_color) {
+  // The pre-pass's depth-only geometry with depth func ALWAYS: the game's first-person arms (and what
+  // Jack holds), drawn in front of everything whatever the world's depth (REPORT-240).
+  const uint32_t dc = record.depth_control;
+  return !writes_color && record.depth_format && (dc & 6) == 6 && ((dc >> 4) & 7) == 7;
+}
+
+bool GameRenderer::AoHandsColourDraw(const PipelineRecord& record) {
+  // Its opaque colour draw: render target 0 written without blending, depth tested and written.
+  const uint32_t dc = record.depth_control, bc = record.color_control[0];
+  const bool opaque = (bc & 0x1F) == 1 && ((bc >> 5) & 7) == 0 && ((bc >> 8) & 0x1F) == 0;
+  return record.color_count && record.color_index[0] == 0 && (record.color_mask[0] & 7) && opaque &&
+         record.depth_format && (dc & 6) == 6 && ((dc >> 4) & 7) != 7 && !(record.flags & kRecordTessellation);
+}
+
 void GameRenderer::AoNoteHandsDepth(const DrawCall& call, const PipelineRecord& record, bool writes_color) {
   if (!scene_ao_ || !ao_hands_ps_ || !call.indexed) return;
   const AoSettings s = AoSettingsFor(call.frame);
@@ -297,12 +315,9 @@ void GameRenderer::AoNoteHandsDepth(const DrawCall& call, const PipelineRecord& 
     ao_hands_.clear();
     ao_hands_frame_ = call.frame;
   }
-  // The pre-pass's depth-only geometry with depth func ALWAYS: the game's first-person arms (and what
-  // Jack holds), drawn in front of everything whatever the world's depth (REPORT-240).
-  const uint32_t dc = record.depth_control;
-  if (writes_color || !record.depth_format || (dc & 6) != 6 || ((dc >> 4) & 7) != 7) return;
+  if (!AoHandsDepthDraw(record, writes_color)) return;
   const AoHandsKey key{call.index_info.physical, call.start, call.count, call.base_vertex};
-  if (ao_hands_.size() >= 16 || std::find(ao_hands_.begin(), ao_hands_.end(), key) != ao_hands_.end()) return;
+  if (ao_hands_.size() >= kHandsKeys || std::find(ao_hands_.begin(), ao_hands_.end(), key) != ao_hands_.end()) return;
   ao_hands_.push_back(key);
   if (options_.ao.dump_every && call.frame % options_.ao.dump_every == 0)
     Logf(LogLevel::kInfo, "rexgpu-native:   AO hands: draw %u noted (count %u ib %08X start %u)", call.index_in_frame, call.count,
@@ -314,12 +329,7 @@ void GameRenderer::AoRedrawHands(nvrhi::ICommandList* cl, const DrawCall& call, 
                                  const GameShader& vs, const nvrhi::GraphicsState& gs, const nvrhi::DrawArguments& args,
                                  bool indexed, const HostTarget& target) {
   if (ao_hands_.empty() || ao_hands_frame_ != call.frame || !call.indexed || !scene_ao_) return;
-  // Its opaque colour draw: render target 0 written without blending, depth tested and written.
-  const uint32_t dc = record.depth_control, bc = record.color_control[0];
-  const bool opaque = (bc & 0x1F) == 1 && ((bc >> 5) & 7) == 0 && ((bc >> 8) & 0x1F) == 0;
-  if (!record.color_count || record.color_index[0] != 0 || !(record.color_mask[0] & 7) || !opaque ||
-      !record.depth_format || (dc & 6) != 6 || ((dc >> 4) & 7) == 7 || (record.flags & kRecordTessellation))
-    return;
+  if (!AoHandsColourDraw(record)) return;
   const AoHandsKey key{call.index_info.physical, call.start, call.count, call.base_vertex};
   if (std::find(ao_hands_.begin(), ao_hands_.end(), key) == ao_hands_.end()) return;
   const bool dump = options_.ao.dump_every && call.frame % options_.ao.dump_every == 0;

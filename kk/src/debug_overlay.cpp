@@ -235,6 +235,10 @@ const std::vector<Setting>& Settings() {
       // The game's own effects.
       {"Effects", "Motion blur", "kk_motion_blur", Kind::kToggle, {{"Off", "false"}, {"On", "true"}}, 0, 1, "", false},
       {"Effects", "Screen blur", "kk_big_blur", Kind::kToggle, {{"Off", "false"}, {"On", "true"}}, 0, 1, "", false},
+      {"Effects", "Muzzle flash light", "native_muzzle_light", Kind::kToggle, {{"Off", "false"}, {"On", "true"}}, 0, 1, "", false},
+      {"Effects", "Hands depth of field", "native_hands_dof", Kind::kToggle, {{"Off", "false"}, {"On", "true"}}, 0, 1, "", false},
+      {"Effects", "Skin shading", "native_skin_band", Kind::kToggle, {{"Off", "false"}, {"On", "true"}}, 0, 1, "", false},
+      {"Effects", "Parallax occlusion", "native_parallax", Kind::kToggle, {{"Off", "false"}, {"On", "true"}}, 0, 1, "", false},
       {"Effects", "Distance fog", "kk_fog", Kind::kToggle, {{"Off", "false"}, {"On", "true"}}, 0, 1, "", false},
       {"Effects", "Field of view", "kk_fov", Kind::kSliderInt, {}, 69, 110, "%d", false},
       // Only at the next start.

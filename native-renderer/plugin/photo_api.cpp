@@ -5,6 +5,7 @@
 
 #include "backend/draw_tags.h"
 #include "backend/menu_scene_light.h"
+#include "backend/muzzle_light.h"
 #include "backend/photo_config.h"
 #include "plugin/native_photo.h"
 
@@ -12,6 +13,9 @@
 extern "C" REX_GPU_PLUGIN_EXPORT void nr_set_draw_tags(uint32_t tags, float hud_width_scale) {
   nr::SetDrawTags(tags, hud_width_scale);
 }
+
+// A gun's flame (backend/muzzle_light.h), at this view position: called on the game's thread.
+extern "C" REX_GPU_PLUGIN_EXPORT void nr_muzzle_flash(float x, float y, float z) { nr::NoteMuzzleFlash(x, y, z); }
 
 // Task 330: the live menu scene behind the launcher draws with lighter effects (backend/menu_scene_light.h).
 extern "C" REX_GPU_PLUGIN_EXPORT void nr_set_menu_scene_light(uint32_t on) { nr::SetMenuSceneLight(on != 0); }

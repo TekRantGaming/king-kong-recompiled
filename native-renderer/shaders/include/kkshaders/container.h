@@ -130,6 +130,8 @@ struct ShaderInfo {
     // Pixel shaders only: the lighting options' water reflection hook (kkshaders/lighting.h,
     // docs/lighting.md). Part of the input hash only when set.
     WaterReflectionHook waterReflection;
+    // Pixel shaders only: parallax occlusion mapping (kkshaders/parallax.h). Part of the input hash only when set.
+    bool parallax = false;
 };
 
 struct ParseResult {

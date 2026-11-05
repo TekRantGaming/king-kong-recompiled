@@ -95,6 +95,7 @@ add_library(kkshaders STATIC
     src/vertex_patch.cpp
     src/pack_builder.cpp
     src/lighting.cpp
+    src/parallax.cpp
     "${CMAKE_CURRENT_BINARY_DIR}/prelude.cpp"
     "${CMAKE_CURRENT_BINARY_DIR}/lighting_text.cpp")
 target_include_directories(kkshaders PUBLIC include PRIVATE "${KK_DXC_INCLUDE}")

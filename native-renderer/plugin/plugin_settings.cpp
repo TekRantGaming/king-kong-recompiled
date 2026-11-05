@@ -267,6 +267,27 @@ CelConfig ReadCelConfig() {
   return c;
 }
 
+SkinBandConfig ReadSkinBandConfig() {
+  SkinBandConfig c;
+  c.enabled = rex::cvar::GetFlagByName("native_skin_band") == "true";
+  c.gpu_time = rex::cvar::GetFlagByName("native_skin_band_gpu_time") == "true";
+  return c;
+}
+
+HandsDofConfig ReadHandsDofConfig() {
+  HandsDofConfig c;
+  c.enabled = rex::cvar::GetFlagByName("native_hands_dof") == "true";
+  c.gpu_time = rex::cvar::GetFlagByName("native_hands_dof_gpu_time") == "true";
+  return c;
+}
+
+MuzzleConfig ReadMuzzleConfig() {
+  MuzzleConfig c;
+  c.enabled = rex::cvar::GetFlagByName("native_muzzle_light") == "true";
+  c.gpu_time = rex::cvar::GetFlagByName("native_muzzle_gpu_time") == "true";
+  return c;
+}
+
 void ReadLightingConfig(LightingConfig& l) {
   if (!ParseShadowQuality(REXCVAR_GET(native_shadow_quality), l.shadows))
     REXGPU_WARN("rexgpu-native: native_shadow_quality '{}' is not original, high or ultra", REXCVAR_GET(native_shadow_quality));
@@ -374,6 +395,9 @@ GameSettings ReadGameSettings(bool vulkan) {
   ReadUpscaleConfig(game.upscale);
   ReadLightingConfig(game.lighting);
   game.cel = ReadCelConfig();
+  game.muzzle = ReadMuzzleConfig();
+  game.hands_dof = ReadHandsDofConfig();
+  game.skin = ReadSkinBandConfig();
   // The settings the graphics panel (F8) and the in-game pages change while the game runs: read once a
   // frame by the game renderer (effect_settings.h). The init-only parts (tuning, debugging, rule
   // files) stay as read above.
@@ -391,6 +415,7 @@ GameSettings ReadGameSettings(bool vulkan) {
     ParseAoQuality(get("native_ao_quality"), quality);
     s.ao_quality = quality;
     s.tessellation = get("native_tessellation")=="true";
+    s.parallax = get("native_parallax") == "true";
     s.texture_pack = get("native_texture_pack")=="true";
     s.texture_pack_folder = get("native_texture_pack_folder");
     s.tessellation_smoothness = float(std::clamp(number("native_tessellation_smoothness",0.75),0.0,1.0));
@@ -413,6 +438,9 @@ GameSettings ReadGameSettings(bool vulkan) {
     s.gi = gi;
     s.lighting = lighting;
     s.cel = ReadCelConfig();
+    s.muzzle = ReadMuzzleConfig();
+    s.hands_dof = ReadHandsDofConfig();
+    s.skin = ReadSkinBandConfig();
     s.shadow_scale = shadow_override > 0 && !(lighting.shadows_on() && shadow_override == 1)
                          ? shadow_override : ShadowScaleForQuality(lighting.shadows);
     ParseUpscalerKind(get("native_upscaler"), upscale.kind);
