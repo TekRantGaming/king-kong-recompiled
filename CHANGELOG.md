@@ -3,9 +3,13 @@
 Every release of the King Kong PC port, newest first. The launcher shows this on its About page, and a
 version's notes the first time you start it.
 
-## Next update (not released)
+## v2.1.0 (not released)
 
 ### Added
+- **Muzzle flash light**: every shot lights what is around it for a moment: walls, the ground, enemies, your hands and gun. On in Remastered (Graphics > Effects).
+- **Skin shading**: light softens and warms on skin, with a touch of red where light meets shadow, as light scattered under skin looks. On in Remastered (Graphics > Effects).
+- **Depth of field on your hands and gun**: they go slightly soft while the world stays sharp. Off by default (Graphics > Effects).
+- **Parallax occlusion**: rock, stone and wood show depth when you look across them. Off by default (Graphics > Effects).
 - **Reset achievements**: the Achievements page has a Reset achievements button that locks every achievement again, so a new playthrough can earn them all again. It asks first, and your saves stay as they are.
 
 ### Fixed

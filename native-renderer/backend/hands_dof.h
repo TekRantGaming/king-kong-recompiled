@@ -22,8 +22,9 @@ namespace nr {
 
 class HandsDof {
  public:
-  // The largest blur radius, as a share of the picture's height (shaders/hands_dof.hlsl).
-  static constexpr float kRadius = 0.006f;
+  // The largest blur radius, as a share of the picture's height (shaders/hands_dof.hlsl). 0.006 until 5 Nov, when Craig
+  // found it rather strong: about 30% less.
+  static constexpr float kRadius = 0.0042f;
 
   explicit HandsDof(nvrhi::IDevice* device) : device_(device) {}
   bool Initialize();

@@ -18,8 +18,10 @@ cbuffer SkinBandConstants : register(b0)
 Texture2D<float4> g_srcColour : register(t0);
 Texture2D<float4> g_srcSkin : register(t1);
 
-// The picture is about gamma 2: red lifted, green and blue held down a little.
-static const float3 kRed = float3(0.20, -0.03, -0.06);
+// The picture is about gamma 2: red lifted, green and blue held down a little. 0.20, -0.03, -0.06 until 5 Nov.
+static const float3 kRed = float3(0.35, -0.05, -0.09);
+// How far each channel's light moves toward the light around it (skin_band's spread): red furthest.
+static const float3 kSpread = float3(0.55, 0.30, 0.22);
 
 float4 vs_main(uint id : SV_VertexID) : SV_Position
 {
@@ -49,7 +51,7 @@ float4 ps_main(float4 pos : SV_Position) : SV_Target0
     if (mine.a <= 0.01 || kk_Tune.z > 1.5)
         return colour;
     const float here = Lit(colour.rgb, mine.rgb);
-    float darkest = here, brightest = here;
+    float darkest = here, brightest = here, sum = here, weights = 1.0;
     const int2 last = int2(kk_Size.xy) - 1;
     const int kTaps = 16;
     [loop] for (int i = 1; i <= kTaps; ++i)
@@ -63,17 +65,30 @@ float4 ps_main(float4 pos : SV_Position) : SV_Target0
             const float lit = Lit(g_srcColour.Load(int3(q, 0)).rgb, other.rgb);
             darkest = min(darkest, lit);
             brightest = max(brightest, lit);
+            // The light under the skin spreads: nearer skin counts more.
+            const float w = 1.0 - 0.6 * float(i) / float(kTaps);
+            sum += lit * w;
+            weights += w;
         }
     }
     const float apart = brightest - darkest;
-    if (apart <= 0.02)
-        return colour;
-    // Fullest a little on the shadow side of half way, where light that went in on the lit side comes back out.
-    const float t = pow(saturate((here - darkest) / apart), 0.75);
-    const float ridge = 4.0 * t * (1.0 - t);
-    const float band = ridge * ridge * saturate(apart / kk_Tune.y) * mine.a * kk_Tune.x;
-    if (kk_Tune.z > 0.5)
-        return float4(band, colour.g * 0.5, colour.g * 0.5, colour.a);
-    colour.rgb = saturate(colour.rgb * (1.0 + kRed * band));
+    // 5 Nov (Craig saw little change): the light also spreads under the skin, red furthest, then green, then blue (a
+    // skin diffusion profile), so shadows on skin turn soft and warm; the band stays where light meets shadow.
+    const float spread = sum / weights;
+    // Light coming into a shadow brings red most; light leaving a lit pixel takes every channel alike (no cyan rim).
+    const float3 k = spread > here ? kSpread : kSpread.zzz;
+    const float3 diffuse = here + (spread - here) * k * mine.a * kk_Tune.x;
+    float3 lit = diffuse / max(here, 1e-3);
+    if (apart > 0.02)
+    {
+        // Fullest a little on the shadow side of half way, where light that went in on the lit side comes back out.
+        const float t = pow(saturate((here - darkest) / apart), 0.75);
+        const float ridge = 4.0 * t * (1.0 - t);
+        const float band = ridge * ridge * saturate(apart / kk_Tune.y) * mine.a * kk_Tune.x;
+        if (kk_Tune.z > 0.5)
+            return float4(band, colour.g * 0.5, colour.g * 0.5, colour.a);
+        lit *= 1.0 + kRed * band;
+    }
+    colour.rgb = saturate(colour.rgb * lit);
     return colour;
 }

@@ -3,9 +3,10 @@
 // enemy jumping at you, the ground, the wall.
 //
 //  - The game's thread tells where a flame was made (nr_muzzle_flash, in view space, from kk/src/muzzle_light.cpp).
-//  - At the end of the scene's opaque pass, as the GI (scene_gi.h), a full-screen pass (shaders/muzzle.hlsl) adds the
-//    light from the scene's depth and normals. Water, fur, smoke, fire and the HUD are drawn after it and are not lit.
-//    It casts no shadows.
+//  - At the end of the scene's opaque pass, as the GI (scene_gi.h), a pass (shaders/muzzle.hlsl) over the part of the
+//    picture the light reaches adds it, from the scene's depth alone (normals from the depth beside each pixel), blended
+//    onto the picture: no copy, no normals pass (5 Nov, to cost little). Water, fur, smoke, fire and the HUD are drawn
+//    after it and are not lit. It casts no shadows.
 //  - The first-person hands and gun have their colour drawn after that moment, so in a frame with a flash their colour
 //    draws are made a second time with shaders/muzzle_hands.hlsl (depth EQUAL, the colour brightened).
 //  - A frame with no flash costs one look at the list: nothing is classified, copied or drawn.
@@ -32,8 +33,10 @@ namespace nr {
 
 // Tuning (docs/lighting.md); not settings.
 struct MuzzleTuning {
-  static constexpr uint32_t kMaxLights = 4;
-  static constexpr float kRadius = 9.0f;           // view units, metres in King Kong
+  static constexpr uint32_t kMaxLights = 2;        // 4 until 5 Nov
+  static constexpr float kRadius = 7.0f;           // view units, metres in King Kong (9 until 5 Nov)
+  static constexpr float kGain = 1.6f;             // muzzle.hlsl: the light on a surface's own colour
+  static constexpr float kDarkShows = 0.12f;       // and the light a dark surface still shows (added)
   static constexpr float kFalloff = 0.25f;         // 1 / (1 + this * distance^2)
   static constexpr float kSeconds = 0.10f;         // how long a flash lasts
   static constexpr float kStrength = 1.5f;         // at its start
@@ -92,17 +95,17 @@ class SceneMuzzle {
 
  private:
   struct Constants;
-  bool Apply(nvrhi::ICommandList* cl, const Gtao* ao, bool depth_before_draw);
-  bool Shade(nvrhi::ICommandList* cl, const Gtao& gtao, nvrhi::ITexture* color, nvrhi::ITexture* depth,
-             const MuzzleLightNow* lights, uint32_t count);
+  bool Apply(nvrhi::ICommandList* cl, bool depth_before_draw);
+  bool Shade(nvrhi::ICommandList* cl, const AoProjection& projection, const AoScreen& screen, nvrhi::ITexture* color,
+             nvrhi::ITexture* depth, const MuzzleLightNow* lights, uint32_t count);
   nvrhi::IFramebuffer* Framebuffer(nvrhi::ITexture* color);
-  nvrhi::IGraphicsPipeline* GraphicsPipeline(const nvrhi::FramebufferInfo& info);
+  // add: the draw that adds the light a dark surface shows; else the one that multiplies the picture.
+  nvrhi::IGraphicsPipeline* GraphicsPipeline(const nvrhi::FramebufferInfo& info, bool add);
 
   nvrhi::IDevice* device_;
   AoRuleTable rules_;
   AoFrameTracker tracker_;
   AoCameraFinder camera_;
-  std::unique_ptr<Gtao> gtao_;
   AoGpuTimer* timer_ = nullptr;
   Stats stats_;
   uint64_t frame_ = UINT64_MAX;
@@ -114,8 +117,7 @@ class SceneMuzzle {
   nvrhi::ShaderHandle vs_, ps_;
   nvrhi::BindingLayoutHandle layout_;
   nvrhi::BufferHandle constants_;
-  nvrhi::TextureHandle copy_;
-  std::map<std::pair<nvrhi::ITexture*, nvrhi::ITexture*>, nvrhi::BindingSetHandle> sets_;
+  std::map<nvrhi::ITexture*, nvrhi::BindingSetHandle> sets_;  // by depth
   std::map<nvrhi::ITexture*, nvrhi::FramebufferHandle> framebuffers_;
   std::map<uint32_t, nvrhi::GraphicsPipelineHandle> pipelines_;
 };

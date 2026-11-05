@@ -312,15 +312,22 @@ with a blend of destination minus source. So:
 sprite, which lights nothing. Every gun flame goes through `H_exec_GFX_Flamme`; `kk/src/muzzle_light.cpp` turns the flame's
 position into view space and hands it to `nr_muzzle_flash`. A flash is a small warm point light for 0.1 s.
 
-- `backend/muzzle_light.{h,cpp}`, `backend/game_muzzle.cpp`, `shaders/muzzle.hlsl`: one full screen pass at the end of the
-  opaque pass, only in frames that begin with a live flash. A frame with no flash costs one look at the list.
-- Position from the scene's depth, normal from the Gtao working normals (the AO's when it ran). The picture holds surface
-  colour times light, so the surface is estimated from it, with the grain brought back from how a pixel stands against
-  the pixels around it, because the depth's normals only know the polygons.
+- `backend/muzzle_light.{h,cpp}`, `backend/game_muzzle.cpp`, `shaders/muzzle.hlsl`: two draws at the end of the opaque
+  pass over the part of the picture the light reaches (the lights' spheres projected; the whole picture when the eye is
+  inside one), only in frames that begin with a live flash. A frame with no flash costs one look at the list.
+- Since 5 Nov (Craig: it cost too much frame rate, and a flash is seen for a tenth of a second) the pass reads only the
+  scene's depth, five texels a pixel: position from the stored depth, normal from the depth beside it (on each axis the
+  nearer side). No copy of the picture and no Gtao normals pass. The first draw adds a little warm light (what a dark
+  surface still shows, `kDarkShows`), the second multiplies the picture by one plus the light (`kGain`), so the surface
+  keeps its own colour and grain; pixels out of reach are discarded. At most 2 lights (was 4), radius 7 m (was 9).
+- Before 5 Nov: normal from the Gtao working normals (a Prepare of its own when the AO had not run that frame), a full
+  copy of the picture, the surface estimated from it with its grain from the pixels around. That cost 0.13 to 0.16 ms at
+  3200x1800 and brought frame spikes while firing (p95 35 to 60 ms against 14 to 21 ms after).
 - The hands and gun have their colour drawn after that moment, so in a frame with a flash their colour draws are made again
   with `shaders/muzzle_hands.hlsl`: depth EQUAL, destination times one plus source.
 - `KK_DEV_MUZZLE_HOLD=<seconds>` holds a flash, `KK_DEV_MUZZLE_TEST="x,y,z"` keeps a light at a view position.
-- Measured: about 0.11 ms at 3200x1800 on the RTX, only while firing. It casts no shadows.
+- Measured: about 0.11 ms at 3200x1800 on the RTX, only while firing (2 Nov); 0.067 ms with a light held at the gun
+  against 0.156 ms before (5 Nov, same picture, chapter select entry 4). It casts no shadows.
 
 ## Hands depth of field
 
@@ -329,7 +336,8 @@ stays sharp, as in Killzone Shadow Fall.
 
 - `backend/hands_dof.{h,cpp}`, `backend/game_hands_dof.cpp`, `shaders/hands_dof.hlsl`, `shaders/hands_dof_mask.hlsl`.
 - Their colour draws are made again into an R8 mask: 0 away from them, else how soft the pixel is from its distance
-  (`SV_Position.w`; Vulkan needs `-fvk-use-dx-position-w`). Sharp from 0.65 m, softest from 0.25 m.
+  (`SV_Position.w`; Vulkan needs `-fvk-use-dx-position-w`). Sharp from 0.65 m, softest from 0.25 m. The widest blur is
+  0.42% of the picture's height (`HandsDof::kRadius`; 0.6% until 5 Nov, when Craig found it rather strong).
 - At the first draw after that run a gather over a disc runs from a copy of the picture. A hands pixel reaches as far as
   its softness and covers what is behind it, so edges spread over the world. What is behind the hands was never drawn
   (their depth comes first), so world pixels nearby stand in for it. Smoke, flames and the HUD come later and stay sharp.
@@ -351,9 +359,14 @@ translucent and nothing blurs. It adds no game shader variants, so players do no
 - The mask shader sorts skin from the hair, leather and cloth in those atlases by colour.
 - The picture over the skin's colour is how much light a pixel got, from every light and shadow together. The darkest and
   brightest skin around a pixel say where it lies between them; the band peaks a little on the shadow side of half way.
+- Since 5 Nov (Craig saw little change) the light also spreads under the skin: each skin pixel's light moves toward the
+  light of the skin around it, red furthest, then green, then blue (`kSpread` 0.55, 0.30, 0.22, a skin diffusion profile),
+  so shadows on skin turn soft and warm. Light leaving a lit pixel takes every channel alike, so lit edges get no cyan rim.
+  The band is stronger too (`kRed` 0.35, -0.05, -0.09; was 0.20, -0.03, -0.06).
 - It runs at the fog pass for the world and again after the hands. A skin image for another target (a reflection) is dropped.
 - `KK_DEV_SKIN_VIEW`: 1 the band in red, 2 how much is skin, 3 the skin image. Chapter select entry 1 opens on Ann's face.
-- Measured: 0.07 to 0.15 ms in play, 0.26 ms with her face filling the frame, at 3200x1800 on the RTX.
+- Measured: 0.07 to 0.15 ms in play, 0.26 ms with her face filling the frame, at 3200x1800 on the RTX; with the spread
+  0.31 ms against 0.27 ms on the same picture (5 Nov).
 
 ## Parallax occlusion
 
