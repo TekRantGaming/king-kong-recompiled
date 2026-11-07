@@ -3,7 +3,7 @@
 Every release of the King Kong PC port, newest first. The launcher shows this on its About page, and a
 version's notes the first time you start it.
 
-## v2.1.1 (not released)
+## v2.1.1 (7 November 2026)
 
 ### Fixed
 - **Crash after changing DLSS or the graphics preset**: switching the upscaler on or off (for example on the launcher's Graphics page) could end the game a second later with a lost graphics device, behind an error box the launcher could hide, so the launcher looked frozen. The effects now let go of the old picture buffers when the picture size changes.
