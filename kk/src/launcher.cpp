@@ -91,6 +91,7 @@
 #endif
 
 #include <imgui.h>
+#include <imgui_internal.h>  // PlatformImeData: OS text input for the new save's name
 #include <SDL3/SDL_dialog.h>
 #include <SDL3/SDL_init.h>
 #include <SDL3/SDL_stdinc.h>
@@ -4694,6 +4695,10 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
       editing_name_ = false;
       return;
     }
+    // Typed characters reach ImGui only while SDL text input is on, and the SDK turns it on only when ImGui
+    // wants text input (a focused InputText, as the Social panel uses). This pop up has none, so ask for it
+    // every frame it is open; the SDK turns it off again the frame after it closes.
+    ImGui::GetCurrentContext()->PlatformImeData.WantTextInput = true;
     const ImGuiIO& io = ImGui::GetIO();
     for (const ImWchar c : io.InputQueueCharacters)
       if (c >= 32 && c < 127 && new_name_.size() < kNameMax && !(c == ' ' && new_name_.empty())) new_name_ += char(c);

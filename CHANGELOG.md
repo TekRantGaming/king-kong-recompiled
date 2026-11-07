@@ -7,6 +7,7 @@ version's notes the first time you start it.
 
 ### Fixed
 - **Crash after changing DLSS or the graphics preset**: switching the upscaler on or off (for example on the launcher's Graphics page) could end the game a second later with a lost graphics device, behind an error box the launcher could hide, so the launcher looked frozen. The effects now let go of the old picture buffers when the picture size changes.
+- **Naming a new save**: typing on the keyboard in the Name box of Play > New game did nothing. The box now takes the letters you type.
 
 ## v2.1.0 (5 November 2026)
 
