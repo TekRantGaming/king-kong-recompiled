@@ -3,6 +3,12 @@
 Every release of the King Kong PC port, newest first. The launcher shows this on its About page, and a
 version's notes the first time you start it.
 
+## v2.1.3 (9 November 2026)
+
+### Changed
+- **AMD FSR 1 and NVIDIA NIS are back**: both can be picked again under Display > Upscaling (NIS on Windows). FSR 1 is the default again.
+- NVIDIA DLSS (and DLAA), AMD FSR 3.1 and FSR 4 and Intel XeSS stay switched off for now while we fix the performance problem, and FXAA stays the only antialiasing.
+
 ## v2.1.2 (9 November 2026)
 
 ### Changed

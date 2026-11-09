@@ -195,11 +195,12 @@ bool Fsr4AllowedOnThisGpu();
 // is a choice only. What runs is the launcher's question to the plugin (kk_upscalers_offered, kept in
 // the settings file); before it has answered once, the card's vendor decides (the game falls back to
 // FSR 3.1 itself if the guess cannot run).
-// Owner, 9 Nov 2026 (v2.1.2): every upscaler (DLSS, DLAA, NIS, FSR 1, FSR 3.1, FSR 4, XeSS, with their modes)
-// and SMAA are switched off for now while a performance problem is found; FXAA is the only antialiasing. The
-// saved choices are put back to the defaults (Off, FXAA) at the start and the rows are hidden. Set this to
-// false to bring them all back; the players' old upscaler choices are not kept, they get the usual defaults.
-inline constexpr bool kUpscalersPaused = true;
+// Owner, 9 Nov 2026: the temporal upscalers (DLSS and DLAA, FSR 3.1, FSR 4, XeSS, with their modes) and SMAA are
+// switched off for now while a performance problem is found; FXAA is the only antialiasing. A saved temporal
+// upscaler goes back to the default (Off) at the start, the renderer is not asked which ones run, and their rows
+// are hidden. v2.1.2 had FSR 1 and NIS off too; v2.1.3 brings those two back (and FSR 1 as the default again).
+// Set this to false to bring them all back; old temporal choices are not kept, players get the usual default.
+inline constexpr bool kTemporalUpscalersPaused = true;
 
 // DefaultUpscaler: present_effect's default ("bilinear" under a temporal upscaler, else "fsr").
 std::string DefaultUpscaler();

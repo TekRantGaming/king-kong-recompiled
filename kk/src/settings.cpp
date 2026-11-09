@@ -765,7 +765,6 @@ namespace {
 
 // FSR 1 where the presenter has it (NIS is a choice only, since Beta 3).
 std::string SpatialDefault() {
-  if (kUpscalersPaused) return "bilinear";
   for (const auto& e : rex::cvar::GetRegistry()) {
     if (e.name != "present_effect") continue;
     const auto& allowed = e.constraints.allowed_values;
@@ -818,7 +817,7 @@ bool NormalizeRendererSettings() {
 }
 
 std::string DefaultTemporalUpscaler() {
-  if (kUpscalersPaused || !Flag("native_upscaler") || !NativeRendererInUse()) return "off";
+  if (kTemporalUpscalersPaused || !Flag("native_upscaler") || !NativeRendererInUse()) return "off";
   return BestTemporalUpscaler();
 }
 
@@ -971,15 +970,15 @@ void ApplyFixedSettings() {
   // FXAA Extreme is no longer offered: a settings file that chose it gets FXAA.
   if (rex::cvar::GetFlagByName("swap_post_effect") == "fxaa_extreme")
     rex::cvar::SetFlagByName("swap_post_effect", "fxaa");
-  if (kUpscalersPaused) {
-    // v2.1.2 (settings.h): no upscaler and no SMAA. The defaults are Off (ApplyUpscalerDefaults), so going back
-    // to them also leaves these out of the settings file.
+  if (kTemporalUpscalersPaused) {
+    // settings.h: no temporal upscaler and no SMAA (FSR 1 and NIS stay). The default is Off
+    // (ApplyUpscalerDefaults), so going back to it also leaves it out of the settings file.
     ApplyUpscalerDefaults();
-    for (const char* name : {"native_upscaler", "present_effect"}) {
-      if (!Flag(name) || rex::cvar::GetFlagSource(name) == rex::cvar::Source::kDefault) continue;
-      REXLOG_INFO("KK: upscalers are switched off in this version: {} {} back to {}", name,
-                  rex::cvar::GetFlagByName(name), Flag(name)->default_value);
-      rex::cvar::ResetToDefault(name);
+    if (const auto* temporal = Flag("native_upscaler");
+        temporal && rex::cvar::GetFlagSource("native_upscaler") != rex::cvar::Source::kDefault) {
+      REXLOG_INFO("KK: temporal upscalers are switched off in this version: native_upscaler {} back to {}",
+                  rex::cvar::GetFlagByName("native_upscaler"), temporal->default_value);
+      rex::cvar::ResetToDefault("native_upscaler");
     }
     if (rex::cvar::GetFlagByName("swap_post_effect") == "smaa") {
       REXLOG_INFO("KK: SMAA is switched off in this version: FXAA instead");

@@ -417,7 +417,7 @@ struct OfferedUpscalers {
 };
 OfferedUpscalers OfferedTemporalUpscalers() {
   OfferedUpscalers o;
-  if (kUpscalersPaused) {  // v2.1.2 (settings.h): none offered, and the renderer is not asked
+  if (kTemporalUpscalersPaused) {  // v2.1.2 (settings.h): none offered, and the renderer is not asked
     o.known = true;
     return o;
   }
@@ -441,7 +441,7 @@ OfferedUpscalers OfferedTemporalUpscalers() {
 // lists them (debug_overlay_logic.h): never a new question, which would make a second device in the game.
 OfferedUpscalers OfferedWhilePlaying() {
   OfferedUpscalers o;
-  if (kUpscalersPaused) {
+  if (kTemporalUpscalersPaused) {
     o.known = true;
     return o;
   }
@@ -544,8 +544,8 @@ void SetOriginalLook(bool on) {
       if (eq == std::string::npos) continue;
       const std::string name = item.substr(0, eq);
       std::string value = item.substr(eq + 1);
-      if (kUpscalersPaused) {  // v2.1.2 (settings.h): no upscaler and no SMAA come back with them
-        if (name == "native_upscaler" || name == "present_effect") {
+      if (kTemporalUpscalersPaused) {  // settings.h: no temporal upscaler and no SMAA come back with them
+        if (name == "native_upscaler") {
           Reset(name.c_str());
           continue;
         }
@@ -1141,18 +1141,7 @@ class SettingsPages {
                                                 : "Draws {0} for your {1} window.";
     items.push_back(Section("Upscaling"));
     const std::string temporal = CurrentTemporalUpscaler();
-    if (kUpscalersPaused) {
-      // v2.1.2 (settings.h): the row stays, at Off, to say why there is nothing to pick.
-      Item it;
-      it.type = ItemType::kChoice;
-      it.label = "Upscaler";
-      it.description = "Scales the picture up to your screen.";
-      it.options = {"Off"};
-      it.index = 0;
-      it.default_text = "Off";
-      Disable(it, true, "DLSS, DLAA, FSR, XeSS and NIS are switched off for now while we fix a performance problem.");
-      items.push_back(std::move(it));
-    } else {
+    {
       // Each choice: its name, present_effect (the spatial upscalers, in the presenter) and
       // native_upscaler (the temporal ones, in the native renderer; docs/upscalers.md).
       struct Choice {
@@ -1217,6 +1206,8 @@ class SettingsPages {
       if (it.index < 0) it.value_text = present;
       if (UsingNativeRenderer() && !offered.known && HasTemporalSetting())
         it.facts.push_back("Checking which other upscalers your graphics card runs...");
+      if (kTemporalUpscalersPaused)  // settings.h
+        it.facts.push_back("DLSS, DLAA, FSR 3.1, FSR 4 and XeSS are switched off for now while we fix a performance problem.");
       if (in_game_ && !spatial_now)
         it.facts.push_back("While you play, the change is made at once. FSR 1 and NIS are chosen from the main menu.");
       if (in_game_ && spatial_now) Disable(it, true, kInLauncherOnly);
@@ -1869,7 +1860,7 @@ class SettingsPages {
     UpscalingItems(items);
     items.push_back(Section("Image"));
     {
-      Item it = kUpscalersPaused  // v2.1.2 (settings.h): no SMAA for now
+      Item it = kTemporalUpscalersPaused  // v2.1.2 (settings.h): no SMAA for now
                     ? CvarChoice("Antialiasing", "Smooths jagged edges after the frame is drawn.", "swap_post_effect",
                                  {{"Off", "none"}, {"FXAA", "fxaa"}})
                     : CvarChoice("Antialiasing", "Smooths jagged edges after the frame is drawn.", "swap_post_effect",
@@ -8831,7 +8822,7 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
   // The temporal upscalers this PC runs (asked when the launcher opened): once the answer is in, it is
   // kept in the settings (kk_upscalers_offered) and the default upscaler follows it (SetOfferedUpscalers).
   void TickUpscalerQuery() {
-    if (kUpscalersPaused || !HasTemporalSetting() || !UsingNativeRenderer()) return;
+    if (kTemporalUpscalersPaused || !HasTemporalSetting() || !UsingNativeRenderer()) return;
     const std::string backend = Get("native_backend");
     if (upscaler_answer_taken_ && upscaler_answer_backend_ == backend) return;
     const nr::kk::UpscalerChoices c = nr::kk::QueryUpscalers();
@@ -9819,7 +9810,7 @@ std::string ApplyRendererChoice() {
 }
 
 void AskUpscalersBeforeWindow() {
-  if (kUpscalersPaused || !HasTemporalSetting() || !UsingNativeRenderer()) return;
+  if (kTemporalUpscalersPaused || !HasTemporalSetting() || !UsingNativeRenderer()) return;
   const auto start = std::chrono::steady_clock::now();
   if (nr::kk::QueryUpscalers().state != 1) return;  // kept by the renderer (or none here): no device made
   nr::kk::WaitForUpscalers();
