@@ -176,7 +176,10 @@ const std::vector<Setting>& Settings() {
       {"Image", "Effect resolution", "native_effect_buffers", Kind::kChoice,
        {{"Original", "false"}, {"Output", "true"}}, 0, 1, "", true, Show::kAlways,
        "Resolution of bloom, blur and glow buffers."},
-      {"Image", "Antialiasing", "swap_post_effect", Kind::kChoice, {{"Off", "none"}, {"FXAA", "fxaa"}, {"SMAA", "smaa"}}, 0, 2,
+      {"Image", "Antialiasing", "swap_post_effect", Kind::kChoice,
+       kUpscalersPaused ? std::vector<Option>{{"Off", "none"}, {"FXAA", "fxaa"}}  // v2.1.2 (settings.h): no SMAA
+                        : std::vector<Option>{{"Off", "none"}, {"FXAA", "fxaa"}, {"SMAA", "smaa"}},
+       0, kUpscalersPaused ? 1.0f : 2.0f,
        "", true, Show::kAlways, "Off while a temporal upscaler runs (it antialiases itself)."},
       {"Image", "Texture filtering", "anisotropic_override", Kind::kChoice,
        {{"Game", "-1"}, {"Off", "0"}, {"2x", "2"}, {"4x", "3"}, {"8x", "4"}, {"16x", "5"}}},
@@ -421,6 +424,9 @@ void EndAb() {
 bool Visible(const Setting& s) {
   // Task 062: the three experimental lighting effects stay hidden for Beta 4.
   if (std::string_view(s.section) == "Lighting") return false;
+  // v2.1.2 (settings.h): the upscalers are switched off, so their rows are not shown.
+  if (kUpscalersPaused && (std::string_view(s.cvar) == "native_upscaler" || std::string_view(s.cvar) == "present_effect"))
+    return false;
   if (!Exists(s.cvar)) return false;
   if (s.native && !NativeRenderer()) return false;
   const std::string up = Get("native_upscaler");

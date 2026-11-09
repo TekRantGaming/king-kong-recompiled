@@ -765,6 +765,7 @@ namespace {
 
 // FSR 1 where the presenter has it (NIS is a choice only, since Beta 3).
 std::string SpatialDefault() {
+  if (kUpscalersPaused) return "bilinear";
   for (const auto& e : rex::cvar::GetRegistry()) {
     if (e.name != "present_effect") continue;
     const auto& allowed = e.constraints.allowed_values;
@@ -817,7 +818,7 @@ bool NormalizeRendererSettings() {
 }
 
 std::string DefaultTemporalUpscaler() {
-  if (!Flag("native_upscaler") || !NativeRendererInUse()) return "off";
+  if (kUpscalersPaused || !Flag("native_upscaler") || !NativeRendererInUse()) return "off";
   return BestTemporalUpscaler();
 }
 
@@ -970,6 +971,21 @@ void ApplyFixedSettings() {
   // FXAA Extreme is no longer offered: a settings file that chose it gets FXAA.
   if (rex::cvar::GetFlagByName("swap_post_effect") == "fxaa_extreme")
     rex::cvar::SetFlagByName("swap_post_effect", "fxaa");
+  if (kUpscalersPaused) {
+    // v2.1.2 (settings.h): no upscaler and no SMAA. The defaults are Off (ApplyUpscalerDefaults), so going back
+    // to them also leaves these out of the settings file.
+    ApplyUpscalerDefaults();
+    for (const char* name : {"native_upscaler", "present_effect"}) {
+      if (!Flag(name) || rex::cvar::GetFlagSource(name) == rex::cvar::Source::kDefault) continue;
+      REXLOG_INFO("KK: upscalers are switched off in this version: {} {} back to {}", name,
+                  rex::cvar::GetFlagByName(name), Flag(name)->default_value);
+      rex::cvar::ResetToDefault(name);
+    }
+    if (rex::cvar::GetFlagByName("swap_post_effect") == "smaa") {
+      REXLOG_INFO("KK: SMAA is switched off in this version: FXAA instead");
+      rex::cvar::SetFlagByName("swap_post_effect", "fxaa");
+    }
+  }
   // Shader preparing is always Balanced (no longer a setting): Wait paused the
   // game for up to 2 seconds the first time an effect appeared, and
   // Background made objects vanish or flash. A settings file from before keeps

@@ -3,6 +3,13 @@
 Every release of the King Kong PC port, newest first. The launcher shows this on its About page, and a
 version's notes the first time you start it.
 
+## v2.1.2 (9 November 2026)
+
+### Changed
+- **Upscalers switched off for now**: NVIDIA DLSS (and DLAA), NVIDIA NIS, AMD FSR 1, FSR 3.1 and FSR 4 and Intel XeSS, with all their modes, are switched off while we fix a performance problem in the game. The game draws at the Render quality you choose and scales it to your screen with plain smooth scaling.
+- **FXAA is the only antialiasing for now**: SMAA is switched off too. If you had SMAA, you get FXAA.
+- Your old upscaler choice goes back to Off at the first start. They all come back in a later update.
+
 ## v2.1.1 (7 November 2026)
 
 ### Fixed
